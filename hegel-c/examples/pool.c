@@ -85,13 +85,15 @@ static int64_t live_remove(struct live_set *s, int64_t id) {
 }
 
 int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
     hegel_settings_t *s = hegel_settings_new();
     hegel_settings_test_cases(s, 100);
-    hegel_settings_database(s, "");
+    hegel_settings_database(ctx, s, "");
     hegel_settings_derandomize(s, true);
     hegel_settings_seed(s, 0x5ca1ab1e, true);
 
-    hegel_run_t *run = hegel_run_start(s);
+    hegel_run_t *run = hegel_run_start(ctx, s);
 
     const int STEPS = 12;
     size_t total = 0;
@@ -99,11 +101,11 @@ int main(void) {
     bool ok = true;
 
     hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(run)) != NULL) {
+    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
         struct live_set live = { .count = 0 };
         int64_t pool;
-        if (hegel_new_pool(tc, &pool) != HEGEL_OK) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+        if (hegel_new_pool(ctx, tc, &pool) != HEGEL_OK) {
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
 
@@ -114,25 +116,25 @@ int main(void) {
             size_t len;
 
             /* Decide push vs pop. */
-            int rc = hegel_generate(tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &bytes, &len);
+            hegel_result_t rc = hegel_generate(ctx, tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &bytes, &len);
             if (rc != HEGEL_OK) { overran = true; break; }
             bool push = decode_bool(bytes, len);
 
             if (push || live.count == 0) {
                 /* Push: generate a value and register it in the pool. */
-                rc = hegel_generate(tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &bytes, &len);
+                rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &bytes, &len);
                 if (rc != HEGEL_OK) { overran = true; break; }
                 /* The integer fits in one or two CBOR bytes for [0,1000];
                  * we only need a representative value, so use the length. */
                 int64_t value = (int64_t)len;
 
                 int64_t var_id;
-                if (hegel_pool_add(tc, pool, &var_id) != HEGEL_OK) { overran = true; break; }
+                if (hegel_pool_add(ctx, tc, pool, &var_id) != HEGEL_OK) { overran = true; break; }
                 live_add(&live, var_id, value);
             } else {
                 /* Pop: draw a live variable and consume it. */
                 int64_t var_id;
-                rc = hegel_pool_generate(tc, pool, true, &var_id);
+                rc = hegel_pool_generate(ctx, tc, pool, true, &var_id);
                 if (rc == HEGEL_E_STOP_TEST) { overran = true; break; }
                 if (rc != HEGEL_OK) { overran = true; break; }
 
@@ -146,19 +148,19 @@ int main(void) {
         }
 
         if (bad) {
-            hegel_mark_complete(tc, HEGEL_STATUS_INTERESTING, "drew a non-live variable");
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, "drew a non-live variable");
             ok = false;
             continue;
         }
         if (overran) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         total++;
-        hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+        hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
     }
 
-    const hegel_run_result_t *result = hegel_run_result(run);
+    const hegel_run_result_t *result = hegel_run_result(ctx, run);
     bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
 
     printf("ran %zu valid cases (max live pool size seen: %zu), %s\n",
@@ -166,5 +168,6 @@ int main(void) {
 
     hegel_run_free(run);
     hegel_settings_free(s);
+    hegel_context_free(ctx);
     return (passed && ok) ? 0 : 1;
 }
