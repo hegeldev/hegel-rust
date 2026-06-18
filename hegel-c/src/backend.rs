@@ -18,7 +18,7 @@ pub enum DataSourceError {
     /// A caller-supplied argument (typically a schema) was semantically
     /// invalid. The main library converts this to a panic at the API surface;
     /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
-    /// `hegel_last_error_message`. Carries a human-readable diagnostic.
+    /// `hegel_context_last_error`. Carries a human-readable diagnostic.
     InvalidArgument(String),
 }
 
