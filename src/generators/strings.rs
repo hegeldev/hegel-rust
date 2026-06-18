@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
 use crate::control::hegel_internal_assert;
@@ -516,7 +518,7 @@ pub enum IpVersion {
     V6,
 }
 
-/// Generator for IP address strings. Created by [`ip_addresses()`].
+/// Generator for IP addresses. Created by [`ip_addresses()`].
 ///
 /// By default generates both IPv4 and IPv6 addresses.
 pub struct IpAddressGenerator {
@@ -551,8 +553,8 @@ impl IpAddressGenerator {
     }
 }
 
-impl Generator<String> for IpAddressGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
+impl Generator<std::net::IpAddr> for IpAddressGenerator {
+    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::IpAddr>> {
         let version = self.version;
         Some(BasicGenerator::new(self.build_schema(), move |raw| {
             // one_of returns [index, value]; extract the value for the mixed case.
@@ -561,12 +563,13 @@ impl Generator<String> for IpAddressGenerator {
             } else {
                 raw
             };
-            super::deserialize_value(inner)
+            let string: String = super::deserialize_value(inner);
+            std::net::IpAddr::from_str(&string).unwrap()
         }))
     }
 }
 
-/// Generate IP address strings (IPv4 or IPv6).
+/// Generate IP addresses (IPv4 or IPv6).
 ///
 /// See [`IpAddressGenerator`] for builder methods.
 pub fn ip_addresses() -> IpAddressGenerator {

@@ -1,11 +1,12 @@
 use super::{
     BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
-    Generator, HashMapGenerator, IntegerGenerator, OptionalGenerator, TextGenerator, VecGenerator,
-    booleans, characters, collections::ArrayGenerator, durations, floats, hashmaps, integers,
-    optional, text, vecs,
+    Generator, HashMapGenerator, IntegerGenerator, IpAddressGenerator, OptionalGenerator,
+    TextGenerator, VecGenerator, booleans, characters, collections::ArrayGenerator, durations,
+    floats, hashmaps, integers, ip_addresses, optional, text, vecs,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -208,6 +209,14 @@ impl DefaultGenerator for PathBuf {
     type Generator = BoxedGenerator<'static, PathBuf>;
     fn default_generator() -> Self::Generator {
         text().map(PathBuf::from).boxed()
+    }
+}
+
+impl DefaultGenerator for IpAddr {
+    type Generator = IpAddressGenerator;
+
+    fn default_generator() -> Self::Generator {
+        ip_addresses()
     }
 }
 
