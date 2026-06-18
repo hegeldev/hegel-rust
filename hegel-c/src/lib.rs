@@ -1340,16 +1340,17 @@ pub unsafe extern "C" fn hegel_start_span(
 /// choice buffer overruns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_length(
+    ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     out_count: *mut usize,
-) -> c_int {
-    clear_last_error();
+) -> hegel_result_t {
+    clear_last_error(ctx);
     let tc = match unsafe { tc_mut(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
     if out_count.is_null() {
-        set_last_error("hegel_test_case_length: out parameter is null");
+        set_last_error(ctx, "hegel_test_case_length: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_count = tc.ds.choice_count() };

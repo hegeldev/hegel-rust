@@ -685,7 +685,9 @@ hegel_result_t hegel_start_span(hegel_context_t *ctx, hegel_test_case_t *tc, uin
  NULL. Lets callers (e.g. the stateful driver) stop generating before the
  choice buffer overruns.
  */
-int hegel_test_case_length(hegel_test_case_t *tc, size_t *out_count);
+hegel_result_t hegel_test_case_length(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      size_t *out_count);
 
 /*
  Close the most-recently opened span. Pass `discard = true` to mark
