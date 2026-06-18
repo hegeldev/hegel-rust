@@ -76,7 +76,7 @@ fn invalid_argument_error_is_raised_as_a_usage_error() {
 
 // ── error-code translation ───────────────────────────────────────────────
 //
-// `raise_for_rc` maps libhegel's `c_int` return codes to control-flow
+// `raise_for_rc` maps libhegel's `hegel_result_t` codes to control-flow
 // unwinds. The per-primitive `TestCase` methods (start_span, stop_span,
 // generate, the pool/collection calls) are thin wrappers that call it on any
 // non-OK code, so a span call after the engine runs out of data concludes the
@@ -85,7 +85,8 @@ fn invalid_argument_error_is_raised_as_a_usage_error() {
 #[test]
 fn stop_test_code_unwinds_as_stop_test() {
     let payload =
-        std::panic::catch_unwind(|| raise_for_rc(hegel_c::HEGEL_E_STOP_TEST)).unwrap_err();
+        std::panic::catch_unwind(|| raise_for_rc(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST))
+            .unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "expected a StopTest control unwind"
@@ -94,7 +95,9 @@ fn stop_test_code_unwinds_as_stop_test() {
 
 #[test]
 fn assume_code_unwinds_as_assume_failed() {
-    let payload = std::panic::catch_unwind(|| raise_for_rc(hegel_c::HEGEL_E_ASSUME)).unwrap_err();
+    let payload =
+        std::panic::catch_unwind(|| raise_for_rc(hegel_c::hegel_result_t::HEGEL_E_ASSUME))
+            .unwrap_err();
     assert!(
         payload
             .downcast_ref::<crate::control::AssumeFailed>()
@@ -151,11 +154,15 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
 
 #[test]
 fn unexpected_code_unwinds_as_an_internal_error() {
-    // Any libhegel return code the frontend doesn't model is a framework
-    // invariant violation, surfaced as an internal error (not a shrinkable
-    // failure). 4242 is a code the engine never returns.
-    let payload = std::panic::catch_unwind(|| raise_for_rc(4242)).unwrap_err();
+    // Any libhegel result code the frontend doesn't model as control flow is a
+    // framework invariant violation, surfaced as an internal error (not a
+    // shrinkable failure). `HEGEL_E_BACKEND` (-3) is such a code: the
+    // per-test-case path only ever expects OK / STOP_TEST / ASSUME /
+    // INVALID_ARG, so a backend error reaching `raise_for_rc` is unexpected.
+    let payload =
+        std::panic::catch_unwind(|| raise_for_rc(hegel_c::hegel_result_t::HEGEL_E_BACKEND))
+            .unwrap_err();
     let msg = panic_payload_message(payload);
-    assert!(msg.contains("unexpected code 4242"), "{msg}");
+    assert!(msg.contains("unexpected code -3"), "{msg}");
     assert!(msg.contains("Internal error in hegel"), "{msg}");
 }

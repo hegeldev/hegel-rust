@@ -3,38 +3,91 @@
 //! hegeltest drives the engine the same way every other language binding
 //! does: through the `hegel_*` C functions exported by the `hegel-c` crate
 //! (lib name `hegel_c`), passing CBOR bytes and opaque handles and reading
-//! back `c_int` error codes. This module is the single place that touches
+//! back `hegel_result_t` codes. This module is the single place that touches
 //! those raw functions; the rest of the frontend works against the safe
 //! wrappers here.
 //!
 //! The wrappers deliberately do *not* know about hegeltest's control-flow
-//! unwinds: the per-test-case methods return `Result<_, c_int>` and leave it
-//! to [`crate::test_case`] to translate a non-`HEGEL_OK` code into the right
-//! [`crate::control`] payload (a `StopTest` / `AssumeFailed` / invalid-argument
-//! unwind). Keeping that split means the unsafe boundary stays small and the
-//! control-flow policy stays with the test lifecycle.
+//! unwinds: the per-test-case methods return `Result<_, hegel_result_t>` and
+//! leave it to [`crate::test_case`] to translate a non-`HEGEL_OK` code into the
+//! right [`crate::control`] payload (a `StopTest` / `AssumeFailed` /
+//! invalid-argument unwind). Keeping that split means the unsafe boundary stays
+//! small and the control-flow policy stays with the test lifecycle.
 
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 use std::ptr;
 
-/// The most recent error message libhegel recorded on this thread, or an
-/// empty string if the last call succeeded. libhegel's buffer is borrowed
-/// and invalidated by the next call on this thread, so we copy it out
-/// immediately.
-pub(crate) fn last_error_string() -> String {
-    // SAFETY: returns a borrowed pointer into a thread-local buffer valid
-    // until the next libhegel call on this thread; we copy before returning.
-    let p = hegel_c::hegel_last_error_message();
-    if p.is_null() {
-        // libhegel's thread-local error buffer is a CString whose pointer is
-        // never null; this guard exists for FFI soundness (CStr::from_ptr is UB
-        // on null), so the branch is unreachable in practice but must stay a
-        // guard rather than become a panic.
-        return String::new(); // nocov
+/// Owns a `*mut HegelContext` — libhegel's explicit per-call error channel —
+/// and frees it on drop.
+struct Context {
+    raw: *mut hegel_c::HegelContext,
+}
+
+impl Context {
+    fn new() -> Self {
+        // SAFETY: hegel_context_new never returns null.
+        Context {
+            raw: hegel_c::hegel_context_new(),
+        }
     }
-    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+
+    fn as_ptr(&self) -> *mut hegel_c::HegelContext {
+        self.raw
+    }
+
+    /// Copy out the most recent error message recorded on this context.
+    /// libhegel's buffer is borrowed and invalidated by the next call taking
+    /// this context, so we copy immediately.
+    fn last_error(&self) -> String {
+        // SAFETY: self.raw is a live, non-null context handle.
+        let p = unsafe { hegel_c::hegel_context_last_error(self.raw) };
+        if p.is_null() {
+            // hegel_context_last_error only returns null for a null context,
+            // and self.raw is never null; this guard keeps CStr::from_ptr
+            // sound rather than becoming a panic.
+            return String::new(); // nocov
+        }
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from hegel_context_new and is freed exactly once.
+        unsafe { hegel_c::hegel_context_free(self.raw) };
+    }
+}
+
+thread_local! {
+    /// This thread's libhegel error context.
+    ///
+    /// libhegel reports a failed call's diagnostic on an explicit context
+    /// handle rather than its own thread-local state — deliberately, so that
+    /// callers running on green threads / fibers that migrate between OS
+    /// threads mid-call (e.g. Go's goroutines) are not pinned to thread-local
+    /// error storage. The hegel-rust frontend has no such constraint: it
+    /// drives the engine from ordinary OS threads, and a failed call and the
+    /// [`last_error_string`] that reads its message always run on the same
+    /// thread. So it is sound — and simplest — to keep one context per thread
+    /// here and pass it to every fallible call. Each thread gets its own, so
+    /// no two threads ever share one (and it is freed when the thread exits).
+    static CONTEXT: Context = Context::new();
+}
+
+/// Run `f` with this thread's libhegel error-context pointer.
+fn with_context<R>(f: impl FnOnce(*mut hegel_c::HegelContext) -> R) -> R {
+    CONTEXT.with(|c| f(c.as_ptr()))
+}
+
+/// The most recent error message libhegel recorded on this thread's context,
+/// or an empty string if the last call on it succeeded. Read synchronously on
+/// the same thread that made the failing call, before any later call can
+/// overwrite it.
+pub(crate) fn last_error_string() -> String {
+    CONTEXT.with(|c| c.last_error())
 }
 
 /// Build a NUL-terminated C string, replacing any interior NUL (which a
@@ -75,22 +128,25 @@ impl SettingsHandle {
                 raw,
                 settings.report_multiple_failures,
             );
+            // The database setters take an error context (their only failure
+            // is a non-UTF-8 path/key); thread this thread's context through
+            // even though we always build the C strings from valid Rust `&str`.
             match &settings.database {
                 // Empty string disables the database; a path selects it; Unset
                 // leaves libhegel's default in place (don't call the setter).
                 Database::Disabled => {
                     let empty = CString::new("").unwrap();
-                    hegel_c::hegel_settings_database(raw, empty.as_ptr());
+                    with_context(|ctx| hegel_c::hegel_settings_database(ctx, raw, empty.as_ptr()));
                 }
                 Database::Path(path) => {
                     let c = cstring_lossy(path);
-                    hegel_c::hegel_settings_database(raw, c.as_ptr());
+                    with_context(|ctx| hegel_c::hegel_settings_database(ctx, raw, c.as_ptr()));
                 }
                 Database::Unset => {}
             }
             if let Some(key) = database_key {
                 let c = cstring_lossy(key);
-                hegel_c::hegel_settings_database_key(raw, c.as_ptr());
+                with_context(|ctx| hegel_c::hegel_settings_database_key(ctx, raw, c.as_ptr()));
             }
             hegel_c::hegel_settings_phases(raw, phases_bitmask(&settings.phases));
             hegel_c::hegel_settings_suppress_health_check(
@@ -127,7 +183,7 @@ impl RunHandle {
     /// could not be started.
     pub(crate) fn start(settings: &SettingsHandle) -> Result<Self, String> {
         // SAFETY: settings.as_ptr() is a live, non-null handle.
-        let raw = unsafe { hegel_c::hegel_run_start(settings.as_ptr()) };
+        let raw = with_context(|ctx| unsafe { hegel_c::hegel_run_start(ctx, settings.as_ptr()) });
         if raw.is_null() {
             // settings is always a live handle, so hegel_run_start returns null
             // only on OS worker-thread spawn failure: a real but unprovokable
@@ -143,7 +199,7 @@ impl RunHandle {
     pub(crate) fn next_test_case(&self) -> Option<CTestCase> {
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
         // case or returns null at completion.
-        let raw = unsafe { hegel_c::hegel_next_test_case(self.raw) };
+        let raw = with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw) });
         if raw.is_null() {
             None
         } else {
@@ -156,7 +212,7 @@ impl RunHandle {
     pub(crate) fn result(&self) -> RunResult<'_> {
         // SAFETY: called after the pull loop drained; libhegel returns a
         // borrowed pointer valid for the run's lifetime.
-        let raw = unsafe { hegel_c::hegel_run_result(self.raw) };
+        let raw = with_context(|ctx| unsafe { hegel_c::hegel_run_result(ctx, self.raw) });
         RunResult {
             raw,
             _run: std::marker::PhantomData,
@@ -196,7 +252,9 @@ impl CTestCase {
     pub(crate) fn from_blob(settings: &SettingsHandle, blob: &str) -> Result<Self, String> {
         let c_blob = cstring_lossy(blob);
         // SAFETY: settings is live; c_blob is a valid NUL-terminated string.
-        let raw = unsafe { hegel_c::hegel_test_case_from_blob(settings.as_ptr(), c_blob.as_ptr()) };
+        let raw = with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_from_blob(ctx, settings.as_ptr(), c_blob.as_ptr())
+        });
         if raw.is_null() {
             return Err(last_error_string());
         }
@@ -206,21 +264,22 @@ impl CTestCase {
     /// Generate a CBOR value for `schema_cbor`, returning a fresh copy of the
     /// bytes (libhegel's buffer is invalidated by the next call on this
     /// handle, so we copy immediately).
-    pub(crate) fn generate(&self, schema_cbor: &[u8]) -> Result<Vec<u8>, c_int> {
+    pub(crate) fn generate(&self, schema_cbor: &[u8]) -> Result<Vec<u8>, hegel_result_t> {
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len: usize = 0;
         // SAFETY: schema bytes + out params are valid; on HEGEL_OK libhegel
         // writes a borrowed (ptr, len) we copy before any further call.
-        let rc = unsafe {
+        let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_generate(
+                ctx,
                 self.raw,
                 schema_cbor.as_ptr(),
                 schema_cbor.len(),
                 &mut out_ptr,
                 &mut out_len,
             )
-        };
-        if rc != hegel_c::HEGEL_OK {
+        });
+        if rc != hegel_result_t::HEGEL_OK {
             return Err(rc);
         }
         // SAFETY: on success out_ptr/out_len describe a valid borrowed buffer.
@@ -228,29 +287,41 @@ impl CTestCase {
         Ok(bytes.to_vec())
     }
 
-    pub(crate) fn start_span(&self, label: u64) -> Result<(), c_int> {
-        rc_to_unit(unsafe { hegel_c::hegel_start_span(self.raw, label) })
+    pub(crate) fn start_span(&self, label: u64) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_start_span(ctx, self.raw, label)
+        }))
     }
 
-    pub(crate) fn stop_span(&self, discard: bool) -> Result<(), c_int> {
-        rc_to_unit(unsafe { hegel_c::hegel_stop_span(self.raw, discard) })
+    pub(crate) fn stop_span(&self, discard: bool) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_stop_span(ctx, self.raw, discard)
+        }))
     }
 
     pub(crate) fn new_collection(
         &self,
         min_size: u64,
         max_size: Option<u64>,
-    ) -> Result<i64, c_int> {
+    ) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
-        let rc = unsafe {
-            hegel_c::hegel_new_collection(self.raw, min_size, max_size.unwrap_or(u64::MAX), &mut id)
-        };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_new_collection(
+                ctx,
+                self.raw,
+                min_size,
+                max_size.unwrap_or(u64::MAX),
+                &mut id,
+            )
+        });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, c_int> {
+    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, hegel_result_t> {
         let mut more = false;
-        let rc = unsafe { hegel_c::hegel_collection_more(self.raw, collection_id, &mut more) };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_collection_more(ctx, self.raw, collection_id, &mut more)
+        });
         rc_to_value(rc, more)
     }
 
@@ -258,27 +329,32 @@ impl CTestCase {
         &self,
         collection_id: i64,
         why: Option<&str>,
-    ) -> Result<(), c_int> {
+    ) -> Result<(), hegel_result_t> {
         let c_why = why.map(cstring_lossy);
         let why_ptr = c_why.as_ref().map_or(ptr::null(), |c| c.as_ptr());
-        rc_to_unit(unsafe { hegel_c::hegel_collection_reject(self.raw, collection_id, why_ptr) })
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_collection_reject(ctx, self.raw, collection_id, why_ptr)
+        }))
     }
 
-    pub(crate) fn new_pool(&self) -> Result<i64, c_int> {
+    pub(crate) fn new_pool(&self) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
-        let rc = unsafe { hegel_c::hegel_new_pool(self.raw, &mut id) };
+        let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut id) });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, c_int> {
+    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
-        let rc = unsafe { hegel_c::hegel_pool_add(self.raw, pool_id, &mut id) };
+        let rc =
+            with_context(|ctx| unsafe { hegel_c::hegel_pool_add(ctx, self.raw, pool_id, &mut id) });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, c_int> {
+    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
-        let rc = unsafe { hegel_c::hegel_pool_generate(self.raw, pool_id, consume, &mut id) };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_pool_generate(ctx, self.raw, pool_id, consume, &mut id)
+        });
         rc_to_value(rc, id)
     }
 
@@ -286,7 +362,7 @@ impl CTestCase {
         &self,
         rule_names: &[&str],
         invariant_names: &[&str],
-    ) -> Result<i64, c_int> {
+    ) -> Result<i64, hegel_result_t> {
         // Keep the CStrings alive until the call returns; the pointer arrays
         // borrow into them.
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
@@ -296,8 +372,9 @@ impl CTestCase {
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
         let mut id: i64 = 0;
-        let rc = unsafe {
+        let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
+                ctx,
                 self.raw,
                 rule_ptrs.as_ptr(),
                 rule_ptrs.len(),
@@ -305,20 +382,26 @@ impl CTestCase {
                 invariant_ptrs.len(),
                 &mut id,
             )
-        };
+        });
         rc_to_value(rc, id)
     }
 
-    pub(crate) fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, c_int> {
+    pub(crate) fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<i64, hegel_result_t> {
         let mut out: i64 = 0;
-        let rc =
-            unsafe { hegel_c::hegel_state_machine_next_rule(self.raw, state_machine_id, &mut out) };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
+        });
         rc_to_value(rc, out)
     }
 
-    pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), c_int> {
+    pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
         let c_label = cstring_lossy(label);
-        rc_to_unit(unsafe { hegel_c::hegel_target(self.raw, score, c_label.as_ptr()) })
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_target(ctx, self.raw, score, c_label.as_ptr())
+        }))
     }
 
     /// Report the test case's outcome. `origin` is supplied only for an
@@ -327,10 +410,12 @@ impl CTestCase {
         &self,
         status: hegel_c::hegel_status_t,
         origin: Option<&str>,
-    ) -> Result<(), c_int> {
+    ) -> Result<(), hegel_result_t> {
         let c_origin = origin.map(cstring_lossy);
         let origin_ptr = c_origin.as_ref().map_or(ptr::null(), |c| c.as_ptr());
-        rc_to_unit(unsafe { hegel_c::hegel_mark_complete(self.raw, status, origin_ptr) })
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_mark_complete(ctx, self.raw, status, origin_ptr)
+        }))
     }
 
     /// Whether this is the engine's final replay of a minimal counterexample
@@ -346,7 +431,7 @@ impl Drop for CTestCase {
             // SAFETY: a `owned` handle came from from_blob and is ours to free
             // exactly once. Run-owned handles (owned = false) are freed by the
             // run and must not be touched here.
-            unsafe { hegel_c::hegel_test_case_free(self.raw) };
+            with_context(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
         }
     }
 }
@@ -398,16 +483,16 @@ pub(crate) struct Failure {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn rc_to_unit(rc: c_int) -> Result<(), c_int> {
-    if rc == hegel_c::HEGEL_OK {
+fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {
+    if rc == hegel_result_t::HEGEL_OK {
         Ok(())
     } else {
         Err(rc)
     }
 }
 
-fn rc_to_value<T>(rc: c_int, value: T) -> Result<T, c_int> {
-    if rc == hegel_c::HEGEL_OK {
+fn rc_to_value<T>(rc: hegel_result_t, value: T) -> Result<T, hegel_result_t> {
+    if rc == hegel_result_t::HEGEL_OK {
         Ok(value)
     } else {
         Err(rc)
@@ -452,11 +537,11 @@ fn phases_bitmask(phases: &[Phase]) -> u32 {
     let mut mask = 0;
     for phase in phases {
         mask |= match phase {
-            Phase::Explicit => hegel_c::HEGEL_PHASE_EXPLICIT,
-            Phase::Reuse => hegel_c::HEGEL_PHASE_REUSE,
-            Phase::Generate => hegel_c::HEGEL_PHASE_GENERATE,
-            Phase::Target => hegel_c::HEGEL_PHASE_TARGET,
-            Phase::Shrink => hegel_c::HEGEL_PHASE_SHRINK,
+            Phase::Explicit => hegel_c::hegel_phase_t::HEGEL_PHASE_EXPLICIT as u32,
+            Phase::Reuse => hegel_c::hegel_phase_t::HEGEL_PHASE_REUSE as u32,
+            Phase::Generate => hegel_c::hegel_phase_t::HEGEL_PHASE_GENERATE as u32,
+            Phase::Target => hegel_c::hegel_phase_t::HEGEL_PHASE_TARGET as u32,
+            Phase::Shrink => hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK as u32,
         };
     }
     mask
@@ -466,10 +551,16 @@ fn health_check_bitmask(checks: &[HealthCheck]) -> u32 {
     let mut mask = 0;
     for check in checks {
         mask |= match check {
-            HealthCheck::FilterTooMuch => hegel_c::HEGEL_HC_FILTER_TOO_MUCH,
-            HealthCheck::TooSlow => hegel_c::HEGEL_HC_TOO_SLOW,
-            HealthCheck::TestCasesTooLarge => hegel_c::HEGEL_HC_TEST_CASES_TOO_LARGE,
-            HealthCheck::LargeInitialTestCase => hegel_c::HEGEL_HC_LARGE_INITIAL_TEST_CASE,
+            HealthCheck::FilterTooMuch => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_FILTER_TOO_MUCH as u32
+            }
+            HealthCheck::TooSlow => hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW as u32,
+            HealthCheck::TestCasesTooLarge => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_TEST_CASES_TOO_LARGE as u32
+            }
+            HealthCheck::LargeInitialTestCase => {
+                hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32
+            }
         };
     }
     mask

@@ -46,54 +46,58 @@ static int decode_small_uint(const uint8_t *bytes, size_t len) {
 #define ORIGIN "n >= 5"
 
 int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
     hegel_settings_t *s = hegel_settings_new();
     hegel_settings_test_cases(s, 200);
-    hegel_settings_database(s, "");
+    hegel_settings_database(ctx, s, "");
     hegel_settings_derandomize(s, true);
     hegel_settings_seed(s, 0xc0ffee, true);
 
-    hegel_run_t *run = hegel_run_start(s);
+    hegel_run_t *run = hegel_run_start(ctx, s);
     if (!run) {
-        fprintf(stderr, "hegel_run_start: %s\n", hegel_last_error_message());
+        fprintf(stderr, "hegel_run_start: %s\n", hegel_context_last_error(ctx));
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 2;
     }
 
     hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(run)) != NULL) {
+    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
         const uint8_t *value;
         size_t value_len;
-        int rc = hegel_generate(tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
+        hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
-            hegel_mark_complete(tc, HEGEL_STATUS_OVERRUN, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         if (rc != HEGEL_OK) {
-            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, hegel_last_error_message());
-            hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, hegel_context_last_error(ctx));
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
             continue;
         }
 
         int n = decode_small_uint(value, value_len);
         if (n < 0) {
             fprintf(stderr, "decode failed\n");
-            hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
             continue;
         }
 
         if (n < 5) {
-            hegel_mark_complete(tc, HEGEL_STATUS_VALID, NULL);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
         } else {
-            hegel_mark_complete(tc, HEGEL_STATUS_INTERESTING, ORIGIN);
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
         }
     }
 
-    const hegel_run_result_t *result = hegel_run_result(run);
+    const hegel_run_result_t *result = hegel_run_result(ctx, run);
     if (hegel_run_result_status(result) != HEGEL_RUN_STATUS_FAILED) {
         fprintf(stderr, "FAIL: expected a failing run, got status %d\n",
                 (int)hegel_run_result_status(result));
         hegel_run_free(run);
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
@@ -102,6 +106,7 @@ int main(void) {
         fprintf(stderr, "FAIL: expected at least one failure, got %zu\n", nf);
         hegel_run_free(run);
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
@@ -111,6 +116,7 @@ int main(void) {
         fprintf(stderr, "FAIL: expected origin to contain %s, got: %s\n", ORIGIN, origin);
         hegel_run_free(run);
         hegel_settings_free(s);
+        hegel_context_free(ctx);
         return 1;
     }
 
@@ -118,5 +124,6 @@ int main(void) {
 
     hegel_run_free(run);
     hegel_settings_free(s);
+    hegel_context_free(ctx);
     return 0;
 }
