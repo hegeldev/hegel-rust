@@ -22,7 +22,7 @@ use hegel_c::{
     hegel_settings_new, hegel_settings_phases, hegel_settings_report_multiple_failures,
     hegel_settings_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
     hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_test_case_is_final_replay, hegel_version,
+    hegel_test_case_is_final_replay, hegel_test_case_length, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -257,6 +257,59 @@ fn run_free_with_undrained_case_does_not_deadlock() {
         let tc = hegel_next_test_case(ctx, run);
         assert!(!tc.is_null());
         // Drop everything without marking the case complete.
+        hegel_run_free(run);
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+    }
+}
+
+/// `hegel_test_case_length` reports the running choice count: zero before any
+/// draw, growing as draws happen, and rejecting null handles / out params.
+#[test]
+fn test_case_length_tracks_choice_count() {
+    let ctx = hegel_context_new();
+    unsafe {
+        // Null test-case handle is an invalid handle.
+        let mut out = 0usize;
+        assert_eq!(
+            hegel_test_case_length(ctx, ptr::null_mut(), &mut out),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        let s = hegel_settings_new();
+        let empty = CString::new("").unwrap();
+        hegel_settings_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_test_cases(s, 1);
+        let run = hegel_run_start(ctx, s);
+        assert!(!run.is_null());
+        let tc = hegel_next_test_case(ctx, run);
+        assert!(!tc.is_null());
+
+        // Null out parameter is rejected with an invalid-argument error.
+        assert_eq!(
+            hegel_test_case_length(ctx, tc, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        // No draws yet: zero choices.
+        let mut before = usize::MAX;
+        assert_eq!(hegel_test_case_length(ctx, tc, &mut before), HEGEL_OK);
+        assert_eq!(before, 0);
+
+        // After a draw the count has grown.
+        let schema = integer_schema();
+        let mut p: *const u8 = ptr::null();
+        let mut n = 0usize;
+        assert_eq!(
+            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+        let mut after = 0usize;
+        assert_eq!(hegel_test_case_length(ctx, tc, &mut after), HEGEL_OK);
+        assert!(after > before, "choice count should grow after a draw");
+
+        hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
         hegel_run_free(run);
         hegel_settings_free(s);
         hegel_context_free(ctx);
