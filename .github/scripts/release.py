@@ -216,6 +216,7 @@ def release() -> None:
             "release",
             "create",
             f"v{new_version}",
+            "--draft",
             "--title",
             f"v{new_version}",
             "--notes",
