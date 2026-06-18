@@ -65,18 +65,19 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
 
         // A span wrapping a small engine-managed collection of ints, rejecting
         // any zero element so collection_reject is exercised.
-        tc.start_span(hegel_c::HEGEL_LABEL_LIST).unwrap();
+        tc.start_span(hegel_c::hegel_label_t::HEGEL_LABEL_LIST as u64)
+            .unwrap();
         let cid = tc.new_collection(0, Some(3)).unwrap();
         let mut drew_overrun = false;
         loop {
             match tc.collection_more(cid) {
                 Ok(true) => {}
                 Ok(false) => break,
-                Err(hegel_c::HEGEL_E_STOP_TEST) => {
+                Err(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST) => {
                     drew_overrun = true;
                     break;
                 }
-                Err(rc) => panic!("collection_more rc={rc}"),
+                Err(rc) => panic!("collection_more rc={rc:?}"),
             }
             match tc.generate(&schema) {
                 Ok(bytes) => {
@@ -84,11 +85,11 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
                         tc.collection_reject(cid, Some("zero")).unwrap();
                     }
                 }
-                Err(hegel_c::HEGEL_E_STOP_TEST) => {
+                Err(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST) => {
                     drew_overrun = true;
                     break;
                 }
-                Err(rc) => panic!("generate rc={rc}"),
+                Err(rc) => panic!("generate rc={rc:?}"),
             }
         }
         tc.stop_span(false).unwrap();
@@ -102,11 +103,11 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
         let added = tc.pool_add(pool).unwrap();
         match tc.pool_generate(pool, false) {
             Ok(drawn) => assert_eq!(drawn, added, "non-consuming draw returns the added id"),
-            Err(hegel_c::HEGEL_E_STOP_TEST) => {
+            Err(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST) => {
                 tc.mark_complete(OVERRUN, None).unwrap();
                 continue;
             }
-            Err(rc) => panic!("pool_generate rc={rc}"),
+            Err(rc) => panic!("pool_generate rc={rc:?}"),
         }
 
         // A targeting observation, then the actual draw the "property" sees.
@@ -117,8 +118,10 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
                 assert!((0..=100).contains(&n));
                 tc.mark_complete(VALID, None).unwrap();
             }
-            Err(hegel_c::HEGEL_E_STOP_TEST) => tc.mark_complete(OVERRUN, None).unwrap(),
-            Err(rc) => panic!("generate rc={rc}"),
+            Err(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST) => {
+                tc.mark_complete(OVERRUN, None).unwrap()
+            }
+            Err(rc) => panic!("generate rc={rc:?}"),
         }
     }
     assert!(cases >= 1);
@@ -148,8 +151,10 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
                     tc.mark_complete(VALID, None).unwrap();
                 }
             }
-            Err(hegel_c::HEGEL_E_STOP_TEST) => tc.mark_complete(OVERRUN, None).unwrap(),
-            Err(rc) => panic!("generate rc={rc}"),
+            Err(hegel_c::hegel_result_t::HEGEL_E_STOP_TEST) => {
+                tc.mark_complete(OVERRUN, None).unwrap()
+            }
+            Err(rc) => panic!("generate rc={rc:?}"),
         }
     }
 

@@ -48,7 +48,8 @@
           # target/release/ depending on whether --target is in play.
           postInstall = ''
             mkdir -p $out/lib
-            find target -name 'libhegel.so' -path '*/release/*' -exec cp {} $out/lib/ \;
+            cp "$(find target -name 'libhegel_c.so' -path '*/release/*' | 
+            head -n1)" $out/lib/libhegel.so
           '';
         };
 

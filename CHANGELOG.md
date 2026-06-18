@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.0 - 2026-06-18
+
+This patch tightens libhegel's C ABI: it removes the last thread-local state,
+replaces the `#define`d integer constants with named enums, and documents
+pointer ownership.
+
+For Rust users this is an internal-only change, but it is a significant breaking
+change for libhegel users.
+
 ## 0.19.2 - 2026-06-16
 
 This patch moves Hegel's data-generation engine out of the `hegeltest` crate and into libhegel (the `hegel-c` crate). `hegeltest` now drives the engine entirely through libhegel's C ABI, exactly like the other language bindings. For Rust users this is an internal change — the public API is unchanged — but it keeps us honest: hegel-rust can no longer accidentally depend on engine internals that aren't exposed through the C ABI.

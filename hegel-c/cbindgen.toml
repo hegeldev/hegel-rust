@@ -5,6 +5,35 @@ header = """
  *
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
+ *
+ * Pointer ownership
+ * -----------------
+ * Pointers you pass *into* a libhegel function are always yours. The library
+ * reads them during the call and copies whatever it needs to keep, so you may
+ * free or reuse the memory as soon as the call returns. This covers strings
+ * (char*), CBOR byte buffers, and arrays of strings alike.
+ *
+ * Of the pointers libhegel hands *back*, you own exactly the handles made by
+ * the four constructors, and must release each with its matching free:
+ *
+ *     hegel_context_new          ->  hegel_context_free
+ *     hegel_settings_new         ->  hegel_settings_free
+ *     hegel_run_start            ->  hegel_run_free
+ *     hegel_test_case_from_blob  ->  hegel_test_case_free
+ *
+ * Every *other* pointer libhegel returns is borrowed: libhegel still owns it,
+ * you must not free it, and it is valid only until a point that the returning
+ * function documents. Two cases are easy to trip over:
+ *
+ *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
+ *     run and freed by hegel_run_free. Do NOT pass it to hegel_test_case_free
+ *     (that is only for a test case you made with hegel_test_case_from_blob).
+ *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
+ *     run live until hegel_run_free.
+ *   - Returned strings and byte buffers (e.g. from hegel_generate,
+ *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
+ *     getters) are transient — hegel_generate's bytes, for instance, are
+ *     invalidated by the next call on that test case. Copy them to keep them.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
@@ -17,7 +46,18 @@ documentation_style = "c"
 style = "type"
 usize_is_size_t = true
 
+# These enums name constants that are passed as plain integers, not as the
+# enum type, so cbindgen sees no signature referencing them and would omit
+# them. Force them into the header so the named values are still emitted as
+# proper enums:
+#   - hegel_phase_t / hegel_health_check_t: bitwise-OR'd into a uint32_t mask.
+#   - hegel_label_t: a uint64_t span label (the label space is open, so the
+#     parameter can't be the closed enum type).
+[export]
+include = ["hegel_phase_t", "hegel_health_check_t", "hegel_label_t"]
+
 [export.rename]
+"HegelContext" = "hegel_context_t"
 "HegelRun" = "hegel_run_t"
 "HegelSettings" = "hegel_settings_t"
 "HegelTestCase" = "hegel_test_case_t"
