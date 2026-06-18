@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.1 - 2026-06-18
+
+Fixes stateful testing terminating step generation prematurely.
+
 ## 0.20.0 - 2026-06-18
 
 This patch tightens libhegel's C ABI: it removes the last thread-local state,
