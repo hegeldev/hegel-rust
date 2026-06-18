@@ -550,17 +550,15 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
 /// floor (which would turn e.g. a stateful stop signal's `p = 2^-16` into
 /// `1/256`).
 ///
-/// Spends 8 bytes of entropy rather than one, so it is reserved for draws
-/// whose probability needs the precision (routed via
+/// Delegates to [`RngExt::random_bool`], which scales `p` to a 64-bit
+/// threshold and compares it against a fresh `u64` — spending 8 bytes of
+/// entropy rather than the one byte [`weighted_boolean_sample`] uses, so it is
+/// reserved for draws whose probability needs the precision (routed via
 /// [`NativeTestCase::weighted_precise`]); ordinary booleans keep the one-byte
-/// sampler. Callers must pass `0.0 < p < 1.0`; boundaries are forced without
-/// entropy by `weighted_precise`.
+/// sampler. Callers must pass `0.0 < p < 1.0` (`random_bool` panics outside
+/// `[0, 1]`).
 pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bool {
-    let mut buf = [0u8; 8];
-    rng.fill_bytes(&mut buf);
-    // Top 53 bits -> uniform in [0, 1), the resolution of an f64 mantissa.
-    let uniform = (u64::from_le_bytes(buf) >> 11) as f64 * (1.0 / ((1u64 << 53) as f64));
-    uniform < p
+    rng.random_bool(p)
 }
 
 /// Interesting string constants: logic keywords, numeric edge cases,
