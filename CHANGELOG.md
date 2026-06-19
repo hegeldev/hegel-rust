@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.21.1 - 2026-06-19
+
+This patch reduces redundant test executions by the shrinker.
+
 ## 0.21.0 - 2026-06-19
 
 This release reworks the stateful-testing value-pool API. The `Variables<T>`
