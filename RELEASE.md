@@ -11,9 +11,6 @@ you draw from with `tc.draw()`:
 - `pool.values_consumed()` returns a generator over `T` — drawing from it
   removes a value from the pool and yields it by value (the old `consume()`).
 
-Routing pool draws through `tc.draw()` means the chosen value is recorded in the
-failing-test replay and shrinks like any other draw.
-
 To migrate, rename the type and constructor, and replace draws:
 
 ```rust
@@ -30,11 +27,6 @@ let account = tc.draw(accounts.values_reusable()).clone();
 let consumed = tc.draw(accounts.values_consumed());
 ```
 
-The `is_empty()`, `len()`, and `add()` methods are unchanged.
-
-The `Generator<T>` trait no longer requires `Self: Send + Sync`. Drawing a value
-is single-threaded, so the bound was never needed to produce values; it is now
-required only where a generator is actually shared across threads — by `boxed()`
-and by `deferred()`'s `set()`, which already carry it. This lets generators that
-borrow non-`Sync` data (such as the new `Pool` reference and value generators)
-implement the trait directly. Existing generators are unaffected.
+Additionally, the `Generator<T>` trait no longer requires `Self: Send + Sync`.
+This lets generators that borrow non-`Sync` data (such as the new `Pool` reference
+and value generators) implement the trait directly. 
