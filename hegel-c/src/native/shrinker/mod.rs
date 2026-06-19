@@ -243,14 +243,8 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
-        // ported from Hypothesis's `cached_test_function` (shrinker.py):
-        // compare the candidate against the current target over
-        // the target's length window (truncating a candidate longer than the
-        // target — extra trailing nodes can't make it shortlex-smaller). If the
-        // truncated candidate is already shortlex >= the current target, no
-        // realised run from it can improve on the target, so reject it without
-        // running the test. Deletion candidates are shorter, hence
-        // shortlex-smaller, and are NOT rejected here — they still run.
+        // If the truncated candidate is already shortlex >= the current target, 
+        // no run from it can improve on the target, so reject it
         let cmp: &[ChoiceNode] = if nodes.len() > self.current_nodes.len() {
             &nodes[..self.current_nodes.len()]
         } else {
@@ -280,8 +274,10 @@ impl<'a> Shrinker<'a> {
             .iter()
             .enumerate()
             .take(nodes.len().min(self.current_nodes.len()))
-            .filter(|_| nodes.len() == self.current_nodes.len())
         {
+            if nodes.len() == self.current_nodes.len() {
+                continue
+            }
             if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
                 return Ok(false);
             }
