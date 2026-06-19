@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.21.2 - 2026-06-19
+
+Print to stderr indicating the start and end of the reuse, generate, and shrink phases
+when verbosity is `Verbose` or `Debug`.
+
 ## 0.21.1 - 2026-06-19
 
 This patch reduces redundant test executions by the shrinker.
