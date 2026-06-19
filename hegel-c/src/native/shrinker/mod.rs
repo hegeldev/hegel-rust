@@ -243,7 +243,7 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
-        // If the truncated candidate is already shortlex >= the current target, 
+        // If the truncated candidate is already shortlex >= the current target,
         // no run from it can improve on the target, so reject it
         let cmp: &[ChoiceNode] = if nodes.len() > self.current_nodes.len() {
             &nodes[..self.current_nodes.len()]
@@ -275,8 +275,8 @@ impl<'a> Shrinker<'a> {
             .enumerate()
             .take(nodes.len().min(self.current_nodes.len()))
         {
-            if nodes.len() == self.current_nodes.len() {
-                continue
+            if nodes.len() != self.current_nodes.len() {
+                continue;
             }
             if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
                 return Ok(false);
