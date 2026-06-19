@@ -1,3 +1,4 @@
 RELEASE_TYPE: patch
 
-This patch reduces redundant test executions by the shrinker.
+Print to stderr indicating the start and end of the reuse, generate, and shrink phases
+when verbosity is `Verbose` or `Debug`.
