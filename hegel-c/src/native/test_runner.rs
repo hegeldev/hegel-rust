@@ -224,6 +224,11 @@ impl<'a> Engine<'a> {
         let database_key = self.database_key;
         let max_test_cases = settings.test_cases;
         let verbosity = settings.verbosity;
+        let log_phase = move |name: &str, edge: &str| {
+            if matches!(verbosity, Verbosity::Verbose | Verbosity::Debug) {
+                eprintln!("{edge}ing phase: {name}");
+            }
+        };
 
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
         let target_enabled = settings.phases.contains(&Phase::Target);
@@ -248,6 +253,7 @@ impl<'a> Engine<'a> {
         // it to false so the shrinker re-runs over the full set.
         if settings.phases.contains(&Phase::Reuse) {
             if let (Some(_), Some(key)) = (self.db(), database_key) {
+                log_phase("Reuse", "Start");
                 let key_bytes = key.as_bytes().to_vec();
                 let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
                 let mut values = self.db().map(|db| db.fetch(&key_bytes)).unwrap_or_default();
@@ -344,6 +350,7 @@ impl<'a> Engine<'a> {
                     // generation results instead.
                     replay_aligned = false;
                 }
+                log_phase("Reuse", "End");
             }
         }
 
@@ -359,6 +366,15 @@ impl<'a> Engine<'a> {
         // ASAP than take the time to look for new ones"
         // (engine.py::generate_new_examples).
         let found_in_reuse = !self.interesting.is_empty();
+
+        // The generation phase runs (simplest pre-trial + random batches) unless
+        // it is disabled, the reuse phase already reproduced a bug, or the test
+        // is trivial.
+        let actually_generate =
+            settings.phases.contains(&Phase::Generate) && !found_in_reuse && !self.test_is_trivial;
+        if actually_generate {
+            log_phase("Generate", "Start");
+        }
 
         // All-simplest pre-trial: a deterministic "draw every choice at its
         // shrink target" probe before random generation starts. Gives
@@ -555,11 +571,16 @@ impl<'a> Engine<'a> {
             )));
         }
 
+        if actually_generate {
+            log_phase("Generate", "End");
+        }
+
         // --- Shrinking phase ---
         if !self.interesting.is_empty()
             && !replay_aligned
             && settings.phases.contains(&Phase::Shrink)
         {
+            log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
                 eprintln!(
@@ -726,6 +747,7 @@ impl<'a> Engine<'a> {
                     total
                 );
             }
+            log_phase("Shrink", "End");
         } else if self.interesting.is_empty() && verbosity == Verbosity::Debug {
             // No bug found — nothing to shrink; left for symmetry with the
             // `Test done.` line below.
