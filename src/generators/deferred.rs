@@ -70,7 +70,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
     /// # Panics
     ///
     /// Drawing from a handle before `set` is called will panic.
-    pub fn set(self, generator: impl Generator<T> + 'static) {
+    pub fn set(self, generator: impl Generator<T> + Send + Sync + 'static) {
         let _ = self.inner.set(generator.boxed());
     }
 }

@@ -559,11 +559,16 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           asset="$ASSET"
-          # The first racer creates the Release; the rest see "already
-          # exists" from `gh release create` and fall through to upload.
+          # The `release` job creates the Release as a draft up front, so
+          # normally `gh release view` finds it and we go straight to upload.
+          # The `--draft` fallback only fires if that release is somehow
+          # absent: assets must land in a *draft* release because GitHub's
+          # immutable releases feature locks a release's assets once it is
+          # published. `release-binaries-verify` publishes it afterwards.
           # `--clobber` makes re-runs (e.g. after a flaked build) idempotent.
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
+              --draft \
               --title "$tag" \
               --notes "libhegel binaries for $tag. See CHANGELOG.md for the full changelog." \
               || true
@@ -581,8 +586,11 @@ jobs:
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
     needs: [release, release-binaries]
     runs-on: ubuntu-latest
+    # `contents: write` (not just read) so this job can both view the draft
+    # release — drafts are invisible to read-only tokens — and publish it
+    # once every expected asset is present.
     permissions:
-      contents: read
+      contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
@@ -612,6 +620,19 @@ jobs:
             exit 1
           fi
           echo "All expected libhegel assets present on $tag."
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # Un-draft the release now that every asset is verified present.
+          # Publishing is what makes the release (and its assets) immutable,
+          # so it must happen last. 
+          gh release edit "$tag" --repo "$REPO" --draft=false
+          echo "Published release $tag."
 
   # Notify each downstream language binding that a new libhegel release is live
   # so it can bump its pinned version. One matrix entry per consumer repo.

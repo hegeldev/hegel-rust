@@ -1,6 +1,6 @@
 [package]
 name = "hegeltest-c"
-version = "0.19.2"
+version = "0.21.0"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT"

@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
-use crate::HEGEL_LABEL_FEATURE_FLAG;
 use crate::control::hegel_internal_assert;
+use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 
 /// Draw a uniform index in `[0, n)`.
@@ -54,7 +54,7 @@ impl FeatureFlags {
     }
 
     fn is_enabled(&mut self, ntc: &mut NativeTestCase, i: usize) -> Result<bool, EngineError> {
-        ntc.start_span(HEGEL_LABEL_FEATURE_FLAG);
+        ntc.start_span(HEGEL_LABEL_FEATURE_FLAG as u64);
         let forced = if self.at_least_one_of.len() == 1 && self.at_least_one_of.contains(&i) {
             Some(false)
         } else {
