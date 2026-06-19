@@ -92,10 +92,11 @@ impl<M> Rule<M> {
 /// from the pool, use the generators it hands out rather than reading from it
 /// directly:
 ///
-/// - [`references`](Pool::references) returns a generator over `&T` — drawing
-///   from it yields a reference to a value in the pool without removing it.
-/// - [`values`](Pool::values) returns a generator over `T` — drawing from it
-///   removes a value from the pool and yields it by value.
+/// - [`values_reusable`](Pool::values_reusable) returns a generator over `&T` —
+///   drawing from it yields a reference to a value in the pool without removing
+///   it.
+/// - [`values_consumed`](Pool::values_consumed) returns a generator over `T` —
+///   drawing from it removes a value from the pool and yields it by value.
 ///
 /// Both generators are used through [`tc.draw`](TestCase::draw), so the chosen
 /// value is recorded in the failing-test replay and the choice shrinks like any
@@ -142,8 +143,8 @@ impl<T> Pool<T> {
     /// Drawing from it yields a `&T` borrowing a value in the pool, without
     /// removing it. Drawing rejects the current test case (as if by
     /// `assume(false)`) when the pool is empty.
-    pub fn references(&self) -> References<'_, T> {
-        References {
+    pub fn values_reusable(&self) -> ValuesReusable<'_, T> {
+        ValuesReusable {
             pool_id: self.pool_id,
             values: &self.values,
         }
@@ -154,8 +155,8 @@ impl<T> Pool<T> {
     /// Drawing from it removes a value from the pool and yields it by value.
     /// Once consumed, that value is never drawn again. Drawing rejects the
     /// current test case (as if by `assume(false)`) when the pool is empty.
-    pub fn values(&mut self) -> Values<'_, T> {
-        Values {
+    pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
+        ValuesConsumed {
             pool_id: self.pool_id,
             values: RefCell::new(&mut self.values),
         }
@@ -164,14 +165,14 @@ impl<T> Pool<T> {
 
 /// A generator over references to the values in a [`Pool`].
 ///
-/// Returned by [`Pool::references`]. Borrows the pool, so the references it
+/// Returned by [`Pool::values_reusable`]. Borrows the pool, so the references it
 /// produces stay valid for as long as the generator is alive.
-pub struct References<'a, T> {
+pub struct ValuesReusable<'a, T> {
     pool_id: i64,
     values: &'a HashMap<i64, T>,
 }
 
-impl<'a, T> Generator<&'a T> for References<'a, T> {
+impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> &'a T {
         tc.assume(!self.values.is_empty());
         let variable_id = pool_generate(tc, self.pool_id, false);
@@ -182,15 +183,15 @@ impl<'a, T> Generator<&'a T> for References<'a, T> {
 /// A generator that consumes values from a [`Pool`], removing each value it
 /// yields.
 ///
-/// Returned by [`Pool::values`]. Borrows the pool mutably; the inner
+/// Returned by [`Pool::values_consumed`]. Borrows the pool mutably; the inner
 /// [`RefCell`] is what lets it remove a value during a draw, which only has
 /// shared access to the generator.
-pub struct Values<'a, T> {
+pub struct ValuesConsumed<'a, T> {
     pool_id: i64,
     values: RefCell<&'a mut HashMap<i64, T>>,
 }
 
-impl<T> Generator<T> for Values<'_, T> {
+impl<T> Generator<T> for ValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool_id, true);

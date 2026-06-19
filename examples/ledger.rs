@@ -55,7 +55,7 @@ impl LedgerTest {
 
     #[rule]
     fn credit(&mut self, tc: TestCase) {
-        let account = tc.draw(self.accounts.references()).clone();
+        let account = tc.draw(self.accounts.values_reusable()).clone();
         let amount = tc.draw(gs::integers::<i64>().min_value(0).max_value(LIMIT));
         tc.note(&format!("credit '{}' with {}", account.clone(), amount));
         self.ledger.credit(account, amount);
@@ -63,8 +63,8 @@ impl LedgerTest {
 
     #[rule]
     fn transfer(&mut self, tc: TestCase) {
-        let from = tc.draw(self.accounts.references()).clone();
-        let to = tc.draw(self.accounts.references()).clone();
+        let from = tc.draw(self.accounts.values_reusable()).clone();
+        let to = tc.draw(self.accounts.values_reusable()).clone();
         let amount = tc.draw(gs::integers::<i64>().min_value(0).max_value(LIMIT));
         tc.note(&format!(
             "transfer '{}' from {} to {}",

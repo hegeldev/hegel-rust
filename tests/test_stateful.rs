@@ -71,7 +71,7 @@ struct TestConsumeMachine {
 impl TestConsumeMachine {
     #[rule]
     fn draw(&mut self, tc: TestCase) {
-        let x = tc.draw(self.numbers.references());
+        let x = tc.draw(self.numbers.values_reusable());
         assert!(*x != self.consumed);
     }
 }
@@ -85,7 +85,7 @@ fn test_consume(tc: TestCase) {
     for element in elements.clone() {
         bundle.add(element);
     }
-    let consumed = tc.draw(bundle.values());
+    let consumed = tc.draw(bundle.values_consumed());
     let m = TestConsumeMachine {
         numbers: bundle,
         consumed,
@@ -147,7 +147,7 @@ struct TestDrawDomainMachine {
 impl TestDrawDomainMachine {
     #[rule]
     fn draw(&mut self, tc: TestCase) {
-        let x = tc.draw(self.pool.references());
+        let x = tc.draw(self.pool.values_reusable());
         assert!(self.domain.contains(x));
     }
 
@@ -290,7 +290,7 @@ mod stateful {
     impl DepthMachine {
         #[rule]
         fn charge(&mut self, tc: TestCase) {
-            let depth = tc.draw(self.charges.references()).depth;
+            let depth = tc.draw(self.charges.values_reusable()).depth;
             self.charges.add(DepthCharge { depth: depth + 1 });
         }
 
@@ -301,7 +301,7 @@ mod stateful {
 
         #[rule]
         fn is_not_too_deep(&mut self, tc: TestCase) {
-            let check = tc.draw(self.charges.references());
+            let check = tc.draw(self.charges.values_reusable());
             assert!(check.depth < 3, "depth {} is not less than 3", check.depth);
         }
     }
