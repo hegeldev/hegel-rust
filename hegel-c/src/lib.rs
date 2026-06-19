@@ -1482,9 +1482,9 @@ pub unsafe extern "C" fn hegel_collection_reject(
 ///
 /// A pool tracks a set of opaque variable ids that the engine can draw
 /// from and shrink over — the primitive behind hegel-rust's
-/// `stateful::Variables` and `#[hegel::state_machine]`. The caller keeps
+/// `stateful::Pool` and `#[hegel::state_machine]`. The caller keeps
 /// its own mapping from variable id to the actual value it generated
-/// (mirroring how `Variables<T>` holds a `HashMap<i64, T>`).
+/// (mirroring how `Pool<T>` holds a `HashMap<i64, T>`).
 ///
 /// On success writes the new pool's id into `*out_pool_id` and returns
 /// `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`

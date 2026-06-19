@@ -59,7 +59,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 /// - Generators with a client-side fallback (filter, flat_map, lists with
 ///   non-basic elements, …) override `do_draw`. They may also override
 ///   `as_basic` to opt into schema generation when their inputs allow it.
-pub trait Generator<T>: Send + Sync {
+pub trait Generator<T> {
     /// Produce a value.
     ///
     /// The default delegates to [`as_basic`](Self::as_basic). Generators

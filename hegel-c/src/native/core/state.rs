@@ -545,6 +545,22 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
     u32::from(byte[0]) >= falsey
 }
 
+/// Full-precision weighted boolean: `true` with probability `p`, faithful to
+/// probabilities far below [`weighted_boolean_sample`]'s 1/256 quantization
+/// floor (which would turn e.g. a stateful stop signal's `p = 2^-16` into
+/// `1/256`).
+///
+/// Delegates to [`RngExt::random_bool`], which scales `p` to a 64-bit
+/// threshold and compares it against a fresh `u64` — spending 8 bytes of
+/// entropy rather than the one byte [`weighted_boolean_sample`] uses, so it is
+/// reserved for draws whose probability needs the precision (routed via
+/// [`NativeTestCase::weighted_precise`]); ordinary booleans keep the one-byte
+/// sampler. Callers must pass `0.0 < p < 1.0` (`random_bool` panics outside
+/// `[0, 1]`).
+pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bool {
+    rng.random_bool(p)
+}
+
 /// Interesting string constants: logic keywords, numeric edge cases,
 /// common Unicode stress strings. Stored as codepoint vectors so they can
 /// be validated against and inserted into the draw_string nasty pool.
@@ -1436,9 +1452,27 @@ impl NativeTestCase {
         Ok(s)
     }
 
-    /// Draw a boolean with probability `p` of being true.
-    /// If `forced` is Some, the result is forced to that value.
+    /// Draw a boolean with probability `p` of being true, sampled with the
+    /// one-byte [`weighted_boolean_sample`]. If `forced` is Some, the result is
+    /// forced to that value.
     pub fn weighted(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
+        self.weighted_with(p, forced, weighted_boolean_sample)
+    }
+
+    /// Like [`Self::weighted`], but samples with the full-precision
+    /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
+    /// sampler's 1/256 floor (e.g. a stateful stop signal at `p = 2^-16`) are
+    /// honored. Routed here from `primitive_boolean`.
+    pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
+        self.weighted_with(p, forced, weighted_boolean_sample_precise)
+    }
+
+    fn weighted_with(
+        &mut self,
+        p: f64,
+        forced: Option<bool>,
+        sample: impl Fn(f64, &mut EngineRng) -> bool,
+    ) -> Result<bool, EngineError> {
         let kind = BooleanChoice;
 
         let forced_value = forced.or(if p <= 0.0 {
@@ -1458,7 +1492,7 @@ impl NativeTestCase {
                 || ChoiceValue::Boolean(kind.simplest()),
                 || ChoiceValue::Boolean(kind.unit()),
                 |v| matches!(v, ChoiceValue::Boolean(_)),
-                |rng| ChoiceValue::Boolean(weighted_boolean_sample(p, rng)),
+                |rng| ChoiceValue::Boolean(sample(p, rng)),
             )?
         };
 

@@ -214,3 +214,66 @@ fn normalize_unicode_chars_skips_forced_node() {
         _ => unreachable!(),
     }
 }
+
+// --- Regression tests for the `consider` changes ---------
+
+/// Forced-guard fix: the forced-value guard in `consider` must apply ONLY to
+/// same-length candidates. A deletion shifts every node after the cut, so
+/// comparing `candidate[i]` to `current[i]` at a forced index past the cut is
+/// meaningless and used to spuriously reject the deletion.
+///
+/// Here `current = [int(1), forced int(9), int(2)]`. Deleting index 0 yields
+/// the shorter `[forced int(9), int(2)]`: the forced node shifts from index 1
+/// to index 0, and the node now under the old forced index 1 (value 2) differs
+/// from 9. The pre-fix guard rejected this without running; the fix must run it
+/// and accept it (it is interesting and shortlex-smaller).
+#[test]
+fn consider_accepts_length_reducing_candidate_past_forced_node() {
+    let mut shrinker = accepting_shrinker(vec![
+        int_node(1, false),
+        int_node(9, true),
+        int_node(2, false),
+    ]);
+    let interesting = shrinker
+        .consider(&[int_node(9, true), int_node(2, false)])
+        .unwrap();
+    assert!(
+        interesting,
+        "length-reducing candidate must not be pre-rejected by the forced guard"
+    );
+    assert_eq!(
+        shrinker.current_nodes.len(),
+        2,
+        "the deletion should have been accepted as the new shrink target"
+    );
+}
+
+/// Free-reject (Hypothesis `cached_test_function` port): a candidate that is
+/// shortlex >= the current target can never improve it, so `consider` must
+/// reject it WITHOUT running the test closure.
+#[test]
+fn consider_free_rejects_shortlex_larger_candidate_without_running() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let ran = Rc::new(Cell::new(false));
+    let inner = Rc::clone(&ran);
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            ShrinkRun::Full(nodes) => {
+                inner.set(true);
+                (true, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5, false)],
+        Spans::new(),
+    );
+    // 7 > 5: shortlex-larger, so it cannot be an improvement.
+    let interesting = shrinker.consider(&[int_node(7, false)]).unwrap();
+    assert!(!interesting, "shortlex-larger candidate must be rejected");
+    assert!(
+        !ran.get(),
+        "shortlex-larger candidate must be free-rejected without running the test"
+    );
+}

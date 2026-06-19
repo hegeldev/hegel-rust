@@ -278,7 +278,10 @@ impl DataSource for NativeDataSource {
                     "primitive_boolean: cannot force false when p = 1.0".to_string(),
                 ));
             }
-            ntc.weighted(p, forced)
+            // Full-precision sampler: callers (e.g. the stateful stop signal at
+            // p = 2^-16) rely on probabilities far below the one-byte sampler's
+            // 1/256 floor being honored.
+            ntc.weighted_precise(p, forced)
         })
     }
 

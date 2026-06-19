@@ -243,17 +243,41 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
+        // If the truncated candidate is already shortlex >= the current target,
+        // no run from it can improve on the target, so reject it
+        let cmp: &[ChoiceNode] = if nodes.len() > self.current_nodes.len() {
+            &nodes[..self.current_nodes.len()]
+        } else {
+            nodes
+        };
+        if sort_key(&self.current_nodes) < sort_key(cmp) {
+            return Ok(false);
+        }
         // Forced-node guard: a candidate may not differ from the
         // current shrink target at any index marked `was_forced`.
         // Forced choices stay put through shrinking. `replace` enforces
         // this on its own single-position path; consider covers callers
         // that build candidate sequences directly
         // (try_shortening_via_increment, delete_chunks, span passes, …).
+        //
+        // Only meaningful for SAME-LENGTH candidates: the comparison is
+        // positional, so once a candidate deletes nodes the indices past the
+        // deletion point are shifted and `candidate[i]` no longer corresponds
+        // to `current[i]`. Applying the guard there spuriously rejects every
+        // deletion that precedes a forced node (e.g. the swarm feature-flag
+        // draws re-recorded as forced throughout a stateful run), which is the
+        // single biggest blocker to deleting whole steps. For length-changing
+        // candidates the realised run re-derives forced-ness anyway, and
+        // `accept_improvement` only commits a strictly-smaller result, so
+        // skipping the guard here is safe.
         for (i, candidate) in nodes
             .iter()
             .enumerate()
             .take(nodes.len().min(self.current_nodes.len()))
         {
+            if nodes.len() != self.current_nodes.len() {
+                continue;
+            }
             if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
                 return Ok(false);
             }
