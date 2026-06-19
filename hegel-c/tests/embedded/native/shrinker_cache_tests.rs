@@ -109,7 +109,11 @@ fn consider_cache_short_circuits_repeat_lookups() {
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
-        vec![int_node(0)],
+        // Start from a large target so the candidates below are shortlex-
+        // SMALLER and reach the run/cache path. (A shortlex-larger candidate
+        // is free-rejected by `consider` before the cache, so it would never
+        // exercise the cache.)
+        vec![int_node(201)],
         Spans::new(),
     );
     shrinker.max_stall = usize::MAX;

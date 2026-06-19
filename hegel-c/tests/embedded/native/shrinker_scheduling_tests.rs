@@ -132,7 +132,12 @@ fn max_stall_grows_after_shrink() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
-                (v < 10, nodes.to_vec(), Spans::new())
+                // Interesting only at two sentinel values, both reachable by
+                // lowering. The burn candidates between them are uninteresting
+                // but still shortlex-SMALLER than the current target, so they
+                // reach the run path (a larger candidate would be free-rejected
+                // by `consider` before `calls` is incremented).
+                (v == 1 || v == 9, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -146,13 +151,14 @@ fn max_stall_grows_after_shrink() {
     let accepted_first = shrinker.consider(&[int_node(9)]).unwrap();
     assert!(accepted_first);
     let stall_after_first = shrinker.max_stall;
-    // Burn 3 uninteresting calls (still within stall budget).
-    for v in 11..14 {
+    // Burn 3 uninteresting calls, smaller than the current target [9] so they
+    // run (still within stall budget).
+    for v in [8, 7, 6] {
         shrinker.consider(&[int_node(v)]).unwrap();
     }
-    // Another improvement.  span = calls - calls_at_last_shrink ≈ 3;
-    // grown = 6 > 5, so max_stall should grow.
-    shrinker.consider(&[int_node(5)]).unwrap();
+    // Another improvement (1 < 9).  span = calls - calls_at_last_shrink ≈ 3+;
+    // grown > 5, so max_stall should grow.
+    shrinker.consider(&[int_node(1)]).unwrap();
     assert!(
         shrinker.max_stall > stall_after_first,
         "max_stall failed to grow: {} -> {}",

@@ -286,7 +286,9 @@ fn consider_cache_short_circuits_repeated_candidate() {
         initial,
         Spans::new(),
     );
-    let candidate = vec![int_node(7)];
+    // Shortlex-SMALLER than the initial target [5] so it reaches the run/cache
+    // path (a larger candidate would be free-rejected before the cache).
+    let candidate = vec![int_node(3)];
     shrinker.consider(&candidate).unwrap();
     shrinker.consider(&candidate).unwrap();
     shrinker.consider(&candidate).unwrap();
