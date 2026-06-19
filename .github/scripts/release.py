@@ -5,7 +5,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOURCE_DIRS = ["src/", "hegel-macros/"]
+SOURCE_DIRS = ["src/", "hegel-macros/", "hegel-c/src/"]
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Files the release commit reads, rewrites, and stages. These are validated by
@@ -216,6 +216,7 @@ def release() -> None:
             "release",
             "create",
             f"v{new_version}",
+            "--draft",
             "--title",
             f"v{new_version}",
             "--notes",

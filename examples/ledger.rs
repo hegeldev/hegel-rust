@@ -3,7 +3,7 @@
 
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::{Variables, variables};
+use hegel::stateful::{Pool, pool};
 use std::collections::HashMap;
 
 const LIMIT: i64 = 1000000;
@@ -41,7 +41,7 @@ impl Ledger {
 
 struct LedgerTest {
     ledger: Ledger,
-    accounts: Variables<String>,
+    accounts: Pool<String>,
 }
 
 #[hegel::state_machine]
@@ -55,7 +55,7 @@ impl LedgerTest {
 
     #[rule]
     fn credit(&mut self, tc: TestCase) {
-        let account = self.accounts.draw().clone();
+        let account = tc.draw(self.accounts.values_reusable()).clone();
         let amount = tc.draw(gs::integers::<i64>().min_value(0).max_value(LIMIT));
         tc.note(&format!("credit '{}' with {}", account.clone(), amount));
         self.ledger.credit(account, amount);
@@ -63,8 +63,8 @@ impl LedgerTest {
 
     #[rule]
     fn transfer(&mut self, tc: TestCase) {
-        let from = self.accounts.draw().clone();
-        let to = self.accounts.draw().clone();
+        let from = tc.draw(self.accounts.values_reusable()).clone();
+        let to = tc.draw(self.accounts.values_reusable()).clone();
         let amount = tc.draw(gs::integers::<i64>().min_value(0).max_value(LIMIT));
         tc.note(&format!(
             "transfer '{}' from {} to {}",
@@ -87,7 +87,7 @@ impl LedgerTest {
 fn test_ledger(tc: TestCase) {
     let test = LedgerTest {
         ledger: Ledger::new(),
-        accounts: variables(&tc),
+        accounts: pool(&tc),
     };
     hegel::stateful::run(test, tc);
 }
