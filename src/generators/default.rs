@@ -1,3 +1,5 @@
+use crate::generators::binary;
+
 use super::{
     BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
     Generator, HashMapGenerator, IntegerGenerator, IpAddressGenerator, Ipv4AddressGenerator,
@@ -209,7 +211,26 @@ impl DefaultGenerator for Duration {
 impl DefaultGenerator for PathBuf {
     type Generator = BoxedGenerator<'static, PathBuf>;
     fn default_generator() -> Self::Generator {
-        text().map(PathBuf::from).boxed()
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            binary()
+                .map(std::ffi::OsString::from_vec)
+                .map(PathBuf::from)
+                .boxed()
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            vecs(integers())
+                .map(|wide: Vec<u16>| std::ffi::OsString::from_wide(&wide))
+                .map(PathBuf::from)
+                .boxed()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            text().map(PathBuf::from).boxed()
+        }
     }
 }
 
