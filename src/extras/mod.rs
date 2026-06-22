@@ -1,3 +1,5 @@
+//! Integrations with third-party libraries.
+
 #[cfg(feature = "chrono")]
 pub mod chrono;
 
