@@ -394,10 +394,6 @@ const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced differen
      This usually means your test depends on external state such as \
      global variables, system time, or external random number generators.";
 
-/// The caught panic payload and rendered diagnostic kept from the one final
-/// case of a `Mode::SingleTestCase` run, for the report after the loop drains.
-type SingleOutcome = (Option<Box<dyn std::any::Any + Send>>, Option<String>);
-
 /// Drive a libhegel run to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, starts the engine through the C ABI
@@ -418,8 +414,8 @@ type SingleOutcome = (Option<Box<dyn std::any::Any + Send>>, Option<String>);
 /// engine's own message instead of the `Property test failed:` framing.
 ///
 /// `Mode::SingleTestCase` has no exploration, shrinking, or blob: the engine
-/// emits one case, which the client treats as final by mode (running the body
-/// once) and reports from directly.
+/// emits one case, and if it fails the run re-raises that case's own panic
+/// straight away (see [`drive_single_case`]).
 pub(crate) fn drive<F>(
     test_fn: F,
     settings: &Settings,
@@ -445,20 +441,17 @@ pub(crate) fn drive<F>(
         Err(message) => panic!("{message}"), // nocov
     };
 
-    // `Mode::SingleTestCase` pumps exactly one case and it is the whole run:
-    // the client treats it as final by mode (running the body once) and keeps
-    // its panic payload + diagnostic for the report. A full run pumps only
-    // non-final exploration cases; the client replays the result's blobs
-    // afterward.
-    let single = mode == Mode::SingleTestCase;
-    let mut single_outcome: Option<SingleOutcome> = None;
+    // A single test case is the whole run: run it and, if it fails, propagate
+    // its own panic immediately — there is no exploration, result, or replay.
+    if mode == Mode::SingleTestCase {
+        drive_single_case(&run, &mut test_fn, verbosity, test_location);
+        return;
+    }
+
+    // A full run pumps only non-final exploration cases; the failures (and
+    // their blobs) are read from the result afterward.
     while let Some(c_tc) = run.next_test_case() {
-        if single {
-            let (_, payload, diagnostic) = run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
-            single_outcome = Some((payload, diagnostic));
-        } else {
-            run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
-        }
+        run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
     }
 
     let result = run.result();
@@ -475,19 +468,6 @@ pub(crate) fn drive<F>(
                 .error()
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
-        }
-        RunStatus::HEGEL_RUN_STATUS_FAILED if single => {
-            // The single case already ran as its own final replay: emit its
-            // diagnostic (captured, not sinked, so the snapshot invariant
-            // holds) and re-raise the test's own panic. No headline and no
-            // reproducer line — there is one failure and no shrunk blob.
-            let (payload, diagnostic) = single_outcome.unwrap_or((None, None));
-            if let Some(diagnostic) = diagnostic {
-                eprint!("{diagnostic}");
-            }
-            // An interesting result always carries the caught panic payload, so
-            // re-raise the test's own panic.
-            std::panic::resume_unwind(payload.expect("interesting case carries a panic payload"));
         }
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
@@ -551,6 +531,36 @@ pub(crate) fn drive<F>(
             }
         }
     }
+}
+
+/// Drive a `Mode::SingleTestCase` run: the engine emits exactly one case and
+/// the run's verdict is that case's outcome. The case is still run through
+/// [`run_test_case`] — the engine needs its `mark_complete`, and `assume()` /
+/// out-of-data must be classified rather than escape — but a real failure is
+/// re-raised straight away. There is no shrinking or replay, so no report to
+/// build and no run-level error to consult.
+fn drive_single_case(
+    run: &RunHandle,
+    test_fn: &mut dyn FnMut(TestCase),
+    verbosity: Verbosity,
+    test_location: Option<&TestLocation>,
+) {
+    while let Some(c_tc) = run.next_test_case() {
+        let (result, payload, diagnostic) =
+            run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity);
+        if matches!(result, TestCaseResult::Interesting(_)) {
+            emit_antithesis_assertion(true, test_location);
+            // Rendered (not sinked) so the failure detail still shows — the
+            // `resume_unwind` below skips the panic hook.
+            if let Some(diagnostic) = diagnostic {
+                eprint!("{diagnostic}");
+            }
+            std::panic::resume_unwind(
+                payload.expect("an interesting case carries the caught panic payload"),
+            );
+        }
+    }
+    emit_antithesis_assertion(false, test_location);
 }
 
 /// Replay a single base64 failure blob through the C ABI
