@@ -114,11 +114,9 @@ pub trait DataSource: Send + Sync {
 
 /// A single interesting test case surfaced by a run.
 ///
-/// This is data about the failure, not its presentation: the rendered
-/// diagnostic block (panic location, message, backtrace) is produced by the
-/// client when it replays the reproduce blob, and never travels with the
-/// failure. A failure carries the origin the engine grouped on and the
-/// reproduce blob the client replays.
+/// A failure carries the origin the engine grouped on and the reproduce blob
+/// the client replays; the rendered diagnostic (panic location, message,
+/// backtrace) is produced when the client replays that blob.
 #[derive(Debug, Clone)]
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
@@ -155,9 +153,7 @@ pub enum TestCaseResult {
 ///
 /// These are returned as `Err` from the engine's exploration and surface at
 /// the API boundary — the panic API panics with the message; libhegel reports
-/// it through its error channel. They never appear as [`Failure`]s: there is no
-/// counterexample, reproduce blob, or diagnostic block, just a message about
-/// the run.
+/// it through its error channel.
 #[derive(Debug, Clone)]
 pub enum RunError {
     /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,

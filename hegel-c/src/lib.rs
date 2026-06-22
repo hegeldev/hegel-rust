@@ -17,13 +17,15 @@
 //   `DataSource` methods directly without channel traffic — `DataSource`
 //   is `Send + Sync` so once handed across it works in place.
 //
-// - Every function except `hegel_context_new` takes a `hegel_context_t` as its
-//   first argument and returns a `hegel_result_t` code (`HEGEL_OK` is zero;
-//   negatives are errors). Values other than the code — handles, strings,
-//   counts — are written through trailing `out_*` parameters. The diagnostic
-//   for a failed call is recorded on the `hegel_context_t` the caller passes in
-//   (rather than thread-local state, which is ill-defined under runtimes that
-//   migrate work between OS threads) and read back with
+// - Every function takes a `hegel_context_t` as its first argument and returns
+//   a `hegel_result_t` code (`HEGEL_OK` is zero; negatives are errors), with
+//   two exceptions: `hegel_context_new`, which creates a context and returns
+//   it, and `hegel_context_last_error`, which is the error-reporting reader and
+//   returns the message pointer directly. Values other than the code — handles,
+//   strings, counts — are written through trailing `out_*` parameters. The
+//   diagnostic for a failed call is recorded on the `hegel_context_t` the
+//   caller passes in (rather than thread-local state, which is ill-defined
+//   under runtimes that migrate work between OS threads) and read back with
 //   `hegel_context_last_error`. There is no callback into C from Rust on the
 //   hot path; the loop is user-driven.
 
@@ -100,11 +102,12 @@ use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call.
 ///
-/// Every entry point except `hegel_context_new` returns one of these.
-/// `HEGEL_OK` is zero; every error is negative, so `result != HEGEL_OK` (or
-/// `result < 0`) tests for failure. Anything else a call produces — a handle,
-/// a string, a count — is written through a trailing `out_*` parameter. For the
-/// error variants that carry a diagnostic, the message is on the call's
+/// Every entry point returns one of these except `hegel_context_new` (which
+/// returns a context) and `hegel_context_last_error` (which returns the message
+/// pointer). `HEGEL_OK` is zero; every error is negative, so `result != HEGEL_OK`
+/// (or `result < 0`) tests for failure. Anything else a call produces — a
+/// handle, a string, a count — is written through a trailing `out_*` parameter.
+/// For the error variants that carry a diagnostic, the message is on the call's
 /// context — read it with `hegel_context_last_error()`.
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -420,30 +423,25 @@ pub unsafe extern "C" fn hegel_context_free(ctx: *mut HegelContext) -> hegel_res
     HEGEL_OK
 }
 
-/// Write the most recent error message recorded on `ctx` into `*out_message`
-/// — the empty string if the most recent call taking this context succeeded.
+/// Most recent error message recorded on `ctx`, or the empty string if the
+/// most recent call taking this context succeeded. Returns NULL only when
+/// `ctx` itself is NULL.
 ///
-/// Unlike every other call, this one does not reset `ctx`'s message: it exists
-/// to read it. The written pointer borrows `ctx`'s internal buffer and is
-/// invalidated by the next libhegel call that takes the same `ctx` — copy the
-/// bytes before making another such call.
+/// This is the error-reporting reader, not a normal `hegel_*` call: it is the
+/// one function (besides `hegel_context_new`) that does not follow the
+/// `hegel_result_t` + `out_*` convention. It returns the message pointer
+/// directly so a caller can read it straight after the call it is diagnosing,
+/// and it does not reset the stored message.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` if `ctx` is NULL and `HEGEL_E_INVALID_ARG`
-/// if `out_message` is NULL (neither sets a message — there is nowhere to put
-/// one).
+/// The returned pointer borrows `ctx`'s internal buffer and is invalidated by
+/// the next libhegel call that takes the same `ctx` — copy the bytes before
+/// making another such call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_context_last_error(
-    ctx: *const HegelContext,
-    out_message: *mut *const c_char,
-) -> hegel_result_t {
-    let Some(c) = (unsafe { ctx.as_ref() }) else {
-        return HEGEL_E_INVALID_HANDLE;
-    };
-    if out_message.is_null() {
-        return HEGEL_E_INVALID_ARG;
+pub unsafe extern "C" fn hegel_context_last_error(ctx: *const HegelContext) -> *const c_char {
+    match unsafe { ctx.as_ref() } {
+        Some(c) => c.last_error.as_ptr(),
+        None => ptr::null(),
     }
-    unsafe { *out_message = c.last_error.as_ptr() };
-    HEGEL_OK
 }
 
 /// Record `msg` as `ctx`'s most recent error. A NULL `ctx` discards the

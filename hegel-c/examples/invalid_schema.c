@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "hegel.h"
+#include "hegel_check.h"
 
 /*
  * Hand-rolled CBOR encoding of { "type": "ipv4" }:
@@ -42,28 +43,19 @@ int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
     hegel_settings_t *s;
-    hegel_settings_new(ctx, &s);
-    hegel_settings_test_cases(ctx, s, 1);
-    hegel_settings_database(ctx, s, "");
-    hegel_settings_derandomize(ctx, s, true);
-    hegel_settings_seed(ctx, s, 1, true);
+    HEGEL_CHECK(ctx, hegel_settings_new(ctx, &s));
+    HEGEL_CHECK(ctx, hegel_settings_test_cases(ctx, s, 1));
+    HEGEL_CHECK(ctx, hegel_settings_database(ctx, s, ""));
+    HEGEL_CHECK(ctx, hegel_settings_derandomize(ctx, s, true));
+    HEGEL_CHECK(ctx, hegel_settings_seed(ctx, s, 1, true));
 
     hegel_run_t *run;
-    if (hegel_run_start(ctx, s, &run) != HEGEL_OK) {
-        const char *err;
-        hegel_context_last_error(ctx, &err);
-        fprintf(stderr, "hegel_run_start failed: %s\n", err);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
-        return 1;
-    }
+    HEGEL_CHECK(ctx, hegel_run_start(ctx, s, &run));
 
     hegel_test_case_t *tc;
-    if (hegel_next_test_case(ctx, run, &tc) != HEGEL_OK || !tc) {
+    HEGEL_CHECK(ctx, hegel_next_test_case(ctx, run, &tc));
+    if (!tc) {
         fprintf(stderr, "expected a test case\n");
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
         return 1;
     }
 
@@ -77,8 +69,7 @@ int main(void) {
                 HEGEL_E_INVALID_ARG, rc);
         ok = 0;
     }
-    const char *err;
-    hegel_context_last_error(ctx, &err);
+    const char *err = hegel_context_last_error(ctx);
     if (err[0] == '\0') {
         fprintf(stderr, "expected a diagnostic message for the invalid schema\n");
         ok = 0;
@@ -86,9 +77,9 @@ int main(void) {
         printf("invalid schema correctly rejected: rc=%d, message=\"%s\"\n", rc, err);
     }
 
-    hegel_mark_complete(ctx, tc, HEGEL_STATUS_INVALID, NULL);
-    hegel_run_free(ctx, run);
-    hegel_settings_free(ctx, s);
-    hegel_context_free(ctx);
+    HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_INVALID, NULL));
+    HEGEL_CHECK(ctx, hegel_run_free(ctx, run));
+    HEGEL_CHECK(ctx, hegel_settings_free(ctx, s));
+    HEGEL_CHECK(ctx, hegel_context_free(ctx));
     return ok ? 0 : 1;
 }

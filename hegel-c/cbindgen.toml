@@ -8,11 +8,13 @@ header = """
  *
  * Calling convention
  * ------------------
- * Every function except hegel_context_new takes a hegel_context_t* as its
- * first argument and returns a hegel_result_t code (HEGEL_OK is zero;
- * negatives are errors). Anything else a call produces — a handle, a string,
- * a count — is written through a trailing out-parameter named out_*. A NULL
- * context is allowed and simply opts out of error messages.
+ * Every function takes a hegel_context_t* as its first argument and returns a
+ * hegel_result_t code (HEGEL_OK is zero; negatives are errors), with two
+ * exceptions: hegel_context_new, which creates a context and returns it, and
+ * hegel_context_last_error, the error-reporting reader, which returns the
+ * message pointer directly. Anything else a call produces — a handle, a
+ * string, a count — is written through a trailing out-parameter named out_*. A
+ * NULL context is allowed and simply opts out of error messages.
  *
  * Pointer ownership
  * -----------------

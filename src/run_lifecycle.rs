@@ -442,7 +442,7 @@ pub(crate) fn drive<F>(
     };
 
     // A single test case is the whole run: run it and, if it fails, propagate
-    // its own panic immediately — there is no exploration, result, or replay.
+    // its own panic immediately.
     if mode == Mode::SingleTestCase {
         drive_single_case(&run, &mut test_fn, verbosity, test_location);
         return;
@@ -545,20 +545,21 @@ fn drive_single_case(
     verbosity: Verbosity,
     test_location: Option<&TestLocation>,
 ) {
-    while let Some(c_tc) = run.next_test_case() {
-        let (result, payload, diagnostic) =
-            run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity);
-        if matches!(result, TestCaseResult::Interesting(_)) {
-            emit_antithesis_assertion(true, test_location);
-            // Rendered (not sinked) so the failure detail still shows — the
-            // `resume_unwind` below skips the panic hook.
-            if let Some(diagnostic) = diagnostic {
-                eprint!("{diagnostic}");
-            }
-            std::panic::resume_unwind(
-                payload.expect("an interesting case carries the caught panic payload"),
-            );
+    let c_tc = run
+        .next_test_case()
+        .expect("a SingleTestCase run produces exactly one test case");
+    let (result, payload, diagnostic) =
+        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity);
+    if matches!(result, TestCaseResult::Interesting(_)) {
+        emit_antithesis_assertion(true, test_location);
+        // Rendered (not sinked) so the failure detail still shows — the
+        // `resume_unwind` below skips the panic hook.
+        if let Some(diagnostic) = diagnostic {
+            eprint!("{diagnostic}");
         }
+        std::panic::resume_unwind(
+            payload.expect("an interesting case carries the caught panic payload"),
+        );
     }
     emit_antithesis_assertion(false, test_location);
 }

@@ -29,9 +29,8 @@ use std::os::raw::c_char;
 use std::ptr;
 
 fn last_error(ctx: *const HegelContext) -> String {
-    let mut p: *const c_char = ptr::null();
-    let rc = unsafe { hegel_context_last_error(ctx, &mut p) };
-    if rc != HEGEL_OK || p.is_null() {
+    let p = unsafe { hegel_context_last_error(ctx) };
+    if p.is_null() {
         String::new()
     } else {
         unsafe { std::ffi::CStr::from_ptr(p) }
@@ -295,10 +294,9 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_run_start(ptr::null_mut(), ptr::null(), &mut run),
             HEGEL_E_INVALID_HANDLE
         );
-        assert_eq!(
-            hegel_context_last_error(ptr::null(), &mut p),
-            HEGEL_E_INVALID_HANDLE
-        );
+        // hegel_context_last_error is the error reader: it returns the message
+        // pointer directly (NULL for a NULL context), not a result code.
+        assert!(hegel_context_last_error(ptr::null()).is_null());
     }
     unsafe {
         assert_eq!(hegel_context_free(ctx), HEGEL_OK);
@@ -338,12 +336,6 @@ fn out_parameters_are_rejected_when_null() {
 
         // hegel_version rejects a null out pointer too.
         assert_eq!(hegel_version(ctx, ptr::null_mut()), HEGEL_E_INVALID_ARG);
-
-        // hegel_context_last_error rejects a null out pointer (on a live ctx).
-        assert_eq!(
-            hegel_context_last_error(ctx, ptr::null_mut()),
-            HEGEL_E_INVALID_ARG
-        );
 
         // The result getters reject a null out pointer once their handle is
         // valid. Drive the run to completion to get a real result handle.
@@ -391,7 +383,7 @@ fn settings_string_setters_handle_bad_input() {
         assert_eq!(hegel_settings_database(ctx, s, ptr::null()), HEGEL_OK);
         assert_eq!(hegel_settings_database_key(ctx, s, ptr::null()), HEGEL_OK);
 
-        // Non-UTF-8 bytes are rejected, not honoured.
+        // Non-UTF-8 bytes are rejected.
         let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
         assert_eq!(
             hegel_settings_database(ctx, s, bad.as_ptr()),

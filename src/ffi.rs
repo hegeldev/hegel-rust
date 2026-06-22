@@ -42,14 +42,12 @@ impl Context {
     /// libhegel's buffer is borrowed and invalidated by the next call taking
     /// this context, so we copy immediately.
     fn last_error(&self) -> String {
-        let mut p: *const c_char = ptr::null();
-        // SAFETY: self.raw is a live, non-null context handle; &mut p is a
-        // valid out parameter.
-        let rc = unsafe { hegel_c::hegel_context_last_error(self.raw, &mut p) };
-        if rc != hegel_result_t::HEGEL_OK || p.is_null() {
-            // hegel_context_last_error only fails for a null context/out, and
-            // self.raw is never null and the out is always &mut p; this guard
-            // keeps CStr::from_ptr sound rather than becoming a panic.
+        // SAFETY: self.raw is a live, non-null context handle.
+        let p = unsafe { hegel_c::hegel_context_last_error(self.raw) };
+        if p.is_null() {
+            // hegel_context_last_error returns null only for a null context,
+            // and self.raw is never null; this guard keeps CStr::from_ptr
+            // sound rather than becoming a panic.
             return String::new(); // nocov
         }
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
@@ -504,10 +502,8 @@ impl RunResult<'_> {
 
 /// A distinct failure read out of a finished run.
 ///
-/// The client only needs the reproduce blob: it replays the blob to produce
-/// the diagnostic and re-raise the test's own panic. The C ABI also exposes
-/// the failure's origin via `hegel_failure_origin`, but the client re-derives
-/// it from the replay, so it isn't read here.
+/// The client needs only the reproduce blob: it replays the blob to produce
+/// the diagnostic and re-raise the test's own panic.
 pub(crate) struct Failure {
     pub(crate) reproduce_blob: Option<String>,
 }

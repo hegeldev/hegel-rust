@@ -234,7 +234,6 @@ mod reproduce {
         let c_settings = SettingsHandle::build(&settings, None);
         let run = RunHandle::start(&c_settings).expect("the engine starts");
         while let Some(c_tc) = run.next_test_case() {
-            // The engine only explores now — every pumped case is non-final.
             crate::run_lifecycle::run_test_case(
                 c_tc,
                 &mut test_fn,
