@@ -3,7 +3,7 @@ mod common;
 use common::project::TempRustProject;
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::{Variables, variables};
+use hegel::stateful::{Pool, pool};
 
 #[test]
 fn test_state_machine_failure() {
@@ -63,15 +63,15 @@ fn main() {}
 
 // Consuming an element from a set should mean subsequent draws never yield the element.
 struct TestConsumeMachine {
-    numbers: Variables<i32>,
+    numbers: Pool<i32>,
     consumed: i32,
 }
 
 #[hegel::state_machine]
 impl TestConsumeMachine {
     #[rule]
-    fn draw(&mut self, _tc: TestCase) {
-        let x = self.numbers.draw();
+    fn draw(&mut self, tc: TestCase) {
+        let x = tc.draw(self.numbers.values_reusable());
         assert!(*x != self.consumed);
     }
 }
@@ -81,11 +81,11 @@ fn test_consume(tc: TestCase) {
     let ints = gs::integers::<i32>;
     let elements = tc.draw(gs::vecs(ints()).unique(true));
     tc.assume(!elements.is_empty());
-    let mut bundle = variables(&tc);
+    let mut bundle = pool(&tc);
     for element in elements.clone() {
         bundle.add(element);
     }
-    let consumed = bundle.consume();
+    let consumed = tc.draw(bundle.values_consumed());
     let m = TestConsumeMachine {
         numbers: bundle,
         consumed,
@@ -140,20 +140,21 @@ fn test_state_machine_with_type_parameter(tc: TestCase) {
 // Drawing an element from a bundle should always yield an element that was previously added.
 struct TestDrawDomainMachine {
     domain: Vec<i32>,
-    variables: Variables<i32>,
+    pool: Pool<i32>,
 }
 
 #[hegel::state_machine]
 impl TestDrawDomainMachine {
     #[rule]
-    fn draw(&mut self, _tc: TestCase) {
-        let x = self.variables.draw();
+    fn draw(&mut self, tc: TestCase) {
+        let x = tc.draw(self.pool.values_reusable());
         assert!(self.domain.contains(x));
     }
 
     #[invariant]
     fn len_matches_domain(&mut self, _tc: TestCase) {
-        assert_eq!(self.variables.len(), self.domain.len());
+        assert!(!self.pool.is_empty());
+        assert_eq!(self.pool.len(), self.domain.len());
     }
 }
 
@@ -162,13 +163,13 @@ fn test_draw_domain(tc: TestCase) {
     let ints = gs::integers::<i32>;
     let elements = tc.draw(gs::vecs(ints()));
     tc.assume(!elements.is_empty());
-    let mut bundle = variables(&tc);
+    let mut bundle = pool(&tc);
     for element in elements.clone() {
         bundle.add(element);
     }
     let m = TestDrawDomainMachine {
         domain: elements,
-        variables: bundle,
+        pool: bundle,
     };
     hegel::stateful::run(m, tc);
 }
@@ -178,22 +179,118 @@ mod stateful {
     use super::common::utils::expect_panic;
     use hegel::TestCase;
     use hegel::generators as gs;
-    use hegel::stateful::{Rule, StateMachine, Variables, variables};
-    use hegel::{Hegel, Settings};
+    use hegel::stateful::{Pool, Rule, StateMachine, pool};
+    use hegel::{Hegel, Settings, Verbosity};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{Arc, Mutex};
 
+    /// Run `body` as a Hegel property test and return the lines emitted through
+    /// the output sink. With `verbose` set, every test case emits its notes and
+    /// draws; otherwise only the final replay of a failing case does. `body` is
+    /// run inside `with_output_override` so those lines are captured instead of
+    /// going to stderr.
+    fn capture_output<F>(verbose: bool, body: F) -> String
+    where
+        F: FnMut(TestCase) + 'static,
+    {
+        let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let buf_writer = buf.clone();
+        let sink: Arc<dyn Fn(&str) + Send + Sync> =
+            Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+
+        let verbosity = if verbose {
+            Verbosity::Verbose
+        } else {
+            Verbosity::Normal
+        };
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            hegel::with_output_override(sink, || {
+                Hegel::new(body)
+                    .settings(
+                        Settings::new()
+                            .test_cases(200)
+                            .database(None)
+                            .derandomize(true)
+                            .verbosity(verbosity),
+                    )
+                    .run();
+            });
+        }));
+
+        buf.lock().unwrap().join("\n")
+    }
+
+    struct GenuineFailureMachine;
+
+    #[hegel::state_machine]
+    impl GenuineFailureMachine {
+        #[rule]
+        fn always_fails(&mut self, _tc: TestCase) {
+            panic!("boom");
+        }
+    }
+
+    // A rule that fails for a real reason must NOT be reported as having
+    // stopped due to a violated assumption: that note describes the
+    // assume(false) skip path, not a genuine failure. Regression test for the
+    // inverted note that printed "violated assumption" on every rule failure.
+    #[test]
+    fn test_genuine_failure_is_not_reported_as_violated_assumption() {
+        let output = capture_output(false, |tc: TestCase| {
+            hegel::stateful::run(GenuineFailureMachine, tc);
+        });
+        assert!(
+            output.contains("Step 1: always_fails"),
+            "expected the failing step to appear in the replay output:\n{output}"
+        );
+        assert!(
+            !output.contains("violated assumption"),
+            "a genuine rule failure must not be reported as a violated assumption:\n{output}"
+        );
+    }
+
+    struct AssumeSkipMachine;
+
+    #[hegel::state_machine]
+    impl AssumeSkipMachine {
+        #[rule]
+        fn succeeds(&mut self, _tc: TestCase) {}
+
+        #[rule]
+        fn skips(&mut self, tc: TestCase) {
+            tc.assume(false);
+        }
+    }
+
+    // The complement of the above: a rule that genuinely skips via assume(false)
+    // is the case the "violated assumption" note actually describes, so the note
+    // must appear there.
+    #[test]
+    fn test_assume_skip_is_reported_as_violated_assumption() {
+        let output = capture_output(true, |tc: TestCase| {
+            hegel::stateful::run(AssumeSkipMachine, tc);
+        });
+        assert!(
+            output.contains("violated assumption"),
+            "a rule skipped via assume(false) should be reported as a violated assumption:\n{output}"
+        );
+    }
+
+    #[derive(Debug)]
     struct DepthCharge {
         depth: i64,
     }
 
     struct DepthMachine {
-        charges: Variables<DepthCharge>,
+        charges: Pool<DepthCharge>,
     }
 
     #[hegel::state_machine]
     impl DepthMachine {
         #[rule]
-        fn charge(&mut self, _tc: TestCase) {
-            let depth = self.charges.draw().depth;
+        fn charge(&mut self, tc: TestCase) {
+            let depth = tc.draw(self.charges.values_reusable()).depth;
             self.charges.add(DepthCharge { depth: depth + 1 });
         }
 
@@ -203,8 +300,8 @@ mod stateful {
         }
 
         #[rule]
-        fn is_not_too_deep(&mut self, _tc: TestCase) {
-            let check = self.charges.draw();
+        fn is_not_too_deep(&mut self, tc: TestCase) {
+            let check = tc.draw(self.charges.values_reusable());
             assert!(check.depth < 3, "depth {} is not less than 3", check.depth);
         }
     }
@@ -373,7 +470,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    let charges = variables(&tc);
+                    let charges = pool(&tc);
                     hegel::stateful::run(DepthMachine { charges }, tc);
                 })
                 .settings(Settings::new().database(None).test_cases(1000))
@@ -462,5 +559,108 @@ fn main() {}
             .main_file(FLAKY_MACHINE_CODE)
             .expect_failure("Flaky test detected")
             .cargo_test(&[]);
+    }
+
+    struct NoRulesMachine;
+
+    impl StateMachine for NoRulesMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_machine_with_no_rules_is_a_usage_error() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: TestCase| {
+                    hegel::stateful::run(NoRulesMachine, tc);
+                })
+                .settings(Settings::new().database(None))
+                .run();
+            },
+            "cannot run a state machine with no rules",
+        );
+    }
+
+    /// Records which rule ran at each step, one sequence per test case.
+    struct SwarmRecorderMachine {
+        runs: Arc<Mutex<Vec<Vec<usize>>>>,
+    }
+
+    impl SwarmRecorderMachine {
+        fn record(&self, index: usize) {
+            self.runs.lock().unwrap().last_mut().unwrap().push(index);
+        }
+    }
+
+    impl StateMachine for SwarmRecorderMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![
+                Rule::new("rule_0", |m, _tc| m.record(0)),
+                Rule::new("rule_1", |m, _tc| m.record(1)),
+                Rule::new("rule_2", |m, _tc| m.record(2)),
+            ]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    /// Length of the longest run of identical consecutive elements.
+    fn longest_run(sequence: &[usize]) -> usize {
+        let mut longest = 0;
+        let mut current = 0;
+        let mut previous = None;
+        for &value in sequence {
+            current = if previous == Some(value) {
+                current + 1
+            } else {
+                1
+            };
+            previous = Some(value);
+            longest = longest.max(current);
+        }
+        longest
+    }
+
+    /// Swarm testing disables a subset of rules per test case, so some test
+    /// cases run the same rule many times in a row. With three rules and
+    /// uniform selection, a run of 20 identical rules is vanishingly unlikely
+    /// ((1/3)^19 per starting point) — only the all-minimal test case (every
+    /// draw 0) produces one. With swarm testing long runs are common:
+    /// whenever the feature flags leave a single rule enabled, every step
+    /// picks that survivor. So we assert on the *number* of test cases with a
+    /// long run, not merely its existence.
+    #[test]
+    fn test_swarm_produces_long_runs_of_one_rule() {
+        let runs: Arc<Mutex<Vec<Vec<usize>>>> = Arc::new(Mutex::new(Vec::new()));
+        let runs_in_test = Arc::clone(&runs);
+        Hegel::new(move |tc: TestCase| {
+            runs_in_test.lock().unwrap().push(Vec::new());
+            let m = SwarmRecorderMachine {
+                runs: Arc::clone(&runs_in_test),
+            };
+            hegel::stateful::run(m, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(100)
+                .database(None)
+                .derandomize(true),
+        )
+        .run();
+
+        let runs = runs.lock().unwrap();
+        let long_run_count = runs.iter().filter(|s| longest_run(s) >= 20).count();
+        assert!(
+            long_run_count >= 10,
+            "expected at least 10 of {} test cases to have a run of >= 20 \
+             identical rules under swarm selection, got {long_run_count}",
+            runs.len()
+        );
     }
 }

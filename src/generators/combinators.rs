@@ -1,5 +1,6 @@
 use super::{BasicGenerator, BoxedGenerator, Generator, TestCase, integers, labels};
 use crate::cbor_utils::{cbor_array, cbor_map};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -60,10 +61,9 @@ where
     S: Into<Cow<'a, [T]>>,
 {
     let elements = elements.into();
-    assert!(
-        !elements.is_empty(),
-        "Collection passed to sampled_from cannot be empty"
-    );
+    if elements.is_empty() {
+        invalid_argument!("Collection passed to sampled_from cannot be empty");
+    }
     SampledFromGenerator { elements }
 }
 
@@ -99,7 +99,7 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            // The server returns `[index, value]` for one_of schemas.
+            // The engine returns `[index, value]` for one_of schemas.
             let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
             let index = i128::from(idx.into_integer().unwrap()) as usize;
             basics[index].parse_raw(value)
@@ -117,10 +117,9 @@ where
     I: IntoIterator<Item = BoxedGenerator<'a, T>>,
 {
     let generators: Vec<BoxedGenerator<'a, T>> = generators.into_iter().collect();
-    assert!(
-        !generators.is_empty(),
-        "one_of requires at least one generator"
-    );
+    if generators.is_empty() {
+        invalid_argument!("one_of requires at least one generator");
+    }
     OneOfGenerator { generators }
 }
 
@@ -188,7 +187,7 @@ where
             cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            // The server returns `[index, value]` for one_of schemas; index 0
+            // The engine returns `[index, value]` for one_of schemas; index 0
             // selects the null branch (None), 1 selects the inner generator (Some).
             let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
             if i128::from(idx.into_integer().unwrap()) == 0 {

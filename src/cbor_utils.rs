@@ -34,6 +34,10 @@ macro_rules! cbor_array {
 pub(crate) use cbor_array;
 pub(crate) use cbor_map;
 
+// Schema *readers*. The frontend only *builds* CBOR schemas (the engine, in
+// hegel-c, reads them), so these are exercised only by the tests that verify
+// the builders — hence `#[cfg(test)]`.
+#[cfg(test)]
 pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     let Value::Map(entries) = value else {
         panic!("expected Value::Map, got {value:?}"); // nocov
@@ -80,6 +84,7 @@ pub fn map_extend(target: &mut Value, source: Value) {
     }
 }
 
+#[cfg(test)]
 pub fn as_text(value: &Value) -> Option<&str> {
     match value {
         Value::Text(s) => Some(s),
@@ -87,6 +92,7 @@ pub fn as_text(value: &Value) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 pub fn as_u64(value: &Value) -> Option<u64> {
     match value {
         Value::Integer(i) => u64::try_from(i128::from(*i)).ok(),
@@ -94,6 +100,7 @@ pub fn as_u64(value: &Value) -> Option<u64> {
     }
 }
 
+#[cfg(test)]
 pub fn as_bool(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
@@ -102,9 +109,12 @@ pub fn as_bool(value: &Value) -> Option<bool> {
 }
 
 pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
-    let mut bytes = Vec::new();
-    ciborium::into_writer(value, &mut bytes).expect("CBOR serialization failed");
-    ciborium::from_reader(&bytes[..]).expect("CBOR deserialization failed")
+    // Build the `Value` directly via ciborium's value serializer rather than
+    // round-tripping through an encoded byte buffer. Both produce the same
+    // `Value`, but this skips a `Vec<u8>` allocation plus the encode+decode
+    // work on every call — and this runs on the generation hot path (e.g.
+    // `build_schema` serialises each integer/float bound on every draw).
+    Value::serialized(value).expect("CBOR serialization failed")
 }
 
 #[cfg(test)]

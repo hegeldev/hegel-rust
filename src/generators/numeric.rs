@@ -1,5 +1,6 @@
 use super::{BasicGenerator, Generator};
 use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::marker::PhantomData;
 
@@ -93,7 +94,9 @@ impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
     fn build_schema(&self) -> Value {
         let min = self.min.unwrap_or(T::MIN);
         let max = self.max.unwrap_or(T::MAX);
-        assert!(min <= max, "Cannot have max_value < min_value");
+        if min > max {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
 
         cbor_map! {
             "type" => "integer",
@@ -139,6 +142,7 @@ pub struct FloatGenerator<T> {
     exclude_max: bool,
     allow_nan: Option<bool>,
     allow_infinity: Option<bool>,
+    allow_subnormal: Option<bool>,
 }
 
 impl<T> FloatGenerator<T> {
@@ -177,6 +181,16 @@ impl<T> FloatGenerator<T> {
         self.allow_infinity = Some(allow);
         self
     }
+
+    /// Whether subnormal ("denormalised") values are allowed. Defaults to
+    /// allowing them whenever the bounds admit any; set to `false` when the
+    /// code under test may run with flush-to-zero floating point (e.g.
+    /// compiled with `-ffast-math`), where subnormal inputs silently become
+    /// zero.
+    pub fn allow_subnormal(mut self, allow: bool) -> Self {
+        self.allow_subnormal = Some(allow);
+        self
+    }
 }
 
 impl<T: Float + serde::Serialize> FloatGenerator<T> {
@@ -186,25 +200,113 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         let has_max = self.max.is_some();
 
         if let (Some(min), Some(max)) = (self.min, self.max) {
-            assert!(min <= max, "Cannot have max_value < min_value");
+            // Reject `max < min`, and also a NaN bound (which compares
+            // unordered, i.e. `partial_cmp` is `None`) — matching the original
+            // `!(min <= max)` check.
+            if !matches!(
+                min.partial_cmp(&max),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) {
+                invalid_argument!("Cannot have max_value < min_value");
+            }
             // Reject the sign-aware-empty range min=+0.0, max=-0.0: the
             // backends treat -0.0 < +0.0, so this range contains no floats.
             if !sign_aware_lte(min, max) {
-                panic!(
+                invalid_argument!(
                     "InvalidArgument: There are no {width}-bit floating-point \
                      values between min_value=0.0 and max_value=-0.0"
                 );
             }
+            // After exclude_min/exclude_max, the closed-open / open-closed /
+            // open-open ranges over [min, min] (and the `-0.0`/`0.0` pair
+            // that compares equal under sign-aware ordering) are empty.
+            let min_f = min.to_f64();
+            let max_f = max.to_f64();
+            let zero_pair = min_f == 0.0 && max_f == 0.0;
+            if (min_f == max_f || zero_pair) && (self.exclude_min || self.exclude_max) {
+                invalid_argument!(
+                    "InvalidArgument: exclude_min/exclude_max leave no \
+                     {width}-bit floating-point values in [{min_f}, {max_f}]"
+                );
+            }
+        }
+
+        // Mirror Hypothesis: an exclusive bound needs a bound to exclude.
+        if self.exclude_min && !has_min {
+            invalid_argument!("InvalidArgument: Cannot have exclude_min=true without min_value");
+        }
+        if self.exclude_max && !has_max {
+            invalid_argument!("InvalidArgument: Cannot have exclude_max=true without max_value");
+        }
+
+        // exclude_min=true with min_value=+inf (or exclude_max=true with
+        // max_value=-inf) demands the next representable value beyond an
+        // unbounded endpoint, which doesn't exist.
+        if self.exclude_min && self.min.is_some_and(|v| v.to_f64() == f64::INFINITY) {
+            invalid_argument!(
+                "InvalidArgument: exclude_min=true with min_value=+inf leaves \
+                 no {width}-bit floating-point values"
+            );
+        }
+        if self.exclude_max && self.max.is_some_and(|v| v.to_f64() == f64::NEG_INFINITY) {
+            invalid_argument!(
+                "InvalidArgument: exclude_max=true with max_value=-inf leaves \
+                 no {width}-bit floating-point values"
+            );
         }
 
         let allow_nan = self.allow_nan.unwrap_or(!has_min && !has_max);
         let allow_infinity = self.allow_infinity.unwrap_or(!has_min || !has_max);
 
         if allow_nan && (has_min || has_max) {
-            panic!("Cannot have allow_nan=true with min_value or max_value");
+            invalid_argument!("Cannot have allow_nan=true with min_value or max_value");
         }
         if allow_infinity && has_min && has_max {
-            panic!("Cannot have allow_infinity=true with both min_value and max_value");
+            invalid_argument!("Cannot have allow_infinity=true with both min_value and max_value");
+        }
+
+        // Subnormal handling, mirroring Hypothesis's `floats()`: when unset,
+        // subnormals are allowed exactly when the bounds admit any; an
+        // explicit `true` that the bounds contradict is an error; `false`
+        // raises the draw's magnitude floor to the width's smallest normal.
+        let smallest_normal = if width == 32 {
+            f32::MIN_POSITIVE as f64
+        } else {
+            f64::MIN_POSITIVE
+        };
+        let min_f = self.min.map(|v| v.to_f64());
+        let max_f = self.max.map(|v| v.to_f64());
+        let allow_subnormal = self.allow_subnormal.unwrap_or(match (min_f, max_f) {
+            (Some(lo), Some(hi)) if lo == hi => -smallest_normal < lo && lo < smallest_normal,
+            (Some(lo), Some(hi)) => lo < smallest_normal && hi > -smallest_normal,
+            (Some(lo), None) => lo < smallest_normal,
+            (None, Some(hi)) => hi > -smallest_normal,
+            (None, None) => true,
+        });
+        if allow_subnormal {
+            if min_f.is_some_and(|lo| lo >= smallest_normal) {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=true, but min_value excludes \
+                     all values below the smallest positive normal {smallest_normal}"
+                );
+            }
+            if max_f.is_some_and(|hi| hi <= -smallest_normal) {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=true, but max_value excludes \
+                     all values above the smallest negative normal -{smallest_normal}"
+                );
+            }
+        } else if let (Some(lo), Some(hi)) = (min_f, max_f) {
+            // With subnormals excluded the valid set is
+            // {0} ∪ (-∞, -smallest_normal] ∪ [smallest_normal, ∞) ∩ [lo, hi];
+            // reject ranges that miss it entirely.
+            let contains_zero = lo <= 0.0 && hi >= 0.0;
+            if !contains_zero && hi < smallest_normal && lo > -smallest_normal {
+                invalid_argument!(
+                    "InvalidArgument: allow_subnormal=false leaves no {width}-bit \
+                     floating-point values in [{lo}, {hi}]"
+                );
+            }
         }
 
         let mut schema = cbor_map! {
@@ -221,6 +323,16 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         }
         if let Some(ref max) = self.max {
             map_insert(&mut schema, "max_value", cbor_serialize(max));
+        }
+        // The engine's default (the width's smallest subnormal) means "no
+        // restriction", so the field is only sent when subnormals are
+        // excluded — keeping schemas from older builds byte-identical.
+        if !allow_subnormal {
+            map_insert(
+                &mut schema,
+                "smallest_nonzero_magnitude",
+                Value::Float(smallest_normal),
+            );
         }
 
         // When generating finite values without explicit bounds, add type
@@ -276,6 +388,7 @@ pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send +
         exclude_max: false,
         allow_nan: None,
         allow_infinity: None,
+        allow_subnormal: None,
     }
 }
 

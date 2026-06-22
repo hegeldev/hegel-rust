@@ -44,8 +44,8 @@ pub trait DefaultGenerator: Sized {
 ///         .age(gs::integers().min_value(0).max_value(120)));
 /// }
 /// ```
-pub fn default<T: DefaultGenerator>() -> BoxedGenerator<'static, T> {
-    T::default_generator().boxed()
+pub fn default<T: DefaultGenerator>() -> T::Generator {
+    T::default_generator()
 }
 
 impl DefaultGenerator for bool {

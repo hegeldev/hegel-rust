@@ -215,18 +215,20 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub(crate) mod antithesis;
-pub mod backend; <!-- I recommend defining the term for in-document consistency -->
+#[doc(hidden)]
+pub mod backend;
 pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
-pub mod explicit_test_case;<!-- I recommend defining the term, for consistency -->
-pub mod extras;<!-- I recommend defining the term, for consistency -->
+pub mod explicit_test_case;
+pub mod extras;
+pub(crate) mod ffi;
 pub mod generators;
+#[doc(hidden)]
+pub mod run_lifecycle;
 pub(crate) mod runner;
-pub(crate) mod server;
 pub mod stateful;
 mod test_case;
-
 #[doc(hidden)]
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
@@ -246,6 +248,14 @@ pub use test_case::{
 // re-export public api
 #[doc(hidden)]
 pub use antithesis::TestLocation;
+
+// Internal re-exports for benches/. The engine lives in the `hegel-c` crate
+// now, so the bench harness reaches its internals through that crate's own
+// `__bench` module; both are gated on the private `__bench` feature (hegeltest's
+// forwards to hegel-c's) so they stay out of normal builds.
+#[doc(hidden)]
+#[cfg(feature = "__bench")]
+pub use hegel_c::__bench;
 
 /// Derive a generator for a struct or enum.
 ///
@@ -295,11 +305,7 @@ pub use antithesis::TestLocation;
 /// #[hegel::test]
 /// fn generates_statuses(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Status>()
-///         .Active(
-///             gs::default::<Status>()
-///                 .default_Active()
-///                 .since(gs::text().max_size(20))
-///         );
+///         .active(|g| g.since(gs::text().max_size(20)));
 ///     let status: Status = tc.draw(generator);
 /// }
 /// ```
@@ -332,6 +338,58 @@ pub use hegel_macros::DefaultGenerator;
 pub use hegel_macros::composite;
 pub use hegel_macros::explicit_test_case;
 
+/// Replay a single failing example from a base64 *failure blob*.
+///
+/// When a test fails on the native backend and the
+/// [`print_blob`](Settings::print_blob) setting is enabled, Hegel prints a
+/// reproducer line of the form:
+///
+/// ```text
+/// To reproduce this failure, add the attribute below #[hegel::test]:
+///     #[hegel::reproduce_failure("AAEC…")]
+/// ```
+///
+/// Paste that attribute **below** `#[hegel::test]` and the next run will
+/// decode the blob's choice sequence and run *only* that example.
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::reproduce_failure("AAEC…")]
+/// fn my_test(tc: hegel::TestCase) {
+///     let x: i32 = tc.draw(hegel::generators::integers());
+///     assert!(x < 100);
+/// }
+/// ```
+///
+/// The argument is any expression that resolves to a base64 blob — a string
+/// literal, or a `const`/`static`/variable holding one:
+///
+/// ```ignore
+/// const REGRESSION: &str = "AAEC…";
+///
+/// #[hegel::test]
+/// #[hegel::reproduce_failure(REGRESSION)]
+/// fn my_test(tc: hegel::TestCase) { /* ... */ }
+/// ```
+///
+/// The attribute may be stacked to keep track of several failures, but only
+/// the **first** one replays — the rest are bookkeeping. Delete them one by
+/// one as the failures are fixed:
+///
+/// ```ignore
+/// #[hegel::test]
+/// #[hegel::reproduce_failure("AAEC…")] // replayed
+/// #[hegel::reproduce_failure("AAED…")] // kept for later
+/// fn my_test(tc: hegel::TestCase) { /* ... */ }
+/// ```
+///
+/// The blob encodes Hegel's internal choice sequence, so it is only
+/// guaranteed to reproduce a failure within a specific version of Hegel.
+/// A blob that can't be decoded (corrupt or from an incompatible version),
+/// or that no longer reproduces a failure, panics with an explanatory
+/// message.
+pub use hegel_macros::reproduce_failure;
+
 #[doc(hidden)]
 pub use hegel_macros::rewrite_draws;
 
@@ -362,6 +420,16 @@ pub use hegel_macros::state_machine;
 /// fn test_runs_many_more_times(tc: TestCase) {
 ///     let x: i32 = tc.draw(integers());
 ///     assert!(x + 0 == x);
+/// }
+/// ```
+///
+/// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
+///
+/// ```ignore
+/// #[tokio::test]
+/// #[hegel::test]
+/// async fn my_async_test() {
+///     // ...
 /// }
 /// ```
 pub use hegel_macros::test;
@@ -421,8 +489,4 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
-#[doc(hidden)]
-pub use server::process::__test_kill_server;
-#[doc(hidden)]
-pub use server::process::format_log_excerpt;
+pub use runner::{Backend, HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};

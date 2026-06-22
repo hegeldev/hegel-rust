@@ -61,9 +61,11 @@
 //! ```
 
 use crate::TestCase;
-use crate::generators::integers;
+use crate::control::{AssumeFailed, StopTest, raise_control};
+use crate::generators::{Generator, integers};
 use crate::runner::Mode;
-use crate::test_case::{ASSUME_FAIL_STRING, STOP_TEST_STRING};
+use crate::test_case::raise_for_rc;
+use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -85,42 +87,50 @@ impl<M> Rule<M> {
 }
 
 /// A pool of previously generated values.
-pub struct Variables<T> {
-    pool_id: i128,
+///
+/// Create one with [`pool()`] and populate it with [`add`](Pool::add). To draw
+/// from the pool, use the generators it hands out rather than reading from it
+/// directly:
+///
+/// - [`values_reusable`](Pool::values_reusable) returns a generator over `&T` —
+///   drawing from it yields a reference to a value in the pool without removing
+///   it.
+/// - [`values_consumed`](Pool::values_consumed) returns a generator over `T` —
+///   drawing from it removes a value from the pool and yields it by value.
+///
+/// Both generators are used through [`tc.draw`](TestCase::draw), so the chosen
+/// value is recorded in the failing-test replay and the choice shrinks like any
+/// other draw.
+pub struct Pool<T> {
+    pool_id: i64,
     tc: TestCase,
-    values: HashMap<i128, T>,
+    values: HashMap<i64, T>,
 }
 
-impl<T> Variables<T> {
-    fn pool_generate(&self, consume: bool) -> i128 {
-        match self
-            .tc
-            .with_data_source(|ds| ds.pool_generate(self.pool_id, consume))
-        {
-            Ok(id) => id,
-            Err(_) => {
-                panic!("{}", STOP_TEST_STRING);
-            }
-        }
+/// Ask the engine for a variable id from `pool_id`, consuming it if `consume`.
+fn pool_generate(tc: &TestCase, pool_id: i64, consume: bool) -> i64 {
+    match tc.with_ctc(|ctc| ctc.pool_generate(pool_id, consume)) {
+        Ok(id) => id,
+        Err(_) => raise_control(StopTest),
     }
+}
 
-    /// Returns true if no variables are in the pool.
+impl<T> Pool<T> {
+    /// Returns true if no values are in the pool.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
-    /// Number of variables currently in the pool.
+    /// Number of values currently in the pool.
     pub fn len(&self) -> usize {
         self.values.len()
     }
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i128 = match self.tc.with_data_source(|ds| ds.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
             Ok(id) => id,
-            Err(_) => {
-                panic!("{}", STOP_TEST_STRING); // nocov
-            }
+            Err(_) => raise_control(StopTest), // nocov
         };
         if self.values.contains_key(&variable_id) {
             panic!("unexpected variable id in map"); // nocov
@@ -128,34 +138,74 @@ impl<T> Variables<T> {
         self.values.insert(variable_id, v);
     }
 
-    /// Draw a reference to a value from the pool (without removing it).
+    /// A generator over references to values in the pool.
     ///
-    /// Calls `assume(false)` if the pool is empty.
-    pub fn draw(&self) -> &T {
-        self.tc.assume(!self.is_empty());
-        let variable_id = self.pool_generate(false);
-        self.values.get(&variable_id).unwrap()
+    /// Drawing from it yields a `&T` borrowing a value in the pool, without
+    /// removing it. Drawing rejects the current test case (as if by
+    /// `assume(false)`) when the pool is empty.
+    pub fn values_reusable(&self) -> ValuesReusable<'_, T> {
+        ValuesReusable {
+            pool_id: self.pool_id,
+            values: &self.values,
+        }
     }
 
-    /// Remove and return a value from the pool.
+    /// A generator that consumes values from the pool.
     ///
-    /// Calls `assume(false)` if the pool is empty.
-    pub fn consume(&mut self) -> T {
-        self.tc.assume(!self.is_empty());
-        let variable_id = self.pool_generate(true);
-        self.values.remove(&variable_id).unwrap()
+    /// Drawing from it removes a value from the pool and yields it by value.
+    /// Once consumed, that value is never drawn again. Drawing rejects the
+    /// current test case (as if by `assume(false)`) when the pool is empty.
+    pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
+        ValuesConsumed {
+            pool_id: self.pool_id,
+            values: RefCell::new(&mut self.values),
+        }
     }
 }
 
-/// Create a new variable pool for stateful tests.
-pub fn variables<T>(tc: &TestCase) -> Variables<T> {
-    let pool_id = match tc.with_data_source(|ds| ds.new_pool()) {
+/// A generator over references to the values in a [`Pool`].
+///
+/// Returned by [`Pool::values_reusable`]. Borrows the pool, so the references it
+/// produces stay valid for as long as the generator is alive.
+pub struct ValuesReusable<'a, T> {
+    pool_id: i64,
+    values: &'a HashMap<i64, T>,
+}
+
+impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
+    fn do_draw(&self, tc: &TestCase) -> &'a T {
+        tc.assume(!self.values.is_empty());
+        let variable_id = pool_generate(tc, self.pool_id, false);
+        self.values.get(&variable_id).unwrap()
+    }
+}
+
+/// A generator that consumes values from a [`Pool`], removing each value it
+/// yields.
+///
+/// Returned by [`Pool::values_consumed`]. Borrows the pool mutably; the inner
+/// [`RefCell`] is what lets it remove a value during a draw, which only has
+/// shared access to the generator.
+pub struct ValuesConsumed<'a, T> {
+    pool_id: i64,
+    values: RefCell<&'a mut HashMap<i64, T>>,
+}
+
+impl<T> Generator<T> for ValuesConsumed<'_, T> {
+    fn do_draw(&self, tc: &TestCase) -> T {
+        tc.assume(!self.values.borrow().is_empty());
+        let variable_id = pool_generate(tc, self.pool_id, true);
+        self.values.borrow_mut().remove(&variable_id).unwrap()
+    }
+}
+
+/// Create a new value pool for stateful tests.
+pub fn pool<T>(tc: &TestCase) -> Pool<T> {
+    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
         Ok(id) => id,
-        Err(_) => {
-            panic!("{}", STOP_TEST_STRING); // nocov
-        }
+        Err(_) => raise_control(StopTest), // nocov
     };
-    Variables {
+    Pool {
         pool_id,
         tc: tc.clone(),
         values: HashMap::new(),
@@ -174,17 +224,6 @@ pub trait StateMachine {
     fn invariants(&self) -> Vec<Rule<Self>>;
 }
 
-// TODO: factor out (shared with runner.rs)
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string() // nocov
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string() // nocov
-    }
-}
-
 fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
     let invariants = m.invariants();
     for invariant in invariants {
@@ -196,11 +235,13 @@ fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 pub fn run(mut m: impl StateMachine, tc: TestCase) {
     let rules = m.rules();
-    if rules.is_empty() {
-        panic!("Cannot run a machine with no rules."); // nocov
-    }
-
-    let rule_index = integers::<usize>().min_value(0).max_value(rules.len() - 1);
+    let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+    let invariants = m.invariants();
+    let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
+    let machine_id = match tc.with_ctc(|ctc| ctc.new_state_machine(&rule_names, &invariant_names)) {
+        Ok(id) => id,
+        Err(rc) => raise_for_rc(rc),
+    };
 
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &tc);
@@ -225,7 +266,11 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
             || (steps_run_successfully == 0 && steps_attempted < 1000))
     {
         step += 1;
-        let rule = &rules[tc.draw_silent(&rule_index)];
+        let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
+            Ok(i) => i as usize,
+            Err(rc) => raise_for_rc(rc),
+        };
+        let rule = &rules[rule_index];
         tc.note(&format!("Step {}: {}", step, rule.name));
 
         // We only need this because AssertUnwindSafe expects a closure.
@@ -239,16 +284,14 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
                 steps_run_successfully += 1;
                 check_invariants(&mut m, &tc);
             }
-            Err(e) => {
-                let msg = panic_message(&e);
-                if msg == STOP_TEST_STRING {
-                    // Backend ran out of data — this test case is done.
-                    break;
-                } else if msg != ASSUME_FAIL_STRING {
-                    tc.note("Rule stopped early due to violated assumption.");
-                    resume_unwind(e);
-                }
+            // Backend ran out of data — this test case is done.
+            Err(e) if e.downcast_ref::<StopTest>().is_some() => break,
+            // Rule was skipped by assume(false); try a different rule.
+            Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
+                tc.note("Rule stopped early due to violated assumption.");
             }
+            // Genuine rule failure: propagate it.
+            Err(e) => resume_unwind(e),
         };
     }
 }

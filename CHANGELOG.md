@@ -1,5 +1,445 @@
 # Changelog
 
+## 0.21.2 - 2026-06-19
+
+Print to stderr indicating the start and end of the reuse, generate, and shrink phases
+when verbosity is `Verbose` or `Debug`.
+
+## 0.21.1 - 2026-06-19
+
+This patch reduces redundant test executions by the shrinker.
+
+## 0.21.0 - 2026-06-19
+
+This release reworks the stateful-testing value-pool API. The `Variables<T>`
+type is renamed to `Pool<T>` and the `variables()` constructor is renamed to
+`pool()`. The `draw()` and `consume()` methods are replaced by two generators
+you draw from with `tc.draw()`:
+
+- `pool.values_reusable()` returns a generator over `&T` — drawing from it
+  yields a reference to a value in the pool without removing it (the old
+  `draw()`).
+- `pool.values_consumed()` returns a generator over `T` — drawing from it
+  removes a value from the pool and yields it by value (the old `consume()`).
+
+To migrate, rename the type and constructor, and replace draws:
+
+```rust
+// Before
+use hegel::stateful::{Variables, variables};
+let mut accounts: Variables<String> = variables(&tc);
+let account = accounts.draw().clone();
+let consumed = accounts.consume();
+
+// After
+use hegel::stateful::{Pool, pool};
+let mut accounts: Pool<String> = pool(&tc);
+let account = tc.draw(accounts.values_reusable()).clone();
+let consumed = tc.draw(accounts.values_consumed());
+```
+
+Additionally, the `Generator<T>` trait no longer requires `Self: Send + Sync`.
+This lets generators that borrow non-`Sync` data (such as the new `Pool` reference
+and value generators) implement the trait directly.
+
+## 0.20.1 - 2026-06-18
+
+Fixes stateful testing terminating step generation prematurely.
+
+## 0.20.0 - 2026-06-18
+
+This patch tightens libhegel's C ABI: it removes the last thread-local state,
+replaces the `#define`d integer constants with named enums, and documents
+pointer ownership.
+
+For Rust users this is an internal-only change, but it is a significant breaking
+change for libhegel users.
+
+## 0.19.2 - 2026-06-16
+
+This patch moves Hegel's data-generation engine out of the `hegeltest` crate and into libhegel (the `hegel-c` crate). `hegeltest` now drives the engine entirely through libhegel's C ABI, exactly like the other language bindings. For Rust users this is an internal change — the public API is unchanged — but it keeps us honest: hegel-rust can no longer accidentally depend on engine internals that aren't exposed through the C ABI.
+
+For libhegel C-ABI consumers (such as hegel-go) it adds and hardens some surface:
+
+- A new `hegel_settings_backend(settings, backend)` together with the `hegel_backend_t` enum (`HEGEL_BACKEND_AUTO` / `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM`) lets you choose the engine's source of randomness. `HEGEL_BACKEND_AUTO` is the default: it picks `URANDOM` automatically when running under Antithesis and the seeded, reproducible PRNG (`DEFAULT`) otherwise. This auto-detection now lives in the engine rather than in each binding.
+
+- libhegel no longer panics on invalid arguments, so it is now correct to build it with `panic = "abort"`. `hegel_target` returns `HEGEL_E_INVALID_ARG` (with a message in `hegel_last_error_message`) for a non-finite score or a duplicate label, and the id-taking primitives (`hegel_collection_more`, `hegel_collection_reject`, `hegel_pool_add`, `hegel_pool_generate`, `hegel_state_machine_next_rule`) return `HEGEL_E_INVALID_ARG` for an unknown id instead of aborting the process. Only genuine internal-invariant violations still panic.
+
+## 0.19.1 - 2026-06-15
+
+This patch adds swarm testing to stateful tests. Rule selection is owned by the engine and exposed to libhegel consumers as `hegel_new_state_machine` / `hegel_state_machine_next_rule`.
+
+## 0.19.0 - 2026-06-15
+
+This release adds `primitive_boolean`, a weighted boolean draw with an optional forced value
+and exposes it in the libhegel C ABI.
+
+## 0.18.0 - 2026-06-12
+
+This release improves how failing runs are reported, separates "the
+property failed" from "the run itself failed", and fixes a bug where
+`Verbosity::Quiet` would not always be respected when reporting the
+final error.
+
+A failing run now ends by re-raising the failing test's own panic —
+payload intact, so `#[should_panic(expected = ...)]` and `catch_unwind`
+consumers see exactly what the test raised — instead of a synthetic
+`Property test failed: <message>` panic, and the failure no longer prints
+a second time after the report. Runs that find several distinct bugs
+still fail with the `"... N distinct failures."` message.
+
+## 0.17.4 - 2026-06-10
+
+This patch restructures the native engine into a single `Engine` object mirroring Hypothesis's `ConjectureRunner`: one owner for the executor, the RNG, the example database, the choice tree, the per-origin failing examples, and all run-level counters, with every executed test case recorded through one `test_function` path. Previously each phase (generation, database reuse, targeting, span mutation) kept its own copy of the counter updates, which had already let the same accounting bug appear in two places.
+
+Three small behavioural unifications come with it, all matching Hypothesis: database-reuse replays and targeting trials now count toward the same budgets as generated examples (and feed the choice tree, so generation starts informed by what replays explored — and a generator that is non-deterministic across replays is now reported); span mutation only runs once the health-check warm-up is over; and generation is skipped entirely when a database replay already reproduced a failure, so known failures are reported as fast as possible.
+
+## 0.17.3 - 2026-06-10
+
+This release fixes a large number of bugs found by auditing the native engine against the Hypothesis implementation it is ported from, and adds one new float feature. Generated distributions change noticeably, and a few previously-silent invalid argument combinations now raise errors, so test suites may see different examples after upgrading.
+
+Generation fixes:
+
+- Integer and string draws were dominated by the "interesting constants" pool: for wide integer ranges (e.g. the full `i64` range) *every* draw came from a pool of ~500 constants and the intended heavy-tailed distribution never ran, and for permissive alphabets ~60% of strings were pool constants. The pool probability is now capped.
+- The default `gs::floats()` generator returned exactly `f64::MAX` for ~90% of draws (the bounded draw's range-width computation overflowed to infinity). Bounded float draws now use Hypothesis's actual scheme — a lex-ordered draw biased toward simple values, clamped into range — so bounded ranges also regain mass on integers and simple fractions.
+- `exclude_min`/`exclude_max` were silently ignored for infinite bounds: `min_value(f64::NEG_INFINITY).exclude_min(true)` (the Hypothesis idiom for "any float except -inf") kept `-inf` generable. Excluding an infinite bound now steps it to ±`f64::MAX`, and an exclusive bound without the corresponding bound now raises `InvalidArgument`, as Hypothesis does.
+- Unicode category filters were truncated to the Basic Multilingual Plane: `exclude_categories` could still generate astral members of an excluded category (e.g. plane-15/16 private-use characters for `Co`), and `categories` silently dropped astral members (all emoji for `So`). Category sets now cover the whole codespace.
+- `text().codec("ascii").include_characters("é")` silently generated `é`; include characters the codec cannot encode now raise `InvalidArgument`.
+
+New feature: `gs::floats().allow_subnormal(false)` excludes subnormal ("denormalised") values, for testing code that may run with flush-to-zero floating point (e.g. compiled with `-ffast-math`), where subnormal inputs silently become zero. As in Hypothesis, the setting is inferred from the bounds when unset, and contradictory combinations raise `InvalidArgument`. This adds an optional `smallest_nonzero_magnitude` field to the float schema; schemas without it behave exactly as before.
+
+Regex fixes:
+
+- Character-class ranges with escaped endpoints (`[\x00-\x1f]`, `[\--/]`, …) were rejected with "bad character range"; they now parse exactly as CPython does.
+- Under `(?i)`, literals with multi-codepoint case mappings could generate strings the pattern does not match (e.g. `(?i)ß` generated `'S'`), and negated classes only excluded the one-step case swap (`(?i)[^İ]` could generate `'I'`). Both now follow CPython's case-equivalence rules.
+- Very large character classes (hundreds of thousands of codepoints) no longer take quadratic time to expand.
+
+Engine fixes:
+
+- A failure could be masked by a health check: once a bug was found, continued generation could trip `FilterTooMuch`/`TooSlow`/`TestCasesTooLarge` and report that instead of the bug. Health checks are now disabled from the first failure, as in Hypothesis.
+- Failing examples counted against the `test_cases` budget as if they were valid examples; they no longer do.
+- Database replay treated a stored example as stale if the test now draws even one more choice than the entry holds, deleting entries that still reproduce; replay now extends past the stored prefix with fresh draws.
+- The secondary example corpus (where displaced failing examples are downgraded) was written but never read, and grew without bound. The reuse phase now samples it when the primary corpus comes up short, and the shrink phase drains stale entries, matching Hypothesis.
+- A bug with a new panic site discovered *while shrinking another bug* was silently discarded; it is now shrunk and reported alongside the others.
+- `phases = [Phase::Reuse]` (without `Phase::Generate`) silently did nothing; phases are now independent, so reuse-only runs replay stored counterexamples.
+- A failing test that drew floats from a fraction-only range such as `min_value(0.1).max_value(0.9)` crashed the whole run with a `BigUint` underflow panic as soon as the shrinker touched the float. The float index computation behind this is now exact.
+- The choice tree treated forced choices (e.g. a collection's size-boundary continuation decisions) as full-width branch points, so the search space behind any collection never registered as exhausted and "novel" prefixes could silently revisit explored territory.
+
+Shrinking fixes:
+
+- Integer shrinking was anchored at zero rather than the node's `shrink_towards` target: a value between zero and a non-zero target never moved (e.g. a date constrained to years before 2000 never shrank its year up toward the 2000 target). Integer passes now shrink the distance from the target, probing both sides, and pick up Hypothesis's `mask_high_bits` and byte-squeeze moves (predicates like `x & 0xff == 0x77` previously stalled).
+- Shrinking two strings with different alphabets could crash debug builds via a failed assertion when a shared character's replacement existed in only one alphabet.
+
+## 0.17.2 - 2026-06-10
+
+This patch fixes a misleading diagnostic in the stateful runner. When a `#[rule]` failed for a genuine reason (a panic or failed assertion), the runner printed "Rule stopped early due to violated assumption." just before propagating the failure, even though no assumption had been violated. Conversely, a rule that was genuinely skipped via `assume(false)` printed no such note. The note was wired to the wrong branch; it now appears only when a rule is actually skipped by a violated assumption, and genuine failures propagate without it.
+
+## 0.17.1 - 2026-06-09
+
+This patch improves the performance of shrinking a failing test when running with `RUST_BACKTRACE` set. Hegel would previously
+capture the stack backtrace for every panic raised while running your test body even when that backtrace was never shown. This could be a significant performance hit, especially on Windows. Hegel now captures only backtraces it needs to print. This should be a significant performance improvement in some workloads, and otherwise have no user-visible effect.
+
+## 0.17.0 - 2026-06-09
+
+Hegel now runs entirely in-process. The native Rust engine is the only backend: the Python `hegel-core` server, the Unix-socket protocol, and the automatic `uv` install are gone, so Hegel no longer has any Python dependency and there is nothing extra to install.
+
+The `native` Cargo feature has been removed — it is now always on, so depending on `hegeltest` with `features = ["native"]` is no longer valid (drop the feature). The public generator and `Settings` APIs are unchanged.
+
+## 0.16.0 - 2026-06-08
+
+The native engine now bounds the shrinking phase by wall-clock time. If shrinking a failing example runs for more than five minutes it stops, reports the smallest counterexample found so far, and prints a warning, instead of potentially running for a very long time on tests whose body is slow to execute. Re-running resumes shrinking from the saved example. This mirrors Hypothesis's `MAX_SHRINKING_SECONDS` safety valve.
+
+## 0.15.2 - 2026-06-05
+
+This patch adds **failure blobs** to the native backend. A failure blob is a 
+base64 string encoding the counterexample. With the new `print_blob` setting 
+enabled, a failing `#[hegel::test]` prints it as a copy-pasteable attribute:
+
+```text
+To reproduce this failure, add the attribute below #[hegel::test]:
+    #[hegel::reproduce_failure("AAEC…")]
+```
+
+```rust
+#[hegel::test]
+#[hegel::reproduce_failure("AAEC…")]
+fn my_test(tc: hegel::TestCase) {
+    let x: i32 = tc.draw(hegel::generators::integers());
+    assert!(x < 100);
+}
+```
+
+The attribute can be stacked to keep track of several failures; only the
+first one replays — delete them one by one as you fix the failures. A blob
+that decodes but no longer reproduces a failure is reported as a failing run.
+
+Over the C ABI, `hegel_failure_reproduction_blob` reads the blob off a failure
+and `hegel_test_case_from_blob` replays it.
+
+We only guarantee the compatibility of the failure blob within a specific Hegel
+version.
+
+## 0.15.1 - 2026-06-04
+
+The native backend (`--features native`) now implements the `TestCasesTooLarge` and `LargeInitialTestCase` health checks. The former fires when generated inputs routinely overrun the choice buffer; the latter when even the smallest natural input is very large. Both are suppressible via `suppress_health_check`.
+
+## 0.15.0 - 2026-06-03
+
+The native engine (`--features native`) gains a urandom backend, selectable with `Settings::backend(Backend::Urandom)`, the `#[hegel::test(backend = Backend::Urandom)]` attribute, or the `--backend urandom` CLI flag.
+
+In this mode every random choice is drawn from a fresh, unbuffered read of `/dev/urandom` instead of expanding a single seeded PRNG. This exists for running under [Antithesis](https://antithesis.com/), whose fuzzer controls the bytes `/dev/urandom` returns — sourcing every choice from the OS random device hands the fuzzer control over the whole test case (not just the PRNG seed) so it can steer and reproduce generation directly. The generation algorithm is otherwise unchanged; only the source of randomness differs, mirroring Hypothesis's `backend="hypothesis-urandom"`.
+
+When running inside Antithesis the urandom backend is selected automatically unless you pin one explicitly. On platforms without `/dev/urandom` (Windows) it falls back to an OS-seeded PRNG. If you are not running under Antithesis you almost certainly want the default backend.
+
+Relatedly, a weighted boolean draw now spends exactly one byte of entropy (matching Hypothesis's bytestring provider) rather than a full 64-bit float. This keeps a single-bit decision from consuming eight fuzzer-controlled bytes under the urandom backend.
+
+## 0.14.27 - 2026-06-03
+
+The native backend (`--features native`) now rejects regex `\u`/`\U` escapes for surrogate codepoints (e.g. `\uD800`) with a clear error instead of panicking, since a Rust `String` cannot contain a surrogate.
+
+## 0.14.26 - 2026-06-02
+
+The native backend (`--features native`) no longer hangs when a `text()`/`binary()` generator has a very large `max_size`. The index-based shrink passes now skip string and bytes nodes entirely, deferring to the dedicated length-reduction and per-element passes that already handle them.
+
+## 0.14.25 - 2026-06-02
+
+This patch fixes various cases in which the test would run for more test cases than intended when the test function rejects at a very high rate.
+
+## 0.14.24 - 2026-06-01
+
+This patch bundles a batch of fixes and improvements, most of them to the native engine (`--features native`).
+
+- Invalid-argument (usage) errors are now reported uniformly. Misconfiguring a generator — `max_value` below `min_value`, a float range that contains no values, an empty `sampled_from`/`one_of`, an unsatisfiable filter — or misusing `tc.target()` (a non-finite score, or the same label twice in one test case) is a mistake in how the test is written, not a property that failed. Previously such errors were caught mid-draw and misreported (and pointlessly shrunk) as a discovered counterexample ("Property test failed: ..."); now the run aborts immediately with the error message, consistently across generators and across the server and native backends.
+- The native engine uses a faster hasher (FxHash) for its internal lookup tables, which are keyed only by Hegel's own data and never by adversarial input. This speeds up generation across all generators, most noticeably for tests that make many draws per test case.
+- The native engine now iterates targeting labels, shrink origins, and changed-node indices in a deterministic order, so a seeded run with multiple targets or failure origins is reproducible run-to-run.
+- A non-deterministic generator on the native backend (one whose choice kind changes at the same position across runs) is now reported as a failing run instead of panicking, so it no longer aborts the process when the engine is driven over FFI.
+- The native backend writes example-database values atomically (temp file plus rename), so a process sharing the database directory can't observe a partially-written value.
+- The native regex parser now rejects the `\z` anchor (matching CPython's `re`, which only supports `\Z`) and rejects patterns nested beyond a fixed depth with a clear error instead of overflowing the stack on pathologically nested groups.
+- Internal change: the native TooSlow health-check threshold is passed into the engine rather than read from a constant, so it can be tested deterministically. No user-visible behaviour change.
+
+## 0.14.23 - 2026-06-01
+
+Prebuilt `libhegel` binaries are no longer published for Intel macOS (`darwin/amd64`). The `macos-13` (x86_64) GitHub-hosted runners are scarce and routinely left the release job stuck for hours waiting for a runner, and we do not support Intel Macs. Apple-silicon macOS (`darwin/arm64`), Linux, and Windows binaries are unaffected; Intel-mac users can still build the `hegeltest-c` crate themselves.
+
+## 0.14.22 - 2026-06-01
+
+This patch improves the performance of generation by improving how we generate schemas to pass to the underlying engine.
+
+## 0.14.21 - 2026-06-01
+
+This patch improves the performance of generating and shrinking bounded integers, and of any generator built on them (collection sizes, sampled-from indices, and similar).
+
+## 0.14.20 - 2026-06-01
+
+This patch improves the performance of running tests. Previously every draw on every test case paid a formatting cost even though the rendered text was discarded, now this formatting is skipped unless the printed result is needed. The improvement is largest for values that are expensive to format, such as strings and collections.
+
+## 0.14.19 - 2026-05-31
+
+This patch fixes two bugs in the native feature.
+
+1. test case limits were not properly being respected, leading to running up to 5x as many test cases as requested
+2. some checks that were supposed to prevent duplicate test cases were not properly being honoured, leading to duplicate tests
+
+## 0.14.18 - 2026-05-30
+
+Internal refactoring of the native engine's integer representation to use a generic `IntegerChoice` type, and switch from `num-bigint` to `dashu-int` for big integer support.
+
+## 0.14.17 - 2026-05-29
+
+This release only affects libhegel users and is otherwise a pure refactoring.
+
+In libhegel, an invalid schema would abort the process improperly when the rust code panicked. Now the rust code uses Result everywhere internally and properly propagates these errors to callers.
+
+## 0.14.16 - 2026-05-29
+
+This patch makes some improvements to the libhegel C bindings, and has no other user-visible effect.
+
+## 0.14.15 - 2026-05-29
+
+This patch improves the performance of the native backend (`--features native`). The changes are internal only and have no user-visible effect on behaviour.
+
+## 0.14.14 - 2026-05-28
+
+This release contains only internal refactoring that should have no user-visible impact.
+
+## 0.14.12 - 2026-05-26
+
+This patch brings the native-mode shrinker (`--features native`) to feature
+parity with the upstream Hypothesis shrinker.
+
+## 0.14.11 - 2026-05-24
+
+This patch makes `Verbosity::Verbose` (and `Verbosity::Debug`) actually show what's happening inside a run. Previously these levels only added a single `Running test case` line; everything else (drawn values, notes, panic messages) was suppressed until the final replay.
+
+At `Verbose` or higher:
+
+- `tc.note(...)` and the per-draw `let x = ...;` lines now print on every test case, not only the final replay of a failing example.
+- When a test case panics, the full panic diagnostic (thread, location, message, and backtrace if `RUST_BACKTRACE` is set) is emitted as soon as the panic happens, so you can see which inputs caused which failure as the run progresses.
+- Each test case rejected by the backend prints a short reason line — `Test case stopped: failed assumption` for `assume`/`reject` calls, and `Test case stopped: out of data` when the backend exhausts its choice budget.
+
+## 0.14.10 - 2026-05-23
+
+The native backend (`--features native`) now persists failing examples to the
+database as soon as they are discovered and after every shrink improvement,
+matching Hypothesis's behaviour. Previously the save happened only at the end of `run_main`, so killing the runner during
+shrinking (Ctrl-C, SIGTERM) would lose the failure even though it had already
+been found.
+
+## 0.14.9 - 2026-05-21
+
+The native backend's integer sampler now uses a piecewise log-Student's-t distribution instead of a uniform fallback. The distribution is bell-shaped in `log_2(|x|)` so integer magnitudes spread smoothly across many decades, rather than concentrating at the high-magnitude end of the requested range. This mirrors [HypothesisWorks/hypothesis#4728](https://github.com/HypothesisWorks/hypothesis/pull/4728).
+
+## 0.14.8 - 2026-05-20
+
+Internal cleanup. Removes an unused test-only attribute macro and tidies a runtime-directory isolation test so it exercises both backends.
+
+## 0.14.7 - 2026-05-20
+
+The native backend (`--features native`) now supports `gs::domains()`, `gs::emails()`, and `gs::urls()`.
+
+## 0.14.6 - 2026-05-19
+
+This release makes some minor internal changes to the native feature. It should have no user-visible impact.
+
+## 0.14.5 - 2026-05-19
+
+This release adds `gs::from_regex` support for the native backend.
+
+## 0.14.4 - 2026-05-19
+
+The native backend (`--features native`) now supports `gs::dates()`, `gs::times()`, `gs::datetimes()`, `gs::ip_addresses()`, and `gs::uuids()`.
+
+## 0.14.3 - 2026-05-19
+
+The native backend (`--features native`) now implements `Phase::Target`, so `tc.target()` and `tc.target_labelled()` drive a hill-climbing search for better-scoring inputs instead of panicking with `todo!()`.
+
+## 0.14.2 - 2026-05-19
+
+This release makes some minor internal changes to the native feature. It should have no user-visible impact.
+
+## 0.14.1 - 2026-05-19
+
+The native backend (`--features native`) now supports Unicode string generators.
+
+## 0.14.0 - 2026-05-16
+
+This release changes `gs::default::<T>()` to return the concrete generator for `T` instead of a weakly typed `BoxedGenerator` (https://github.com/hegeldev/hegel-rust/issues/246).
+
+This has the following implications:
+
+```rust
+#[derive(DefaultGenerator)]
+struct Person { name: String, age: u32 }
+
+// before
+let p: Person = tc.draw(gs::default());
+// after
+let p = tc.draw(gs::default::<Person>());
+
+// writing the following is now possible, where it would have errored before
+gs::default::<Person>().age(gs::integers::<u32>())
+gs::default::<u32>().min_value(0).max_value(100)
+```
+
+## 0.13.1 - 2026-05-16
+
+This patch adds support for combining `#[hegel::test]` with async test attributes like `#[tokio::test]`.
+
+## 0.13.0 - 2026-05-16
+
+This release makes several changes to `#[derive(DefaultGenerator)]` ([#149](https://github.com/hegeldev/hegel-rust/issues/149)):
+
+- The method names generated by `#[derive]` are now in `snake_case`, rather than `PascalCase`.
+- Tuple variants now take generators as positional arguments.
+- Tuple variants have a `<name>_with` method, which accepts a closure receiving the default variant generator and returning any generator for the enum.
+- Named variants now take a closure, which is passed the default generator for that field.
+
+```rust
+enum Op {
+    Reset,
+    ReadWrite(usize, usize),
+    Configure { retries: u32, timeout: u64 },
+}
+
+// before
+Op::default_generator()
+    .ReadWrite(Op::default_generator().default_ReadWrite().value_0(gs::just(42)).value_1(gs::just(43)))
+    .Configure(Op::default_generator().default_Configure().retries(gs::just(44)))
+
+// after
+Op::default_generator()
+    .read_write(gs::just(42), gs::just(43))
+    .configure(|g| g.retries(gs::just(44)))
+```
+
+Tuple variants also generate a `*_with` method, which passes the derived generator `g`:
+
+```rust
+// configure just the second entry of the tuple variant
+Op::default_generator()
+    .read_write_with(|g| g._1(gs::just(42)))
+
+// configure the entire tuple variant with a custom generator
+Op::default_generator()
+    .read_write_with(|_| hegel::compose!(|tc| {
+        let n = tc.draw(gs::integers::<usize>().max_value(1024));
+        Op::ReadWrite(n, n)
+    }))
+```
+
+Thanks to @sunshowers and @andrewgazelka for providing feedback on enum ergonomics!
+
+The native backend (`--features native`) now supports byte-string generators.
+
+## 0.12.8 - 2026-05-16
+
+The native backend (`--features native`) now supports byte-string generators.
+
+## 0.12.7 - 2026-05-14
+
+The native backend (`--features native`) now supports floating-point
+generators: `gs::floats::<f32>()` and `gs::floats::<f64>()` work on native,
+along with their `min_value` / `max_value` / `exclude_min` / `exclude_max` /
+`allow_nan` / `allow_infinity` bounds and the float-specific shrink passes.
+
+`gs::floats()` also now rejects empty-range `exclude_min` / `exclude_max`
+combinations (`min_value = +inf` with `exclude_min`, `max_value = -inf` with
+`exclude_max`, single-point ranges with either exclude flag) with an
+`InvalidArgument` panic at generator construction. Previously the server
+backend's Hypothesis layer caught these at draw time; both backends now
+agree at builder time.
+
+## 0.12.6 - 2026-05-14
+
+This release adds an experimental `native` feature flag that swaps the
+hegel-core Python server for an in-process Rust engine. When using this
+feature, hegel has no Python dependency, and is likely to be significantly
+faster.
+
+This should at this point be considered more of a preview than a usable
+feature. Some things will work, many things will fail with a `todo!`.
+It is likely to contain bugs. Experience reports on things that work
+but less well than on the server are extremely welcome.
+
+## 0.12.5 - 2026-05-14
+
+This patch fixes running tests on NixOS.
+
+## 0.12.4 - 2026-05-13
+
+This patch makes Hegel surface every distinct failing test case from a
+run, rather than collapsing multi-bug runs down to whichever failure
+fired last.
+
+When the run produces multiple distinct failures, Hegel now prints:
+
+```
+Hegel found N failing test cases:
+<diagnostic for failure 1>
+<diagnostic for failure 2>
+...
+```
+
 ## 0.12.3 - 2026-05-11
 
 This patch bumps our pinned hegel-core from [0.8.0](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.0) to [0.8.2](https://github.com/hegeldev/hegel-core/releases/tag/v0.8.2).

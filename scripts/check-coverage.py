@@ -61,6 +61,7 @@ Adding new patterns to the allowlist could mask actual coverage gaps.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -68,7 +69,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RATCHET_FILE = Path(".github/coverage-ratchet.json")
-SOURCE_DIRS = [Path("src"), Path("hegel-macros/src")]
+SOURCE_DIRS = [Path("src"), Path("hegel-macros/src"), Path("hegel-c/src")]
 
 # ──────────────────────────────────────────────────────────────────────
 # nocov block cache
@@ -333,41 +334,23 @@ class CoverageData:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def get_target_triple() -> str:
-    """Get the current Rust target triple."""
+def _run_lcov_phase(cargo_args: list[str], output: Path, label: str) -> None:
+    """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`."""
+    print(f"  Cleaning previous coverage data ({label})...")
+    # Fully remove the coverage build tree, not just the profile data
+    # (`cargo llvm-cov clean`). The two passes need *different*
+    # instrumentation — the proc-macros' compile-time execution is only
+    # captured when hegel-macros is rebuilt as an instrumented build
+    # dependency, which won't happen if the second pass reuses the first
+    # pass's `--workspace` build. A fresh build per pass keeps each pass's
+    # coverage faithful. (Peak disk stays at one build tree, not two.)
+    import shutil
+
+    shutil.rmtree(Path("target/llvm-cov-target"), ignore_errors=True)
+
+    print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
-        ["rustc", "-vV"],
-        capture_output=True,
-        text=True,
-    )
-    for line in result.stdout.splitlines():
-        if line.startswith("host:"):
-            return line.split(":")[1].strip()
-    return "unknown"
-
-
-def run_coverage() -> Path:
-    """Run coverage analysis and generate LCOV report."""
-    print("Running coverage analysis...")
-    lcov_path = Path("lcov.info")
-
-    # Clean previous profdata
-    print("  Cleaning previous coverage data...")
-    result = subprocess.run(
-        ["cargo", "llvm-cov", "clean", "--workspace"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        print("ERROR: Failed to clean coverage data", file=sys.stderr)
-        sys.exit(1)
-
-    # Phase 1: Run tests and collect profraw data (no report yet)
-    print("  Running tests with coverage...")
-    result = subprocess.run(
-        ["cargo", "llvm-cov", "--no-report", "--all-features"],
+        ["cargo", "llvm-cov", *cargo_args, "--lcov", f"--output-path={output}"],
         capture_output=True,
         text=True,
     )
@@ -376,118 +359,135 @@ def run_coverage() -> Path:
     if result.returncode != 0:
         if result.stderr:
             print(result.stderr, file=sys.stderr)
-        print("ERROR: Coverage run failed", file=sys.stderr)
+        print(f"ERROR: Coverage run ({label}) failed", file=sys.stderr)
         sys.exit(1)
-    print("  Tests passed")
 
-    # Phase 2: Generate LCOV report.
-    # First try with subprocess binaries included (for TempRustProject coverage).
-    # If that fails, fall back to standard report.
-    llvm_cov_target = Path("target/llvm-cov-target")
-    subprocess_bins = sorted(
-        p
-        for p in llvm_cov_target.glob("debug/temp_hegel_test_*")
-        if p.is_file() and not p.suffix  # exclude .d, .pdb etc
-    )
-    print(f"  Generating report ({len(subprocess_bins)} subprocess binaries)...")
 
-    if subprocess_bins:
-        # Use raw llvm tools to include subprocess binaries.
-        # Find llvm tools from the Rust toolchain.
-        toolchain_result = subprocess.run(
-            ["rustc", "--print", "sysroot"],
-            capture_output=True,
-            text=True,
-        )
-        sysroot = toolchain_result.stdout.strip()
-        llvm_bin = Path(sysroot) / "lib/rustlib" / get_target_triple() / "bin"
-        llvm_profdata = llvm_bin / "llvm-profdata"
-        llvm_cov_bin = llvm_bin / "llvm-cov"
+def _merge_lcov(inputs: list[Path], output: Path) -> None:
+    """Union-merge several LCOV files into `output`.
 
-        if llvm_profdata.exists() and llvm_cov_bin.exists():
-            # Merge all profraw files
-            profraw_files = list(llvm_cov_target.glob("*.profraw"))
-            merged_profdata = llvm_cov_target / "merged.profdata"
-            result = subprocess.run(
-                [str(llvm_profdata), "merge", "-sparse"]
-                + [str(f) for f in profraw_files]
-                + ["-o", str(merged_profdata)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(
-                    "WARNING: profdata merge failed, using standard report",
-                    file=sys.stderr,
-                )
-            else:
-                # Find all instrumented binaries (main test binaries + subprocess binaries)
-                main_bins = sorted(
-                    p
-                    for p in llvm_cov_target.glob("debug/deps/hegel-*")
-                    if p.is_file() and not p.suffix
-                )
-                all_bins = main_bins + subprocess_bins
-                # Also include integration test binaries
-                test_bins = sorted(
-                    p
-                    for p in llvm_cov_target.glob("debug/deps/test_*")
-                    if p.is_file() and not p.suffix
-                )
-                all_bins.extend(test_bins)
+    For each source file, line `N` is treated as covered if it's covered
+    in ANY input.  Counts are aggregated as the max over inputs (LCOV's
+    DA: lines are `DA:<line>,<count>`).  Function and branch records
+    (`FN/FNDA/BRDA`) are similarly combined.
+    """
+    from collections import defaultdict
 
-                if all_bins:
-                    # Generate LCOV with all objects
-                    cmd = [
-                        str(llvm_cov_bin),
-                        "export",
-                        "-format=lcov",
-                        f"-instr-profile={merged_profdata}",
-                    ]
-                    # First binary is positional, rest are --object
-                    cmd.append(str(all_bins[0]))
-                    for b in all_bins[1:]:
-                        cmd.extend(["-object", str(b)])
-                    # Only report on project source files
-                    cmd.extend(
-                        [
-                            "-ignore-filename-regex=\\.cargo/registry",
-                            "-ignore-filename-regex=/rustc/",
-                            "-ignore-filename-regex=/rustlib/",
-                            "-ignore-filename-regex=/tmp/",
-                            "-ignore-filename-regex=/var/folders/",
-                            "-ignore-filename-regex=tests/",
-                        ]
-                    )
+    # source file -> {line_number -> max_count}
+    per_file_lines: dict[str, dict[int, int]] = defaultdict(dict)
+    # source file -> {function_name -> max_hit_count}
+    per_file_fn: dict[str, dict[str, int]] = defaultdict(dict)
+    # source file -> {function_name -> declaration_line}
+    per_file_fn_decl: dict[str, dict[str, int]] = defaultdict(dict)
 
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0 and result.stdout:
-                        lcov_path.write_text(result.stdout)
-                        return lcov_path
-                    else:
-                        print(
-                            "WARNING: llvm-cov export failed, using standard report",
-                            file=sys.stderr,
-                        )
-                        if result.stderr:
-                            print(result.stderr[:500], file=sys.stderr)
+    for path in inputs:
+        if not path.exists():
+            continue
+        current: str | None = None
+        with path.open() as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if line.startswith("SF:"):
+                    current = line[3:]
+                elif line == "end_of_record":
+                    current = None
+                elif current is None:
+                    continue
+                elif line.startswith("DA:"):
+                    n, _, count = line[3:].partition(",")
+                    if n and count:
+                        ln, c = int(n), int(count)
+                        prev = per_file_lines[current].get(ln, 0)
+                        per_file_lines[current][ln] = max(prev, c)
+                elif line.startswith("FN:"):
+                    decl_line, _, name = line[3:].partition(",")
+                    if decl_line and name:
+                        per_file_fn_decl[current][name] = int(decl_line)
+                elif line.startswith("FNDA:"):
+                    count, _, name = line[5:].partition(",")
+                    if count and name:
+                        prev = per_file_fn[current].get(name, 0)
+                        per_file_fn[current][name] = max(prev, int(count))
 
-    # Fallback: standard cargo llvm-cov report
-    result = subprocess.run(
-        ["cargo", "llvm-cov", "report", "--lcov", f"--output-path={lcov_path}"],
-        capture_output=True,
-        text=True,
-    )
+    with output.open("w") as f:
+        for source in sorted(per_file_lines):
+            f.write("TN:\n")
+            f.write(f"SF:{source}\n")
+            for name, decl in sorted(per_file_fn_decl[source].items()):
+                f.write(f"FN:{decl},{name}\n")
+            for name, count in sorted(per_file_fn[source].items()):
+                f.write(f"FNDA:{count},{name}\n")
+            for ln in sorted(per_file_lines[source]):
+                f.write(f"DA:{ln},{per_file_lines[source][ln]}\n")
+            f.write("end_of_record\n")
+
+
+def _ensure_smoke_cdylib() -> None:
+    """Build the libhegel cdylib and point the dlopen smoke test at it.
+
+    `cargo llvm-cov` runs `cargo test`, which builds rlibs and test binaries
+    but *not* the standalone `cdylib` artifact. The hegel-c smoke test
+    (`hegel-c/tests/smoke.rs`) dlopens that cdylib, so without it every smoke
+    test fails to find `libhegel_c.so` and the whole coverage run errors out.
+
+    Build it into the default target dir (separate from
+    `target/llvm-cov-target`, so no instrumentation-flag thrash) and export
+    `HEGEL_C_LIB_DIR` so the smoke test loads it. A non-instrumented cdylib is
+    fine here: the engine's line coverage comes from the in-process tests
+    (hegeltest driving the C ABI plus hegel-c's embedded/`c_abi_inprocess`
+    tests), not from dlopening the library — the smoke test only exercises the
+    FFI boundary behaviourally.
+    """
+    print("  Building libhegel cdylib for the dlopen smoke test...")
+    result = subprocess.run(["cargo", "build", "-p", "hegeltest-c"])
     if result.returncode != 0:
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        print("ERROR: Coverage report generation failed", file=sys.stderr)
+        print("ERROR: failed to build the hegeltest-c cdylib", file=sys.stderr)
         sys.exit(1)
+    os.environ["HEGEL_C_LIB_DIR"] = str((Path("target") / "debug").resolve())
 
+
+def run_coverage() -> Path:
+    """Run coverage analysis and generate LCOV report.
+
+    A single `--workspace` pass with every additive feature enabled. Running
+    the whole workspace (rather than hegeltest alone) covers the engine in
+    hegel-c/src — both through hegeltest driving it over the C ABI and through
+    hegel-c's own embedded tests — instead of excluding hegel-c as a mere
+    dependency, while still covering the hegeltest frontend.
+
+    hegel-macros is excluded from the report. It's a proc-macro crate whose
+    code runs at the *compile* time of the test crates, which `cargo llvm-cov`
+    does not measure as runtime coverage — a workspace pass only adds its lines
+    as uncovered noise. (It was never actually counted before this either: the
+    pre-move single-package pass emitted no hegel-macros records at all.) The
+    macros are exercised by the macro test suites regardless; they are simply
+    not line-coverage-measurable here.
+    """
+    print("Running coverage analysis...")
+    lcov_path = Path("lcov.info")
+    raw_lcov = Path("lcov-all.info")
+
+    _ensure_smoke_cdylib()
+
+    _run_lcov_phase(
+        cargo_args=[
+            "--workspace",
+            "--features",
+            "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
+            # proc-macro compile-time execution isn't runtime coverage; keep
+            # hegel-macros out of the report rather than count it as uncovered.
+            "--ignore-filename-regex",
+            "hegel-macros/",
+        ],
+        output=raw_lcov,
+        label="workspace, all features",
+    )
+
+    print("  Normalising LCOV output...")
+    _merge_lcov([raw_lcov], lcov_path)
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
-
     return lcov_path
 
 

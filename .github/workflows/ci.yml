@@ -45,6 +45,7 @@ jobs:
   test:
     # Keep the name matching the branch-protection required checks on Linux
     # (`test (1.86)` / `test (stable)`); Windows variants get a suffix.
+    # macOS is intentionally absent for now and will land in a follow-up.
     name: test (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
     permissions:
@@ -65,7 +66,16 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
+
+      # Windows Defender real-time scanning of every .obj/.exe/.pdb cargo
+      # writes (and of each test binary on execution) is a large tax on the
+      # subprocess-heavy integration tests. Excluding the workspace from
+      # real-time scanning removes it. No-op on non-Windows runners.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
         run: just check-tests
@@ -79,14 +89,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # On Windows, --all-features would enable `antithesis`, which triggers
-          # a compile_error! on Windows. Drop back to just `rand`.
+          # Windows drops `antithesis` because the upstream SDK is
+          # Linux-only and emits a `compile_error!` otherwise.
           - os: windows-latest
             rust: "1.86"
-            recipe: check-tests-rand-feature
+            recipe: check-tests-all-features-windows
           - os: windows-latest
             rust: stable
-            recipe: check-tests-rand-feature
+            recipe: check-tests-all-features-windows
           - os: ubuntu-latest
             rust: "1.86"
             recipe: check-tests-all-features
@@ -104,47 +114,66 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
+
+      # See the note in the `test` job: exclude the workspace from Windows
+      # Defender real-time scanning to drop the AV tax on subprocess builds.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
         run: just ${{ matrix.recipe }}
 
-  test-min-protocol:
-    name: test-min-protocol
-    runs-on: ubuntu-latest
+  test-c-bindings:
+    # Builds libhegel (the C shared/static library in hegel-c/), runs
+    # the libloading-based Rust smoke tests, and then compiles every
+    # example C program in hegel-c/examples/ against both libhegel.so
+    # and libhegel.a, running each binary to check the linking modes
+    # actually work end-to-end. Runs on every native runner where we
+    # publish a release binary; symbol-visibility, libloading behavior,
+    # and Windows-specific calling conventions only get exercised by
+    # actually running the smoke tests on each OS. The example C
+    # programs are bash-driven and only run on Unix runners.
+    name: test-c-bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal && rustup default stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
-      - id: min-version
-        run: |
-          MIN_PROTOCOL=$(grep -rE 'SUPPORTED_PROTOCOL_VERSIONS.*"[0-9.]+"' src/ | grep -oE '"[0-9.]+"' | head -1 | tr -d '"')
+      # See the note in the `test` job: exclude the workspace from Windows
+      # Defender real-time scanning to drop the AV tax on subprocess builds.
+      - name: Exclude workspace from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
-          VERSIONS_JSON=$(curl -sf https://hegel.dev/api/versions.json)
+      - name: Run C bindings test recipe
+        run: just c-test
 
-          MIN_CORE=$(echo "$VERSIONS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['$MIN_PROTOCOL'])")
-
-          echo "Minimum supported protocol version: $MIN_PROTOCOL"
-          echo "Minimum hegel-core version: $MIN_CORE"
-          echo "min_core=$MIN_CORE" >> "$GITHUB_OUTPUT"
-
-      - name: Run tests with minimum protocol version
-        env:
-          MIN_CORE: ${{ steps.min-version.outputs.min_core }}
-        run: |
-          uv tool install "hegel-core==$MIN_CORE"
-          HEGEL_SERVER_COMMAND=$(which hegel) RUST_BACKTRACE=1 cargo test -- --skip single_test_case
+      # Build libhegel with `panic = "abort"` and re-run the smoke tests + C
+      # examples against it. Proves no panic crosses the FFI boundary on the
+      # tested paths (an invalid schema that aborted instead of returning
+      # HEGEL_E_INVALID_ARG would crash the process and fail this step). The
+      # recipe is a no-op on Windows (bash-driven examples).
+      - name: Run C bindings under panic=abort
+        run: just c-test-abort
 
   docs:
     name: docs
@@ -184,7 +213,7 @@ jobs:
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
       - uses: ./.github/actions/install-tools
         with:
-          tools: just uv
+          tools: just
 
       - name: Generate lockfile
         run: cargo generate-lockfile -Z minimal-versions
@@ -247,6 +276,8 @@ jobs:
 
       - uses: ./.github/actions/install-tools
         with:
+          # `uv` is needed for the `check-coverage.py` script's
+          # `#!/usr/bin/env -S uv run --script` shebang.
           tools: just uv
 
       - name: Run coverage
@@ -285,44 +316,6 @@ jobs:
               --head "$BRANCH" || true
           fi
 
-  conformance:
-    name: conformance
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - name: Run conformance tests
-        run: just check-conformance
-
-  whole-repo:
-    name: whole-repo
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/install-tools
-        with:
-          tools: just uv
-
-      - name: Run whole-repo tests
-        run: just check-tests-whole-repo
-
   nix:
     name: nix
     runs-on: ubuntu-latest
@@ -343,13 +336,19 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, conformance, nix, whole-repo]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, nix]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
       # Used by our trusted publishing flow
       id-token: write
+    # Expose the new tag/version to `release-binaries` (cross-platform cdylib
+    # builds). `skipped` lets that job no-op cleanly on non-release pushes;
+    # `version` is the post-bump version it tags / uploads against.
+    outputs:
+      skipped: ${{ steps.check.outputs.skip == 'true' }}
+      version: ${{ steps.released-version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -384,6 +383,13 @@ jobs:
           HEGEL_RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: python .github/scripts/release.py release
 
+      - name: Capture released version
+        id: released-version
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust
         if: steps.check.outputs.skip != 'true'
         run: rustup toolchain install stable --profile minimal
@@ -413,6 +419,31 @@ jobs:
           echo "Timed out waiting for hegeltest-macros to appear on Crates.io"
           exit 1
 
+      - name: Publish hegeltest-c
+        if: steps.check.outputs.skip != 'true'
+        # The engine crate. hegeltest now depends on it, so it must be
+        # published (and indexed) before hegeltest. Its other role is to
+        # reserve the name; the useful artefact for non-Rust consumers is the
+        # `libhegel-<goos>-<goarch>.<ext>` cdylib uploaded by the
+        # `release-binaries` job, not this source crate.
+        run: cargo publish -p hegeltest-c
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      - name: Wait for hegeltest-c on crates.io index
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          VERSION=$(grep '^version' hegel-c/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "waiting for hegeltest-c $VERSION to appear on crates.io..."
+          for i in $(seq 1 60); do
+            if cargo search hegeltest-c | grep -q "\"$VERSION\""; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Timed out waiting for hegeltest-c to appear on Crates.io"
+          exit 1
+
       - name: Publish hegeltest
         if: steps.check.outputs.skip != 'true'
         run: cargo publish -p hegeltest
@@ -424,3 +455,217 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/release.py push-or-pr
+
+  # Cross-platform cdylib builds for libhegel (the C-ABI shared library
+  # produced by the `hegeltest-c` crate). Triggers after the `release` job
+  # has tagged a new version; each matrix entry builds for one Go-style
+  # (GOOS, GOARCH) target, renames the cdylib to the
+  # `libhegel-<goos>-<goarch>.<ext>` shape that hegel-go's downloader
+  # expects, computes a SHA-256 sidecar, and uploads both to the GitHub
+  # Release for the just-pushed tag. The first racer creates the release;
+  # the rest upload into it with --clobber so re-runs are idempotent.
+  release-binaries:
+    # `platform` is the primary matrix dimension; the include entries
+    # specialise the runner / Rust target / file extension for each
+    # platform. Structuring it this way lets GitHub's auto-suffix render
+    # cleanly as "release-binaries (linux-amd64)" etc. when the matrix
+    # expands, and lets the *skipped* form collapse to a single
+    # "release-binaries" entry on non-release pushes — instead of
+    # showing the literal `${{ matrix.X }}` template, which GitHub does
+    # not interpolate when a job-level `if:` evaluates to false before
+    # matrix expansion.
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux-amd64
+          - linux-arm64
+          - darwin-arm64
+          - windows-amd64
+          - windows-arm64
+        include:
+          - { platform: linux-amd64,   runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
+          # Intel macOS (darwin-amd64) is intentionally not built: the
+          # macos-13 (x86_64) runners are scarce and routinely leave the
+          # release job stuck for hours waiting for a runner, and we do not
+          # support Intel Macs. Apple-silicon macOS is covered below.
+          - { platform: darwin-arm64,  runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
+          - { platform: windows-amd64, runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
+          # aarch64-pc-windows-msvc is cross-compiled from the x86_64 runner.
+          # MSVC has had built-in arm64 cross since VS 2017+ and
+          # windows-latest ships the toolchain.
+          - { platform: windows-arm64, runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, ext: dll }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # The release job tags before pushing the bump commit; fetch
+          # tags so we can check out the new tag rather than gambling on
+          # main's HEAD pointer.
+          fetch-depth: 0
+          ref: refs/tags/v${{ needs.release.outputs.version }}
+
+      - name: Install Rust + target
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Build cdylib
+        run: cargo build -p hegeltest-c --release --target ${{ matrix.target }}
+
+      - name: Stage asset + sha256
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          case "${{ matrix.goos }}" in
+            windows) built="target/${{ matrix.target }}/release/hegel_c.dll" ;;
+            darwin)  built="target/${{ matrix.target }}/release/libhegel_c.dylib" ;;
+            linux)   built="target/${{ matrix.target }}/release/libhegel_c.so" ;;
+            *) echo "unknown goos: ${{ matrix.goos }}" >&2; exit 1 ;;
+          esac
+          if [ ! -f "$built" ]; then
+            echo "expected cdylib output $built missing" >&2
+            ls -la "target/${{ matrix.target }}/release/" || true
+            exit 1
+          fi
+          cp "$built" "$asset"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            # macOS doesn't ship sha256sum but ships shasum.
+            shasum -a 256 "$asset" > "$asset.sha256"
+          fi
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET: ${{ steps.stage.outputs.asset }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          asset="$ASSET"
+          # The `release` job creates the Release as a draft up front, so
+          # normally `gh release view` finds it and we go straight to upload.
+          # The `--draft` fallback only fires if that release is somehow
+          # absent: assets must land in a *draft* release because GitHub's
+          # immutable releases feature locks a release's assets once it is
+          # published. `release-binaries-verify` publishes it afterwards.
+          # `--clobber` makes re-runs (e.g. after a flaked build) idempotent.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --draft \
+              --title "$tag" \
+              --notes "libhegel binaries for $tag. See CHANGELOG.md for the full changelog." \
+              || true
+          fi
+          gh release upload "$tag" "$asset" "$asset.sha256" --clobber
+
+  # Independent post-condition check that every expected libhegel asset is
+  # present on the Release. `release-binaries` uses `fail-fast: false` so
+  # failed-platform diagnostics aren't lost; this aggregator job fails
+  # loudly when any expected asset (or its sidecar) is missing, satisfying
+  # go-reports.md item 6: "Update the release workflow to fail if any
+  # expected asset is missing."
+  release-binaries-verify:
+    name: release-binaries-verify
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: [release, release-binaries]
+    runs-on: ubuntu-latest
+    # `contents: write` (not just read) so this job can both view the draft
+    # release — drafts are invisible to read-only tokens — and publish it
+    # once every expected asset is present.
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Check that every expected asset uploaded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          expected=(
+            libhegel-linux-amd64.so
+            libhegel-linux-arm64.so
+            libhegel-darwin-arm64.dylib
+            libhegel-windows-amd64.dll
+            libhegel-windows-arm64.dll
+          )
+          actual=$(gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name')
+          missing=()
+          for a in "${expected[@]}"; do
+            grep -qxF "$a" <<<"$actual" || missing+=("$a")
+            grep -qxF "$a.sha256" <<<"$actual" || missing+=("$a.sha256")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Release $tag is missing assets:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All expected libhegel assets present on $tag."
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # Un-draft the release now that every asset is verified present.
+          # Publishing is what makes the release (and its assets) immutable,
+          # so it must happen last. 
+          gh release edit "$tag" --repo "$REPO" --draft=false
+          echo "Published release $tag."
+
+  # Notify each downstream language binding that a new libhegel release is live
+  # so it can bump its pinned version. One matrix entry per consumer repo.
+  # Gated on `release-binaries-verify`, not just `release`: the downstream bumps
+  # read the per-asset SHA-256 digests off this release, so we only dispatch
+  # once every libhegel binary is confirmed uploaded. `fail-fast: false` keeps a
+  # dispatch failure for one repo from cancelling the others.
+  bump-libhegel:
+    name: bump-libhegel
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    needs: [release, release-binaries-verify]
+    runs-on: ubuntu-latest
+    # The cross-repo dispatch uses the app token below, not GITHUB_TOKEN.
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [hegel-go, hegel-ocaml, hegel-typescript]
+    steps:
+      - name: Generate app token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: app-token
+        with:
+          app-id: ${{ vars.HEGEL_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HEGEL_RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ matrix.repo }}
+
+      - name: Dispatch hegel-rust-release to ${{ matrix.repo }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          gh api "repos/hegeldev/$REPO/dispatches" \
+            -f event_type=hegel-rust-release \
+            -F "client_payload[version]=$VERSION"

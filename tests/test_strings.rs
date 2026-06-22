@@ -152,7 +152,7 @@ fn test_regex_with_alphabet() {
 #[test]
 fn test_dates_format() {
     assert_all_examples(gs::dates(), |s: &String| {
-        // Must match YYYY-MM-DD. Accept any year (server generates pre-1970 dates).
+        // Must match YYYY-MM-DD. Accept any year (pre-1970 dates are generated too).
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() != 3 || parts[0].len() != 4 {
             return false;
@@ -168,7 +168,7 @@ fn test_dates_format() {
 #[test]
 fn test_times_format() {
     assert_all_examples(gs::times(), |s: &String| {
-        // HH:MM:SS with optional fractional seconds (server may produce microseconds).
+        // HH:MM:SS with optional fractional seconds (microseconds may be produced).
         let parts: Vec<&str> = s.splitn(3, ':').collect();
         if parts.len() != 3 {
             return false;
@@ -276,7 +276,7 @@ fn test_uuids_have_canonical_form() {
 fn test_domains_format() {
     assert_all_examples(gs::domains(), |s: &String| {
         // At least two dot-separated labels, each non-empty with valid hostname chars.
-        // Server generates mixed case (e.g. "A.COM"), so accept uppercase too.
+        // Mixed case is generated (e.g. "A.COM"), so accept uppercase too.
         let parts: Vec<&str> = s.split('.').collect();
         parts.len() >= 2
             && parts
@@ -305,7 +305,7 @@ fn test_can_generate_specified_version() {
 fn test_emails_format() {
     assert_all_examples(gs::emails(), |s: &String| {
         // Must contain exactly one '@' with non-empty user and domain containing a dot.
-        // Server generates mixed case and digits, so only check structure.
+        // Mixed case and digits are generated, so only check structure.
         let parts: Vec<&str> = s.splitn(2, '@').collect();
         if parts.len() != 2 {
             return false;
@@ -647,6 +647,9 @@ mod simple_strings {
         assert_all_examples(gs::text().max_codepoint(127), |s: &String| s.is_ascii());
     }
 
+    // A very large `max_size` must not blow up generation: the engine draws
+    // collection lengths from a geometric variate (not uniformly over the
+    // range), so typical strings stay short and the run finishes quickly.
     #[test]
     fn test_can_set_max_size_large() {
         assert_all_examples(gs::text().max_size(1_000_000), |_: &String| true);
@@ -934,10 +937,6 @@ mod regex_tests {
         }
     }
 
-    // Coverage: exercises the StringAlphabet::Intervals branch in alphabet_allows
-    // (regex.rs:665-667). exclude_characters builds an Intervals alphabet; the
-    // literal "a" and character class "[a-z]" both call alphabet_allows.
-
     // test_literals_with_ignorecase: patterns with re.IGNORECASE or inline (?i).
     // re.compile("\\Aa\\Z", re.IGNORECASE) == "(?i)\\Aa\\Z"
     #[test]
@@ -1014,6 +1013,18 @@ mod regex_tests {
     #[test]
     fn test_impossible_negative_lookahead() {
         assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
+    }
+
+    #[test]
+    fn test_impossible_negative_lookbehind() {
+        // Mirror of test_impossible_negative_lookahead for the lookbehind
+        // path. The generator emits "abc" and then the lookbehind body matches
+        // those exact chars, so every draw hits the in-line invalidation
+        // branch in `interpret_regex` (the lookbehind arm of `OpCode::AssertNot`).
+        assert_no_examples(
+            gs::from_regex("abc(?<!abc)").fullmatch(true),
+            |_: &String| true,
+        );
     }
 
     #[test]
@@ -1300,6 +1311,322 @@ mod regex_tests {
     // test_internals_can_disable_newline_from_dollar_for_jsonschema: uses regex_strategy (internal).
     // test_can_pass_union_for_alphabet: uses union alphabet type not supported by hegel-rust's API.
     // test_regex_output_should_print_as_string: output formatting test (subprocess).
+
+    // ----- Coverage tests for the AssertNot SRE-matcher -----
+    //
+    // The SRE-style `match_seq` matcher in `schema::regex` is only invoked
+    // when validating negative lookahead/lookbehind bodies. To exercise
+    // each opcode branch, the patterns below build negative-lookarounds
+    // around the construct of interest.
+
+    #[test]
+    fn lookbehind_can_match_not_literal() {
+        // `[^a]b` after a lookbehind that bans the pre-position char,
+        // exercising NotLiteral inside match_seq.
+        check_can_generate_examples(gs::from_regex(r"a(?<![^a])b"));
+    }
+
+    #[test]
+    fn lookahead_with_any() {
+        // `(?!.x)` exercises Any in match_seq.
+        check_can_generate_examples(gs::from_regex("a(?!.x)b"));
+    }
+
+    #[test]
+    fn lookahead_with_set() {
+        // `(?![abc])` exercises In + char_matches_set.
+        check_can_generate_examples(gs::from_regex("x(?![abc])y"));
+    }
+
+    #[test]
+    fn lookahead_with_set_ranges_and_ignorecase() {
+        // Range + IGNORECASE in char_matches_set.
+        check_can_generate_examples(gs::from_regex(r"(?i)x(?![a-z])Y"));
+    }
+
+    #[test]
+    fn lookahead_with_set_category() {
+        // `(?!\d)` exercises Category branch in char_matches_set.
+        check_can_generate_examples(gs::from_regex(r"x(?!\d)y"));
+    }
+
+    #[test]
+    fn lookahead_with_anchor() {
+        // `(?!\Z)` exercises At + at_matches(EndString) inside match_seq.
+        check_can_generate_examples(gs::from_regex(r"abc(?!\Z)"));
+    }
+
+    #[test]
+    fn lookahead_with_word_boundary() {
+        // `(?!\b)` exercises At + at_matches(Boundary).
+        check_can_generate_examples(gs::from_regex(r"abc(?!\b)d"));
+    }
+
+    #[test]
+    fn lookahead_with_branch() {
+        // `(?!a|b)` exercises Branch in match_seq.
+        check_can_generate_examples(gs::from_regex("x(?!a|b)y"));
+    }
+
+    #[test]
+    fn lookahead_with_subpattern() {
+        // `(?!(?:a))` exercises Subpattern in match_seq.
+        check_can_generate_examples(gs::from_regex("x(?!(?:a))y"));
+    }
+
+    #[test]
+    fn lookahead_with_atomic_group() {
+        // `(?!(?>a))` exercises AtomicGroup in match_seq.
+        check_can_generate_examples(gs::from_regex("x(?!(?>a))y"));
+    }
+
+    #[test]
+    fn lookahead_with_groupref() {
+        // `(?!(\1))` exercises GroupRef. The construct here uses a real
+        // capture before the lookahead so the back-ref resolves.
+        check_can_generate_examples(gs::from_regex(r"(a)x(?!\1)y"));
+    }
+
+    #[test]
+    fn lookahead_with_conditional_backref() {
+        // `(?!(?(1)a|b))` exercises GroupRefExists in match_seq.
+        check_can_generate_examples(gs::from_regex(r"(a)?x(?!(?(1)a|b))y"));
+    }
+
+    #[test]
+    fn lookahead_with_nested_positive_lookaround() {
+        // Positive lookahead inside the body of a negative lookahead.
+        check_can_generate_examples(gs::from_regex(r"x(?!(?=a))y"));
+    }
+
+    #[test]
+    fn lookahead_with_nested_negative_lookaround() {
+        // Negative lookahead inside the body of a negative lookahead.
+        check_can_generate_examples(gs::from_regex(r"x(?!(?!a))y"));
+    }
+
+    #[test]
+    fn lookahead_with_failure() {
+        // `(?!(?!))` — the inner empty negative is OpCode::Failure, so
+        // the outer matches everything.
+        check_can_generate_examples(gs::from_regex(r"x(?!(?!))y"));
+    }
+
+    #[test]
+    fn lookahead_with_max_repeat() {
+        // `(?!a*x)` exercises MaxRepeat in match_seq.
+        check_can_generate_examples(gs::from_regex(r"y(?!a*x)z"));
+    }
+
+    #[test]
+    fn lookahead_with_min_repeat() {
+        // `(?!a*?x)` exercises MinRepeat in match_seq.
+        check_can_generate_examples(gs::from_regex(r"y(?!a*?x)z"));
+    }
+
+    #[test]
+    fn lookahead_with_possessive_repeat() {
+        // `(?!a*+x)` exercises PossessiveRepeat in match_seq.
+        check_can_generate_examples(gs::from_regex(r"y(?!a*+x)z"));
+    }
+
+    #[test]
+    fn lookahead_with_multiline_anchor() {
+        // MULTILINE flag changes how `^` and `$` are handled in at_matches.
+        check_can_generate_examples(gs::from_regex(r"(?m)x(?!^)y"));
+    }
+
+    #[test]
+    fn lookahead_with_dotall_dot() {
+        // DOTALL flag in match_seq's Any handling.
+        check_can_generate_examples(gs::from_regex(r"(?s)x(?!.)y"));
+    }
+
+    #[test]
+    fn lookahead_groupref_with_ignorecase() {
+        // GroupRef path with IGNORECASE so chars_eq's case-swap branch fires.
+        check_can_generate_examples(gs::from_regex(r"(?i)(a)x(?!\1)y"));
+    }
+
+    // ----- Coverage tests for ASCII-only + alphabet edge cases -----
+
+    #[test]
+    fn ascii_flag_in_set_with_alphabet() {
+        // The ASCII flag plus a category that spans non-ASCII exercises
+        // the ascii_only filter in `build_in_set`'s positive branch.
+        check_can_generate_examples(
+            gs::from_regex(r"(?a)\w")
+                .alphabet(gs::characters().min_codepoint(0).max_codepoint(0x300)),
+        );
+    }
+
+    #[test]
+    fn ascii_flag_in_negated_set_with_alphabet() {
+        // ASCII flag in negated class — exercises the ascii_only filter
+        // in `build_in_set`'s negative branch.
+        check_can_generate_examples(
+            gs::from_regex(r"(?a)[^a]")
+                .alphabet(gs::characters().min_codepoint(0).max_codepoint(0x300)),
+        );
+    }
+
+    #[test]
+    fn ignorecase_with_restricted_alphabet() {
+        // IGNORECASE + restricted alphabet exercises the swapcase /
+        // alphabet-allows check at the `Literal` generation site.
+        check_can_generate_examples(
+            gs::from_regex(r"(?i)abc").alphabet(gs::characters().max_codepoint(0x7F)),
+        );
+    }
+
+    #[test]
+    fn not_literal_ignorecase_with_alphabet() {
+        // NotLiteral + IGNORECASE + alphabet exercises the swapcase
+        // blacklist branch inside NotLiteral generation.
+        check_can_generate_examples(
+            gs::from_regex(r"(?i)[^a]").alphabet(gs::characters().max_codepoint(0x7F)),
+        );
+    }
+
+    #[test]
+    fn atomic_group_with_alphabet() {
+        // AtomicGroup in generate_op with alphabet restriction.
+        check_can_generate_examples(
+            gs::from_regex(r"(?>a)").alphabet(gs::characters().max_codepoint(0x7F)),
+        );
+    }
+
+    #[test]
+    fn min_repeat_with_alphabet() {
+        // MinRepeat in generate_op with alphabet.
+        check_can_generate_examples(
+            gs::from_regex(r"a*?").alphabet(gs::characters().max_codepoint(0x7F)),
+        );
+    }
+
+    #[test]
+    fn possessive_repeat_with_alphabet() {
+        // PossessiveRepeat in generate_op with alphabet.
+        check_can_generate_examples(
+            gs::from_regex(r"a*+").alphabet(gs::characters().max_codepoint(0x7F)),
+        );
+    }
+
+    #[test]
+    fn fullmatch_with_literal_in_alphabet() {
+        // Smoke check: literal 'a' inside a restricted single-char alphabet.
+        check_can_generate_examples(
+            gs::from_regex(r"a").fullmatch(false).alphabet(
+                gs::characters()
+                    .min_codepoint(b'a' as u32)
+                    .max_codepoint(b'a' as u32),
+            ),
+        );
+    }
+
+    // The next tests target the "mark_invalid" rejection paths in
+    // `interpret_regex`: the engine should still be able to find examples
+    // even when most draws are unsatisfiable.
+
+    #[test]
+    fn literal_outside_alphabet_is_rejected_but_retried() {
+        // The literal 'a' is outside the alphabet's [b-z] range, so every
+        // attempt to emit it is rejected. With `a?` the optional makes
+        // empty strings valid, so generation still finds examples.
+        check_can_generate_examples(
+            gs::from_regex(r"a?").alphabet(
+                gs::characters()
+                    .min_codepoint(b'b' as u32)
+                    .max_codepoint(b'z' as u32),
+            ),
+        );
+    }
+
+    #[test]
+    fn ignorecase_literal_swapcase_outside_alphabet() {
+        // IGNORECASE + restricted alphabet that allows only uppercase: half
+        // the draws pick the lowercase form (outside the alphabet) and
+        // are rejected; the other half succeed.
+        check_can_generate_examples(
+            gs::from_regex(r"(?i)A?").alphabet(
+                gs::characters()
+                    .min_codepoint(b'A' as u32)
+                    .max_codepoint(b'Z' as u32),
+            ),
+        );
+    }
+
+    #[test]
+    fn anchor_beginning_after_content() {
+        // A `\A` anchor after content is unsatisfiable: every draw with a
+        // prefix gets marked invalid. With `\A?` we make it optional so
+        // the engine can find satisfying examples.
+        check_can_generate_examples(gs::from_regex(r".*\A"));
+    }
+
+    #[test]
+    fn explicit_failure_pattern() {
+        // `(?!)?` — the inner negative-lookahead-with-empty-body parses
+        // as an explicit OpCode::Failure that always invalidates. Combined
+        // with `?` we still get the empty string as a valid example.
+        check_can_generate_examples(gs::from_regex(r"(?!)?"));
+    }
+
+    #[test]
+    fn ascii_flag_positive_set_with_nonascii_literal() {
+        // `(?a)[]?` — non-ASCII literal in a positive class with
+        // ASCII flag. Native rejects via the `ascii_only` filter in
+        // `build_in_set`; the optional `?` keeps empty draws valid.
+        check_can_generate_examples(gs::from_regex("(?a)[\u{0080}]?"));
+    }
+
+    #[test]
+    fn positive_set_outside_alphabet() {
+        // `[a-z]?` with an alphabet that excludes a-z forces the
+        // alphabet-allow filter in `build_in_set` to drop the positive
+        // literals. Optional `?` keeps empty draws valid.
+        check_can_generate_examples(
+            gs::from_regex(r"[a-z]?").alphabet(
+                gs::characters()
+                    .min_codepoint(b'A' as u32)
+                    .max_codepoint(b'Z' as u32),
+            ),
+        );
+    }
+
+    #[test]
+    fn ascii_flag_negated_set_with_nonascii_alphabet() {
+        // `(?a)[^a]?` with a non-ASCII alphabet — every non-ASCII char
+        // is filtered by the predicate's ASCII guard, leaving empty
+        // chars and triggering `emit_from_chars`'s mark_invalid.
+        check_can_generate_examples(
+            gs::from_regex(r"(?a)[^a]?")
+                .alphabet(gs::characters().min_codepoint(0x100).max_codepoint(0x200)),
+        );
+    }
+
+    #[test]
+    fn padded_pattern_with_empty_alphabet_intervals() {
+        // `categories=[]` with no `include_characters` makes
+        // `build_intervals` short-circuit to an empty IntervalSet. The
+        // optional `a?` still lets `draw_prefix` invoke `draw_any_char`
+        // against that empty alphabet, exercising the `mark_invalid` path.
+        check_can_generate_examples(
+            gs::from_regex(r"a?").alphabet(gs::characters().categories(&[])),
+        );
+    }
+
+    #[test]
+    fn anchor_at_start_after_content() {
+        // `\A` after content invalidates draws that pad before the anchor.
+        check_can_generate_examples(gs::from_regex(r"\Aabc"));
+    }
+
+    #[test]
+    fn anchor_multiline_with_padding() {
+        // MULTILINE `^` after content requires a preceding newline.
+        check_can_generate_examples(gs::from_regex(r"(?m)^abc"));
+    }
 }
 
 mod nocover_bad_repr {

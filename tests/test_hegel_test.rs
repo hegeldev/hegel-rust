@@ -1,8 +1,4 @@
-// Compile-time error behaviour of #[hegel::test] (duplicate #[test], zero or
-// two parameters) lives in tests/compile/fail/hegel_test_*.rs, driven by
-// `trybuild`.
-//
-// Below: ported tests merged from hypothesis/{testdecorators, flakiness,
+// Ported tests merged from hypothesis/{testdecorators, flakiness,
 // nocover_baseexception, nocover_nesting, nocover_limits,
 // nocover_unusual_settings_configs, pytest_runs, nocover_completion,
 // core} and pbtkit/core, each wrapped in its own private module.
@@ -62,6 +58,18 @@ fn test_with_seed(tc: TestCase) {
     tc.draw(gs::booleans());
 }
 
+#[hegel::test]
+#[test]
+fn test_works_with_bare_test_attribute(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
+#[hegel::test]
+#[::core::prelude::v1::test]
+fn test_works_with_prelude_test_attribute(tc: TestCase) {
+    tc.draw(gs::booleans());
+}
+
 #[test]
 fn test_database_persists_failing_examples() {
     let db_path = tempfile::tempdir().unwrap();
@@ -78,7 +86,9 @@ fn test_database_persists_failing_examples() {
             .__database_key("test_database_persists".to_string())
             .run();
         },
-        "Property test failed",
+        // The property panics with an empty message; the run re-raises it
+        // verbatim.
+        "^$",
     );
 
     let entries: Vec<_> = std::fs::read_dir(db_path.path()).unwrap().collect();
@@ -510,7 +520,7 @@ mod testdecorators {
     #[test]
     fn test_empty_text() {
         // text("") in Python generates only empty strings; max_size(0) is the Rust equivalent
-        // since an empty alphabet causes a server InvalidArgument error.
+        // since an empty alphabet causes an InvalidArgument error.
         assert_all_examples(gs::text().max_size(0), |x: &String| x.is_empty());
     }
 

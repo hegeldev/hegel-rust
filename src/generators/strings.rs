@@ -1,5 +1,7 @@
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
+use crate::control::hegel_internal_assert;
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
@@ -45,11 +47,12 @@ impl CharacterFields {
         }
         if let Some(ref cats) = self.categories {
             for cat in cats {
-                assert!(
-                    !SURROGATE_CATEGORIES.contains(&cat.as_str()),
-                    "Category \"{cat}\" includes surrogate codepoints (Cs), \
-                     which Rust strings cannot represent."
-                );
+                if SURROGATE_CATEGORIES.contains(&cat.as_str()) {
+                    invalid_argument!(
+                        "Category \"{cat}\" includes surrogate codepoints (Cs), \
+                         which Rust strings cannot represent."
+                    );
+                }
             }
             let arr = Value::Array(cats.iter().map(|c| Value::from(c.as_str())).collect());
             map_insert(&mut schema, "categories", arr);
@@ -168,12 +171,13 @@ impl TextGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            !(self.alphabet_called && self.char_param_called),
-            "Cannot combine .alphabet() with character methods."
-        );
+        if self.alphabet_called && self.char_param_called {
+            invalid_argument!("Cannot combine .alphabet() with character methods.");
+        }
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
 
         let mut schema = cbor_map! {
@@ -287,7 +291,7 @@ fn parse_char(raw: Value) -> char {
     let c = chars
         .next()
         .expect("expected a single character, got empty string");
-    assert!(
+    hegel_internal_assert!(
         chars.next().is_none(),
         "expected a single character, got multiple"
     );
@@ -394,7 +398,9 @@ impl BinaryGenerator {
 
     fn build_schema(&self) -> Value {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
 
         let mut schema = cbor_map! {
@@ -437,40 +443,32 @@ pub fn binary() -> BinaryGenerator {
 pub struct EmailGenerator;
 
 impl Generator<String> for EmailGenerator {
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "email"}, |raw| {
             super::deserialize_value(raw)
-            // nocov end
         }))
     }
 }
 
 /// Generate email address strings.
-// nocov start
 pub fn emails() -> EmailGenerator {
     EmailGenerator
-    // nocov end
 }
 
 /// Generator for URL strings. Created by [`urls()`].
 pub struct UrlGenerator;
 
 impl Generator<String> for UrlGenerator {
-    // nocov start
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(cbor_map! {"type" => "url"}, |raw| {
             super::deserialize_value(raw)
-            // nocov end
         }))
     }
 }
 
 /// Generate URL strings.
-// nocov start
 pub fn urls() -> UrlGenerator {
     UrlGenerator
-    // nocov end
 }
 
 /// Generator for domain name strings. Created by [`domains()`].
@@ -486,14 +484,13 @@ impl DomainGenerator {
     }
 
     fn build_schema(&self) -> Value {
-        assert!(
-            self.max_length >= 4 && self.max_length <= 255,
-            "max_length must be between 4 and 255"
-        );
+        if !(self.max_length >= 4 && self.max_length <= 255) {
+            invalid_argument!("max_length must be between 4 and 255");
+        }
 
-        cbor_map! { // nocov
+        cbor_map! {
             "type" => "domain",
-            "max_length" => self.max_length as u64 // nocov
+            "max_length" => self.max_length as u64
         }
     }
 }
@@ -501,7 +498,7 @@ impl DomainGenerator {
 impl Generator<String> for DomainGenerator {
     fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
         Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw) // nocov
+            super::deserialize_value(raw)
         }))
     }
 }

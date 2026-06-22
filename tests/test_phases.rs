@@ -82,6 +82,82 @@ fn test_disabling_shrink_limits_interesting_calls() {
     );
 }
 
+// At the head of the Generate phase, Hypothesis's ConjectureRunner runs a
+// deterministic all-simplest test case (engine.py:1147,
+// `cached_test_function((ChoiceTemplate("simplest", count=None),))`). The
+// native runner ports the same pre-trial. Verify behaviorally that the
+// first test case sees every draw at its `simplest()` value — for an
+// unbounded `gs::integers::<i32>()`, that's 0.
+#[test]
+fn test_generate_phase_runs_all_simplest_first() {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    let draws: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
+    let draws_clone = Arc::clone(&draws);
+
+    Hegel::new(move |tc: TestCase| {
+        let v: i32 = tc.draw(gs::integers::<i32>());
+        draws_clone.lock().unwrap().push(v);
+    })
+    .settings(
+        Settings::new()
+            .phases([Phase::Generate])
+            .database(None)
+            .test_cases(5),
+    )
+    .run();
+
+    let recorded = draws.lock().unwrap();
+    assert!(!recorded.is_empty(), "no test cases ran");
+    assert_eq!(
+        recorded[0], 0,
+        "first test case should be the all-simplest pre-trial (drawn value = 0), \
+         got {} — pre-trial likely not running",
+        recorded[0]
+    );
+}
+
+#[test]
+fn test_generate_phase_simplest_propagates_to_all_draws() {
+    // The pre-trial forces every choice (not just the first) to simplest.
+    // A test that draws five independent integers should see (0, 0, 0, 0, 0)
+    // on its very first call.
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    type FirstDraws = Option<[i32; 5]>;
+    let first_call: Arc<Mutex<FirstDraws>> = Arc::new(Mutex::new(None));
+    let first_call_clone = Arc::clone(&first_call);
+
+    Hegel::new(move |tc: TestCase| {
+        let arr: [i32; 5] = [
+            tc.draw(gs::integers::<i32>()),
+            tc.draw(gs::integers::<i32>()),
+            tc.draw(gs::integers::<i32>()),
+            tc.draw(gs::integers::<i32>()),
+            tc.draw(gs::integers::<i32>()),
+        ];
+        let mut slot = first_call_clone.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(arr);
+        }
+    })
+    .settings(
+        Settings::new()
+            .phases([Phase::Generate])
+            .database(None)
+            .test_cases(3),
+    )
+    .run();
+
+    let first = first_call.lock().unwrap().expect("no test cases ran");
+    assert_eq!(
+        first, [0; 5],
+        "first test case should have every draw at simplest, got {first:?}"
+    );
+}
+
 // Default phases include Explicit so that explicit_test_case attributes work
 // without any phases configuration.
 #[test]

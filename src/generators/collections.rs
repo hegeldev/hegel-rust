@@ -1,5 +1,7 @@
 use super::{BasicGenerator, BoxedGenerator, Collection, Generator, TestCase, labels};
 use crate::cbor_utils::{cbor_map, map_insert};
+use crate::control::{hegel_internal_assert, hegel_internal_assert_eq};
+use crate::test_case::invalid_argument;
 use ciborium::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -47,7 +49,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -72,7 +76,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<T>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if self.unique_by.is_some() {
             return None;
@@ -155,7 +161,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -172,7 +180,7 @@ where
                 }
             }
             // nocov start
-            assert!(set.len() >= self.min_size);
+            hegel_internal_assert!(set.len() >= self.min_size);
             tc.stop_span(false);
             set
             // nocov end
@@ -181,7 +189,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashSet<T>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         let basic = self.elements.as_basic()?;
 
@@ -248,7 +258,9 @@ where
 {
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         if let Some(basic) = self.as_basic() {
             basic.do_draw(tc)
@@ -271,7 +283,7 @@ where
                 }
             }
             // nocov start
-            assert!(map.len() >= self.min_size);
+            hegel_internal_assert!(map.len() >= self.min_size);
             tc.stop_span(false);
             map
             // nocov end
@@ -280,7 +292,9 @@ where
 
     fn as_basic(&self) -> Option<BasicGenerator<'_, HashMap<KT, VT>>> {
         if let Some(max) = self.max_size {
-            assert!(self.min_size <= max, "Cannot have max_size < min_size");
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
         }
         let keys_basic = self.keys.as_basic()?;
         let values_basic = self.values.as_basic()?;
@@ -544,7 +558,7 @@ impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
                 Value::Array(arr) => arr,
                 _ => panic!("Expected array from tuple schema, got {:?}", raw), // nocov
             };
-            assert_eq!(arr.len(), N);
+            hegel_internal_assert_eq!(arr.len(), N);
             let mut iter = arr.into_iter();
             std::array::from_fn(|_| basic.parse_raw(iter.next().unwrap()))
         }))

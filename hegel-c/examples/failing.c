@@ -1,0 +1,129 @@
+/*
+ * failing.c — demo: a failing property, with libhegel shrinking to a
+ * minimal counterexample and reporting it back through the result API.
+ *
+ * Property: every integer in [0, 100] is < 5. Obviously false. We expect
+ * libhegel to find the smallest n that violates the property — which is
+ * 5 itself. The program exits 0 if the failing run was correctly detected
+ * and the reported failure carries the expected origin string.
+ *
+ * Build (same incantation as echo.c):
+ *   cc -o failing failing.c -I../include -L../../target/release -lhegel \
+ *      -Wl,-rpath,$PWD/../../target/release
+ */
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "hegel.h"
+
+/* CBOR-encoded {"type": "integer", "min_value": 0, "max_value": 100} */
+static const uint8_t INTEGER_SCHEMA[] = {
+    0xA3,                                            /* map(3) */
+    0x64, 't', 'y', 'p', 'e',
+    0x67, 'i', 'n', 't', 'e', 'g', 'e', 'r',
+    0x69, 'm', 'i', 'n', '_', 'v', 'a', 'l', 'u', 'e',
+    0x00,
+    0x69, 'm', 'a', 'x', '_', 'v', 'a', 'l', 'u', 'e',
+    0x18, 0x64
+};
+
+/* Decode a small CBOR unsigned integer (0..255). Returns -1 if the
+ * encoding is something we don't handle (we know the engine only emits
+ * the small-uint head for our [0, 100] range, so this is sufficient). */
+static int decode_small_uint(const uint8_t *bytes, size_t len) {
+    if (len < 1) return -1;
+    uint8_t major = bytes[0] >> 5;
+    uint8_t info  = bytes[0] & 0x1F;
+    if (major != 0) return -1;
+    if (info < 24) return info;
+    if (info == 24 && len >= 2) return bytes[1];
+    return -1;
+}
+
+#define ORIGIN "n >= 5"
+
+int main(void) {
+    hegel_context_t *ctx = hegel_context_new();
+
+    hegel_settings_t *s = hegel_settings_new();
+    hegel_settings_test_cases(s, 200);
+    hegel_settings_database(ctx, s, "");
+    hegel_settings_derandomize(s, true);
+    hegel_settings_seed(s, 0xc0ffee, true);
+
+    hegel_run_t *run = hegel_run_start(ctx, s);
+    if (!run) {
+        fprintf(stderr, "hegel_run_start: %s\n", hegel_context_last_error(ctx));
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+        return 2;
+    }
+
+    hegel_test_case_t *tc;
+    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
+        const uint8_t *value;
+        size_t value_len;
+        hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
+        if (rc == HEGEL_E_STOP_TEST) {
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            continue;
+        }
+        if (rc != HEGEL_OK) {
+            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, hegel_context_last_error(ctx));
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+            continue;
+        }
+
+        int n = decode_small_uint(value, value_len);
+        if (n < 0) {
+            fprintf(stderr, "decode failed\n");
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+            continue;
+        }
+
+        if (n < 5) {
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+        } else {
+            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
+        }
+    }
+
+    const hegel_run_result_t *result = hegel_run_result(ctx, run);
+    if (hegel_run_result_status(result) != HEGEL_RUN_STATUS_FAILED) {
+        fprintf(stderr, "FAIL: expected a failing run, got status %d\n",
+                (int)hegel_run_result_status(result));
+        hegel_run_free(run);
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+        return 1;
+    }
+
+    size_t nf = hegel_run_result_failure_count(result);
+    if (nf < 1) {
+        fprintf(stderr, "FAIL: expected at least one failure, got %zu\n", nf);
+        hegel_run_free(run);
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+        return 1;
+    }
+
+    const hegel_failure_t *f = hegel_run_result_failure(result, 0);
+    const char *origin = hegel_failure_origin(f);
+    if (strstr(origin, ORIGIN) == NULL) {
+        fprintf(stderr, "FAIL: expected origin to contain %s, got: %s\n", ORIGIN, origin);
+        hegel_run_free(run);
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+        return 1;
+    }
+
+    printf("got expected failure: origin=%s\n", origin);
+
+    hegel_run_free(run);
+    hegel_settings_free(s);
+    hegel_context_free(ctx);
+    return 0;
+}

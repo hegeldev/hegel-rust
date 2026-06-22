@@ -1,0 +1,7 @@
+# Keep the generated C header on LF endings regardless of the
+# checkout platform. Windows runners default to `core.autocrlf=true`,
+# which rewrites LF -> CRLF on checkout; without this rule
+# `hegel-c/build.rs`'s drift check (which compares the on-disk header
+# against cbindgen's freshly-generated, always-LF output) fails on
+# Windows even when nothing has actually drifted.
+*.h text eol=lf

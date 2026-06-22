@@ -1,4 +1,4 @@
-use crate::test_case::{TestCase, labels};
+use crate::test_case::{TestCase, invalid_argument, labels};
 use ciborium::Value;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
         (self.parse)(raw)
     }
 
-    /// Generate a value by sending the schema to the server and parsing the response.
+    /// Generate a value by handing the schema to the engine and parsing the result.
     pub fn do_draw(&self, tc: &TestCase) -> T {
         self.parse_raw(super::generate_raw(tc, self.schema()))
     }
@@ -50,7 +50,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 /// The core trait for all generators.
 ///
 /// Generators produce values of type `T` and optionally provide a
-/// [`BasicGenerator`] for server-based generation via `as_basic()`.
+/// [`BasicGenerator`] for single-request schema-based generation via `as_basic()`.
 ///
 /// Implementors override one or both of [`as_basic`](Self::as_basic) and
 /// [`do_draw`](Self::do_draw):
@@ -59,7 +59,7 @@ impl<'a, T: 'a> BasicGenerator<'a, T> {
 /// - Generators with a client-side fallback (filter, flat_map, lists with
 ///   non-basic elements, …) override `do_draw`. They may also override
 ///   `as_basic` to opt into schema generation when their inputs allow it.
-pub trait Generator<T>: Send + Sync {
+pub trait Generator<T> {
     /// Produce a value.
     ///
     /// The default delegates to [`as_basic`](Self::as_basic). Generators
@@ -294,7 +294,7 @@ where
             .enumerate_values()
             .is_some_and(|valid| valid.is_empty())
         {
-            panic!(
+            invalid_argument!(
                 "Unsatisfiable filter: all values from the source generator \
                  are rejected by the filter predicate"
             );

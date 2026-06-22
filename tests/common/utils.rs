@@ -14,6 +14,11 @@ pub fn is_nightly() -> bool {
     std::env::var("HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY").is_ok_and(|v| v == "1")
 }
 
+// some of our tests don't work on NixOS
+pub fn is_nixos() -> bool {
+    std::fs::exists("/etc/NIXOS").unwrap_or_default()
+}
+
 pub fn assert_matches_regex(text: &str, pattern: &str) {
     let re = Regex::new(pattern).unwrap_or_else(|e| panic!("invalid regex {pattern:?}: {e}"));
     assert!(
@@ -147,8 +152,11 @@ where
     pub fn run(self) {
         // These checks are about "can we generate at all", not speed, and
         // instrumented coverage binaries routinely trip the TooSlow check.
+        // FilterTooMuch is suppressed because generators that use filtering
+        // (e.g. regex with lookaheads) legitimately reject many inputs; what
+        // matters here is that valid examples *can* be produced.
         self.inner
-            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow]);
+            .run_with_health_checks_suppressed(&[HealthCheck::TooSlow, HealthCheck::FilterTooMuch]);
     }
 }
 
@@ -243,7 +251,7 @@ where
 
         if let Err(e) = hegel_result {
             // If found is None, this panic is not from HEGEL_FOUND — re-propagate
-            // the real error (e.g. server crash) instead of swallowing it.
+            // the real error instead of swallowing it.
             if found.lock().unwrap().is_none() {
                 std::panic::resume_unwind(e);
             }
@@ -335,7 +343,7 @@ where
                 .downcast_ref::<&str>()
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()));
-            let is_expected = msg.is_some_and(|s| s == "Property test failed: HEGEL_MINIMAL_FOUND");
+            let is_expected = msg.is_some_and(|s| s == "HEGEL_MINIMAL_FOUND");
             if !is_expected {
                 std::panic::resume_unwind(payload);
             }

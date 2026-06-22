@@ -107,3 +107,113 @@ fn test_one_of_slip() {
     );
     assert_eq!(result, 101);
 }
+
+/// Asserts a tight joint minimum for the sum-style predicate
+/// `i + f >= 100 && i != 1 && f != 1.0`. With those exclusions both sides
+/// are forced above their individual shrink targets, so the only way to
+/// reach the joint minimum is via `redistribute_numeric_pairs` walking both
+/// sides together.
+fn assert_tight_joint_minimum(i: i64, f: f64) {
+    assert!(
+        i != 1,
+        "integer at its shrink target — joint walk didn't fire"
+    );
+    assert!(
+        f != 1.0,
+        "float at its shrink target — joint walk didn't fire"
+    );
+    assert!(
+        (i as f64) + f >= 100.0,
+        "predicate fails for (i={i}, f={f})"
+    );
+    assert!(
+        (i as f64) + f < 101.0,
+        "joint sum {:.3} is more than one unit slack — pair didn't tighten",
+        (i as f64) + f
+    );
+}
+
+fn pair_predicate(i: i64, f: f64) -> bool {
+    (i as f64) + f >= 100.0 && i != 1 && f != 1.0
+}
+
+#[test]
+fn test_redistribute_int_float_pair() {
+    // A sum-style predicate where the per-kind simplest values are
+    // excluded: only the joint redistribute pass can find the minimum.
+    let (i, f) = minimal(
+        hegel::tuples!(
+            gs::integers::<i64>().min_value(1).max_value(10_000),
+            gs::floats::<f64>()
+                .min_value(0.5)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+        ),
+        |&(i, f): &(i64, f64)| pair_predicate(i, f),
+    );
+    assert_tight_joint_minimum(i, f);
+}
+
+#[test]
+fn test_redistribute_float_int_pair() {
+    // Mirror of the above with `(f64, i64)` ordering — exercises the
+    // (Float, Int) adjacency direction of `redistribute_numeric_pairs`.
+    let (f, i) = minimal(
+        hegel::tuples!(
+            gs::floats::<f64>()
+                .min_value(0.5)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+            gs::integers::<i64>().min_value(1).max_value(10_000),
+        ),
+        |&(f, i): &(f64, i64)| pair_predicate(i, f),
+    );
+    assert_tight_joint_minimum(i, f);
+}
+
+#[test]
+fn test_redistribute_pair_with_boolean_in_sequence() {
+    // A boolean adjacent to the (int, float) pair forces the
+    // `redistribute_numeric_pairs` walk to skip non-numeric kinds via
+    // `is_float_or_integer`.
+    let (b, i, f) = minimal(
+        hegel::tuples!(
+            gs::booleans(),
+            gs::integers::<i64>().min_value(1).max_value(10_000),
+            gs::floats::<f64>()
+                .min_value(0.5)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+        ),
+        |&(_, i, f): &(bool, i64, f64)| pair_predicate(i, f),
+    );
+    assert!(!b);
+    assert_tight_joint_minimum(i, f);
+}
+
+// Port of `tests/quality/test_shrink_quality.py::test_sum_of_pair_float`.
+//
+// Two floats whose sum must exceed 1000 should land at (1.0, 1000.0)
+// after `redistribute_numeric_pairs`.
+#[test]
+fn test_sum_of_pair_float() {
+    let (a, b) = minimal(
+        hegel::tuples!(
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(1000.0)
+                .allow_nan(false)
+                .allow_infinity(false),
+        ),
+        |&(a, b): &(f64, f64)| a + b > 1000.0,
+    );
+    assert_eq!((a, b), (1.0, 1000.0));
+}

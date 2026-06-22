@@ -5,8 +5,20 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOURCE_DIRS = ["src/", "hegel-macros/"]
+SOURCE_DIRS = ["src/", "hegel-macros/", "hegel-c/src/"]
 ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Files the release commit reads, rewrites, and stages. These are validated by
+# `check` on every PR so removing one (as the conformance-test removal did with
+# tests/conformance/rust) fails fast instead of breaking the actual release —
+# which only ever runs the `release` subcommand on a push to main.
+RELEASE_PATHS = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "hegel-macros/Cargo.toml",
+    "hegel-c/Cargo.toml",
+    "CHANGELOG.md",
+]
 
 
 def git(*args: str, cwd: Path | None = None) -> None:
@@ -60,15 +72,42 @@ def set_version(cargo_toml: Path, new_version: str) -> None:
     cargo_toml.write_text(new_text)
 
 
-def set_macros_dep_version(cargo_toml: Path, new_version: str) -> None:
-    text = cargo_toml.read_text()
-    new_text = re.sub(
-        r'hegeltest-macros = \{ version = "=[^"]+"',
-        f'hegeltest-macros = {{ version = "={new_version}"',
-        text,
-        count=1,
-    )
-    cargo_toml.write_text(new_text)
+def bump_internal_path_deps(cargo_toml: Path, new_version: str) -> None:
+    """Bump every internal (path) dependency pinned with `=` to new_version.
+
+    Internal crates are pinned exactly (`version = "=X.Y.Z"`) and declared
+    with a `path = ...`. Deriving the set to bump from "has a path dep and an
+    exact pin" (rather than a hardcoded crate list) means a change in
+    dependency direction can't silently leave a stale pin behind — which is
+    exactly how the inversion refactor broke the release: the root crate
+    gained a `hegeltest-c` path dependency that the old hardcoded list never
+    touched.
+    """
+    lines = cargo_toml.read_text().splitlines(keepends=True)
+    out = []
+    for line in lines:
+        if "path =" in line and re.search(r'version = "=[^"]+"', line):
+            line = re.sub(
+                r'version = "=[^"]+"', f'version = "={new_version}"', line
+            )
+        out.append(line)
+    cargo_toml.write_text("".join(out))
+
+
+def apply_version_bump(root: Path, new_version: str) -> None:
+    """Rewrite every workspace manifest to new_version (package + path deps).
+
+    Pure file rewriting, factored out of `release()` so it can be tested
+    without the publish/git/gh machinery around it.
+    """
+    manifests = [
+        root / "Cargo.toml",
+        root / "hegel-macros" / "Cargo.toml",
+        root / "hegel-c" / "Cargo.toml",
+    ]
+    for manifest in manifests:
+        set_version(manifest, new_version)
+        bump_internal_path_deps(manifest, new_version)
 
 
 def add_changelog(path: Path, *, version: str, content: str) -> None:
@@ -82,6 +121,13 @@ def add_changelog(path: Path, *, version: str, content: str) -> None:
 
 
 def check(base_ref: str) -> None:
+    missing = [rel for rel in RELEASE_PATHS if not (ROOT / rel).exists()]
+    if missing:
+        raise ValueError(
+            "release.py would fail: these paths it stages no longer exist: "
+            + ", ".join(missing)
+        )
+
     output = subprocess.check_output(
         ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
         text=True,
@@ -99,7 +145,7 @@ def check(base_ref: str) -> None:
         capture_output=True,
         cwd=ROOT,
     )
-    if process.returncode == 0:
+    if process.returncode == 0 and "RELEASE.md" not in changed_files:
         raise ValueError(
             f"RELEASE.md already exists on {base_ref}. It's possible the CI job "
             "responsible for cutting a new release is in progress, or has failed."
@@ -135,17 +181,10 @@ def release() -> None:
     )
     new_version = bump_version(m.group(1), release_type)
 
-    set_version(ROOT / "Cargo.toml", new_version)
-    set_version(ROOT / "hegel-macros" / "Cargo.toml", new_version)
-    set_macros_dep_version(ROOT / "Cargo.toml", new_version)
+    apply_version_bump(ROOT, new_version)
 
-    # regenerate lockfiles after version bump
+    # regenerate the lockfile after version bump
     subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
-    subprocess.run(
-        ["cargo", "update", "--workspace"],
-        check=True,
-        cwd=(ROOT / "tests" / "conformance" / "rust"),
-    )
 
     add_changelog(ROOT / "CHANGELOG.md", version=new_version, content=content)
 
@@ -160,15 +199,7 @@ def release() -> None:
         f"{bot_user_id}+{app_slug}[bot]@users.noreply.github.com",
         cwd=ROOT,
     )
-    git(
-        "add",
-        "Cargo.toml",
-        "Cargo.lock",
-        "hegel-macros/Cargo.toml",
-        "tests/conformance/rust/Cargo.lock",
-        "CHANGELOG.md",
-        cwd=ROOT,
-    )
+    git("add", *RELEASE_PATHS, cwd=ROOT)
     git("rm", "RELEASE.md", cwd=ROOT)
     git(
         "commit",
@@ -185,6 +216,7 @@ def release() -> None:
             "release",
             "create",
             f"v{new_version}",
+            "--draft",
             "--title",
             f"v{new_version}",
             "--notes",

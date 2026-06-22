@@ -429,7 +429,7 @@ mod direct_strategies {
         check_can_generate_examples(gs::text().alphabet("abc"));
         // Upstream also tests `alphabet=""` with default `min_size=0`, relying on
         // Hypothesis's rule that an empty alphabet yields only empty strings.
-        // hegel-rust's server rejects an empty character set outright, so we only
+        // hegel-rust rejects an empty character set outright, so we only
         // exercise the non-empty-alphabet case here.
     }
 
@@ -660,9 +660,8 @@ mod provisional_strategies {
 
     use regex::Regex;
 
-    use super::common::utils::{
-        assert_all_examples, check_can_generate_examples, expect_panic, find_any,
-    };
+    use super::common::utils::expect_panic;
+    use super::common::utils::{assert_all_examples, check_can_generate_examples, find_any};
     use hegel::generators::{self as gs, Generator};
 
     fn url_allowed_chars() -> HashSet<char> {

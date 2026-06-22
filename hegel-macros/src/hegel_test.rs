@@ -1,11 +1,42 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{FnArg, ItemFn};
+use syn::{Attribute, FnArg, ItemFn};
 
 use crate::common::{
     SettingsAttrArgs, build_explicit_blocks, extract_explicit_test_cases, extract_ident_from_pat,
-    rewrite_draws_in_block,
+    extract_reproduce_failure, rewrite_draws_in_block,
 };
+
+// Vendored from tokio 1fc450aefba4b05cdff9b7825ca5e39cccb3780e (thanks!)
+//
+// Check whether given attribute is a test attribute of forms:
+// * `#[test]`
+// * `#[core::prelude::*::test]` or `#[::core::prelude::*::test]`
+// * `#[std::prelude::*::test]` or `#[::std::prelude::*::test]`
+fn is_test_attribute(attr: &Attribute) -> bool {
+    let path = match &attr.meta {
+        syn::Meta::Path(path) => path,
+        _ => return false,
+    };
+    let candidates = [
+        ["core", "prelude", "*", "test"],
+        ["std", "prelude", "*", "test"],
+    ];
+    if path.leading_colon.is_none()
+        && path.segments.len() == 1
+        && path.segments[0].arguments.is_none()
+        && path.segments[0].ident == "test"
+    {
+        return true;
+    } else if path.segments.len() != candidates[0].len() {
+        return false;
+    }
+    candidates.into_iter().any(|segments| {
+        path.segments.iter().zip(segments).all(|(segment, path)| {
+            segment.arguments.is_none() && (path == "*" || segment.ident == path)
+        })
+    })
+}
 
 pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let test_args: SettingsAttrArgs = if attr.is_empty() {
@@ -47,19 +78,25 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let param_pat = &*param_typed.pat;
     let param_ty = &*param_typed.ty;
 
-    for attr in &func.attrs {
-        if attr.path().is_ident("test") {
-            return syn::Error::new_spanned(
-                attr,
-                "#[hegel::test] used on a function with #[test].\
-                Remove the #[test] attribute; [hegel::test] automatically adds #[test].",
-            )
-            .to_compile_error();
-        }
+    // If #[tokio::test] (or similar) did its job, we shouldn't be seeing an async function.
+    if let Some(asy) = func.sig.asyncness {
+        return syn::Error::new_spanned(
+            asy,
+            "#[hegel::test] does not support bare interactions with async functions.\
+             Put #[hegel::test] below an async test macro like #[tokio::test] instead.",
+        )
+        .to_compile_error();
     }
+
+    let is_existing_test = func.attrs.iter().any(is_test_attribute);
 
     let explicit_cases = match extract_explicit_test_cases(&mut func.attrs) {
         Ok(cases) => cases,
+        Err(err) => return err,
+    };
+
+    let reproduce_blob = match extract_reproduce_failure(&mut func.attrs) {
+        Ok(blob) => blob,
         Err(err) => return err,
     };
 
@@ -73,6 +110,15 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let test_name = func.sig.ident.to_string();
     let settings_expr = test_args.to_settings_expr();
+    // Chain `.reproduce_failure((<expr>).to_string())` onto the `Hegel`
+    // builder so the run replays only the encoded example. The blob
+    // expression flows straight from the attribute into generated code
+    // (`.to_string()` accepts a string literal, a `const`/`static` `&str`,
+    // or a `String`); decoding happens at runtime.
+    let reproduce_call = match &reproduce_blob {
+        Some(blob) => quote! { .reproduce_failure((#blob).to_string()) },
+        None => quote! {},
+    };
     let explicit_blocks = build_explicit_blocks(&explicit_cases, param_pat, &body);
 
     let new_body: TokenStream = quote! {
@@ -84,6 +130,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
+            #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
             .test_location(hegel::TestLocation {
                 function: #test_name.to_string(),
@@ -101,8 +148,14 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     func.sig.inputs.clear();
     *func.block = new_block;
 
-    quote! {
-        #[test]
-        #func
+    if is_existing_test {
+        quote! {
+            #func
+        }
+    } else {
+        quote! {
+            #[test]
+            #func
+        }
     }
 }

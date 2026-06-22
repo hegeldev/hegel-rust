@@ -123,7 +123,7 @@ fn test_standalone_function_fails_on_failing_property() {
         assert!(x < 0, "unexpectedly got nonneg {}", x);
     }
 
-    expect_panic(always_fails, "Property test failed");
+    expect_panic(always_fails, "unexpectedly got nonneg");
 }
 
 // ============================================================

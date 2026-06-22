@@ -4,6 +4,7 @@ mod enum_gen;
 mod explicit_test_case;
 mod hegel_main;
 mod hegel_test;
+mod reproduce_failure;
 mod rewrite_draws;
 mod standalone_function;
 mod stateful;
@@ -82,6 +83,14 @@ pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn explicit_test_case(attr: TokenStream, item: TokenStream) -> TokenStream {
     explicit_test_case::expand_explicit_test_case(attr.into(), item.into()).into()
+}
+
+/// Reproduce a single failing example from a base64 failure blob.
+///
+/// Documentation lives in hegel's lib.rs for intra-doc links.
+#[proc_macro_attribute]
+pub fn reproduce_failure(attr: TokenStream, item: TokenStream) -> TokenStream {
+    reproduce_failure::expand_reproduce_failure(attr.into(), item.into()).into()
 }
 
 #[proc_macro_attribute]

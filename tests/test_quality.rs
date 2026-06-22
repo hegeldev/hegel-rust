@@ -312,10 +312,18 @@ mod shrink_quality {
 
     #[test]
     fn test_duplicate_containment() {
-        let (xs, x): (Vec<i64>, i64) = minimal(
+        // This counterexample is discovered by a span mutation that copies one
+        // integer's span over another. Span mutations are generated examples
+        // and consume the `test_cases` budget like any other, so finding it
+        // needs a few hundred more examples than the 500 default — previously
+        // this passed only because mutations ran *outside* the budget, letting
+        // a 500-example run secretly execute several thousand cases.
+        let (xs, x): (Vec<i64>, i64) = Minimal::new(
             gs::tuples!(gs::vecs(gs::integers::<i64>()), gs::integers::<i64>()),
             |(xs, x): &(Vec<i64>, i64)| xs.iter().filter(|&&v| v == *x).count() > 1,
-        );
+        )
+        .test_cases(1000)
+        .run();
         assert_eq!(xs, vec![0, 0]);
         assert_eq!(x, 0);
     }
@@ -386,7 +394,14 @@ mod shrink_quality {
             }
             let mx = *x.iter().max().unwrap();
             let mn = *x.iter().min().unwrap();
-            mx > mn + 10 && mn + 10 > 0
+            // `mn + 10` would overflow for inputs near `i64::MAX`; previously
+            // those overflows were swallowed by the runner's single-failure
+            // collapsing.  Use `checked_add` so a draw at the extreme returns
+            // a clean `false` rather than panicking.
+            let Some(threshold) = mn.checked_add(10) else {
+                return false;
+            };
+            mx > threshold && threshold > 0
         });
         assert_eq!(xs.len(), 2);
         xs.sort();
@@ -529,10 +544,6 @@ mod shrink_quality {
         assert_eq!((a, b), (1, 1000));
     }
 
-    // The bounded-float shrinker can get stuck at intermediate values
-    // (e.g. 203.0) instead of driving down to 1.0 through paired-sum
-    // constraints; this also blocks the `_mixed_float_int` and
-    // `_separated_float` variants.
     #[test]
     fn test_sum_of_pair_float() {
         let (a, b) = minimal(

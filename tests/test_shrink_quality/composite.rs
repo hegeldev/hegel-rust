@@ -73,10 +73,10 @@ fn test_earlier_exit_produces_shorter_sequence() {
         }
         v0
     });
-    // The tail `len(v1) != 0` check in the upstream is always truthy
-    // because pairs always have length 2, so the shrinker gets to pick
-    // between the two "interesting" paths. We model this with a
-    // condition that's always true.
+    // The tail `len(v1) != 0` check is always truthy because pairs
+    // always have length 2, so the shrinker gets to pick between the
+    // two "interesting" paths. We model this with a condition that's
+    // always true.
     let v0 = minimal(g, |_: &bool| true);
     assert!(v0, "shrinker should prefer the shorter v0=true path");
 }
@@ -118,8 +118,8 @@ fn test_early_exit_via_flag_with_preceding_draws() {
     let (v0, v1, v2) = minimal(g, |(v0, v1, v2): &(bool, Vec<u8>, Vec<i64>)| {
         *v0 || v1.len() + v2.len() >= 20
     });
-    // Per the upstream, shrunk result is either (false, b'\x00'*20, [])
-    // or (true, b'', []). Both are valid outcomes.
+    // Shrunk result is either (false, b'\x00'*20, []) or (true, b'', []).
+    // Both are valid outcomes.
     let _ = (v0, v1, v2);
 }
 
@@ -165,8 +165,7 @@ fn test_shorter_path_via_later_assertion() {
         let _: (bool, f64) = tc.draw(pair());
         (v0, v1)
     });
-    // `len(v0)` in Python refers to the tuple length (always 2), so the
-    // second disjunct always fires. The shorter path is v1 empty.
+    // The predicate is trivially true, so the shorter path is v1 empty.
     let (_v0, v1) = minimal(test_data, |_: &((bool, f64), Vec<i64>)| true);
     assert!(v1.is_empty());
 }
@@ -238,16 +237,12 @@ fn test_shorter_path_when_guard_precedes_expensive_draw() {
     assert!(v0 > 0);
 }
 
-// --- Regression tests from test_core.py ---
+// --- Regression tests ---
 
 #[test]
 fn test_finds_small_list_even_with_bad_lists() {
-    // Python parametrises over seed in range(10); hegel's `minimal()` is
-    // already derandomized, so we just run once and check the shrunk
+    // `minimal()` is derandomized, so we run once and check the shrunk
     // counterexample is `[1001]`.
-    //
-    // `test_case.choice(n)` in pbtkit draws from [0, n] inclusive, so
-    // `test_case.choice(10000)` → `integers().min_value(0).max_value(10000)`.
     let bad_list = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(10));
         (0..n)
@@ -265,8 +260,8 @@ fn test_shrinking_mixed_choice_types_no_sort_crash() {
     // Mix integer and boolean choices — shrinking must not crash when the
     // type at a given position changes across iterations.
     //
-    // Upstream uses `tc.weighted(0.5)` which at p=0.5 is equivalent to
-    // drawing an unbiased boolean.
+    // `tc.weighted(0.5)` at p=0.5 is equivalent to drawing an unbiased
+    // boolean.
     let g = hegel::compose!(|tc| {
         let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(3));
         if x > 0 {
@@ -275,8 +270,10 @@ fn test_shrinking_mixed_choice_types_no_sort_crash() {
         }
         x
     });
-    // Any value is accepted — we're checking that shrinking doesn't crash.
-    let _ = minimal(g, |_: &i64| true);
+    // Any value is accepted, so the shrinker drives `x` to the
+    // simplest integer in `[0, 3]`.  When `x == 0` the trailing two
+    // booleans aren't drawn.
+    assert_eq!(minimal(g, |_: &i64| true), 0);
 }
 
 #[test]
@@ -290,8 +287,7 @@ fn test_shrinking_stale_indices_no_redistribute_crash() {
     // way to make three values in [0, 100] sum to > 150 is
     // `[0, 51, 100]`: 0 then the smallest second element such that
     // `0 + b + 100 > 150` (i.e., b=51) then the largest available value
-    // (100). Pre-N11 this was a `let _ = ...` smoke test asserting only
-    // "doesn't crash".
+    // (100).
     let g = hegel::compose!(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(2).max_value(8));
         let vals: Vec<i64> = (0..n)
@@ -334,8 +330,8 @@ fn test_lower_and_bump_with_type_change() {
 
 #[test]
 fn test_lower_and_bump_explores_new_range() {
-    // Encodes the upstream's choice-sequence assertion [0, 0, 32, 0] as
-    // the shrunk tuple (v0, v1, v2, v3).
+    // Encodes the choice-sequence assertion [0, 0, 32, 0] as the shrunk
+    // tuple (v0, v1, v2, v3).
     let g = hegel::compose!(|tc| {
         let v0: i64 = tc.draw(gs::sampled_from(vec![32i64, 46]));
         let v1: i64 = tc.draw(gs::sampled_from(vec![32i64, 46]));
@@ -354,7 +350,7 @@ fn test_lower_and_bump_explores_new_range() {
     let (v0, v1, v2, v3) = Minimal::new(g, |(v0, _, v2, _): &(i64, i64, i64, i64)| v2 == v0)
         .test_cases(2000)
         .run();
-    // Upstream asserts the choice-sequence values are [0, 0, 32, 0]. For
+    // Asserts the choice-sequence values are [0, 0, 32, 0]. For
     // sampled_from(v0) the sampling index 0 maps to value 32 — the first
     // entry — so we check by *value*, not by index.
     assert_eq!(v2, v0);
@@ -391,9 +387,9 @@ fn test_lower_and_bump_tries_negative_values() {
     })
     .test_cases(2000)
     .run();
-    // Per the upstream: v2 = integer(0,0) → 0 with v3 = -1 is simpler than
-    // v2 = bool=true with v3 = 0. But the failing predicate here requires
-    // v2=bool; so that's what we get, and we check it's a simpler case.
+    // v2 = integer(0,0) → 0 with v3 = -1 is simpler than v2 = bool=true
+    // with v3 = 0. But the failing predicate here requires v2=bool; so
+    // that's what we get, and we check it's a simpler case.
     match v2 {
         BoolOrInt::Bool(true) => assert_eq!(v3, 0),
         BoolOrInt::Bool(false) => assert_eq!(v3, -1),
@@ -430,15 +426,16 @@ fn test_lower_and_bump_targets_booleans() {
         let v1: bool = tc.draw(gs::booleans());
         (v0, v1)
     });
-    // The failing condition always fires. We check the shrunk values:
-    // v0=0 + v1=true is simpler than v0=1 + v1=false under sort_key at
-    // position 0.
-    let (v0, _v1) = minimal(g, |_: &(i64, bool)| true);
-    assert_eq!(v0, 0);
+    // The predicate accepts every draw, so the shrinker drives both
+    // values to their simplest representation: `v0 = 0` (the only
+    // value in `[0, 1]` that hits sort_key 0) and `v1 = false` (the
+    // simplest boolean).  sort_key compares v0 before v1, so trading
+    // v1 for a lower v0 always wins.
+    assert_eq!(minimal(g, |_: &(i64, bool)| true), (0, false));
 }
 
 // Requires `try_shortening_via_increment` with prefix_nodes (value punning
-// across type-changing continuations) — `shrinking.index_passes` in pbtkit.
+// across type-changing continuations).
 #[test]
 fn test_increment_with_dependent_continuation() {
     // Shrink to the 5-draw path (via v1=true) not the 6-draw path (via
@@ -499,8 +496,7 @@ enum BoolIntOrInt {
 fn test_redistribute_stale_indices_with_one_of() {
     // Predicate: `Bool(true) | Two`. The first one_of branch (Bool)
     // matches via `Bool(true)`, which is the simplest matching variant
-    // (the one_of branch index drops to 0). Pre-N11 this was a
-    // `let _ = ...` smoke test asserting only "doesn't crash".
+    // (the one_of branch index drops to 0).
     let g = hegel::compose!(|tc| {
         let v0 = tc.draw(gs::one_of(vec![
             gs::booleans().map(BoolIntOrInt::Bool).boxed(),
@@ -533,8 +529,7 @@ fn test_lower_and_bump_stale_j_after_replace() {
     // generator structure (filter + flat_map + nested vecs). The test
     // body returns just `v0: bool`; predicate is `*v == true`, so the
     // shrunk minimum is `true` (any other draw shrinks to its simplest
-    // value, but they're discarded). Pre-N11 this was a `let _ = ...`
-    // smoke test — the assertion now both confirms "doesn't crash"
+    // value, but they're discarded). The assertion confirms "doesn't crash"
     // *and* "actually finds the minimum" in one shot.
     let g = hegel::compose!(|tc| {
         let v0: bool = tc.draw(gs::booleans());
@@ -648,8 +643,8 @@ fn test_one_of_switches_to_shorter_branch() {
 
 #[test]
 fn test_mutate_exercises_index_probes() {
-    // Find a case where a > 5 and b is truthy. Upstream uses
-    // `tc.weighted(0.5)` for b, which is equivalent to `gs::booleans()`.
+    // Find a case where a > 5 and b is truthy. `tc.weighted(0.5)` for b
+    // is equivalent to `gs::booleans()`.
     let (a, b) = minimal(
         gs::tuples!(
             gs::integers::<i64>().min_value(0).max_value(10),
@@ -663,13 +658,12 @@ fn test_mutate_exercises_index_probes() {
 
 #[test]
 fn test_mutate_skips_large_result() {
-    // 35 integer draws — upstream asserts shrinking doesn't choke on the
+    // 35 integer draws — asserts shrinking doesn't choke on the
     // large-result early-return in `mutate_and_shrink`.
     //
     // Predicate accepts every Vec<i64>, so the shrinker minimises every
     // value to its simplest. Each integer is in [0, 10] with the default
     // shrink_towards = 0, so the shrunk minimum is exactly 35 zeros.
-    // Pre-N11 this was a `let _ = ...` smoke test.
     let g = hegel::compose!(|tc| {
         (0..35)
             .map(|_| tc.draw(gs::integers::<i64>().min_value(0).max_value(10)))
@@ -678,3 +672,104 @@ fn test_mutate_skips_large_result() {
     let v = Minimal::new(g, |_: &Vec<i64>| true).test_cases(200).run();
     assert_eq!(v, vec![0i64; 35]);
 }
+
+// ----------------------------------------------------------------------------
+// Composite tests.
+// ----------------------------------------------------------------------------
+
+/// Five integers; the predicate accepts iff all non-zero values appear
+/// before any zero. The shrinker should compact to all zeroes (the
+/// predicate's "everything zero" branch).
+#[test]
+fn test_can_expand_zeroed_region() {
+    let g = hegel::compose!(|tc| {
+        let mut nums: Vec<i64> = Vec::new();
+        for _ in 0..5 {
+            nums.push(tc.draw(gs::integers::<i64>().min_value(0).max_value(255)));
+        }
+        nums
+    });
+    let v = Minimal::new(g, |nums: &Vec<i64>| {
+        let mut seen_zero = false;
+        for &n in nums {
+            if n == 0 {
+                seen_zero = true;
+            } else if seen_zero {
+                return false;
+            }
+        }
+        true
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!(v, vec![0, 0, 0, 0, 0]);
+}
+
+/// The shrinker should preserve the trailing 0 sentinel while reducing
+/// the middle-of-sequence to minimal contents that still trigger the
+/// 6-marker — converging on a sequence whose simplest form ends with
+/// the 6 and the terminator.
+#[test]
+fn test_retain_end_of_buffer() {
+    let g = hegel::compose!(|tc| {
+        let mut nums: Vec<i64> = Vec::new();
+        loop {
+            let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+            nums.push(n);
+            if n == 0 {
+                break;
+            }
+            if nums.len() > 50 {
+                break;
+            }
+        }
+        nums
+    });
+    let v = Minimal::new(g, |nums: &Vec<i64>| nums.contains(&6))
+        .test_cases(5000)
+        .run();
+    // Minimal counterexample: just [6, 0] — the 6-marker then the
+    // terminator.
+    assert!(v.contains(&6));
+    assert!(
+        v.len() <= 3,
+        "expected short tail-preserving result, got {:?}",
+        v
+    );
+}
+
+/// Two equal positive integers x, y followed by `x & 255` bytes each of
+/// value 1. Predicate: x == y AND the bytes set has at most one element.
+/// Minimum: (0, 0) with no trailing bytes — both x and y can shrink to
+/// zero together via `minimize_duplicated_choices`.
+#[test]
+fn test_duplicate_nodes_that_go_away() {
+    let g = hegel::compose!(|tc| {
+        let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+        let y: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(255));
+        let mut bytes: Vec<i64> = Vec::new();
+        for _ in 0..(x & 255) {
+            bytes.push(tc.draw(gs::integers::<i64>().min_value(0).max_value(255)));
+        }
+        (x, y, bytes)
+    });
+    let (x, y, b) = Minimal::new(g, |(x, y, b): &(i64, i64, Vec<i64>)| {
+        if x != y {
+            return false;
+        }
+        let set: std::collections::HashSet<&i64> = b.iter().collect();
+        set.len() <= 1
+    })
+    .test_cases(5000)
+    .run();
+    assert_eq!((x, y), (0, 0));
+    assert!(b.is_empty());
+}
+
+// `test_accidental_duplication` deferred: the predicate
+// (`x == y AND x >= 5 AND uniform bytes`) is too narrow for random
+// search to find an initial counterexample within a reasonable
+// attempt budget. A fixture-based variant (seeded with a known
+// counterexample) would address this but requires either an embedded
+// shrinker fixture or extending `Minimal` to accept a seed
+// counterexample.

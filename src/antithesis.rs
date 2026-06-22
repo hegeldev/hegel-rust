@@ -24,15 +24,42 @@ pub(crate) fn is_running_in_antithesis() -> bool {
     #[cfg(not(windows))]
     // nocov start
     if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {
-        assert!(
-            Path::new(&output_dir).exists(),
-            "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
-        );
-        return true;
+        return check_antithesis_output_dir(&output_dir);
     }
     // nocov end
     false
 }
+
+/// Validate the directory `ANTITHESIS_OUTPUT_DIR` points at. A missing
+/// directory is a configuration error in how the process was launched —
+/// reported as a plain panic, not an internal invariant. Split from the
+/// env read so it can be unit-tested without mutating the environment.
+fn check_antithesis_output_dir(output_dir: &str) -> bool {
+    if !Path::new(output_dir).exists() {
+        panic!(
+            "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
+        );
+    }
+    true
+}
+
+/// Panic when running inside Antithesis without the `antithesis` feature.
+///
+/// Accepts the runtime flag and a compile-time flag (`cfg!(feature = "antithesis")`)
+/// as ordinary parameters so it can be covered by a unit test that passes
+/// `(true, false)` directly — no env-var mutation required.
+pub(crate) fn require_antithesis_feature(in_antithesis: bool, feature_enabled: bool) {
+    if in_antithesis && !feature_enabled {
+        panic!(
+            "When Hegel is run inside of Antithesis, it requires the `antithesis` feature. \
+            You can add it with {{ features = [\"antithesis\"] }}."
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/embedded/antithesis_tests.rs"]
+mod tests;
 
 // nocov start
 #[cfg(feature = "antithesis")]

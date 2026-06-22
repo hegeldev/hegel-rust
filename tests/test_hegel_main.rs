@@ -85,7 +85,7 @@ fn main(tc: TestCase) {
 "#;
     TempRustProject::new()
         .main_file(code)
-        .expect_failure("Property test failed")
+        .expect_failure("got nonneg")
         .cargo_run(&[]);
 }
 
@@ -140,7 +140,8 @@ fn main(tc: TestCase) {
     let _: bool = tc.draw(gs::booleans());
 }
 "#;
-    // Debug verbosity prints REQUEST/RESPONSE lines via ServerDataSource.
+    // Debug verbosity makes the native engine print per-test-case status
+    // lines and a closing `Test done.` line.
     let output = TempRustProject::new().main_file(code).cargo_run(&[
         "--",
         "--verbosity",
@@ -149,7 +150,7 @@ fn main(tc: TestCase) {
         "1",
     ]);
     assert!(
-        output.stderr.contains("REQUEST:") || output.stderr.contains("run_test response"),
+        output.stderr.contains("test case #") || output.stderr.contains("Test done."),
         "Expected debug output, got: {}",
         output.stderr
     );
