@@ -13,7 +13,7 @@ fn quiet_settings(test_cases: u64) -> Settings {
 #[test]
 fn run_native_invokes_callback_and_returns_passing_result() {
     let calls = AtomicUsize::new(0);
-    let result = run_native(&quiet_settings(5), None, |ds, _is_final| {
+    let result = run_native(&quiet_settings(5), None, |ds| {
         calls.fetch_add(1, Ordering::SeqCst);
         ds.mark_complete(&TestCaseResult::Valid);
     });
@@ -42,7 +42,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
     // First run: any integer >= 1_000_000 is "interesting", so the engine
     // shrinks down to the boundary and persists it.
     let first_failures = std::sync::Mutex::new(Vec::<i128>::new());
-    let result = run_native(&settings, key, |ds, _is_final| {
+    let result = run_native(&settings, key, |ds| {
         let schema = cbor_map! {
             "type" => "integer",
             "min_value" => 0_i64,
@@ -54,7 +54,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
                 if n >= 1_000_000 {
                     first_failures.lock().unwrap().push(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                        panic_message: "n >= 1_000_000".to_string(),
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
                     }));
@@ -81,7 +80,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
     // Second run: same settings, same key. Reuse phase must replay the
     // persisted failure as the very first test case.
     let observed_first = std::sync::Mutex::new(None::<i128>);
-    let _ = run_native(&settings, key, |ds, _is_final| {
+    let _ = run_native(&settings, key, |ds| {
         let schema = cbor_map! {
             "type" => "integer",
             "min_value" => 0_i64,
@@ -95,7 +94,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
             }
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -128,89 +126,87 @@ fn run_native_replays_persisted_failure_on_second_run() {
 /// will fail and surface the shrinker regression.
 #[test]
 fn run_native_shrinks_predicate_boundary_seed_sweep() {
-    use crate::backend::Failure;
-
     let mut hits = 0u32;
-    let mut last_values = Vec::<i128>::new();
+    let mut shrunk_values = Vec::<i128>::new();
     for seed in 0u64..50 {
         let settings = Settings::new()
             .test_cases(100)
             .seed(Some(seed))
             .derandomize(true)
             .database(None);
-        let last = std::sync::Mutex::new(None::<i128>);
-        let _ = run_native(&settings, None, |ds, _is_final| {
-            let schema = cbor_map! {
-                "type" => "integer",
-                "min_value" => i64::MIN,
-                "max_value" => i64::MAX,
-            };
-            if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
-                let n: i128 = i.into();
-                if n >= 1_000_000 {
-                    *last.lock().unwrap() = Some(n);
-                    ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                        panic_message: "n >= 1_000_000".to_string(),
-                        origin: "n >= 1_000_000".to_string(),
-                        reproduce_blob: None,
-                    }));
-                    return;
-                }
-            }
-            ds.mark_complete(&TestCaseResult::Valid);
-        });
-        let observed = last.lock().unwrap().unwrap();
-        last_values.push(observed);
+        let result = run_native(&settings, None, |ds| mark_above_million(&*ds)).unwrap();
+        let blob = result.failures[0]
+            .reproduce_blob
+            .as_deref()
+            .expect("native failure carries a reproduce blob");
+        let observed = replay_above_million_blob(blob);
+        shrunk_values.push(observed);
         if observed == 1_000_000 {
             hits += 1;
         }
     }
-    eprintln!("shrinker reached boundary {hits}/50; values: {last_values:?}");
+    eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
     assert!(
         hits >= 25,
-        "shrinker reached the boundary only {}/50 times; observed values: {:?}",
+        "shrinker reached the boundary only {}/50 times; shrunk values: {:?}",
         hits,
-        last_values
+        shrunk_values
     );
+}
+
+/// The body of the predicate-boundary tests: any `i64` `>= 1_000_000` is
+/// interesting, over the full `i64` range.
+fn mark_above_million(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
+    use crate::backend::Failure;
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => i64::MIN,
+        "max_value" => i64::MAX,
+    };
+    if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
+        let n: i128 = i.into();
+        if n >= 1_000_000 {
+            ds.mark_complete(&TestCaseResult::Interesting(Failure {
+                origin: "n >= 1_000_000".to_string(),
+                reproduce_blob: None,
+            }));
+            return;
+        }
+    }
+    ds.mark_complete(&TestCaseResult::Valid);
+}
+
+/// Replay the integer encoded in a full-`i64`-range reproduce blob — i.e. the
+/// value the shrinker minimised to, read back out of the result's blob.
+fn replay_above_million_blob(blob: &str) -> i128 {
+    let ds = data_source_for_blob(&quiet_settings(1), blob).unwrap();
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => i64::MIN,
+        "max_value" => i64::MAX,
+    };
+    let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) else {
+        panic!("expected an integer draw");
+    };
+    ds.mark_complete(&TestCaseResult::Valid);
+    i.into()
 }
 
 /// Single-seed version of the boundary test, retained as a fast-feedback
 /// gate that surfaces total regressions on the lucky-seed path.
 #[test]
 fn run_native_shrinks_predicate_boundary_to_exact_value() {
-    use crate::backend::Failure;
-
     let settings = Settings::new()
         .test_cases(200)
         .seed(Some(0xc0ffee))
         .database(None);
 
-    let last_failure = std::sync::Mutex::new(None::<i128>);
-    let _ = run_native(&settings, None, |ds, _is_final| {
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => i64::MIN,
-            "max_value" => i64::MAX,
-        };
-        if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
-            let n: i128 = i.into();
-            if n >= 1_000_000 {
-                *last_failure.lock().unwrap() = Some(n);
-                ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
-                    origin: "n >= 1_000_000".to_string(),
-                    reproduce_blob: None,
-                }));
-                return;
-            }
-        }
-        ds.mark_complete(&TestCaseResult::Valid);
-    });
-
-    let observed = last_failure
-        .lock()
-        .unwrap()
-        .expect("never observed failure");
+    let result = run_native(&settings, None, |ds| mark_above_million(&*ds)).unwrap();
+    let blob = result.failures[0]
+        .reproduce_blob
+        .as_deref()
+        .expect("native failure carries a reproduce blob");
+    let observed = replay_above_million_blob(blob);
     assert_eq!(
         observed, 1_000_000,
         "shrinker should reach the predicate boundary exactly; observed {}",
@@ -247,13 +243,12 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
 
     // Run #1: collect persisted shrink result.
     let last = std::sync::Mutex::new(None::<i128>);
-    let result = run_native(&settings, key, |ds, _is_final| {
+    let result = run_native(&settings, key, |ds| {
         if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
             let n: i128 = i.into();
             if predicate(n) {
                 *last.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -270,7 +265,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
 
     // Run #2: same settings, observe the first value.
     let observed_first = std::sync::Mutex::new(None::<i128>);
-    let _ = run_native(&settings, key, |ds, _is_final| {
+    let _ = run_native(&settings, key, |ds| {
         if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
             let n: i128 = i.into();
             let mut slot = observed_first.lock().unwrap();
@@ -279,7 +274,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
             }
             if predicate(n) {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -300,7 +294,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
 
 #[test]
 fn run_native_callback_can_generate_via_data_source() {
-    let result = run_native(&quiet_settings(3), None, |ds, _is_final| {
+    let result = run_native(&quiet_settings(3), None, |ds| {
         let schema = cbor_map! {"type" => "boolean"};
         let value = ds.generate(&schema).expect("generate succeeded");
         assert!(matches!(value, ciborium::Value::Bool(_)));
@@ -323,7 +317,6 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             let n: i128 = i.into();
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
-                    panic_message: "n >= 1_000_000".to_string(),
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
                 }));
@@ -339,10 +332,7 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
 /// attached to the (shrunk) counterexample.
 fn discover_reproduce_blob() -> String {
     let settings = quiet_settings(200).seed(Some(7));
-    let result = run_native(&settings, None, |ds, _is_final| {
-        mark_large_interesting(&*ds)
-    })
-    .unwrap();
+    let result = run_native(&settings, None, |ds| mark_large_interesting(&*ds)).unwrap();
     assert!(!result.failures.is_empty(), "property should have failed");
     result.failures[0]
         .reproduce_blob
@@ -389,36 +379,35 @@ fn data_source_for_blob_rejects_an_undecodable_blob() {
 
 #[test]
 fn run_native_single_test_case_reports_the_failure() {
-    // `Mode::SingleTestCase` over the embedding API: the one test case is
-    // final from the start and its failure comes back in the result.
+    // `Mode::SingleTestCase` over the embedding API: the engine runs the one
+    // test case exactly once (no replay) and surfaces its failure — origin
+    // only, no blob — in the result.
     use crate::backend::Failure;
 
     let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let finals = AtomicUsize::new(0);
-    let result = run_native(&settings, None, |ds, is_final| {
-        if is_final {
-            finals.fetch_add(1, Ordering::SeqCst);
-        }
+    let calls = AtomicUsize::new(0);
+    let result = run_native(&settings, None, |ds| {
+        calls.fetch_add(1, Ordering::SeqCst);
         ds.mark_complete(&TestCaseResult::Interesting(Failure {
-            panic_message: "single-case bug".to_string(),
             origin: "single-case bug".to_string(),
             reproduce_blob: None,
         }));
     })
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    assert_eq!(result.failures[0].panic_message, "single-case bug");
+    assert_eq!(result.failures[0].origin, "single-case bug");
+    assert!(result.failures[0].reproduce_blob.is_none());
     assert_eq!(
-        finals.load(Ordering::SeqCst),
+        calls.load(Ordering::SeqCst),
         1,
-        "the single test case is its own final replay"
+        "the single test case runs exactly once"
     );
 }
 
 #[test]
 fn run_native_single_test_case_passes_cleanly() {
     let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let result = run_native(&settings, None, |ds, _is_final| {
+    let result = run_native(&settings, None, |ds| {
         ds.mark_complete(&TestCaseResult::Valid);
     })
     .unwrap();

@@ -60,8 +60,6 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     let mut cases = 0usize;
     while let Some(tc) = run.next_test_case() {
         cases += 1;
-        // is_final_replay is queryable on every case (false during exploration).
-        let _ = tc.is_final_replay();
 
         // A span wrapping a small engine-managed collection of ints, rejecting
         // any zero element so collection_reject is exercised.
@@ -174,10 +172,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     // Replay the blob as a standalone, caller-owned, final test case.
     let sh2 = SettingsHandle::build(&settings, None);
     let replay = CTestCase::from_blob(&sh2, &blob).unwrap();
-    assert!(
-        replay.is_final_replay(),
-        "a blob replay is the final example"
-    );
     let bytes = replay.generate(&schema).unwrap();
     assert_eq!(
         decode_int(&bytes),

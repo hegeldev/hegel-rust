@@ -83,8 +83,8 @@ typedef enum {
 
  - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
  - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
- - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress, drawn values
-   for the final replay, panic diagnostics as they happen.
+ - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
+   panic diagnostics as they happen.
  - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
    shrinker trace output.
  */
@@ -367,10 +367,14 @@ typedef enum {
 typedef struct hegel_context_t hegel_context_t;
 
 /*
- One distinct failure surfaced by the run. The strings are owned by
- the parent `hegel_run_result_t`; reading them via
- `hegel_failure_panic_message` / `_origin` returns `const char*`
+ One distinct interesting test case surfaced by the run. The strings are
+ owned by the parent `hegel_run_result_t`; reading them via
+ `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
  pointers that stay valid until `hegel_run_free`.
+
+ A failure carries the origin the engine grouped on and the reproduce blob.
+ The caller replays the blob (via `hegel_test_case_from_blob`) to produce
+ the diagnostic and re-raise the test's own failure.
  */
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -615,8 +619,8 @@ void hegel_run_free(hegel_run_t *run);
  property failed again) or is stale (it passed). Replay several blobs by
  calling this once per blob. A blob whose choices no longer match the
  caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
- overruns. `hegel_test_case_is_final_replay` reports true: the replayed
- example *is* the counterexample.
+ overruns. Replaying a blob is how a caller performs the *final replay* of
+ a counterexample.
 
  Returns NULL with a diagnostic in `hegel_context_last_error` if `s` or
  `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
@@ -886,14 +890,6 @@ hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    const char *origin);
 
 /*
- True iff this test case is the engine's *final replay* of a
- minimal failing example. Bindings that want to emit verbose draw
- traces only for the final counterexample (rather than every probe
- the shrinker tries) gate their tracing on this flag.
- */
-bool hegel_test_case_is_final_replay(const hegel_test_case_t *tc);
-
-/*
  The run's aggregate status: passed, failed (the property has
  counterexamples — see `hegel_run_result_failure`), or errored (the run
  itself failed and produced no verdict — see `hegel_run_result_error`).
@@ -925,13 +921,6 @@ size_t hegel_run_result_failure_count(const hegel_run_result_t *r);
  run.
  */
 const hegel_failure_t *hegel_run_result_failure(const hegel_run_result_t *r, size_t index);
-
-/*
- The failure's panic message — e.g. the assertion text or
- engine-emitted message like `"FailedHealthCheck: FilterTooMuch — …"`.
- Returns NULL if `f` is NULL.
- */
-const char *hegel_failure_panic_message(const hegel_failure_t *f);
 
 /*
  The failure's origin string — the stable identifier that the

@@ -14,7 +14,7 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::Once;
 
 use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
@@ -24,7 +24,7 @@ use crate::control::{
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
-use crate::test_case::{OutputSink, TestCase, current_output_sink, with_output_override};
+use crate::test_case::TestCase;
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -384,25 +384,42 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
     ))
 }
 
+/// Message for a flaky test — one whose outcome changed when re-run with the
+/// same generated data. After the engine shrinks and verifies a counterexample,
+/// the client replays its blob one final time; if that replay does not fail,
+/// the test is non-deterministic.
+const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced different outcomes \
+     when run with the same generated data — it failed when it \
+     previously succeeded, or succeeded when it previously failed. \
+     This usually means your test depends on external state such as \
+     global variables, system time, or external random number generators.";
+
+/// The caught panic payload and rendered diagnostic kept from the one final
+/// case of a `Mode::SingleTestCase` run, for the report after the loop drains.
+type SingleOutcome = (Option<Box<dyn std::any::Any + Send>>, Option<String>);
+
 /// Drive a libhegel run to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, starts the engine through the C ABI
 /// (`hegel_run_start`), and pulls each test case the engine schedules
 /// (`hegel_next_test_case`), wrapping every one in [`run_test_case`]. The
-/// engine owns the whole loop — generation, shrinking, and the final replays —
-/// and flags the final replays via `hegel_test_case_is_final_replay`.
+/// engine only *explores* — generation and shrinking — so every pumped case is
+/// non-final. The client owns the final replays: once the loop drains, it reads
+/// each discovered counterexample's reproduce blob from `hegel_run_result` and
+/// replays it via [`drive`]'s own `from_blob` path, marking it final itself.
 ///
-/// Because the failure count is only known once the loop drains
-/// (`hegel_run_result`), each final replay's output is buffered so the
-/// "N distinct failures" headline can still be printed before the per-failure
-/// blocks, preserving the previous report ordering. The run ends by re-raising
-/// the failing test's own panic (or, for several distinct bugs, a panic
-/// carrying the count). A run-level error — a failed health check,
-/// nondeterminism, an engine panic — surfaces with the engine's own message
-/// instead of the `Property test failed:` framing.
+/// Because the failures (and their count) are known up front once the loop
+/// drains, the "N distinct failures" headline is printed before replaying, and
+/// each replay's draws/notes flow live (to the active sink or stderr) followed
+/// by its diagnostic and reproducer line, so each failure prints as one grouped
+/// block. The run ends by re-raising the failing test's own panic (or, for
+/// several distinct bugs, a panic carrying the count). A run-level error — a
+/// failed health check, nondeterminism, an engine panic — surfaces with the
+/// engine's own message instead of the `Property test failed:` framing.
 ///
-/// `Mode::SingleTestCase` needs no special handling here: it is carried in the
-/// settings, and the engine simply emits one final case and stops.
+/// `Mode::SingleTestCase` has no exploration, shrinking, or blob: the engine
+/// emits one case, which the client treats as final by mode (running the body
+/// once) and reports from directly.
 pub(crate) fn drive<F>(
     test_fn: F,
     settings: &Settings,
@@ -428,52 +445,19 @@ pub(crate) fn drive<F>(
         Err(message) => panic!("{message}"), // nocov
     };
 
-    // Pull and run each scheduled case. Final replays (emitted after
-    // exploration) get their output buffered so the headline can precede them;
-    // the last final replay's panic payload is kept for the closing re-raise.
-    let mut final_blocks: Vec<Vec<String>> = Vec::new();
-    let mut last_payload: Option<Box<dyn std::any::Any + Send>> = None;
+    // `Mode::SingleTestCase` pumps exactly one case and it is the whole run:
+    // the client treats it as final by mode (running the body once) and keeps
+    // its panic payload + diagnostic for the report. A full run pumps only
+    // non-final exploration cases; the client replays the result's blobs
+    // afterward.
+    let single = mode == Mode::SingleTestCase;
+    let mut single_outcome: Option<SingleOutcome> = None;
     while let Some(c_tc) = run.next_test_case() {
-        if !c_tc.is_final_replay() {
-            run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
-            continue;
-        }
-        // A final replay: always capture the payload (so the run can re-raise
-        // the test's own panic), and buffer its block (draws/notes + the
-        // returned diagnostic) unless quiet so the headline can be printed
-        // first. The buffering sink *tees* to any sink already installed (e.g.
-        // a test capturing draws) so it still sees the draw/note lines; the
-        // diagnostic is returned separately and goes only into the block, never
-        // through the sink.
-        if quiet {
-            let (_, payload, _) = run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
-            last_payload = payload;
+        if single {
+            let (_, payload, diagnostic) = run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
+            single_outcome = Some((payload, diagnostic));
         } else {
-            let buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-            let outer = current_output_sink();
-            let sink: OutputSink = {
-                let buffer = Arc::clone(&buffer);
-                Arc::new(move |line: &str| {
-                    buffer.lock().unwrap().push(line.to_string());
-                    if let Some(outer) = &outer {
-                        outer(line);
-                    }
-                })
-            };
-            let (_, payload, diagnostic) = with_output_override(sink, || {
-                run_test_case(c_tc, &mut test_fn, true, mode, verbosity)
-            });
-            last_payload = payload;
-            let mut block = std::mem::take(&mut *buffer.lock().unwrap());
-            if let Some(diagnostic) = diagnostic {
-                block.extend(
-                    diagnostic
-                        .trim_end_matches('\n')
-                        .split('\n')
-                        .map(str::to_string),
-                );
-            }
-            final_blocks.push(block);
+            run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
         }
     }
 
@@ -492,6 +476,19 @@ pub(crate) fn drive<F>(
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
         }
+        RunStatus::HEGEL_RUN_STATUS_FAILED if single => {
+            // The single case already ran as its own final replay: emit its
+            // diagnostic (captured, not sinked, so the snapshot invariant
+            // holds) and re-raise the test's own panic. No headline and no
+            // reproducer line — there is one failure and no shrunk blob.
+            let (payload, diagnostic) = single_outcome.unwrap_or((None, None));
+            if let Some(diagnostic) = diagnostic {
+                eprint!("{diagnostic}");
+            }
+            // An interesting result always carries the caught panic payload, so
+            // re-raise the test's own panic.
+            std::panic::resume_unwind(payload.expect("interesting case carries a panic payload"));
+        }
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
             let multiple = count > 1;
@@ -500,46 +497,57 @@ pub(crate) fn drive<F>(
             if multiple && !quiet {
                 eprintln!("Property-based test failed with {count} distinct failures.");
             }
-            let mut reported: Vec<String> = Vec::new();
+            let mut last_payload: Option<Box<dyn std::any::Any + Send>> = None;
             for index in 0..count {
                 if multiple && !quiet {
                     eprintln!();
                 }
-                // Flush the buffered draws + diagnostic for this failure, in
-                // the same order the engine replayed them.
-                if let Some(block) = final_blocks.get(index) {
-                    for line in block {
-                        eprintln!("{line}");
-                    }
-                }
-                let failure = result
+                // Replay this counterexample's blob as the final, client-owned
+                // replay. Its draws/notes flow live to the active sink/stderr
+                // (the per-failure "block"); the diagnostic is returned and
+                // eprinted, then the reproducer line, matching the prior order.
+                let blob = result
                     .failure(index)
-                    .unwrap_or_else(|| hegel_internal_error!("failure index {index} out of range"));
-                if let Some(line) = reproducer_line(settings, failure.reproduce_blob.as_deref()) {
+                    .and_then(|f| f.reproduce_blob)
+                    .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
+                let c_tc = match CTestCase::from_blob(&c_settings, &blob) {
+                    Ok(c_tc) => c_tc,
+                    // The engine just produced this blob; it cannot fail to
+                    // decode here.
+                    Err(message) => panic!("{message}"), // nocov
+                };
+                let (tc_result, payload, diagnostic) =
+                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
+                if !matches!(tc_result, TestCaseResult::Interesting(_)) {
+                    // The shrunk counterexample did not fail when replayed, so
+                    // the test is non-deterministic.
+                    panic!("{FLAKY_DIAGNOSTIC}");
+                }
+                if let Some(diagnostic) = diagnostic {
+                    eprint!("{diagnostic}");
+                }
+                if let Some(line) = reproducer_line(settings, Some(blob.as_str())) {
                     eprintln!("{line}");
                 }
-                reported.push(failure.panic_message);
+                last_payload = payload;
             }
 
             // End the run by re-raising. `resume_unwind` skips the panic hook,
             // so nothing prints twice — the unwind is purely the run's result.
-            match reported.as_slice() {
-                // Defensive: a FAILED status with no failures shouldn't happen.
-                [] => panic!("Property test failed: unknown"), // nocov
-                // Single-failure path: re-raise the test's *own* panic, payload
-                // intact, so `should_panic(expected = ...)` and `catch_unwind`
-                // consumers see exactly what the test raised. A quiet run that
-                // somehow produced no payload falls back to a synthetic panic.
-                [message] => match last_payload.take() {
-                    Some(payload) => std::panic::resume_unwind(payload),
-                    None => panic!("Property test failed: {}", message), // nocov
-                },
+            if multiple {
                 // Multi-failure path: no single panic to re-raise, so fail with
                 // the count (already eprinted as the headline).
-                many => std::panic::resume_unwind(Box::new(format!(
-                    "Property-based test failed with {} distinct failures.",
-                    many.len()
-                ))),
+                std::panic::resume_unwind(Box::new(format!(
+                    "Property-based test failed with {count} distinct failures."
+                )));
+            } else {
+                // Single-failure path: re-raise the test's *own* panic, payload
+                // intact, so `should_panic(expected = ...)` and `catch_unwind`
+                // consumers see exactly what the test raised. The replay above
+                // re-failed (else we panicked as flaky), so it carries a payload.
+                std::panic::resume_unwind(
+                    last_payload.expect("a re-failing replay carries a panic payload"),
+                );
             }
         }
     }

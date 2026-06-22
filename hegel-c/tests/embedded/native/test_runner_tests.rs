@@ -78,7 +78,6 @@ const I32_MAX: i64 = i32::MAX as i64;
 /// mention "Panic", standing in for a panicking test body.
 fn boom(msg: &str) -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
-        panic_message: msg.to_string(),
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
     })
@@ -142,31 +141,6 @@ fn too_slow_check_quiet_when_enough_valid_cases() {
 #[test]
 fn flaky_diagnostic_mentions_flaky() {
     assert!(flaky_diagnostic().contains("Flaky test detected"));
-}
-
-#[test]
-fn native_vanished_replay_is_a_flaky_run_error() {
-    // A counterexample that fails during exploration but not on its final
-    // replay is the engine's definition of a flaky test; `replay_final`
-    // must surface it as `RunError::Flaky`.
-    let counterexample = ShrunkCounterexample {
-        choices: Vec::new(),
-        nodes: None,
-        blob: String::new(),
-    };
-    // A test body that no longer fails: every replay completes Valid.
-    let result = NativeTestRunner.replay_final(counterexample, &mut |ds| {
-        ds.mark_complete(&TestCaseResult::Valid);
-    });
-    match result {
-        Err(crate::backend::RunError::Flaky(msg)) => {
-            assert!(
-                msg.contains("Flaky test detected"),
-                "unexpected message: {msg}"
-            );
-        }
-        other => panic!("expected RunError::Flaky, got {other:?}"),
-    }
 }
 
 #[test]
@@ -428,19 +402,15 @@ fn create_rng_urandom_backend_reads_urandom() {
     assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
 }
 
-/// Fold a `run_main` outcome plus its final replays into the aggregate
+/// Wrap a `run_main` outcome into the aggregate
 /// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
 /// convenient for tests that drive `run_main` directly to inject the
-/// TooSlow / shrink-budget thresholds.
+/// TooSlow / shrink-budget thresholds: the exploration failures wrapped up.
 fn complete_native(
-    exploration: Result<
-        crate::backend::Exploration<ShrunkCounterexample>,
-        crate::backend::RunError,
-    >,
-    run_case: &mut dyn FnMut(Box<dyn crate::backend::DataSource + Send + Sync>, bool),
+    exploration: Result<Vec<crate::backend::Failure>, crate::backend::RunError>,
 ) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    crate::backend::collect_failures(&NativeTestRunner, exploration?, &mut |ds| {
-        run_case(ds, true)
+    Ok(crate::backend::TestRunResult {
+        failures: exploration?,
     })
 }
 
@@ -460,10 +430,7 @@ fn run_single_case_returns_the_failure() {
         },
     )
     .unwrap();
-    assert!(
-        failure.panic_message.contains("single-case bug"),
-        "{failure:?}"
-    );
+    assert!(failure.origin.contains("single-case bug"), "{failure:?}");
 }
 
 #[test]
@@ -490,7 +457,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -501,11 +468,11 @@ fn run_main_with_urandom_backend_generates_and_passes() {
     let exploration = run_main(
         &settings,
         None,
-        &mut |ds| run_case(ds, false),
+        &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration, &mut run_case).unwrap();
+    let result = complete_native(exploration).unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -518,7 +485,7 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Ok(_) => boom("always fails"),
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -529,13 +496,13 @@ fn run_main_with_urandom_backend_finds_counterexample() {
     let exploration = run_main(
         &settings,
         None,
-        &mut |ds| run_case(ds, false),
+        &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration, &mut run_case).unwrap();
+    let result = complete_native(exploration).unwrap();
     assert!(
-        result.failures[0].panic_message.contains("always fails"),
+        result.failures[0].origin.contains("always fails"),
         "{:?}",
         result.failures
     );
@@ -580,7 +547,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
             TestCaseResult::Valid
         }
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -591,17 +558,17 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
     let exploration = run_main(
         &settings,
         None,
-        &mut |ds| run_case(ds, false),
+        &mut run_case,
         Duration::from_secs(30),
         Duration::ZERO,
     );
-    let result = complete_native(exploration, &mut run_case).unwrap();
+    let result = complete_native(exploration).unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
     );
     assert!(
-        result.failures[0].panic_message.contains("non-empty vec"),
+        result.failures[0].origin.contains("non-empty vec"),
         "{:?}",
         result.failures
     );
@@ -617,7 +584,7 @@ fn run_main_reports_too_slow_at_call_site() {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -625,11 +592,11 @@ fn run_main_reports_too_slow_at_call_site() {
     let exploration = run_main(
         &settings,
         None,
-        &mut |ds| run_case(ds, false),
+        &mut run_case,
         Duration::ZERO,
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration, &mut run_case);
+    let result = complete_native(exploration);
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
@@ -745,18 +712,18 @@ fn reuse_run<F>(
 where
     F: FnMut(&dyn DataSource) -> TestCaseResult,
 {
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>, _is_final: bool| {
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
     let exploration = run_main(
         &settings,
         Some(key),
-        &mut |ds| run_case(ds, false),
+        &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    complete_native(exploration, &mut run_case)
+    complete_native(exploration)
 }
 
 #[test]
@@ -976,8 +943,7 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
         result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "the stored bug should be reported"
     );
-    // One reuse replay (the first entry reproduces, so the loop breaks)
-    // plus the final replay of the counterexample.
+    // One reuse replay: the first entry reproduces, so the loop breaks.
     assert!(
         calls.load(Ordering::SeqCst) <= 2,
         "expected reuse to stop after the first reproduced bug, ran {} cases",
@@ -1002,7 +968,7 @@ fn reuse_found_bug_skips_generation_entirely() {
     // ASAP than take the time to look for new ones"). With reuse replays
     // now recorded like any other run, the bug-window heuristic alone would
     // let generation probe for several extra calls; the explicit skip must
-    // keep the body-call count at exactly reuse + final replay.
+    // keep the body-call count at exactly the one reuse replay.
     let calls = AtomicUsize::new(0);
     let result = reuse_run(
         Settings::new()
@@ -1025,8 +991,8 @@ fn reuse_found_bug_skips_generation_entirely() {
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "expected exactly one reuse replay and one final replay"
+        1,
+        "expected exactly one reuse replay and no generation or final replay"
     );
 }
 

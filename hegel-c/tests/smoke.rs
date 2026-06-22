@@ -159,11 +159,9 @@ type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
 type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
 type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
-type FnFailurePanicMessage = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnFailureReproduceBlob = unsafe extern "C" fn(*const u8) -> *const c_char;
 type FnTestCaseFromBlob = unsafe extern "C" fn(*mut u8, *const u8, *const c_char) -> *mut u8;
 type FnTestCaseFree = unsafe extern "C" fn(*mut u8, *mut u8);
-type FnTestCaseIsFinalReplay = unsafe extern "C" fn(*const u8) -> bool;
 
 // Bundle of the symbols we use, so the test bodies stay readable.
 struct Api<'a> {
@@ -197,11 +195,9 @@ struct Api<'a> {
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
-    failure_panic_message: Symbol<'a, FnFailurePanicMessage>,
     failure_reproduce_blob: Symbol<'a, FnFailureReproduceBlob>,
     test_case_from_blob: Symbol<'a, FnTestCaseFromBlob>,
     test_case_free: Symbol<'a, FnTestCaseFree>,
-    test_case_is_final_replay: Symbol<'a, FnTestCaseIsFinalReplay>,
 }
 
 unsafe fn bind(lib: &Library) -> Api<'_> {
@@ -237,11 +233,9 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
-            failure_panic_message: lib.get(b"hegel_failure_panic_message\0").unwrap(),
             failure_reproduce_blob: lib.get(b"hegel_failure_reproduction_blob\0").unwrap(),
             test_case_from_blob: lib.get(b"hegel_test_case_from_blob\0").unwrap(),
             test_case_free: lib.get(b"hegel_test_case_free\0").unwrap(),
-            test_case_is_final_replay: lib.get(b"hegel_test_case_is_final_replay\0").unwrap(),
         }
     }
 }
@@ -623,8 +617,9 @@ fn libhegel_reports_shrunk_failure() {
         let n_failures = (a.run_result_failure_count)(result);
         assert!(n_failures >= 1, "expected at least one failure");
 
-        // Inspect the first failure: origin and panic message should carry
-        // the string we passed in.
+        // Inspect the first failure: the origin should carry the string we
+        // passed in. The engine never replays, so there is no panic message —
+        // a caller would replay `failure_reproduction_blob` to obtain one.
         let f = (a.run_result_failure)(result, 0);
         assert!(!f.is_null());
         let origin_back = CStr::from_ptr((a.failure_origin)(f)).to_string_lossy();
@@ -632,12 +627,6 @@ fn libhegel_reports_shrunk_failure() {
             origin_back.contains("n >= 5 failed"),
             "expected failure origin to contain 'n >= 5 failed', got: {}",
             origin_back
-        );
-        let message_back = CStr::from_ptr((a.failure_panic_message)(f)).to_string_lossy();
-        assert!(
-            message_back.contains("n >= 5 failed"),
-            "expected failure panic message to contain 'n >= 5 failed', got: {}",
-            message_back
         );
 
         (a.run_free)(run);
@@ -731,10 +720,6 @@ unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> 
             !tc.is_null(),
             "hegel_test_case_from_blob failed: {}",
             CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy()
-        );
-        assert!(
-            (a.test_case_is_final_replay)(tc),
-            "a blob replay is the counterexample, so is_final_replay must be true"
         );
 
         let schema = integer_schema(0, 100);

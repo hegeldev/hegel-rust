@@ -417,12 +417,6 @@ impl CTestCase {
             hegel_c::hegel_mark_complete(ctx, self.raw, status, origin_ptr)
         }))
     }
-
-    /// Whether this is the engine's final replay of a minimal counterexample
-    /// (used to gate verbose draw output to the counterexample only).
-    pub(crate) fn is_final_replay(&self) -> bool {
-        unsafe { hegel_c::hegel_test_case_is_final_replay(self.raw) }
-    }
 }
 
 impl Drop for CTestCase {
@@ -468,16 +462,18 @@ impl RunResult<'_> {
             return None;
         }
         Some(Failure {
-            panic_message: cstr_opt(unsafe { hegel_c::hegel_failure_panic_message(f) })
-                .unwrap_or_default(),
             reproduce_blob: cstr_opt(unsafe { hegel_c::hegel_failure_reproduction_blob(f) }),
         })
     }
 }
 
 /// A distinct failure read out of a finished run.
+///
+/// The client only needs the reproduce blob: it replays the blob to produce
+/// the diagnostic and re-raise the test's own panic. The C ABI also exposes
+/// the failure's origin via `hegel_failure_origin`, but the client re-derives
+/// it from the replay, so it isn't read here.
 pub(crate) struct Failure {
-    pub(crate) panic_message: String,
     pub(crate) reproduce_blob: Option<String>,
 }
 

@@ -11,56 +11,47 @@
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
 //! lets them drive it directly. That's what [`run_native`] is for.
 
-use crate::backend::{DataSource, RunError, TestRunResult, TestRunner, collect_failures};
+use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::settings::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
 /// data source for each test case.
 ///
 /// `run_case` is invoked once per test case the engine wants to run. It
-/// receives:
-/// - A boxed [`DataSource`] for the test case. The callback uses this to
-///   generate values, open spans, observe targets, and ultimately call
-///   [`DataSource::mark_complete`] with the test case's outcome.
-/// - A `bool` indicating whether this is the *final replay* of a minimal
-///   failing example (useful for triggering verbose output on the
-///   counterexample only).
+/// receives a boxed [`DataSource`] for the test case; the callback uses this
+/// to generate values, open spans, observe targets, and ultimately call
+/// [`DataSource::mark_complete`] with the test case's outcome.
 ///
 /// The callback **must** call [`DataSource::mark_complete`] on its data
 /// source before returning; the engine reads the outcome back through the
 /// data source rather than from the callback's return value.
 ///
-/// Returns the aggregated [`TestRunResult`] describing whether the run
-/// passed and listing any distinct failures the engine surfaced: the
-/// exploration (generation + shrinking) runs first, then each discovered
-/// counterexample is replayed once with `is_final = true` and its reported
-/// failure folded into the result. `Err` is a [`RunError`] — a failure of
-/// the run itself (health check, nondeterminism) rather than of any test
-/// case; the embedding reports it through its own error channel.
+/// The engine only *explores* — database replay, generation, and shrinking —
+/// and every test case is non-final. Each returned
+/// [`Failure`](crate::backend::Failure) carries the origin the engine grouped
+/// on plus a reproduce blob; the caller replays each blob (via
+/// `hegel_test_case_from_blob`) to produce the final report and the panic
+/// message. `Err` is a [`RunError`] — a failure of the run itself (health
+/// check, nondeterminism) rather than of any test case; the embedding reports
+/// it through its own error channel.
 #[doc(hidden)]
 pub fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
-    mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>, bool),
+    mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Result<TestRunResult, RunError> {
-    // A single test case bypasses the TestRunner machinery: its one case is
-    // final from the start.
+    // A single test case has no exploration, shrinking, or blob: its one case
+    // is the whole run. The caller treats it as final by mode.
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, &mut |ds| {
-                run_case(ds, true)
-            });
+            crate::native::test_runner::run_single_case(settings, database_key, &mut run_case);
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });
     }
 
-    let runner = crate::native::test_runner::NativeTestRunner;
-    let exploration = {
-        let mut explore_case = |ds: Box<dyn DataSource + Send + Sync>| run_case(ds, false);
-        runner.explore(settings, database_key, &mut explore_case)?
-    };
-    collect_failures(&runner, exploration, &mut |ds| run_case(ds, true))
+    let failures = crate::native::test_runner::explore(settings, database_key, &mut run_case)?;
+    Ok(TestRunResult { failures })
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a

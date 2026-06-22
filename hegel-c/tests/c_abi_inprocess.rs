@@ -12,17 +12,17 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelTestCase, hegel_backend_t, hegel_collection_more,
     hegel_collection_reject, hegel_context_free, hegel_context_last_error, hegel_context_new,
-    hegel_failure_origin, hegel_failure_panic_message, hegel_failure_reproduction_blob,
-    hegel_generate, hegel_label_t, hegel_mark_complete, hegel_mode_t, hegel_new_collection,
-    hegel_new_pool, hegel_new_state_machine, hegel_next_test_case, hegel_pool_add,
-    hegel_pool_generate, hegel_primitive_boolean, hegel_run_free, hegel_run_result,
-    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_backend,
-    hegel_settings_database, hegel_settings_database_key, hegel_settings_free, hegel_settings_mode,
-    hegel_settings_new, hegel_settings_phases, hegel_settings_report_multiple_failures,
+    hegel_failure_origin, hegel_failure_reproduction_blob, hegel_generate, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
+    hegel_primitive_boolean, hegel_run_free, hegel_run_result, hegel_run_result_error,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_backend, hegel_settings_database,
+    hegel_settings_database_key, hegel_settings_free, hegel_settings_mode, hegel_settings_new,
+    hegel_settings_phases, hegel_settings_report_multiple_failures,
     hegel_settings_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
     hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_test_case_is_final_replay, hegel_version,
+    hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -65,7 +65,6 @@ fn null_handles_are_rejected_without_crashing() {
         assert!(hegel_run_result_error(ptr::null()).is_null());
         assert_eq!(hegel_run_result_failure_count(ptr::null()), 0);
         assert!(hegel_run_result_failure(ptr::null(), 0).is_null());
-        assert!(hegel_failure_panic_message(ptr::null()).is_null());
         assert!(hegel_failure_origin(ptr::null()).is_null());
         assert!(hegel_failure_reproduction_blob(ptr::null()).is_null());
 
@@ -120,7 +119,6 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_OK
         );
-        assert!(!hegel_test_case_is_final_replay(tc));
 
         // A null context is tolerated wherever a context is accepted: the call
         // still returns its error code, the diagnostic is just discarded (there is
@@ -551,15 +549,65 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         assert!(hegel_run_result_failure(result, count).is_null());
         let f = hegel_run_result_failure(result, 0);
         assert!(!f.is_null());
-        let msg = std::ffi::CStr::from_ptr(hegel_failure_panic_message(f))
-            .to_string_lossy()
-            .into_owned();
         let origin = std::ffi::CStr::from_ptr(hegel_failure_origin(f))
             .to_string_lossy()
             .into_owned();
-        assert!(msg.contains("Panic at <unknown>"), "got {msg:?}");
         assert!(origin.contains("Panic at <unknown>"), "got {origin:?}");
         let _ = hegel_failure_reproduction_blob(f);
+
+        hegel_run_free(run);
+        hegel_settings_free(s);
+        hegel_context_free(ctx);
+    }
+}
+
+/// A `Mode::SingleTestCase` run that fails surfaces a failure with an origin
+/// but no reproduce blob (there is no shrunk choice sequence to encode). This
+/// drives the engine's single-case path at the C level and the
+/// `hegel_failure_reproduction_blob` arm that returns NULL for a blobless
+/// failure.
+#[test]
+fn single_test_case_failure_has_origin_but_no_blob() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = hegel_settings_new();
+        let empty = CString::new("").unwrap();
+        hegel_settings_database(ctx, s, empty.as_ptr());
+        hegel_settings_mode(s, hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE);
+        let run = hegel_run_start(ctx, s);
+        let schema = integer_schema();
+        let origin = CString::new("single-case bug").unwrap();
+
+        // Exactly one case is pumped; mark it INTERESTING.
+        let tc = hegel_next_test_case(ctx, run);
+        assert!(!tc.is_null());
+        let mut p: *const u8 = ptr::null();
+        let mut n = 0usize;
+        assert_eq!(
+            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+        hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_INTERESTING,
+            origin.as_ptr(),
+        );
+        assert!(hegel_next_test_case(ctx, run).is_null());
+
+        let result = hegel_run_result(ctx, run);
+        assert!(hegel_run_result_status(result) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        let f = hegel_run_result_failure(result, 0);
+        assert!(!f.is_null());
+        let origin_back = std::ffi::CStr::from_ptr(hegel_failure_origin(f))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            origin_back.contains("single-case bug"),
+            "got {origin_back:?}"
+        );
+        // A single-test-case failure has no shrunk blob.
+        assert!(hegel_failure_reproduction_blob(f).is_null());
 
         hegel_run_free(run);
         hegel_settings_free(s);

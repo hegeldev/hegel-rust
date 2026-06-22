@@ -253,8 +253,8 @@ pub enum hegel_run_status_t {
 ///
 /// - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
 /// - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
-/// - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress, drawn values
-///   for the final replay, panic diagnostics as they happen.
+/// - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
+///   panic diagnostics as they happen.
 /// - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
 ///   shrinker trace output.
 #[repr(C)]
@@ -467,7 +467,6 @@ pub struct HegelSettings {
 enum WorkerMessage {
     TestCase {
         ds: Box<dyn DataSource + Send + Sync>,
-        is_final: bool,
         ack: mpsc::Sender<()>,
     },
     Done(Result<TestRunResult, String>),
@@ -485,7 +484,6 @@ enum WorkerMessage {
 /// `hegel_test_case_free`.
 pub struct HegelTestCase {
     ds: Box<dyn DataSource + Send + Sync>,
-    is_final: bool,
     completed: bool,
     /// Backing buffer for the borrowed `out_value_cbor` pointer returned
     /// from `hegel_generate`. Re-allocated per call; the previous draw's
@@ -533,23 +531,25 @@ pub struct HegelRunResult {
     error: Option<CString>,
 }
 
-/// One distinct failure surfaced by the run. The strings are owned by
-/// the parent `hegel_run_result_t`; reading them via
-/// `hegel_failure_panic_message` / `_origin` returns `const char*`
+/// One distinct interesting test case surfaced by the run. The strings are
+/// owned by the parent `hegel_run_result_t`; reading them via
+/// `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
 /// pointers that stay valid until `hegel_run_free`.
+///
+/// A failure carries the origin the engine grouped on and the reproduce blob.
+/// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
+/// the diagnostic and re-raise the test's own failure.
 pub struct HegelFailure {
-    panic_message: CString,
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
-    /// sequence, or `None` when the engine produced no blob. Read via
-    /// `hegel_failure_reproduction_blob`.
+    /// sequence, or `None` when the engine produced no blob (a
+    /// single-test-case run). Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
-            panic_message: cstring_lossy(&f.panic_message),
             origin: cstring_lossy(&f.origin),
             // The base64 alphabet has no NUL, so this is an
             // invariant: error loudly if it's ever broken.
@@ -905,17 +905,13 @@ pub unsafe extern "C" fn hegel_run_start(
             // terminated" error, losing the message. Both feed the same
             // run-level error channel (`hegel_run_result_error`).
             let engine = std::panic::AssertUnwindSafe(|| {
-                run_native(&settings, database_key.as_deref(), |ds, is_final| {
+                run_native(&settings, database_key.as_deref(), |ds| {
                     if abort_worker.load(Ordering::Acquire) {
                         ds.mark_complete(&TestCaseResult::Valid);
                         return;
                     }
                     let (ack_tx, ack_rx) = mpsc::channel();
-                    let msg = WorkerMessage::TestCase {
-                        ds,
-                        is_final,
-                        ack: ack_tx,
-                    };
+                    let msg = WorkerMessage::TestCase { ds, ack: ack_tx };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
                         // Caller dropped the result channel in the window
                         // between the worker producing a case and sending it —
@@ -1012,10 +1008,9 @@ pub unsafe extern "C" fn hegel_next_test_case(
     }
 
     match run.from_worker.recv() {
-        Ok(WorkerMessage::TestCase { ds, is_final, ack }) => {
+        Ok(WorkerMessage::TestCase { ds, ack }) => {
             let tc = Box::new(HegelTestCase {
                 ds,
-                is_final,
                 completed: false,
                 last_value: Vec::new(),
                 ack: Some(ack),
@@ -1135,8 +1130,8 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
 /// property failed again) or is stale (it passed). Replay several blobs by
 /// calling this once per blob. A blob whose choices no longer match the
 /// caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
-/// overruns. `hegel_test_case_is_final_replay` reports true: the replayed
-/// example *is* the counterexample.
+/// overruns. Replaying a blob is how a caller performs the *final replay* of
+/// a counterexample.
 ///
 /// Returns NULL with a diagnostic in `hegel_context_last_error` if `s` or
 /// `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
@@ -1172,7 +1167,6 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
     };
     Box::into_raw(Box::new(HegelTestCase {
         ds,
-        is_final: true,
         completed: false,
         last_value: Vec::new(),
         ack: None,
@@ -1837,7 +1831,6 @@ pub unsafe extern "C" fn hegel_mark_complete(
                 }
             };
             TestCaseResult::Interesting(Failure {
-                panic_message: origin_str.clone(),
                 origin: origin_str,
                 reproduce_blob: None,
             })
@@ -1850,18 +1843,6 @@ pub unsafe extern "C" fn hegel_mark_complete(
     }
     tc.completed = true;
     HEGEL_OK
-}
-
-/// True iff this test case is the engine's *final replay* of a
-/// minimal failing example. Bindings that want to emit verbose draw
-/// traces only for the final counterexample (rather than every probe
-/// the shrinker tries) gate their tracing on this flag.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_test_case_is_final_replay(tc: *const HegelTestCase) -> bool {
-    match unsafe { tc.as_ref() } {
-        Some(t) => t.is_final,
-        None => false,
-    }
 }
 
 // ─── Result inspection ──────────────────────────────────────────────────────
@@ -1918,17 +1899,6 @@ pub unsafe extern "C" fn hegel_run_result_failure(
             .get(index)
             .map(|f| f as *const HegelFailure)
             .unwrap_or(ptr::null()),
-        None => ptr::null(),
-    }
-}
-
-/// The failure's panic message — e.g. the assertion text or
-/// engine-emitted message like `"FailedHealthCheck: FilterTooMuch — …"`.
-/// Returns NULL if `f` is NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_panic_message(f: *const HegelFailure) -> *const c_char {
-    match unsafe { f.as_ref() } {
-        Some(f) => f.panic_message.as_ptr(),
         None => ptr::null(),
     }
 }

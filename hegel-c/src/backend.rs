@@ -1,4 +1,3 @@
-use crate::settings::Settings;
 use ciborium::Value;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
@@ -113,17 +112,15 @@ pub trait DataSource: Send + Sync {
     fn mark_complete(&self, result: &TestCaseResult);
 }
 
-/// A single failing test case discovered by a [`TestRunner`].
+/// A single interesting test case surfaced by a run.
 ///
 /// This is data about the failure, not its presentation: the rendered
-/// diagnostic block (panic location, message, backtrace) is printed by the
-/// lifecycle at the moment the panic is caught and never travels with the
-/// failure.
+/// diagnostic block (panic location, message, backtrace) is produced by the
+/// client when it replays the reproduce blob, and never travels with the
+/// failure. A failure carries the origin the engine grouped on and the
+/// reproduce blob the client replays.
 #[derive(Debug, Clone)]
 pub struct Failure {
-    /// The raw panic message from the failing test (the string passed to `panic!`).
-    /// Used as-is for the legacy single-failure outer panic message.
-    pub panic_message: String,
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
     /// `take_panic_info` returns nothing).  Passed through
@@ -131,10 +128,12 @@ pub struct Failure {
     /// which bug they trigger and shrink each origin to its own minimal
     /// counterexample.
     pub origin: String,
-    /// A base64 "failure blob" encoding the minimal counterexample's choice sequence.
-    /// `Some` only on the native backend's final replay, where the shrunk choices
-    /// are available; `None` everywhere else. Paste into `#[hegel::reproduce_failure("…")]`
-    /// or feed to [`crate::Hegel::reproduce_failure`] to replay it.
+    /// A base64 "failure blob" encoding the minimal counterexample's choice
+    /// sequence. `Some` for an interesting counterexample surfaced by a full
+    /// run (the shrunk choices are available); `None` for a single-test-case
+    /// run, which has no shrunk choice sequence to encode. The client replays
+    /// it via `hegel_test_case_from_blob`; paste into
+    /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
 }
 
@@ -154,11 +153,11 @@ pub enum TestCaseResult {
 /// A failure of the run itself, as opposed to a failure of a test case:
 /// the run could not produce a trustworthy verdict on the property.
 ///
-/// These are returned as `Err` from [`TestRunner::explore`] and
-/// [`TestRunner::replay_final`] and surface at the API boundary — the panic
-/// API panics with the message; libhegel reports it through its error
-/// channel. They never appear as [`Failure`]s: there is no counterexample,
-/// reproduce blob, or diagnostic block, just a message about the run.
+/// These are returned as `Err` from the engine's exploration and surface at
+/// the API boundary — the panic API panics with the message; libhegel reports
+/// it through its error channel. They never appear as [`Failure`]s: there is no
+/// counterexample, reproduce blob, or diagnostic block, just a message about
+/// the run.
 #[derive(Debug, Clone)]
 pub enum RunError {
     /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
@@ -182,97 +181,18 @@ impl std::fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
-/// The outcome of a [`TestRunner::explore`] pass: the run's result once
-/// generation and shrinking are done, before any final replay.
+/// Result of a full test run: the run's outcome once generation and
+/// shrinking are done.
 ///
-/// The caller — `run_lifecycle::drive` for the panic API,
-/// [`crate::embed::run_native`] for FFI — replays each counterexample via
-/// [`TestRunner::replay_final`] and owns the resulting report.
-#[derive(Debug)]
-pub enum Exploration<C> {
-    /// The run found no failures.
-    Passed,
-    /// The run discovered counterexamples, one per distinct bug, in report
-    /// order. Each still needs its final replay via
-    /// [`TestRunner::replay_final`].
-    Counterexamples(Vec<C>),
-}
-
-/// Result of a full test run: the aggregate, post-replay view.
-///
-/// [`crate::embed::run_native`] folds an [`Exploration`] plus its final
-/// replays into one of these so libhegel can inspect the run as a whole.
-/// The run passed iff `failures` is empty.
+/// The engine only *explores*, so each [`Failure`] carries the origin the
+/// engine grouped on and the reproduce blob the client replays. The client
+/// (`run_lifecycle::drive` for the panic API) replays each blob itself and
+/// owns the resulting report. The run passed iff `failures` is empty.
 #[derive(Debug)]
 pub struct TestRunResult {
-    /// One entry per distinct failing example surfaced by the run, one per
-    /// distinct bug origin, ordered as the run replayed them. Empty for a
-    /// passing run.
+    /// One entry per distinct interesting example surfaced by the run, one
+    /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
-}
-
-/// Drives test exploration and counterexample replay.
-///
-/// Implementations control how test cases are generated, how data sources
-/// are created for each test case, and how shrinking works.
-/// This trait has no reference to any external process — it can be
-/// implemented purely in memory.
-///
-/// In both methods, `run_case` is called once per test case with a data
-/// source for generating test data; it runs the test body to completion
-/// and the outcome is delivered back through [`DataSource::mark_complete`],
-/// not as a return value. Finality is structural: every test case
-/// [`explore`](Self::explore) runs is non-final, and
-/// [`replay_final`](Self::replay_final)'s one case is final — the caller
-/// encodes that in the callback it supplies to each method.
-pub trait TestRunner {
-    /// A minimal counterexample discovered by [`explore`](Self::explore),
-    /// replayable via [`replay_final`](Self::replay_final).
-    type Counterexample;
-
-    /// Run the exploration half of a test run: database replay, generation,
-    /// and shrinking, stopping at the point where the run's outcome — and
-    /// every distinct bug's minimal counterexample — is known. `Err` means
-    /// the run itself failed (health check, nondeterminism) before reaching
-    /// a verdict.
-    fn explore(
-        &self,
-        settings: &Settings,
-        database_key: Option<&str>,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Exploration<Self::Counterexample>, RunError>;
-
-    /// Replay one counterexample and return the [`Failure`] the test body
-    /// reported (with its reproduce blob attached). `Err` means the
-    /// counterexample stopped failing between discovery and replay — flaky
-    /// for the native engine, a stale blob for a blob replay.
-    fn replay_final(
-        &self,
-        counterexample: Self::Counterexample,
-        run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Failure, RunError>;
-}
-
-/// Fold an [`Exploration`] plus its final replays into the aggregate
-/// [`TestRunResult`] shape. Counterexamples are replayed in order; a replay
-/// that no longer fails errors the whole run.
-pub(crate) fn collect_failures<R: TestRunner>(
-    runner: &R,
-    exploration: Exploration<R::Counterexample>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-) -> Result<TestRunResult, RunError> {
-    match exploration {
-        Exploration::Passed => Ok(TestRunResult {
-            failures: Vec::new(),
-        }),
-        Exploration::Counterexamples(counterexamples) => {
-            let mut failures = Vec::new();
-            for counterexample in counterexamples {
-                failures.push(runner.replay_final(counterexample, run_case)?);
-            }
-            Ok(TestRunResult { failures })
-        }
-    }
 }
 
 #[cfg(test)]
