@@ -120,20 +120,20 @@ enum CBackend {
 }
 
 type FnContextNew = unsafe extern "C" fn() -> *mut u8;
-type FnContextFree = unsafe extern "C" fn(*mut u8);
-type FnContextLastError = unsafe extern "C" fn(*const u8) -> *const c_char;
-type FnSettingsNew = unsafe extern "C" fn() -> *mut u8;
-type FnSettingsFree = unsafe extern "C" fn(*mut u8);
-type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, u64);
-type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *mut u8, *const c_char);
-type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *mut u8, *const c_char);
-type FnSettingsSeed = unsafe extern "C" fn(*mut u8, u64, bool);
-type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, bool);
-type FnSettingsBackend = unsafe extern "C" fn(*mut u8, CBackend);
-type FnRunStart = unsafe extern "C" fn(*mut u8, *const u8) -> *mut u8;
-type FnNextTestCase = unsafe extern "C" fn(*mut u8, *mut u8) -> *mut u8;
-type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8) -> *const u8;
-type FnRunFree = unsafe extern "C" fn(*mut u8);
+type FnContextFree = unsafe extern "C" fn(*mut u8) -> c_int;
+type FnContextLastError = unsafe extern "C" fn(*const u8, *mut *const c_char) -> c_int;
+type FnSettingsNew = unsafe extern "C" fn(*mut u8, *mut *mut u8) -> c_int;
+type FnSettingsFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
+type FnSettingsTestCases = unsafe extern "C" fn(*mut u8, *mut u8, u64) -> c_int;
+type FnSettingsDatabase = unsafe extern "C" fn(*mut u8, *mut u8, *const c_char) -> c_int;
+type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *mut u8, *const c_char) -> c_int;
+type FnSettingsSeed = unsafe extern "C" fn(*mut u8, *mut u8, u64, bool) -> c_int;
+type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, *mut u8, bool) -> c_int;
+type FnSettingsBackend = unsafe extern "C" fn(*mut u8, *mut u8, CBackend) -> c_int;
+type FnRunStart = unsafe extern "C" fn(*mut u8, *const u8, *mut *mut u8) -> c_int;
+type FnNextTestCase = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
+type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8, *mut *const u8) -> c_int;
+type FnRunFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnGenerate =
     unsafe extern "C" fn(*mut u8, *mut u8, *const u8, usize, *mut *const u8, *mut usize) -> c_int;
 type FnMarkComplete = unsafe extern "C" fn(*mut u8, *mut u8, CStatus, *const c_char) -> c_int;
@@ -154,14 +154,15 @@ type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnTarget = unsafe extern "C" fn(*mut u8, *mut u8, f64, *const c_char) -> c_int;
 type FnCollectionMore = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut bool) -> c_int;
-type FnRunResultStatus = unsafe extern "C" fn(*const u8) -> CRunStatus;
-type FnRunResultError = unsafe extern "C" fn(*const u8) -> *const c_char;
-type FnRunResultFailureCount = unsafe extern "C" fn(*const u8) -> usize;
-type FnRunResultFailure = unsafe extern "C" fn(*const u8, usize) -> *const u8;
-type FnFailureOrigin = unsafe extern "C" fn(*const u8) -> *const c_char;
-type FnFailureReproduceBlob = unsafe extern "C" fn(*const u8) -> *const c_char;
-type FnTestCaseFromBlob = unsafe extern "C" fn(*mut u8, *const u8, *const c_char) -> *mut u8;
-type FnTestCaseFree = unsafe extern "C" fn(*mut u8, *mut u8);
+type FnRunResultStatus = unsafe extern "C" fn(*mut u8, *const u8, *mut CRunStatus) -> c_int;
+type FnRunResultError = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
+type FnRunResultFailureCount = unsafe extern "C" fn(*mut u8, *const u8, *mut usize) -> c_int;
+type FnRunResultFailure = unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *const u8) -> c_int;
+type FnFailureOrigin = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
+type FnFailureReproduceBlob = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
+type FnTestCaseFromBlob =
+    unsafe extern "C" fn(*mut u8, *const u8, *const c_char, *mut *mut u8) -> c_int;
+type FnTestCaseFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 
 // Bundle of the symbols we use, so the test bodies stay readable.
 struct Api<'a> {
@@ -240,6 +241,113 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
     }
 }
 
+// Ergonomic wrappers over the raw symbols, absorbing the uniform calling
+// convention (a leading context, a `hegel_result_t` return, trailing `out_*`
+// parameters) so the test bodies read like the old value-returning API. Each
+// shares its name with the corresponding field: `a.foo(..)` calls the wrapper,
+// `(a.foo)(..)` still calls the raw symbol.
+impl Api<'_> {
+    unsafe fn settings_new(&self, ctx: *mut u8) -> *mut u8 {
+        let mut s: *mut u8 = ptr::null_mut();
+        assert_eq!(unsafe { (self.settings_new)(ctx, &mut s) }, HEGEL_OK);
+        s
+    }
+    unsafe fn settings_free(&self, ctx: *mut u8, s: *mut u8) {
+        unsafe { (self.settings_free)(ctx, s) };
+    }
+    unsafe fn settings_test_cases(&self, ctx: *mut u8, s: *mut u8, n: u64) {
+        unsafe { (self.settings_test_cases)(ctx, s, n) };
+    }
+    unsafe fn settings_seed(&self, ctx: *mut u8, s: *mut u8, seed: u64, has_seed: bool) {
+        unsafe { (self.settings_seed)(ctx, s, seed, has_seed) };
+    }
+    unsafe fn settings_derandomize(&self, ctx: *mut u8, s: *mut u8, derandomize: bool) {
+        unsafe { (self.settings_derandomize)(ctx, s, derandomize) };
+    }
+    unsafe fn settings_backend(&self, ctx: *mut u8, s: *mut u8, backend: CBackend) {
+        unsafe { (self.settings_backend)(ctx, s, backend) };
+    }
+    unsafe fn run_start(&self, ctx: *mut u8, s: *const u8) -> *mut u8 {
+        let mut run: *mut u8 = ptr::null_mut();
+        assert_eq!(unsafe { (self.run_start)(ctx, s, &mut run) }, HEGEL_OK);
+        run
+    }
+    /// Null both at clean completion (`HEGEL_OK`) and on misuse (an error
+    /// code); callers that care distinguish via `context_last_error`.
+    unsafe fn next_test_case(&self, ctx: *mut u8, run: *mut u8) -> *mut u8 {
+        let mut tc: *mut u8 = ptr::null_mut();
+        unsafe { (self.next_test_case)(ctx, run, &mut tc) };
+        tc
+    }
+    unsafe fn run_result(&self, ctx: *mut u8, run: *mut u8) -> *const u8 {
+        let mut r: *const u8 = ptr::null();
+        assert_eq!(unsafe { (self.run_result)(ctx, run, &mut r) }, HEGEL_OK);
+        r
+    }
+    unsafe fn run_free(&self, ctx: *mut u8, run: *mut u8) {
+        unsafe { (self.run_free)(ctx, run) };
+    }
+    unsafe fn context_last_error(&self, ctx: *const u8) -> *const c_char {
+        let mut p: *const c_char = ptr::null();
+        unsafe { (self.context_last_error)(ctx, &mut p) };
+        p
+    }
+    unsafe fn run_result_status(&self, ctx: *mut u8, r: *const u8) -> CRunStatus {
+        let mut st = CRunStatus::Passed;
+        assert_eq!(
+            unsafe { (self.run_result_status)(ctx, r, &mut st) },
+            HEGEL_OK
+        );
+        st
+    }
+    unsafe fn run_result_error(&self, ctx: *mut u8, r: *const u8) -> *const c_char {
+        let mut p: *const c_char = ptr::null();
+        assert_eq!(unsafe { (self.run_result_error)(ctx, r, &mut p) }, HEGEL_OK);
+        p
+    }
+    unsafe fn run_result_failure_count(&self, ctx: *mut u8, r: *const u8) -> usize {
+        let mut n = 0usize;
+        assert_eq!(
+            unsafe { (self.run_result_failure_count)(ctx, r, &mut n) },
+            HEGEL_OK
+        );
+        n
+    }
+    unsafe fn run_result_failure(&self, ctx: *mut u8, r: *const u8, index: usize) -> *const u8 {
+        let mut f: *const u8 = ptr::null();
+        assert_eq!(
+            unsafe { (self.run_result_failure)(ctx, r, index, &mut f) },
+            HEGEL_OK
+        );
+        f
+    }
+    unsafe fn failure_origin(&self, ctx: *mut u8, f: *const u8) -> *const c_char {
+        let mut p: *const c_char = ptr::null();
+        assert_eq!(unsafe { (self.failure_origin)(ctx, f, &mut p) }, HEGEL_OK);
+        p
+    }
+    unsafe fn failure_reproduce_blob(&self, ctx: *mut u8, f: *const u8) -> *const c_char {
+        let mut p: *const c_char = ptr::null();
+        assert_eq!(
+            unsafe { (self.failure_reproduce_blob)(ctx, f, &mut p) },
+            HEGEL_OK
+        );
+        p
+    }
+    /// Null on failure (bad / undecodable blob); the diagnostic is on the
+    /// context.
+    unsafe fn test_case_from_blob(
+        &self,
+        ctx: *mut u8,
+        s: *const u8,
+        blob: *const c_char,
+    ) -> *mut u8 {
+        let mut tc: *mut u8 = ptr::null_mut();
+        unsafe { (self.test_case_from_blob)(ctx, s, blob, &mut tc) };
+        tc
+    }
+}
+
 // ─── CBOR schema helpers ────────────────────────────────────────────────────
 
 fn encode(value: &Value) -> Vec<u8> {
@@ -286,23 +394,23 @@ fn libhegel_runs_passing_property() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
+        let s = a.settings_new(ctx);
         assert!(!s.is_null());
-        (a.settings_test_cases)(s, 25);
+        a.settings_test_cases(ctx, s, 25);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let schema = integer_schema(0, 100);
         let mut cases = 0usize;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -335,21 +443,21 @@ fn libhegel_runs_passing_property() {
         }
         assert!(cases >= 1, "expected at least one test case to run");
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null(), "run_result null after drained loop");
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Passed,
             "expected passing run"
         );
-        assert_eq!((a.run_result_failure_count)(result), 0);
+        assert_eq!(a.run_result_failure_count(ctx, result), 0);
         assert!(
-            (a.run_result_error)(result).is_null(),
+            a.run_result_error(ctx, result).is_null(),
             "a normal run carries no run-level error"
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -365,22 +473,22 @@ fn libhegel_runs_with_urandom_backend() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
+        let s = a.settings_new(ctx);
         assert!(!s.is_null());
-        (a.settings_test_cases)(s, 10);
+        a.settings_test_cases(ctx, s, 10);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_backend)(s, CBackend::Urandom);
+        a.settings_backend(ctx, s, CBackend::Urandom);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let schema = integer_schema(0, 100);
         let mut cases = 0usize;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -409,13 +517,13 @@ fn libhegel_runs_with_urandom_backend() {
         }
         assert!(cases >= 1, "expected at least one test case to run");
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
-        assert_eq!((a.run_result_status)(result), CRunStatus::Passed);
-        assert_eq!((a.run_result_failure_count)(result), 0);
+        assert_eq!(a.run_result_status(ctx, result), CRunStatus::Passed);
+        assert_eq!(a.run_result_failure_count(ctx, result), 0);
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -434,17 +542,17 @@ fn invalid_schema_returns_error_not_abort() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 1);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
-        let tc = (a.next_test_case)(ctx, run);
+        let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null(), "expected a test case");
 
         // Several distinct malformed schemas, each of which previously
@@ -465,7 +573,7 @@ fn invalid_schema_returns_error_not_abort() {
                 rc, HEGEL_E_INVALID_ARG,
                 "invalid schema should return HEGEL_E_INVALID_ARG, got rc={rc}"
             );
-            let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+            let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
             assert!(
                 !err.is_empty(),
                 "expected a diagnostic message for the invalid schema"
@@ -473,8 +581,8 @@ fn invalid_schema_returns_error_not_abort() {
         }
 
         (a.mark_complete)(ctx, tc, CStatus::Invalid, ptr::null());
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -492,16 +600,16 @@ fn caller_usage_errors_return_error_not_abort() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 1);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
-        let tc = (a.next_test_case)(ctx, run);
+        let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null(), "expected a test case");
 
         let label = CString::new("x").unwrap();
@@ -513,7 +621,7 @@ fn caller_usage_errors_return_error_not_abort() {
             HEGEL_E_INVALID_ARG
         );
         assert!(
-            !CStr::from_ptr((a.context_last_error)(ctx))
+            !CStr::from_ptr(a.context_last_error(ctx))
                 .to_bytes()
                 .is_empty()
         );
@@ -539,8 +647,8 @@ fn caller_usage_errors_return_error_not_abort() {
         );
 
         (a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null());
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -552,21 +660,21 @@ fn libhegel_reports_shrunk_failure() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 200);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 0xc0ffee, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 0xc0ffee, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         let schema = integer_schema(0, 100);
         let origin = CString::new("n >= 5 failed").unwrap();
 
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "got error mid-loop: {}", err);
                 break;
             }
@@ -607,30 +715,30 @@ fn libhegel_reports_shrunk_failure() {
             (a.mark_complete)(ctx, tc, status, origin_ptr);
         }
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Failed,
             "expected failing run (predicate n < 5 is false for many n in [0,100])"
         );
-        let n_failures = (a.run_result_failure_count)(result);
+        let n_failures = a.run_result_failure_count(ctx, result);
         assert!(n_failures >= 1, "expected at least one failure");
 
         // Inspect the first failure: the origin should carry the string we
         // passed in. The engine never replays, so there is no panic message —
         // a caller would replay `failure_reproduction_blob` to obtain one.
-        let f = (a.run_result_failure)(result, 0);
+        let f = a.run_result_failure(ctx, result, 0);
         assert!(!f.is_null());
-        let origin_back = CStr::from_ptr((a.failure_origin)(f)).to_string_lossy();
+        let origin_back = CStr::from_ptr(a.failure_origin(ctx, f)).to_string_lossy();
         assert!(
             origin_back.contains("n >= 5 failed"),
             "expected failure origin to contain 'n >= 5 failed', got: {}",
             origin_back
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -641,7 +749,7 @@ unsafe fn drive_failing_property(a: &Api, ctx: *mut u8, run: *mut u8) {
     let schema = integer_schema(0, 100);
     let origin = CString::new("n >= 5 failed").unwrap();
     loop {
-        let tc = unsafe { (a.next_test_case)(ctx, run) };
+        let tc = unsafe { a.next_test_case(ctx, run) };
         if tc.is_null() {
             break;
         }
@@ -679,33 +787,33 @@ unsafe fn drive_failing_property(a: &Api, ctx: *mut u8, run: *mut u8) {
 /// its first failure. Shared by the blob-replay tests below.
 unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
     unsafe {
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 200);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 0xc0ffee, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 0xc0ffee, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         drive_failing_property(a, ctx, run);
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Failed,
             "expected a failing run"
         );
-        let f = (a.run_result_failure)(result, 0);
+        let f = a.run_result_failure(ctx, result, 0);
         assert!(!f.is_null());
-        let blob_ptr = (a.failure_reproduce_blob)(f);
+        let blob_ptr = a.failure_reproduce_blob(ctx, f);
         assert!(
             !blob_ptr.is_null(),
             "expected a reproduce blob on the failure"
         );
         // Copy out of the run-owned buffer before freeing the run.
         let blob = CStr::from_ptr(blob_ptr).to_owned();
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         blob
     }
 }
@@ -715,11 +823,11 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
 /// the property dictates and freeing the handle.
 unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> i128 {
     unsafe {
-        let tc = (a.test_case_from_blob)(ctx, s, blob.as_ptr());
+        let tc = a.test_case_from_blob(ctx, s, blob.as_ptr());
         assert!(
             !tc.is_null(),
             "hegel_test_case_from_blob failed: {}",
-            CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy()
+            CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy()
         );
 
         let schema = integer_schema(0, 100);
@@ -763,7 +871,7 @@ fn libhegel_blob_test_case_replays_the_counterexample() {
         // Replay the blob as standalone test cases — no run handle, no
         // worker. Replaying twice exercises the multiple-reproduce_failures
         // usage: one call per blob, each its own test case.
-        let s = (a.settings_new)();
+        let s = a.settings_new(ctx);
         let first = replay_blob_once(&a, ctx, s, &blob);
         assert!(
             first >= 5,
@@ -771,7 +879,7 @@ fn libhegel_blob_test_case_replays_the_counterexample() {
         );
         let second = replay_blob_once(&a, ctx, s, &blob);
         assert_eq!(first, second, "blob replay must be deterministic");
-        (a.settings_free)(s);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -783,28 +891,28 @@ fn libhegel_test_case_from_blob_rejects_bad_input() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
+        let s = a.settings_new(ctx);
 
         // An undecodable blob: NULL with a diagnostic.
         let garbage = CString::new("!!! not a blob !!!").unwrap();
-        let tc = (a.test_case_from_blob)(ctx, s, garbage.as_ptr());
+        let tc = a.test_case_from_blob(ctx, s, garbage.as_ptr());
         assert!(tc.is_null());
-        let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+        let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             err.contains("could not be decoded"),
             "unexpected error: {err}"
         );
 
         // NULL blob and NULL settings: NULL with a diagnostic.
-        let tc = (a.test_case_from_blob)(ctx, s, ptr::null());
+        let tc = a.test_case_from_blob(ctx, s, ptr::null());
         assert!(tc.is_null());
-        assert!(!CStr::from_ptr((a.context_last_error)(ctx)).is_empty());
+        assert!(!CStr::from_ptr(a.context_last_error(ctx)).is_empty());
         let blob = CString::new("AAEC").unwrap();
-        let tc = (a.test_case_from_blob)(ctx, ptr::null(), blob.as_ptr());
+        let tc = a.test_case_from_blob(ctx, ptr::null(), blob.as_ptr());
         assert!(tc.is_null());
-        assert!(!CStr::from_ptr((a.context_last_error)(ctx)).is_empty());
+        assert!(!CStr::from_ptr(a.context_last_error(ctx)).is_empty());
 
-        (a.settings_free)(s);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -819,18 +927,18 @@ fn libhegel_test_case_free_refuses_run_owned_test_cases() {
         // Freeing NULL is a no-op.
         (a.test_case_free)(ctx, ptr::null_mut());
 
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 1);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
 
         // A test case pumped from a run is owned by the run: freeing it
         // must be refused, leaving the handle usable.
-        let tc = (a.next_test_case)(ctx, run);
+        let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null());
         (a.test_case_free)(ctx, tc);
-        let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+        let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             err.contains("owned by its hegel_run_t"),
             "unexpected error: {err}"
@@ -838,8 +946,8 @@ fn libhegel_test_case_free_refuses_run_owned_test_cases() {
         // Still usable after the refused free.
         assert_eq!((a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null()), 0);
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -851,22 +959,22 @@ fn libhegel_pool_primitives_draw_added_variables() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 25);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 25);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 3, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 3, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let mut saw_pool_draw = false;
         let mut saw_empty_reject = false;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -936,16 +1044,16 @@ fn libhegel_pool_primitives_draw_added_variables() {
             "expected to drain a pool to empty at least once"
         );
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Passed,
             "expected passing run"
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -957,14 +1065,14 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 50);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 50);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 3, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 3, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let rule_names: Vec<CString> = ["push", "pop", "clear"]
@@ -978,9 +1086,9 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
         let mut saw_rule_draw = false;
         let mut longest_single_rule_run = 0usize;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -1061,16 +1169,16 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             longest_single_rule_run
         );
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Passed,
             "expected to pass"
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -1082,22 +1190,22 @@ fn libhegel_primitive_boolean_draws_and_forces() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 50);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 50);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 11, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 11, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let mut saw_true = false;
         let mut saw_false = false;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -1141,16 +1249,16 @@ fn libhegel_primitive_boolean_draws_and_forces() {
         assert!(saw_true, "expected an unforced draw to come up true");
         assert!(saw_false, "expected an unforced draw to come up false");
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Passed,
             "expected a passed run"
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -1162,17 +1270,17 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 1);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
         let mut saw_test_case = false;
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
@@ -1203,7 +1311,7 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
                     "expected HEGEL_E_INVALID_ARG for p={}, forced={}, has_forced={}",
                     p, forced, has_forced
                 );
-                let err = CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy();
+                let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
                 assert!(!err.is_empty(), "expected a diagnostic message");
             }
 
@@ -1227,16 +1335,16 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
         }
         assert!(saw_test_case, "expected the run to produce a test case");
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(!result.is_null());
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Passed,
             "expected a passed run"
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -1248,20 +1356,20 @@ fn next_test_case_without_mark_complete_errors() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 5);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 5);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 7, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 7, true);
 
-        let run = (a.run_start)(ctx, s);
-        let tc1 = (a.next_test_case)(ctx, run);
+        let run = a.run_start(ctx, s);
+        let tc1 = a.next_test_case(ctx, run);
         assert!(!tc1.is_null());
         // Deliberately skip mark_complete.
-        let tc2 = (a.next_test_case)(ctx, run);
+        let tc2 = a.next_test_case(ctx, run);
         assert!(tc2.is_null(), "expected NULL on second next_test_case");
-        let err = CStr::from_ptr((a.context_last_error)(ctx))
+        let err = CStr::from_ptr(a.context_last_error(ctx))
             .to_string_lossy()
             .into_owned();
         assert!(err.contains("not marked complete"), "got: {}", err);
@@ -1269,15 +1377,15 @@ fn next_test_case_without_mark_complete_errors() {
         // Now mark first complete and let the loop drain so run_free is clean.
         (a.mark_complete)(ctx, tc1, CStatus::Valid, ptr::null());
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
             (a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null());
         }
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -1289,18 +1397,18 @@ fn run_free_after_early_exit_does_not_hang() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 100);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 100);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 99, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 99, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         // Grab one test case, don't complete it, jump straight to free.
-        let _ = (a.next_test_case)(ctx, run);
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        let _ = a.next_test_case(ctx, run);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
         // Reaching here without deadlocking is the assertion.
     }
@@ -1328,16 +1436,16 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
     let mut last_failure: Option<i128> = None;
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 200);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 200);
         (a.settings_database)(ctx, s, db_path.as_ptr());
         (a.settings_database_key)(ctx, s, key.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
@@ -1369,8 +1477,8 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
                 (a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null());
             }
         }
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
     assert!(last_failure.is_some(), "run 1 never observed the failure");
@@ -1379,16 +1487,16 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
     let mut first_seen: Option<i128> = None;
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 200);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 200);
         (a.settings_database)(ctx, s, db_path.as_ptr());
         (a.settings_database_key)(ctx, s, key.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
@@ -1422,8 +1530,8 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
                 (a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null());
             }
         }
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 
@@ -1448,20 +1556,20 @@ fn health_check_surfaces_as_run_error() {
 
     unsafe {
         let ctx = (a.context_new)();
-        let s = (a.settings_new)();
-        (a.settings_test_cases)(s, 200);
+        let s = a.settings_new(ctx);
+        a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
         (a.settings_database)(ctx, s, empty.as_ptr());
-        (a.settings_derandomize)(s, true);
-        (a.settings_seed)(s, 1, true);
+        a.settings_derandomize(ctx, s, true);
+        a.settings_seed(ctx, s, 1, true);
 
-        let run = (a.run_start)(ctx, s);
+        let run = a.run_start(ctx, s);
         let schema = integer_schema(0, 1_000_000);
 
         // Reject everything we draw. The engine eventually trips
         // FilterTooMuch and errors the run.
         loop {
-            let tc = (a.next_test_case)(ctx, run);
+            let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
@@ -1483,7 +1591,7 @@ fn health_check_surfaces_as_run_error() {
             }
         }
 
-        let last_err = CStr::from_ptr((a.context_last_error)(ctx))
+        let last_err = CStr::from_ptr(a.context_last_error(ctx))
             .to_string_lossy()
             .into_owned();
         assert_eq!(
@@ -1492,27 +1600,27 @@ fn health_check_surfaces_as_run_error() {
             last_err
         );
 
-        let result = (a.run_result)(ctx, run);
+        let result = a.run_result(ctx, run);
         assert!(
             !result.is_null(),
             "hegel_run_result returned NULL after the health check fired; \
              last_error = {}",
-            CStr::from_ptr((a.context_last_error)(ctx)).to_string_lossy()
+            CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy()
         );
 
         // The run errored, lists no failures, and carries the
         // FilterTooMuch text on the run-level error channel.
         assert_eq!(
-            (a.run_result_status)(result),
+            a.run_result_status(ctx, result),
             CRunStatus::Error,
             "expected an errored run after the health check fired"
         );
         assert_eq!(
-            (a.run_result_failure_count)(result),
+            a.run_result_failure_count(ctx, result),
             0,
             "a run-level error is not a failure of any test case"
         );
-        let err_ptr = (a.run_result_error)(result);
+        let err_ptr = a.run_result_error(ctx, result);
         assert!(
             !err_ptr.is_null(),
             "expected hegel_run_result_error to carry the health-check message"
@@ -1524,8 +1632,8 @@ fn health_check_surfaces_as_run_error() {
             msg
         );
 
-        (a.run_free)(run);
-        (a.settings_free)(s);
+        a.run_free(ctx, run);
+        a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
 }
@@ -1632,15 +1740,15 @@ fn run_shrinker_sweep(
         let mut last_failing: Option<i128> = None;
         unsafe {
             let ctx = (a.context_new)();
-            let s = (a.settings_new)();
-            (a.settings_test_cases)(s, 100);
+            let s = a.settings_new(ctx);
+            a.settings_test_cases(ctx, s, 100);
             (a.settings_database)(ctx, s, empty.as_ptr());
-            (a.settings_derandomize)(s, true);
-            (a.settings_seed)(s, seed, true);
+            a.settings_derandomize(ctx, s, true);
+            a.settings_seed(ctx, s, seed, true);
 
-            let run = (a.run_start)(ctx, s);
+            let run = a.run_start(ctx, s);
             loop {
-                let tc = (a.next_test_case)(ctx, run);
+                let tc = a.next_test_case(ctx, run);
                 if tc.is_null() {
                     break;
                 }
@@ -1679,8 +1787,8 @@ fn run_shrinker_sweep(
                     (a.mark_complete)(ctx, tc, CStatus::Valid, ptr::null());
                 }
             }
-            (a.run_free)(run);
-            (a.settings_free)(s);
+            a.run_free(ctx, run);
+            a.settings_free(ctx, s);
             (a.context_free)(ctx);
         }
         let final_value = last_failing.unwrap_or(i128::MIN);

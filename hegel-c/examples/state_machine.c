@@ -33,13 +33,15 @@ static const char *INVARIANTS[] = { "non_negative" };
 int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
-    hegel_settings_t *s = hegel_settings_new();
-    hegel_settings_test_cases(s, 100);
+    hegel_settings_t *s;
+    hegel_settings_new(ctx, &s);
+    hegel_settings_test_cases(ctx, s, 100);
     hegel_settings_database(ctx, s, "");
-    hegel_settings_derandomize(s, true);
-    hegel_settings_seed(s, 0x5ca1ab1e, true);
+    hegel_settings_derandomize(ctx, s, true);
+    hegel_settings_seed(ctx, s, 0x5ca1ab1e, true);
 
-    hegel_run_t *run = hegel_run_start(ctx, s);
+    hegel_run_t *run;
+    hegel_run_start(ctx, s, &run);
 
     const int STEPS = 20;
     size_t total = 0;
@@ -47,7 +49,7 @@ int main(void) {
     bool ok = true;
 
     hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
+    while (hegel_next_test_case(ctx, run, &tc) == HEGEL_OK && tc != NULL) {
         int64_t machine;
         if (hegel_new_state_machine(ctx, tc, RULES, NUM_RULES,
                                     INVARIANTS, NUM_INVARIANTS,
@@ -90,8 +92,11 @@ int main(void) {
         hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
     }
 
-    const hegel_run_result_t *result = hegel_run_result(ctx, run);
-    bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
+    const hegel_run_result_t *result;
+    hegel_run_result(ctx, run, &result);
+    hegel_run_status_t status;
+    hegel_run_result_status(ctx, result, &status);
+    bool passed = status == HEGEL_RUN_STATUS_PASSED;
 
     /* Every rule should have been selected at least once across the run —
      * swarm testing restricts the mix per test case, not globally. */
@@ -106,8 +111,8 @@ int main(void) {
            total, rule_counts[0], rule_counts[1], rule_counts[2],
            passed ? "PASSED" : "FAILED");
 
-    hegel_run_free(run);
-    hegel_settings_free(s);
+    hegel_run_free(ctx, run);
+    hegel_settings_free(ctx, s);
     hegel_context_free(ctx);
     return (passed && ok) ? 0 : 1;
 }
