@@ -96,3 +96,12 @@ For enums, it also creates `<Enum><Variant>Generator` for each data variant. Imp
 This project enforces 100% line coverage for new code. You may not add `// nocov` annotations without explicit human permission. See the `coverage` skill for full details on the coverage philosophy, ratchet mechanism, and how to make code testable.
 
 **CRITICAL: You MUST NOT increase the numbers in `.github/coverage-ratchet.json` without first asking for and then receiving explicit human permission to do so.**
+
+
+### Comments
+
+Comments should be short, to the point, and only used where absolutely necessary to explain the code. In the ideal case, no comment is needed.
+
+Comments should never explain what the code doesn't do. This is especially when changing behaviour - there should never be comments about how the code used to work and why it doesn't work that way any more.
+
+Comments should not reference Hypothesis or where code has been ported from.
