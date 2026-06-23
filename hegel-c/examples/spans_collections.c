@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 #include "hegel.h"
+#include "hegel_check.h"
 
 /* CBOR-encoded {"type": "boolean"} */
 static const uint8_t BOOLEAN_SCHEMA[] = {
@@ -49,7 +50,7 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
     }
 
     int n = 0;
-    for (;;) {
+    while (true) {
         bool more;
         hegel_result_t rc = hegel_collection_more(ctx, tc, cid, &more);
         if (rc != HEGEL_OK) {
@@ -82,45 +83,53 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
 int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
-    hegel_settings_t *s = hegel_settings_new();
-    hegel_settings_test_cases(s, 100);
-    hegel_settings_database(ctx, s, "");
-    hegel_settings_derandomize(s, true);
-    hegel_settings_seed(s, 0xfeedface, true);
+    hegel_settings_t *s;
+    HEGEL_CHECK(hegel_settings_new, ctx, &s);
+    HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 100);
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xfeedface, true);
 
-    hegel_run_t *run = hegel_run_start(ctx, s);
+    hegel_run_t *run;
+    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
     const uint64_t MIN_SIZE = 0;
     const uint64_t MAX_SIZE = 8;
     size_t total = 0;
     size_t max_seen = 0;
 
-    hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
+    while (true) {
+        hegel_test_case_t *tc;
+        HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
+        if (tc == NULL) break;
+
         int n = draw_bool_list(ctx, tc, MIN_SIZE, MAX_SIZE);
         if (n < 0) {
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         if ((uint64_t)n < MIN_SIZE || (uint64_t)n > MAX_SIZE) {
             char origin[64];
             snprintf(origin, sizeof origin, "size %d out of range", n);
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, origin);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, origin);
             continue;
         }
         total++;
         if ((size_t)n > max_seen) max_seen = (size_t)n;
-        hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+        HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
     }
 
-    const hegel_run_result_t *result = hegel_run_result(ctx, run);
-    bool passed = hegel_run_result_status(result) == HEGEL_RUN_STATUS_PASSED;
+    const hegel_run_result_t *result;
+    HEGEL_CHECK(hegel_run_result, ctx, run, &result);
+    hegel_run_status_t status;
+    HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
+    bool passed = status == HEGEL_RUN_STATUS_PASSED;
 
     printf("ran %zu valid cases (max list size seen: %zu), %s\n",
            total, max_seen, passed ? "PASSED" : "FAILED");
 
-    hegel_run_free(run);
-    hegel_settings_free(s);
-    hegel_context_free(ctx);
+    HEGEL_CHECK(hegel_run_free, ctx, run);
+    HEGEL_CHECK(hegel_settings_free, ctx, s);
+    HEGEL_CHECK(hegel_context_free, ctx);
     return passed ? 0 : 1;
 }

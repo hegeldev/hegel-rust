@@ -6,6 +6,16 @@ header = """
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
  *
+ * Calling convention
+ * ------------------
+ * Every function takes a hegel_context_t* as its first argument and returns a
+ * hegel_result_t code (HEGEL_OK is zero; negatives are errors), with two
+ * exceptions: hegel_context_new, which creates a context and returns it, and
+ * hegel_context_last_error, the error-reporting reader, which returns the
+ * message pointer directly. Anything else a call produces — a handle, a
+ * string, a count — is written through a trailing out-parameter named out_*. A
+ * NULL context is allowed and simply opts out of error messages.
+ *
  * Pointer ownership
  * -----------------
  * Pointers you pass *into* a libhegel function are always yours. The library
@@ -13,7 +23,8 @@ header = """
  * free or reuse the memory as soon as the call returns. This covers strings
  * (char*), CBOR byte buffers, and arrays of strings alike.
  *
- * Of the pointers libhegel hands *back*, you own exactly the handles made by
+ * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
+ * written to an out-parameter otherwise), you own exactly the handles made by
  * the four constructors, and must release each with its matching free:
  *
  *     hegel_context_new          ->  hegel_context_free
@@ -21,8 +32,8 @@ header = """
  *     hegel_run_start            ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
  *
- * Every *other* pointer libhegel returns is borrowed: libhegel still owns it,
- * you must not free it, and it is valid only until a point that the returning
+ * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
+ * it, you must not free it, and it is valid only until a point that the
  * function documents. Two cases are easy to trip over:
  *
  *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
@@ -30,7 +41,7 @@ header = """
  *     (that is only for a test case you made with hegel_test_case_from_blob).
  *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
  *     run live until hegel_run_free.
- *   - Returned strings and byte buffers (e.g. from hegel_generate,
+ *   - Strings and byte buffers (e.g. from hegel_generate,
  *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
  *     getters) are transient — hegel_generate's bytes, for instance, are
  *     invalidated by the next call on that test case. Copy them to keep them.

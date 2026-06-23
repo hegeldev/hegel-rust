@@ -49,7 +49,7 @@ fn test_settings_backend_setter() {
 
 // The backend's *resolution* (explicit choice vs. auto-urandom-under-
 // Antithesis) is now the engine's job inside hegel-c, reached through the
-// `hegel_settings_backend` C setter; the frontend only records the choice.
+// `hegel_settings_set_backend` C setter; the frontend only records the choice.
 
 #[test]
 fn test_settings_has_phase() {
@@ -234,11 +234,10 @@ mod reproduce {
         let c_settings = SettingsHandle::build(&settings, None);
         let run = RunHandle::start(&c_settings).expect("the engine starts");
         while let Some(c_tc) = run.next_test_case() {
-            let is_final = c_tc.is_final_replay();
             crate::run_lifecycle::run_test_case(
                 c_tc,
                 &mut test_fn,
-                is_final,
+                false,
                 Mode::TestRun,
                 Verbosity::Quiet,
             );

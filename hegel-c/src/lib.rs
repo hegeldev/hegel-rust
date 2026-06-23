@@ -17,11 +17,15 @@
 //   `DataSource` methods directly without channel traffic — `DataSource`
 //   is `Send + Sync` so once handed across it works in place.
 //
-// - Errors are signalled via int return codes (`HEGEL_E_*`) on per-test-case
-//   primitives, or NULL returns for handle-level calls. The diagnostic for a
-//   failed call is recorded on an explicit `hegel_context_t` the caller
-//   passes in (rather than thread-local state, which is ill-defined under
-//   runtimes that migrate work between OS threads) and read back with
+// - Every function takes a `hegel_context_t` as its first argument and returns
+//   a `hegel_result_t` code (`HEGEL_OK` is zero; negatives are errors), with
+//   two exceptions: `hegel_context_new`, which creates a context and returns
+//   it, and `hegel_context_last_error`, which is the error-reporting reader and
+//   returns the message pointer directly. Values other than the code — handles,
+//   strings, counts — are written through trailing `out_*` parameters. The
+//   diagnostic for a failed call is recorded on the `hegel_context_t` the
+//   caller passes in (rather than thread-local state, which is ill-defined
+//   under runtimes that migrate work between OS threads) and read back with
 //   `hegel_context_last_error`. There is no callback into C from Rust on the
 //   hot path; the loop is user-driven.
 
@@ -96,14 +100,15 @@ use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 // ─── Result codes ───────────────────────────────────────────────────────────
 
-/// Result of a fallible libhegel call.
+/// Result of a libhegel call.
 ///
-/// Every `int`-returning entry point (the per-test-case primitives, etc.)
-/// returns one of these. `HEGEL_OK` is zero; every error is negative, so
-/// `result != HEGEL_OK` (or `result < 0`) tests for failure. Handle-returning
-/// entry points signal failure with NULL instead. For the error variants that
-/// carry a diagnostic, the message is on the call's context — read it with
-/// `hegel_context_last_error()`.
+/// Every entry point returns one of these except `hegel_context_new` (which
+/// returns a context) and `hegel_context_last_error` (which returns the message
+/// pointer). `HEGEL_OK` is zero; every error is negative, so `result != HEGEL_OK`
+/// (or `result < 0`) tests for failure. Anything else a call produces — a
+/// handle, a string, a count — is written through a trailing `out_*` parameter.
+/// For the error variants that carry a diagnostic, the message is on the call's
+/// context — read it with `hegel_context_last_error()`.
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[allow(non_camel_case_types)]
@@ -137,8 +142,10 @@ pub enum hegel_result_t {
     /// for a test case that has already been completed.
     HEGEL_E_ALREADY_COMPLETE = -6,
 
-    /// `hegel_next_test_case` was called without first completing the
-    /// previous test case with `hegel_mark_complete`.
+    /// Something was read before it was ready: `hegel_next_test_case` was
+    /// called without first completing the previous test case with
+    /// `hegel_mark_complete`, or `hegel_run_result` was called before the run
+    /// finished (`hegel_next_test_case` has not yet reported completion).
     HEGEL_E_NOT_COMPLETE = -7,
 
     /// An internal invariant failed inside libhegel (e.g. CBOR
@@ -208,7 +215,7 @@ pub enum hegel_mode_t {
 }
 
 /// Which source of randomness the engine draws from. Set via
-/// `hegel_settings_backend`.
+/// `hegel_settings_set_backend`.
 ///
 /// - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
 ///   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
@@ -249,12 +256,12 @@ pub enum hegel_run_status_t {
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
-/// `hegel_settings_verbosity`.
+/// `hegel_settings_set_verbosity`.
 ///
 /// - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
 /// - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
-/// - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress, drawn values
-///   for the final replay, panic diagnostics as they happen.
+/// - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
+///   panic diagnostics as they happen.
 /// - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
 ///   shrinker trace output.
 #[repr(C)]
@@ -270,9 +277,9 @@ pub enum hegel_verbosity_t {
 // ─── Phases ─────────────────────────────────────────────────────────────────
 
 /// A phase of the property-test loop, used as a bit flag for
-/// `hegel_settings_phases`.
+/// `hegel_settings_set_phases`.
 ///
-/// `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+/// `hegel_settings_set_phases` takes a bitwise OR of these values (e.g.
 /// `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
 /// disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
 /// want — turning a phase off is mainly useful for debugging or replay tooling.
@@ -283,7 +290,7 @@ pub enum hegel_phase_t {
     /// Run hard-coded explicit examples (none today, reserved for future use).
     HEGEL_PHASE_EXPLICIT = 1 << 0,
     /// Replay counterexamples persisted from previous runs (requires a
-    /// database path + `hegel_settings_database_key`).
+    /// database path + `hegel_settings_set_database_key`).
     HEGEL_PHASE_REUSE = 1 << 1,
     /// Randomly generate fresh test cases up to the `test_cases` budget.
     HEGEL_PHASE_GENERATE = 1 << 2,
@@ -299,9 +306,9 @@ pub enum hegel_phase_t {
 // ─── Health checks ──────────────────────────────────────────────────────────
 
 /// A health check, used as a bit flag for
-/// `hegel_settings_suppress_health_check`.
+/// `hegel_settings_set_suppress_health_check`.
 ///
-/// `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+/// `hegel_settings_set_suppress_health_check` takes a bitwise OR of these values
 /// naming the checks to *disable*. The default is "all enabled"; suppress a
 /// check only when you understand why it is firing and accept the behavior.
 #[repr(C)]
@@ -406,17 +413,25 @@ pub extern "C" fn hegel_context_new() -> *mut HegelContext {
 }
 
 /// Free a context previously returned by `hegel_context_new`. Safe to call
-/// with NULL (no-op).
+/// with NULL (a no-op that returns `HEGEL_OK`). The `ctx` argument is the
+/// context being freed; there is no separate error context to report into.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_context_free(ctx: *mut HegelContext) {
+pub unsafe extern "C" fn hegel_context_free(ctx: *mut HegelContext) -> hegel_result_t {
     if !ctx.is_null() {
         drop(unsafe { Box::from_raw(ctx) });
     }
+    HEGEL_OK
 }
 
 /// Most recent error message recorded on `ctx`, or the empty string if the
 /// most recent call taking this context succeeded. Returns NULL only when
 /// `ctx` itself is NULL.
+///
+/// This is the error-reporting reader, not a normal `hegel_*` call: it is the
+/// one function (besides `hegel_context_new`) that does not follow the
+/// `hegel_result_t` + `out_*` convention. It returns the message pointer
+/// directly so a caller can read it straight after the call it is diagnosing,
+/// and it does not reset the stored message.
 ///
 /// The returned pointer borrows `ctx`'s internal buffer and is invalidated by
 /// the next libhegel call that takes the same `ctx` — copy the bytes before
@@ -467,7 +482,6 @@ pub struct HegelSettings {
 enum WorkerMessage {
     TestCase {
         ds: Box<dyn DataSource + Send + Sync>,
-        is_final: bool,
         ack: mpsc::Sender<()>,
     },
     Done(Result<TestRunResult, String>),
@@ -485,7 +499,6 @@ enum WorkerMessage {
 /// `hegel_test_case_free`.
 pub struct HegelTestCase {
     ds: Box<dyn DataSource + Send + Sync>,
-    is_final: bool,
     completed: bool,
     /// Backing buffer for the borrowed `out_value_cbor` pointer returned
     /// from `hegel_generate`. Re-allocated per call; the previous draw's
@@ -533,23 +546,25 @@ pub struct HegelRunResult {
     error: Option<CString>,
 }
 
-/// One distinct failure surfaced by the run. The strings are owned by
-/// the parent `hegel_run_result_t`; reading them via
-/// `hegel_failure_panic_message` / `_origin` returns `const char*`
+/// One distinct interesting test case surfaced by the run. The strings are
+/// owned by the parent `hegel_run_result_t`; reading them via
+/// `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
 /// pointers that stay valid until `hegel_run_free`.
+///
+/// A failure carries the origin the engine grouped on and the reproduce blob.
+/// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
+/// the diagnostic and re-raise the test's own failure.
 pub struct HegelFailure {
-    panic_message: CString,
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
-    /// sequence, or `None` when the engine produced no blob. Read via
-    /// `hegel_failure_reproduction_blob`.
+    /// sequence, or `None` when the engine produced no blob (a
+    /// single-test-case run). Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
-            panic_message: cstring_lossy(&f.panic_message),
             origin: cstring_lossy(&f.origin),
             // The base64 alphabet has no NUL, so this is an
             // invariant: error loudly if it's ever broken.
@@ -606,40 +621,76 @@ fn cstring_lossy(s: &str) -> CString {
 
 /// Allocate a new settings handle initialised with libhegel's defaults
 /// (100 test cases, all phases enabled, normal verbosity, no seed,
-/// the default disk database under `.hegel/`). Must be paired with a
-/// `hegel_settings_free` call. Never returns NULL.
+/// the default disk database under `.hegel/`), writing it into
+/// `*out_settings`. Must be paired with a `hegel_settings_free` call. Returns
+/// `HEGEL_E_INVALID_ARG` if `out_settings` is NULL.
 #[unsafe(no_mangle)]
-pub extern "C" fn hegel_settings_new() -> *mut HegelSettings {
-    Box::into_raw(Box::new(HegelSettings {
+pub unsafe extern "C" fn hegel_settings_new(
+    ctx: *mut HegelContext,
+    out_settings: *mut *mut HegelSettings,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_settings.is_null() {
+        set_last_error(ctx, "hegel_settings_new: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let s = Box::into_raw(Box::new(HegelSettings {
         inner: Settings::new(),
         database_key: None,
-    }))
+    }));
+    unsafe { *out_settings = s };
+    HEGEL_OK
 }
 
 /// Free a settings handle previously returned by `hegel_settings_new`.
-/// Safe to call with NULL (no-op).
+/// Safe to call with NULL (a no-op that returns `HEGEL_OK`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_free(s: *mut HegelSettings) {
+pub unsafe extern "C" fn hegel_settings_free(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+) -> hegel_result_t {
+    clear_last_error(ctx);
     if !s.is_null() {
         drop(unsafe { Box::from_raw(s) });
     }
+    HEGEL_OK
 }
 
-unsafe fn settings_mut<'a>(s: *mut HegelSettings) -> Option<&'a mut Settings> {
-    unsafe { s.as_mut() }.map(|h| &mut h.inner)
+/// Resolve a settings handle for a setter, recording a diagnostic and
+/// returning `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn settings_mut<'a>(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    func: &str,
+) -> Result<&'a mut HegelSettings, hegel_result_t> {
+    match unsafe { s.as_mut() } {
+        Some(h) => Ok(h),
+        None => {
+            set_last_error(ctx, &format!("{func}: settings pointer is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
+    }
 }
 
 /// Set whether the engine should drive a full run loop or stop after
 /// one test case. See `hegel_mode_t`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_mode_t) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        let m = match mode {
-            hegel_mode_t::HEGEL_MODE_TEST_RUN => Mode::TestRun,
-            hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE => Mode::SingleTestCase,
-        };
-        *inner = inner.clone().mode(m);
-    }
+pub unsafe extern "C" fn hegel_settings_set_mode(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    mode: hegel_mode_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_mode") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    let m = match mode {
+        hegel_mode_t::HEGEL_MODE_TEST_RUN => Mode::TestRun,
+        hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE => Mode::SingleTestCase,
+    };
+    handle.inner = handle.inner.clone().mode(m);
+    HEGEL_OK
 }
 
 /// Select the engine's randomness backend. See `hegel_backend_t`.
@@ -650,18 +701,26 @@ pub unsafe extern "C" fn hegel_settings_mode(s: *mut HegelSettings, mode: hegel_
 /// pinning is one-way: there is no way to un-pin back to AUTO on a handle
 /// once an explicit backend has been set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_backend(s: *mut HegelSettings, backend: hegel_backend_t) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        match backend {
-            hegel_backend_t::HEGEL_BACKEND_AUTO => {}
-            hegel_backend_t::HEGEL_BACKEND_DEFAULT => {
-                *inner = inner.clone().backend(Backend::Default);
-            }
-            hegel_backend_t::HEGEL_BACKEND_URANDOM => {
-                *inner = inner.clone().backend(Backend::Urandom);
-            }
+pub unsafe extern "C" fn hegel_settings_set_backend(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    backend: hegel_backend_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_backend") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    match backend {
+        hegel_backend_t::HEGEL_BACKEND_AUTO => {}
+        hegel_backend_t::HEGEL_BACKEND_DEFAULT => {
+            handle.inner = handle.inner.clone().backend(Backend::Default);
+        }
+        hegel_backend_t::HEGEL_BACKEND_URANDOM => {
+            handle.inner = handle.inner.clone().backend(Backend::Urandom);
         }
     }
+    HEGEL_OK
 }
 
 /// Maximum number of valid test cases to run before declaring the
@@ -670,35 +729,63 @@ pub unsafe extern "C" fn hegel_settings_backend(s: *mut HegelSettings, backend: 
 /// see `HEGEL_HC_FILTER_TOO_MUCH` for the limit on consecutive
 /// rejections.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_test_cases(s: *mut HegelSettings, n: u64) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        *inner = inner.clone().test_cases(n);
-    }
+pub unsafe extern "C" fn hegel_settings_set_test_cases(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    n: u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_test_cases") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().test_cases(n);
+    HEGEL_OK
 }
 
 /// Set the engine's output verbosity. See `hegel_verbosity_t`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_verbosity(s: *mut HegelSettings, v: hegel_verbosity_t) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        let verbosity = match v {
-            hegel_verbosity_t::HEGEL_VERBOSITY_QUIET => Verbosity::Quiet,
-            hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL => Verbosity::Normal,
-            hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE => Verbosity::Verbose,
-            hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG => Verbosity::Debug,
-        };
-        *inner = inner.clone().verbosity(verbosity);
-    }
+pub unsafe extern "C" fn hegel_settings_set_verbosity(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    v: hegel_verbosity_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_verbosity") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    let verbosity = match v {
+        hegel_verbosity_t::HEGEL_VERBOSITY_QUIET => Verbosity::Quiet,
+        hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL => Verbosity::Normal,
+        hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE => Verbosity::Verbose,
+        hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG => Verbosity::Debug,
+    };
+    handle.inner = handle.inner.clone().verbosity(verbosity);
+    HEGEL_OK
 }
 
 /// Set the RNG seed. When `has_seed = true`, `seed` is used to
 /// initialise generation; when `has_seed = false`, the engine picks a
 /// fresh random seed at run start (the default). Combined with
-/// `hegel_settings_derandomize(s, true)` this gives reproducible runs.
+/// `hegel_settings_set_derandomize(s, true)` this gives reproducible runs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_seed(s: *mut HegelSettings, seed: u64, has_seed: bool) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        *inner = inner.clone().seed(if has_seed { Some(seed) } else { None });
-    }
+pub unsafe extern "C" fn hegel_settings_set_seed(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    seed: u64,
+    has_seed: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_seed") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle
+        .inner
+        .clone()
+        .seed(if has_seed { Some(seed) } else { None });
+    HEGEL_OK
 }
 
 /// Make the run reproducible: derive the seed from a stable hash of
@@ -706,10 +793,18 @@ pub unsafe extern "C" fn hegel_settings_seed(s: *mut HegelSettings, seed: u64, h
 /// supplied. Useful in CI where you want runs of the same test to be
 /// deterministic but different tests to still see different inputs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_derandomize(s: *mut HegelSettings, derandomize: bool) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        *inner = inner.clone().derandomize(derandomize);
-    }
+pub unsafe extern "C" fn hegel_settings_set_derandomize(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    derandomize: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_derandomize") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().derandomize(derandomize);
+    HEGEL_OK
 }
 
 /// When `yes = true` (the default), the engine keeps generating after
@@ -717,10 +812,19 @@ pub unsafe extern "C" fn hegel_settings_derandomize(s: *mut HegelSettings, deran
 /// origins), and the final `hegel_run_result_t` lists all of them.
 /// When `false`, the run stops after the first failing example.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_report_multiple_failures(s: *mut HegelSettings, yes: bool) {
-    if let Some(inner) = unsafe { settings_mut(s) } {
-        *inner = inner.clone().report_multiple_failures(yes);
-    }
+pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle =
+        match unsafe { settings_mut(ctx, s, "hegel_settings_set_report_multiple_failures") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
+    handle.inner = handle.inner.clone().report_multiple_failures(yes);
+    HEGEL_OK
 }
 
 /// Configure the on-disk example database used by `HEGEL_PHASE_REUSE`
@@ -733,44 +837,66 @@ pub unsafe extern "C" fn hegel_settings_report_multiple_failures(s: *mut HegelSe
 /// - Otherwise → use the directory at `database` as the database root.
 ///   The directory is created lazily.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_database(
+pub unsafe extern "C" fn hegel_settings_set_database(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     database: *const c_char,
-) {
-    let Some(inner) = (unsafe { settings_mut(s) }) else {
-        return;
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
     };
     if database.is_null() {
-        // "Use default" — currently same as leaving Settings::new()'s default.
-        return;
+        // "Use default" — same as leaving Settings::new()'s default.
+        return HEGEL_OK;
     }
     let cstr = unsafe { CStr::from_ptr(database) };
     match cstr.to_str() {
-        Ok("") => *inner = inner.clone().database(None),
-        Ok(path) => *inner = inner.clone().database(Some(path.to_string())),
-        Err(_) => set_last_error(ctx, "hegel_settings_database: path is not valid UTF-8"),
+        Ok("") => {
+            handle.inner = handle.inner.clone().database(None);
+            HEGEL_OK
+        }
+        Ok(path) => {
+            handle.inner = handle.inner.clone().database(Some(path.to_string()));
+            HEGEL_OK
+        }
+        Err(_) => {
+            set_last_error(ctx, "hegel_settings_set_database: path is not valid UTF-8");
+            HEGEL_E_INVALID_ARG
+        }
     }
 }
 
 /// Set the database key used to scope stored / replayed examples for this run.
 /// `key = NULL` clears it (the default).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_database_key(
+pub unsafe extern "C" fn hegel_settings_set_database_key(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     key: *const c_char,
-) {
-    let Some(hs) = (unsafe { s.as_mut() }) else {
-        return;
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let hs = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database_key") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
     };
     if key.is_null() {
         hs.database_key = None;
-        return;
+        return HEGEL_OK;
     }
     match unsafe { CStr::from_ptr(key) }.to_str() {
-        Ok(k) => hs.database_key = Some(k.to_string()),
-        Err(_) => set_last_error(ctx, "hegel_settings_database_key: key is not valid UTF-8"),
+        Ok(k) => {
+            hs.database_key = Some(k.to_string());
+            HEGEL_OK
+        }
+        Err(_) => {
+            set_last_error(
+                ctx,
+                "hegel_settings_set_database_key: key is not valid UTF-8",
+            );
+            HEGEL_E_INVALID_ARG
+        }
     }
 }
 
@@ -778,10 +904,16 @@ pub unsafe extern "C" fn hegel_settings_database_key(
 /// values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
 /// Passing 0 produces a run that does nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_phases(s: *mut HegelSettings, phases: u32) {
+pub unsafe extern "C" fn hegel_settings_set_phases(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    phases: u32,
+) -> hegel_result_t {
     use hegel_phase_t::*;
-    let Some(inner) = (unsafe { settings_mut(s) }) else {
-        return;
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_phases") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
     };
     let mut v = Vec::new();
     if phases & (HEGEL_PHASE_EXPLICIT as u32) != 0 {
@@ -799,7 +931,8 @@ pub unsafe extern "C" fn hegel_settings_phases(s: *mut HegelSettings, phases: u3
     if phases & (HEGEL_PHASE_SHRINK as u32) != 0 {
         v.push(Phase::Shrink);
     }
-    *inner = inner.clone().phases(v);
+    handle.inner = handle.inner.clone().phases(v);
+    HEGEL_OK
 }
 
 /// Suppress (disable) a set of health checks, given as a bitwise OR of
@@ -807,10 +940,16 @@ pub unsafe extern "C" fn hegel_settings_phases(s: *mut HegelSettings, phases: u3
 /// when you know a check is going to fire and accept the underlying behavior
 /// (e.g. you intentionally have a high rejection rate).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSettings, checks: u32) {
+pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    checks: u32,
+) -> hegel_result_t {
     use hegel_health_check_t::*;
-    let Some(inner) = (unsafe { settings_mut(s) }) else {
-        return;
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_suppress_health_check") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
     };
     let mut v = Vec::new();
     if checks & (HEGEL_HC_FILTER_TOO_MUCH as u32) != 0 {
@@ -825,7 +964,8 @@ pub unsafe extern "C" fn hegel_settings_suppress_health_check(s: *mut HegelSetti
     if checks & (HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32) != 0 {
         v.push(HealthCheck::LargeInitialTestCase);
     }
-    *inner = inner.clone().suppress_health_check(v);
+    handle.inner = handle.inner.clone().suppress_health_check(v);
+    HEGEL_OK
 }
 
 // ─── Run lifecycle ──────────────────────────────────────────────────────────
@@ -866,27 +1006,34 @@ fn install_worker_panic_hook() {
     });
 }
 
-/// Start a property-test run with the given settings. Returns a handle
-/// the caller pulls test cases out of via `hegel_next_test_case`.
+/// Start a property-test run with the given settings, writing a handle the
+/// caller pulls test cases out of via `hegel_next_test_case` into `*out_run`.
 ///
 /// The engine runs on a worker thread inside libhegel; this function
 /// returns immediately after spawning it. The caller does not need to
 /// hold the settings handle alive — `hegel_run_start` snapshots the
 /// settings it needs.
 ///
-/// Returns NULL on failure with a diagnostic in
-/// `hegel_context_last_error`. The returned handle must be freed with
-/// `hegel_run_free`.
+/// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
+/// worker thread cannot be spawned (with a diagnostic in
+/// `hegel_context_last_error`). The handle written to `*out_run` must be freed
+/// with `hegel_run_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start(
     ctx: *mut HegelContext,
     settings: *const HegelSettings,
-) -> *mut HegelRun {
+    out_run: *mut *mut HegelRun,
+) -> hegel_result_t {
     clear_last_error(ctx);
     install_worker_panic_hook();
+    if out_run.is_null() {
+        set_last_error(ctx, "hegel_run_start: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
     let Some(handle) = (unsafe { settings.as_ref() }) else {
         set_last_error(ctx, "hegel_run_start: settings pointer is null");
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_HANDLE;
     };
     let settings = handle.inner.clone();
     let database_key = handle.database_key.clone();
@@ -905,17 +1052,13 @@ pub unsafe extern "C" fn hegel_run_start(
             // terminated" error, losing the message. Both feed the same
             // run-level error channel (`hegel_run_result_error`).
             let engine = std::panic::AssertUnwindSafe(|| {
-                run_native(&settings, database_key.as_deref(), |ds, is_final| {
+                run_native(&settings, database_key.as_deref(), |ds| {
                     if abort_worker.load(Ordering::Acquire) {
                         ds.mark_complete(&TestCaseResult::Valid);
                         return;
                     }
                     let (ack_tx, ack_rx) = mpsc::channel();
-                    let msg = WorkerMessage::TestCase {
-                        ds,
-                        is_final,
-                        ack: ack_tx,
-                    };
+                    let msg = WorkerMessage::TestCase { ds, ack: ack_tx };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
                         // Caller dropped the result channel in the window
                         // between the worker producing a case and sending it —
@@ -957,40 +1100,46 @@ pub unsafe extern "C" fn hegel_run_start(
         // nocov start
         Err(e) => {
             set_last_error(ctx, &format!("hegel_run_start: spawn failed: {}", e));
-            return ptr::null_mut();
+            return HEGEL_E_BACKEND;
         } // nocov end
     };
 
-    Box::into_raw(Box::new(HegelRun {
+    let run = Box::into_raw(Box::new(HegelRun {
         worker: Some(worker),
         from_worker,
         abort,
         current_tc: None,
         result: None,
         drained: false,
-    }))
+    }));
+    unsafe { *out_run = run };
+    HEGEL_OK
 }
 
-/// Block until the engine produces the next test case, returning a
-/// borrowed handle pointing into the parent `hegel_run_t`.
+/// Block until the engine produces the next test case, writing a borrowed
+/// handle pointing into the parent `hegel_run_t` into `*out_test_case`.
 ///
-/// The caller must complete the previous test case (via
-/// `hegel_mark_complete`) before requesting the next one — otherwise
-/// this returns NULL and sets `hegel_context_last_error`.
-///
-/// Returns NULL when the run is finished; call `hegel_run_result` to
-/// read the outcome. A NULL with `hegel_context_last_error` set means
-/// something went wrong (engine crash, caller misuse) rather than
-/// normal completion.
+/// When the run is finished this writes NULL into `*out_test_case` and returns
+/// `HEGEL_OK`; call `hegel_run_result` to read the outcome. A non-`HEGEL_OK`
+/// code means something went wrong (caller misuse, engine crash) rather than
+/// normal completion: `HEGEL_E_NOT_COMPLETE` if the previous test case was not
+/// marked complete (call `hegel_mark_complete` first), `HEGEL_E_INVALID_HANDLE`
+/// for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_next_test_case(
     ctx: *mut HegelContext,
     run: *mut HegelRun,
-) -> *mut HegelTestCase {
+    out_test_case: *mut *mut HegelTestCase,
+) -> hegel_result_t {
     clear_last_error(ctx);
+    if out_test_case.is_null() {
+        set_last_error(ctx, "hegel_next_test_case: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_test_case = ptr::null_mut() };
     let Some(run) = (unsafe { run.as_mut() }) else {
         set_last_error(ctx, "hegel_next_test_case: run pointer is null");
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_HANDLE;
     };
 
     // The previous test case must have been completed.
@@ -1001,28 +1150,28 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 "hegel_next_test_case: previous test case was not marked complete \
                  (call hegel_mark_complete before requesting the next case)",
             );
-            return ptr::null_mut();
+            return HEGEL_E_NOT_COMPLETE;
         }
     }
     run.current_tc = None;
 
     if run.drained {
-        // Run already completed; calling next again returns NULL with no error.
-        return ptr::null_mut();
+        // Run already completed; calling next again yields a NULL case.
+        return HEGEL_OK;
     }
 
     match run.from_worker.recv() {
-        Ok(WorkerMessage::TestCase { ds, is_final, ack }) => {
+        Ok(WorkerMessage::TestCase { ds, ack }) => {
             let tc = Box::new(HegelTestCase {
                 ds,
-                is_final,
                 completed: false,
                 last_value: Vec::new(),
                 ack: Some(ack),
             });
-            let ptr = (&*tc) as *const HegelTestCase as *mut HegelTestCase;
+            let case = (&*tc) as *const HegelTestCase as *mut HegelTestCase;
             run.current_tc = Some(tc);
-            ptr
+            unsafe { *out_test_case = case };
+            HEGEL_OK
         }
         Ok(WorkerMessage::Done(r)) => {
             run.result = Some(match r {
@@ -1030,50 +1179,63 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 Err(message) => HegelRunResult::from_error(&message),
             });
             run.drained = true;
-            ptr::null_mut()
+            HEGEL_OK
         }
         Err(_) => {
             // Worker dropped its sender without sending Done — should not
             // happen in normal use, but treat as a soft EOF rather than
-            // panicking. Caller distinguishes via last_error. The worker always
-            // sends Done after its catch_unwind, so reaching here needs the
-            // worker thread to die without unwinding: not reproducible in safe
-            // Rust, and this extern "C" entry point must return null, not panic.
+            // panicking. Caller distinguishes via the error code. The worker
+            // always sends Done after its catch_unwind, so reaching here needs
+            // the worker thread to die without unwinding: not reproducible in
+            // safe Rust, and this extern "C" entry point must return a code,
+            // not panic.
             // nocov start
             run.drained = true;
             set_last_error(ctx, "hegel_next_test_case: worker exited without a result");
-            ptr::null_mut()
+            HEGEL_E_BACKEND
             // nocov end
         }
     }
 }
 
-/// Return the aggregated result of a finished run, borrowed from the
-/// parent `hegel_run_t`. Returns NULL with
+/// Write the aggregated result of a finished run, borrowed from the parent
+/// `hegel_run_t`, into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
 /// `hegel_context_last_error` set if the run hasn't finished yet
-/// (`hegel_next_test_case` has not yet returned NULL on this run).
+/// (`hegel_next_test_case` has not yet reported completion on this run),
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_result`.
 ///
-/// The pointer is valid until `hegel_run_free`.
+/// The pointer written to `*out_result` is valid until `hegel_run_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result(
     ctx: *mut HegelContext,
     run: *mut HegelRun,
-) -> *const HegelRunResult {
+    out_result: *mut *const HegelRunResult,
+) -> hegel_result_t {
     clear_last_error(ctx);
+    if out_result.is_null() {
+        set_last_error(ctx, "hegel_run_result: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_result = ptr::null() };
     let Some(run) = (unsafe { run.as_ref() }) else {
         set_last_error(ctx, "hegel_run_result: run pointer is null");
-        return ptr::null();
+        return HEGEL_E_INVALID_HANDLE;
     };
     match &run.result {
-        Some(r) => r as *const HegelRunResult,
+        Some(r) => {
+            unsafe { *out_result = r as *const HegelRunResult };
+            HEGEL_OK
+        }
         None => {
             set_last_error(ctx, "hegel_run_result: run has not finished yet");
-            ptr::null()
+            HEGEL_E_NOT_COMPLETE
         }
     }
 }
 
-/// Free a run handle and its result. Safe to call with NULL.
+/// Free a run handle and its result. Safe to call with NULL (a no-op that
+/// returns `HEGEL_OK`).
 ///
 /// If the caller exited its test loop early (e.g. with a still-active
 /// test case), this drains the worker thread cleanly: any in-flight
@@ -1081,9 +1243,13 @@ pub unsafe extern "C" fn hegel_run_result(
 /// short-circuits, and the worker is joined before the handle is
 /// destroyed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
+pub unsafe extern "C" fn hegel_run_free(
+    ctx: *mut HegelContext,
+    run: *mut HegelRun,
+) -> hegel_result_t {
+    clear_last_error(ctx);
     if run.is_null() {
-        return;
+        return HEGEL_OK;
     }
     let mut run = unsafe { Box::from_raw(run) };
 
@@ -1120,6 +1286,7 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
     if let Some(handle) = run.worker.take() {
         let _ = handle.join();
     }
+    HEGEL_OK
 }
 
 // ─── Standalone test cases (failure-blob replay) ────────────────────────────
@@ -1135,32 +1302,39 @@ pub unsafe extern "C" fn hegel_run_free(run: *mut HegelRun) {
 /// property failed again) or is stale (it passed). Replay several blobs by
 /// calling this once per blob. A blob whose choices no longer match the
 /// caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
-/// overruns. `hegel_test_case_is_final_replay` reports true: the replayed
-/// example *is* the counterexample.
+/// overruns. Replaying a blob is how a caller performs the *final replay* of
+/// a counterexample.
 ///
-/// Returns NULL with a diagnostic in `hegel_context_last_error` if `s` or
-/// `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
-/// from an incompatible Hegel version). The returned handle is owned by
-/// the **caller** — unlike test cases from `hegel_next_test_case`, it must
-/// be released with `hegel_test_case_free`.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `s`, or `HEGEL_E_INVALID_ARG`
+/// for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
+/// failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
+/// with a diagnostic in `hegel_context_last_error`. The handle written to
+/// `*out_test_case` is owned by the **caller** — unlike test cases from
+/// `hegel_next_test_case`, it must be released with `hegel_test_case_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_from_blob(
     ctx: *mut HegelContext,
     s: *const HegelSettings,
     blob: *const c_char,
-) -> *mut HegelTestCase {
+    out_test_case: *mut *mut HegelTestCase,
+) -> hegel_result_t {
     clear_last_error(ctx);
+    if out_test_case.is_null() {
+        set_last_error(ctx, "hegel_test_case_from_blob: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_test_case = ptr::null_mut() };
     let Some(handle) = (unsafe { s.as_ref() }) else {
         set_last_error(ctx, "hegel_test_case_from_blob: settings pointer is null");
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_HANDLE;
     };
     if blob.is_null() {
         set_last_error(ctx, "hegel_test_case_from_blob: blob pointer is null");
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_ARG;
     }
     let Ok(blob) = (unsafe { CStr::from_ptr(blob) }).to_str() else {
         set_last_error(ctx, "hegel_test_case_from_blob: blob is not valid UTF-8");
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_ARG;
     };
     let Some(ds) = data_source_for_blob(&handle.inner, blob) else {
         set_last_error(
@@ -1168,31 +1342,35 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
             "hegel_test_case_from_blob: the supplied failure blob could not be decoded. \
              It may be corrupt or from an incompatible Hegel version.",
         );
-        return ptr::null_mut();
+        return HEGEL_E_INVALID_ARG;
     };
-    Box::into_raw(Box::new(HegelTestCase {
+    let tc = Box::into_raw(Box::new(HegelTestCase {
         ds,
-        is_final: true,
         completed: false,
         last_value: Vec::new(),
         ack: None,
-    }))
+    }));
+    unsafe { *out_test_case = tc };
+    HEGEL_OK
 }
 
 /// Free a standalone test case previously returned by
-/// `hegel_test_case_from_blob`. Safe to call with NULL (no-op), and safe
-/// whether or not the test case was marked complete.
+/// `hegel_test_case_from_blob`. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`), and safe whether or not the test case was marked complete.
 ///
 /// Must NOT be called on a test case obtained from
 /// `hegel_next_test_case` — those are borrowed from the parent
 /// `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
-/// detected (while the run is still alive) and refused, with a diagnostic
-/// in `hegel_context_last_error`.
+/// detected (while the run is still alive) and refused with
+/// `HEGEL_E_INVALID_HANDLE` and a diagnostic in `hegel_context_last_error`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
+pub unsafe extern "C" fn hegel_test_case_free(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+) -> hegel_result_t {
     clear_last_error(ctx);
     if tc.is_null() {
-        return;
+        return HEGEL_OK;
     }
     if unsafe { (*tc).ack.is_some() } {
         set_last_error(
@@ -1200,9 +1378,10 @@ pub unsafe extern "C" fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut H
             "hegel_test_case_free: this test case is owned by its hegel_run_t \
              (it came from hegel_next_test_case); it is freed by hegel_run_free",
         );
-        return;
+        return HEGEL_E_INVALID_HANDLE;
     }
     drop(unsafe { Box::from_raw(tc) });
+    HEGEL_OK
 }
 
 // ─── Per-test-case primitives ───────────────────────────────────────────────
@@ -1837,7 +2016,6 @@ pub unsafe extern "C" fn hegel_mark_complete(
                 }
             };
             TestCaseResult::Interesting(Failure {
-                panic_message: origin_str.clone(),
                 origin: origin_str,
                 reproduce_blob: None,
             })
@@ -1852,127 +2030,225 @@ pub unsafe extern "C" fn hegel_mark_complete(
     HEGEL_OK
 }
 
-/// True iff this test case is the engine's *final replay* of a
-/// minimal failing example. Bindings that want to emit verbose draw
-/// traces only for the final counterexample (rather than every probe
-/// the shrinker tries) gate their tracing on this flag.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_test_case_is_final_replay(tc: *const HegelTestCase) -> bool {
-    match unsafe { tc.as_ref() } {
-        Some(t) => t.is_final,
-        None => false,
-    }
-}
-
 // ─── Result inspection ──────────────────────────────────────────────────────
 
-/// The run's aggregate status: passed, failed (the property has
-/// counterexamples — see `hegel_run_result_failure`), or errored (the run
-/// itself failed and produced no verdict — see `hegel_run_result_error`).
-/// A NULL `r` reports `HEGEL_RUN_STATUS_ERROR`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_run_result_status(r: *const HegelRunResult) -> hegel_run_status_t {
+/// Resolve a run-result handle for a getter, recording a diagnostic and
+/// returning `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn result_ref<'a>(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    func: &str,
+) -> Result<&'a HegelRunResult, hegel_result_t> {
     match unsafe { r.as_ref() } {
-        Some(r) => r.status(),
-        None => hegel_run_status_t::HEGEL_RUN_STATUS_ERROR,
+        Some(r) => Ok(r),
+        None => {
+            set_last_error(ctx, &format!("{func}: result pointer is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
     }
 }
 
-/// The run-level error message when the run ended in an error rather than
-/// a verdict on the property — a failed health check (e.g. FilterTooMuch,
-/// TooSlow), a nondeterministic test, or an engine panic — or NULL when it
-/// completed normally. An errored run has `hegel_run_result_status(r) ==
-/// HEGEL_RUN_STATUS_ERROR` and no failures: the error is a failure of the
-/// run itself, not a counterexample to the property. The pointer is valid
-/// until `hegel_run_free`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_run_result_error(r: *const HegelRunResult) -> *const c_char {
-    match unsafe { r.as_ref() } {
-        Some(r) => r.error.as_ref().map(|e| e.as_ptr()).unwrap_or(ptr::null()),
-        None => ptr::null(),
+/// Resolve a failure handle for a getter, recording a diagnostic and
+/// returning `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn failure_ref<'a>(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    func: &str,
+) -> Result<&'a HegelFailure, hegel_result_t> {
+    match unsafe { f.as_ref() } {
+        Some(f) => Ok(f),
+        None => {
+            set_last_error(ctx, &format!("{func}: failure pointer is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
     }
 }
 
-/// Number of *distinct* failures (by origin) the run surfaced. Each
-/// can be inspected via `hegel_run_result_failure(r, i)`.
+/// Write the run's aggregate status into `*out_status`: passed, failed (the
+/// property has counterexamples — see `hegel_run_result_failure`), or errored
+/// (the run itself failed and produced no verdict — see
+/// `hegel_run_result_error`). Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r`
+/// or `HEGEL_E_INVALID_ARG` for a NULL `out_status`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_run_result_failure_count(r: *const HegelRunResult) -> usize {
-    match unsafe { r.as_ref() } {
-        Some(r) => r.failures.len(),
-        None => 0,
+pub unsafe extern "C" fn hegel_run_result_status(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_status: *mut hegel_run_status_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_status") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_status.is_null() {
+        set_last_error(ctx, "hegel_run_result_status: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_status = r.status() };
+    HEGEL_OK
 }
 
-/// Borrowed pointer to the `index`-th failure (0-based). Returns NULL
-/// if `r` is NULL or `index >= hegel_run_result_failure_count(r)`. The
-/// pointer is valid until `hegel_run_free` is called on the parent
-/// run.
+/// Write the run-level error message into `*out_error` when the run ended in
+/// an error rather than a verdict on the property — a failed health check
+/// (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or an engine panic
+/// — or NULL when it completed normally. An errored run has
+/// `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
+/// error is a failure of the run itself, not a counterexample to the property.
+/// The written pointer is valid until `hegel_run_free`. Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_error(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_error: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_error") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_error.is_null() {
+        set_last_error(ctx, "hegel_run_result_error: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_error = r.error.as_ref().map(|e| e.as_ptr()).unwrap_or(ptr::null()) };
+    HEGEL_OK
+}
+
+/// Write the number of *distinct* failures (by origin) the run surfaced into
+/// `*out_count`. Each can be inspected via `hegel_run_result_failure(r, i)`.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
+/// for a NULL `out_count`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_failure_count(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_count: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_failure_count") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_count.is_null() {
+        set_last_error(ctx, "hegel_run_result_failure_count: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_count = r.failures.len() };
+    HEGEL_OK
+}
+
+/// Write a borrowed pointer to the `index`-th failure (0-based) into
+/// `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
+/// The pointer is valid until `hegel_run_free` is called on the parent run.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
+/// for a NULL `out_failure`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_failure(
+    ctx: *mut HegelContext,
     r: *const HegelRunResult,
     index: usize,
-) -> *const HegelFailure {
-    match unsafe { r.as_ref() } {
-        Some(r) => r
+    out_failure: *mut *const HegelFailure,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_failure") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_failure.is_null() {
+        set_last_error(ctx, "hegel_run_result_failure: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_failure = r
             .failures
             .get(index)
             .map(|f| f as *const HegelFailure)
-            .unwrap_or(ptr::null()),
-        None => ptr::null(),
+            .unwrap_or(ptr::null());
     }
+    HEGEL_OK
 }
 
-/// The failure's panic message — e.g. the assertion text or
-/// engine-emitted message like `"FailedHealthCheck: FilterTooMuch — …"`.
-/// Returns NULL if `f` is NULL.
+/// Write the failure's origin string — the stable identifier the shrinker used
+/// to group probes for this bug — into `*out_origin`. See `hegel_mark_complete`
+/// for what makes a good origin string. Returns `HEGEL_E_INVALID_HANDLE` for a
+/// NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL `out_origin`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_panic_message(f: *const HegelFailure) -> *const c_char {
-    match unsafe { f.as_ref() } {
-        Some(f) => f.panic_message.as_ptr(),
-        None => ptr::null(),
+pub unsafe extern "C" fn hegel_failure_origin(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_origin: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_origin") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_origin.is_null() {
+        set_last_error(ctx, "hegel_failure_origin: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_origin = f.origin.as_ptr() };
+    HEGEL_OK
 }
 
-/// The failure's origin string — the stable identifier that the
-/// shrinker used to group probes for this bug. Returns NULL if `f` is
-/// NULL. See `hegel_mark_complete` for what makes a good origin
-/// string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_origin(f: *const HegelFailure) -> *const c_char {
-    match unsafe { f.as_ref() } {
-        Some(f) => f.origin.as_ptr(),
-        None => ptr::null(),
-    }
-}
-
-/// The failure's reproduce blob — a base64 string encoding the minimal
+/// Write the failure's reproduce blob — a base64 string encoding the minimal
 /// counterexample's choice sequence, suitable for deterministic replay via
-/// `hegel_test_case_from_blob`. Returns NULL if `f` is NULL or the
-/// engine produced no blob for this failure. The pointer is borrowed from the
-/// parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
+/// `hegel_test_case_from_blob` — into `*out_blob`, or NULL if the engine
+/// produced no blob for this failure. The written pointer is borrowed from the
+/// parent `hegel_run_result_t` and stays valid until `hegel_run_free`. Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_blob`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_failure_reproduction_blob(f: *const HegelFailure) -> *const c_char {
-    match unsafe { f.as_ref() } {
-        Some(f) => match &f.reproduce_blob {
+pub unsafe extern "C" fn hegel_failure_reproduction_blob(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_blob: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_reproduction_blob") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_blob.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_failure_reproduction_blob: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_blob = match &f.reproduce_blob {
             Some(blob) => blob.as_ptr(),
             None => ptr::null(),
-        },
-        None => ptr::null(),
+        };
     }
+    HEGEL_OK
 }
 
 // ─── Diagnostics ────────────────────────────────────────────────────────────
 
-/// Libhegel's version, matching the parent `hegeltest` crate's
-/// `CARGO_PKG_VERSION` (e.g. `"0.14.12"`). The returned pointer is
-/// static and valid for the program's lifetime.
+/// Write libhegel's version — matching the parent `hegeltest` crate's
+/// `CARGO_PKG_VERSION` (e.g. `"0.14.12"`) — into `*out_version`. The written
+/// pointer is static and valid for the program's lifetime. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_version`.
 #[unsafe(no_mangle)]
-pub extern "C" fn hegel_version() -> *const c_char {
+pub unsafe extern "C" fn hegel_version(
+    ctx: *mut HegelContext,
+    out_version: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_version.is_null() {
+        set_last_error(ctx, "hegel_version: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
     // Static CStr in the binary; pointer is valid for the program lifetime.
     static VERSION: &CStr =
         match CStr::from_bytes_with_nul(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes()) {
             Ok(c) => c,
             Err(_) => unreachable!(),
         };
-    VERSION.as_ptr()
+    unsafe { *out_version = VERSION.as_ptr() };
+    HEGEL_OK
 }

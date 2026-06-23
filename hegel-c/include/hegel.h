@@ -4,6 +4,16 @@
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
  *
+ * Calling convention
+ * ------------------
+ * Every function takes a hegel_context_t* as its first argument and returns a
+ * hegel_result_t code (HEGEL_OK is zero; negatives are errors), with two
+ * exceptions: hegel_context_new, which creates a context and returns it, and
+ * hegel_context_last_error, the error-reporting reader, which returns the
+ * message pointer directly. Anything else a call produces — a handle, a
+ * string, a count — is written through a trailing out-parameter named out_*. A
+ * NULL context is allowed and simply opts out of error messages.
+ *
  * Pointer ownership
  * -----------------
  * Pointers you pass *into* a libhegel function are always yours. The library
@@ -11,7 +21,8 @@
  * free or reuse the memory as soon as the call returns. This covers strings
  * (char*), CBOR byte buffers, and arrays of strings alike.
  *
- * Of the pointers libhegel hands *back*, you own exactly the handles made by
+ * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
+ * written to an out-parameter otherwise), you own exactly the handles made by
  * the four constructors, and must release each with its matching free:
  *
  *     hegel_context_new          ->  hegel_context_free
@@ -19,8 +30,8 @@
  *     hegel_run_start            ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
  *
- * Every *other* pointer libhegel returns is borrowed: libhegel still owns it,
- * you must not free it, and it is valid only until a point that the returning
+ * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
+ * it, you must not free it, and it is valid only until a point that the
  * function documents. Two cases are easy to trip over:
  *
  *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
@@ -28,7 +39,7 @@
  *     (that is only for a test case you made with hegel_test_case_from_blob).
  *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
  *     run live until hegel_run_free.
- *   - Returned strings and byte buffers (e.g. from hegel_generate,
+ *   - Strings and byte buffers (e.g. from hegel_generate,
  *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
  *     getters) are transient — hegel_generate's bytes, for instance, are
  *     invalidated by the next call on that test case. Copy them to keep them.
@@ -42,68 +53,15 @@
 #include <stdbool.h>
 
 /*
- How the engine should treat the run: a full property-test loop or a
- single test case.
+ Result of a libhegel call.
 
- - `HEGEL_MODE_TEST_RUN`: the engine drives a full
-   generate / shrink / replay loop until `max_examples` or the
-   choice tree is exhausted.
- - `HEGEL_MODE_SINGLE_TEST_CASE`: the engine produces exactly one
-   test case and stops, with no shrinking. Useful for replaying a
-   stored counterexample or running an exploratory probe.
- */
-typedef enum {
-    HEGEL_MODE_TEST_RUN = 0,
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-} hegel_mode_t;
-
-/*
- Which source of randomness the engine draws from. Set via
- `hegel_settings_backend`.
-
- - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
-   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
-   `HEGEL_BACKEND_DEFAULT`.
- - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
-   reproducible from the seed and shrinking / replay work as usual.
- - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
-   every draw (falling back to an OS-seeded PRNG on platforms without
-   it). Intended for running under Antithesis, whose fuzzer controls
-   `/dev/urandom`; you almost certainly don't want it otherwise.
- */
-typedef enum {
-    HEGEL_BACKEND_AUTO = 0,
-    HEGEL_BACKEND_DEFAULT = 1,
-    HEGEL_BACKEND_URANDOM = 2,
-} hegel_backend_t;
-
-/*
- Verbosity of engine-emitted output (logs, per-case traces). Set via
- `hegel_settings_verbosity`.
-
- - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
- - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
- - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress, drawn values
-   for the final replay, panic diagnostics as they happen.
- - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
-   shrinker trace output.
- */
-typedef enum {
-    HEGEL_VERBOSITY_QUIET = 0,
-    HEGEL_VERBOSITY_NORMAL = 1,
-    HEGEL_VERBOSITY_VERBOSE = 2,
-    HEGEL_VERBOSITY_DEBUG = 3,
-} hegel_verbosity_t;
-
-/*
- Result of a fallible libhegel call.
-
- Every `int`-returning entry point (the per-test-case primitives, etc.)
- returns one of these. `HEGEL_OK` is zero; every error is negative, so
- `result != HEGEL_OK` (or `result < 0`) tests for failure. Handle-returning
- entry points signal failure with NULL instead. For the error variants that
- carry a diagnostic, the message is on the call's context — read it with
- `hegel_context_last_error()`.
+ Every entry point returns one of these except `hegel_context_new` (which
+ returns a context) and `hegel_context_last_error` (which returns the message
+ pointer). `HEGEL_OK` is zero; every error is negative, so `result != HEGEL_OK`
+ (or `result < 0`) tests for failure. Anything else a call produces — a
+ handle, a string, a count — is written through a trailing `out_*` parameter.
+ For the error variants that carry a diagnostic, the message is on the call's
+ context — read it with `hegel_context_last_error()`.
  */
 typedef enum {
     /*
@@ -143,8 +101,10 @@ typedef enum {
      */
     HEGEL_E_ALREADY_COMPLETE = -6,
     /*
-     `hegel_next_test_case` was called without first completing the
-     previous test case with `hegel_mark_complete`.
+     Something was read before it was ready: `hegel_next_test_case` was
+     called without first completing the previous test case with
+     `hegel_mark_complete`, or `hegel_run_result` was called before the run
+     finished (`hegel_next_test_case` has not yet reported completion).
      */
     HEGEL_E_NOT_COMPLETE = -7,
     /*
@@ -154,6 +114,60 @@ typedef enum {
      */
     HEGEL_E_INTERNAL = -8,
 } hegel_result_t;
+
+/*
+ How the engine should treat the run: a full property-test loop or a
+ single test case.
+
+ - `HEGEL_MODE_TEST_RUN`: the engine drives a full
+   generate / shrink / replay loop until `max_examples` or the
+   choice tree is exhausted.
+ - `HEGEL_MODE_SINGLE_TEST_CASE`: the engine produces exactly one
+   test case and stops, with no shrinking. Useful for replaying a
+   stored counterexample or running an exploratory probe.
+ */
+typedef enum {
+    HEGEL_MODE_TEST_RUN = 0,
+    HEGEL_MODE_SINGLE_TEST_CASE = 1,
+} hegel_mode_t;
+
+/*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_set_backend`.
+
+ - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+   `HEGEL_BACKEND_DEFAULT`.
+ - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+   reproducible from the seed and shrinking / replay work as usual.
+ - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+   every draw (falling back to an OS-seeded PRNG on platforms without
+   it). Intended for running under Antithesis, whose fuzzer controls
+   `/dev/urandom`; you almost certainly don't want it otherwise.
+ */
+typedef enum {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
+
+/*
+ Verbosity of engine-emitted output (logs, per-case traces). Set via
+ `hegel_settings_set_verbosity`.
+
+ - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
+ - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
+ - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
+   panic diagnostics as they happen.
+ - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
+   shrinker trace output.
+ */
+typedef enum {
+    HEGEL_VERBOSITY_QUIET = 0,
+    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_VERBOSE = 2,
+    HEGEL_VERBOSITY_DEBUG = 3,
+} hegel_verbosity_t;
 
 /*
  Outcome of a single test case. Passed to `hegel_mark_complete`.
@@ -198,9 +212,9 @@ typedef enum {
 
 /*
  A phase of the property-test loop, used as a bit flag for
- `hegel_settings_phases`.
+ `hegel_settings_set_phases`.
 
- `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+ `hegel_settings_set_phases` takes a bitwise OR of these values (e.g.
  `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
  disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
  want — turning a phase off is mainly useful for debugging or replay tooling.
@@ -212,7 +226,7 @@ typedef enum {
     HEGEL_PHASE_EXPLICIT = (1 << 0),
     /*
      Replay counterexamples persisted from previous runs (requires a
-     database path + `hegel_settings_database_key`).
+     database path + `hegel_settings_set_database_key`).
      */
     HEGEL_PHASE_REUSE = (1 << 1),
     /*
@@ -236,9 +250,9 @@ typedef enum {
 
 /*
  A health check, used as a bit flag for
- `hegel_settings_suppress_health_check`.
+ `hegel_settings_set_suppress_health_check`.
 
- `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+ `hegel_settings_set_suppress_health_check` takes a bitwise OR of these values
  naming the checks to *disable*. The default is "all enabled"; suppress a
  check only when you understand why it is firing and accept the behavior.
  */
@@ -367,10 +381,14 @@ typedef enum {
 typedef struct hegel_context_t hegel_context_t;
 
 /*
- One distinct failure surfaced by the run. The strings are owned by
- the parent `hegel_run_result_t`; reading them via
- `hegel_failure_panic_message` / `_origin` returns `const char*`
+ One distinct interesting test case surfaced by the run. The strings are
+ owned by the parent `hegel_run_result_t`; reading them via
+ `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
  pointers that stay valid until `hegel_run_free`.
+
+ A failure carries the origin the engine grouped on and the reproduce blob.
+ The caller replays the blob (via `hegel_test_case_from_blob`) to produce
+ the diagnostic and re-raise the test's own failure.
  */
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -434,14 +452,21 @@ hegel_context_t *hegel_context_new(void);
 
 /*
  Free a context previously returned by `hegel_context_new`. Safe to call
- with NULL (no-op).
+ with NULL (a no-op that returns `HEGEL_OK`). The `ctx` argument is the
+ context being freed; there is no separate error context to report into.
  */
-void hegel_context_free(hegel_context_t *ctx);
+hegel_result_t hegel_context_free(hegel_context_t *ctx);
 
 /*
  Most recent error message recorded on `ctx`, or the empty string if the
  most recent call taking this context succeeded. Returns NULL only when
  `ctx` itself is NULL.
+
+ This is the error-reporting reader, not a normal `hegel_*` call: it is the
+ one function (besides `hegel_context_new`) that does not follow the
+ `hegel_result_t` + `out_*` convention. It returns the message pointer
+ directly so a caller can read it straight after the call it is diagnosing,
+ and it does not reset the stored message.
 
  The returned pointer borrows `ctx`'s internal buffer and is invalidated by
  the next libhegel call that takes the same `ctx` — copy the bytes before
@@ -452,22 +477,25 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
 /*
  Allocate a new settings handle initialised with libhegel's defaults
  (100 test cases, all phases enabled, normal verbosity, no seed,
- the default disk database under `.hegel/`). Must be paired with a
- `hegel_settings_free` call. Never returns NULL.
+ the default disk database under `.hegel/`), writing it into
+ `*out_settings`. Must be paired with a `hegel_settings_free` call. Returns
+ `HEGEL_E_INVALID_ARG` if `out_settings` is NULL.
  */
-hegel_settings_t *hegel_settings_new(void);
+hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
 
 /*
  Free a settings handle previously returned by `hegel_settings_new`.
- Safe to call with NULL (no-op).
+ Safe to call with NULL (a no-op that returns `HEGEL_OK`).
  */
-void hegel_settings_free(hegel_settings_t *s);
+hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
 /*
  Set whether the engine should drive a full run loop or stop after
  one test case. See `hegel_mode_t`.
  */
-void hegel_settings_mode(hegel_settings_t *s, hegel_mode_t mode);
+hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx,
+                                       hegel_settings_t *s,
+                                       hegel_mode_t mode);
 
 /*
  Select the engine's randomness backend. See `hegel_backend_t`.
@@ -478,7 +506,9 @@ void hegel_settings_mode(hegel_settings_t *s, hegel_mode_t mode);
  pinning is one-way: there is no way to un-pin back to AUTO on a handle
  once an explicit backend has been set.
  */
-void hegel_settings_backend(hegel_settings_t *s, hegel_backend_t backend);
+hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
+                                          hegel_settings_t *s,
+                                          hegel_backend_t backend);
 
 /*
  Maximum number of valid test cases to run before declaring the
@@ -487,20 +517,25 @@ void hegel_settings_backend(hegel_settings_t *s, hegel_backend_t backend);
  see `HEGEL_HC_FILTER_TOO_MUCH` for the limit on consecutive
  rejections.
  */
-void hegel_settings_test_cases(hegel_settings_t *s, uint64_t n);
+hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
 
 /*
  Set the engine's output verbosity. See `hegel_verbosity_t`.
  */
-void hegel_settings_verbosity(hegel_settings_t *s, hegel_verbosity_t v);
+hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx,
+                                            hegel_settings_t *s,
+                                            hegel_verbosity_t v);
 
 /*
  Set the RNG seed. When `has_seed = true`, `seed` is used to
  initialise generation; when `has_seed = false`, the engine picks a
  fresh random seed at run start (the default). Combined with
- `hegel_settings_derandomize(s, true)` this gives reproducible runs.
+ `hegel_settings_set_derandomize(s, true)` this gives reproducible runs.
  */
-void hegel_settings_seed(hegel_settings_t *s, uint64_t seed, bool has_seed);
+hegel_result_t hegel_settings_set_seed(hegel_context_t *ctx,
+                                       hegel_settings_t *s,
+                                       uint64_t seed,
+                                       bool has_seed);
 
 /*
  Make the run reproducible: derive the seed from a stable hash of
@@ -508,7 +543,9 @@ void hegel_settings_seed(hegel_settings_t *s, uint64_t seed, bool has_seed);
  supplied. Useful in CI where you want runs of the same test to be
  deterministic but different tests to still see different inputs.
  */
-void hegel_settings_derandomize(hegel_settings_t *s, bool derandomize);
+hegel_result_t hegel_settings_set_derandomize(hegel_context_t *ctx,
+                                              hegel_settings_t *s,
+                                              bool derandomize);
 
 /*
  When `yes = true` (the default), the engine keeps generating after
@@ -516,7 +553,9 @@ void hegel_settings_derandomize(hegel_settings_t *s, bool derandomize);
  origins), and the final `hegel_run_result_t` lists all of them.
  When `false`, the run stops after the first failing example.
  */
-void hegel_settings_report_multiple_failures(hegel_settings_t *s, bool yes);
+hegel_result_t hegel_settings_set_report_multiple_failures(hegel_context_t *ctx,
+                                                           hegel_settings_t *s,
+                                                           bool yes);
 
 /*
  Configure the on-disk example database used by `HEGEL_PHASE_REUSE`
@@ -529,20 +568,26 @@ void hegel_settings_report_multiple_failures(hegel_settings_t *s, bool yes);
  - Otherwise → use the directory at `database` as the database root.
    The directory is created lazily.
  */
-void hegel_settings_database(hegel_context_t *ctx, hegel_settings_t *s, const char *database);
+hegel_result_t hegel_settings_set_database(hegel_context_t *ctx,
+                                           hegel_settings_t *s,
+                                           const char *database);
 
 /*
  Set the database key used to scope stored / replayed examples for this run.
  `key = NULL` clears it (the default).
  */
-void hegel_settings_database_key(hegel_context_t *ctx, hegel_settings_t *s, const char *key);
+hegel_result_t hegel_settings_set_database_key(hegel_context_t *ctx,
+                                               hegel_settings_t *s,
+                                               const char *key);
 
 /*
  Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
  values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
  Passing 0 produces a run that does nothing.
  */
-void hegel_settings_phases(hegel_settings_t *s, uint32_t phases);
+hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
+                                         hegel_settings_t *s,
+                                         uint32_t phases);
 
 /*
  Suppress (disable) a set of health checks, given as a bitwise OR of
@@ -550,50 +595,61 @@ void hegel_settings_phases(hegel_settings_t *s, uint32_t phases);
  when you know a check is going to fire and accept the underlying behavior
  (e.g. you intentionally have a high rejection rate).
  */
-void hegel_settings_suppress_health_check(hegel_settings_t *s, uint32_t checks);
+hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
+                                                        hegel_settings_t *s,
+                                                        uint32_t checks);
 
 /*
- Start a property-test run with the given settings. Returns a handle
- the caller pulls test cases out of via `hegel_next_test_case`.
+ Start a property-test run with the given settings, writing a handle the
+ caller pulls test cases out of via `hegel_next_test_case` into `*out_run`.
 
  The engine runs on a worker thread inside libhegel; this function
  returns immediately after spawning it. The caller does not need to
  hold the settings handle alive — `hegel_run_start` snapshots the
  settings it needs.
 
- Returns NULL on failure with a diagnostic in
- `hegel_context_last_error`. The returned handle must be freed with
- `hegel_run_free`.
+ Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
+ `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
+ worker thread cannot be spawned (with a diagnostic in
+ `hegel_context_last_error`). The handle written to `*out_run` must be freed
+ with `hegel_run_free`.
  */
-hegel_run_t *hegel_run_start(hegel_context_t *ctx, const hegel_settings_t *settings);
+hegel_result_t hegel_run_start(hegel_context_t *ctx,
+                               const hegel_settings_t *settings,
+                               hegel_run_t **out_run);
 
 /*
- Block until the engine produces the next test case, returning a
- borrowed handle pointing into the parent `hegel_run_t`.
+ Block until the engine produces the next test case, writing a borrowed
+ handle pointing into the parent `hegel_run_t` into `*out_test_case`.
 
- The caller must complete the previous test case (via
- `hegel_mark_complete`) before requesting the next one — otherwise
- this returns NULL and sets `hegel_context_last_error`.
-
- Returns NULL when the run is finished; call `hegel_run_result` to
- read the outcome. A NULL with `hegel_context_last_error` set means
- something went wrong (engine crash, caller misuse) rather than
- normal completion.
+ When the run is finished this writes NULL into `*out_test_case` and returns
+ `HEGEL_OK`; call `hegel_run_result` to read the outcome. A non-`HEGEL_OK`
+ code means something went wrong (caller misuse, engine crash) rather than
+ normal completion: `HEGEL_E_NOT_COMPLETE` if the previous test case was not
+ marked complete (call `hegel_mark_complete` first), `HEGEL_E_INVALID_HANDLE`
+ for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
  */
-hegel_test_case_t *hegel_next_test_case(hegel_context_t *ctx, hegel_run_t *run);
+hegel_result_t hegel_next_test_case(hegel_context_t *ctx,
+                                    hegel_run_t *run,
+                                    hegel_test_case_t **out_test_case);
 
 /*
- Return the aggregated result of a finished run, borrowed from the
- parent `hegel_run_t`. Returns NULL with
+ Write the aggregated result of a finished run, borrowed from the parent
+ `hegel_run_t`, into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
  `hegel_context_last_error` set if the run hasn't finished yet
- (`hegel_next_test_case` has not yet returned NULL on this run).
+ (`hegel_next_test_case` has not yet reported completion on this run),
+ `HEGEL_E_INVALID_HANDLE` for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a
+ NULL `out_result`.
 
- The pointer is valid until `hegel_run_free`.
+ The pointer written to `*out_result` is valid until `hegel_run_free`.
  */
-const hegel_run_result_t *hegel_run_result(hegel_context_t *ctx, hegel_run_t *run);
+hegel_result_t hegel_run_result(hegel_context_t *ctx,
+                                hegel_run_t *run,
+                                const hegel_run_result_t **out_result);
 
 /*
- Free a run handle and its result. Safe to call with NULL.
+ Free a run handle and its result. Safe to call with NULL (a no-op that
+ returns `HEGEL_OK`).
 
  If the caller exited its test loop early (e.g. with a still-active
  test case), this drains the worker thread cleanly: any in-flight
@@ -601,7 +657,7 @@ const hegel_run_result_t *hegel_run_result(hegel_context_t *ctx, hegel_run_t *ru
  short-circuits, and the worker is joined before the handle is
  destroyed.
  */
-void hegel_run_free(hegel_run_t *run);
+hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
 
 /*
  Build a standalone test case that replays the example encoded in a
@@ -615,31 +671,33 @@ void hegel_run_free(hegel_run_t *run);
  property failed again) or is stale (it passed). Replay several blobs by
  calling this once per blob. A blob whose choices no longer match the
  caller's generators surfaces as `HEGEL_E_STOP_TEST` from the draw that
- overruns. `hegel_test_case_is_final_replay` reports true: the replayed
- example *is* the counterexample.
+ overruns. Replaying a blob is how a caller performs the *final replay* of
+ a counterexample.
 
- Returns NULL with a diagnostic in `hegel_context_last_error` if `s` or
- `blob` is NULL, or if `blob` is not a valid failure blob (corrupt, or
- from an incompatible Hegel version). The returned handle is owned by
- the **caller** — unlike test cases from `hegel_next_test_case`, it must
- be released with `hegel_test_case_free`.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `s`, or `HEGEL_E_INVALID_ARG`
+ for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
+ failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
+ with a diagnostic in `hegel_context_last_error`. The handle written to
+ `*out_test_case` is owned by the **caller** — unlike test cases from
+ `hegel_next_test_case`, it must be released with `hegel_test_case_free`.
  */
-hegel_test_case_t *hegel_test_case_from_blob(hegel_context_t *ctx,
-                                             const hegel_settings_t *s,
-                                             const char *blob);
+hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
+                                         const hegel_settings_t *s,
+                                         const char *blob,
+                                         hegel_test_case_t **out_test_case);
 
 /*
  Free a standalone test case previously returned by
- `hegel_test_case_from_blob`. Safe to call with NULL (no-op), and safe
- whether or not the test case was marked complete.
+ `hegel_test_case_from_blob`. Safe to call with NULL (a no-op that returns
+ `HEGEL_OK`), and safe whether or not the test case was marked complete.
 
  Must NOT be called on a test case obtained from
  `hegel_next_test_case` — those are borrowed from the parent
  `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
- detected (while the run is still alive) and refused, with a diagnostic
- in `hegel_context_last_error`.
+ detected (while the run is still alive) and refused with
+ `HEGEL_E_INVALID_HANDLE` and a diagnostic in `hegel_context_last_error`.
  */
-void hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
+hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
  Draw a value from the test case's data source, using the
@@ -886,76 +944,83 @@ hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    const char *origin);
 
 /*
- True iff this test case is the engine's *final replay* of a
- minimal failing example. Bindings that want to emit verbose draw
- traces only for the final counterexample (rather than every probe
- the shrinker tries) gate their tracing on this flag.
+ Write the run's aggregate status into `*out_status`: passed, failed (the
+ property has counterexamples — see `hegel_run_result_failure`), or errored
+ (the run itself failed and produced no verdict — see
+ `hegel_run_result_error`). Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r`
+ or `HEGEL_E_INVALID_ARG` for a NULL `out_status`.
  */
-bool hegel_test_case_is_final_replay(const hegel_test_case_t *tc);
+hegel_result_t hegel_run_result_status(hegel_context_t *ctx,
+                                       const hegel_run_result_t *r,
+                                       hegel_run_status_t *out_status);
 
 /*
- The run's aggregate status: passed, failed (the property has
- counterexamples — see `hegel_run_result_failure`), or errored (the run
- itself failed and produced no verdict — see `hegel_run_result_error`).
- A NULL `r` reports `HEGEL_RUN_STATUS_ERROR`.
+ Write the run-level error message into `*out_error` when the run ended in
+ an error rather than a verdict on the property — a failed health check
+ (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or an engine panic
+ — or NULL when it completed normally. An errored run has
+ `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
+ error is a failure of the run itself, not a counterexample to the property.
+ The written pointer is valid until `hegel_run_free`. Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG` for a NULL
+ `out_error`.
  */
-hegel_run_status_t hegel_run_result_status(const hegel_run_result_t *r);
+hegel_result_t hegel_run_result_error(hegel_context_t *ctx,
+                                      const hegel_run_result_t *r,
+                                      const char **out_error);
 
 /*
- The run-level error message when the run ended in an error rather than
- a verdict on the property — a failed health check (e.g. FilterTooMuch,
- TooSlow), a nondeterministic test, or an engine panic — or NULL when it
- completed normally. An errored run has `hegel_run_result_status(r) ==
- HEGEL_RUN_STATUS_ERROR` and no failures: the error is a failure of the
- run itself, not a counterexample to the property. The pointer is valid
- until `hegel_run_free`.
+ Write the number of *distinct* failures (by origin) the run surfaced into
+ `*out_count`. Each can be inspected via `hegel_run_result_failure(r, i)`.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
+ for a NULL `out_count`.
  */
-const char *hegel_run_result_error(const hegel_run_result_t *r);
+hegel_result_t hegel_run_result_failure_count(hegel_context_t *ctx,
+                                              const hegel_run_result_t *r,
+                                              size_t *out_count);
 
 /*
- Number of *distinct* failures (by origin) the run surfaced. Each
- can be inspected via `hegel_run_result_failure(r, i)`.
+ Write a borrowed pointer to the `index`-th failure (0-based) into
+ `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
+ The pointer is valid until `hegel_run_free` is called on the parent run.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
+ for a NULL `out_failure`.
  */
-size_t hegel_run_result_failure_count(const hegel_run_result_t *r);
+hegel_result_t hegel_run_result_failure(hegel_context_t *ctx,
+                                        const hegel_run_result_t *r,
+                                        size_t index,
+                                        const hegel_failure_t **out_failure);
 
 /*
- Borrowed pointer to the `index`-th failure (0-based). Returns NULL
- if `r` is NULL or `index >= hegel_run_result_failure_count(r)`. The
- pointer is valid until `hegel_run_free` is called on the parent
- run.
+ Write the failure's origin string — the stable identifier the shrinker used
+ to group probes for this bug — into `*out_origin`. See `hegel_mark_complete`
+ for what makes a good origin string. Returns `HEGEL_E_INVALID_HANDLE` for a
+ NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL `out_origin`.
  */
-const hegel_failure_t *hegel_run_result_failure(const hegel_run_result_t *r, size_t index);
+hegel_result_t hegel_failure_origin(hegel_context_t *ctx,
+                                    const hegel_failure_t *f,
+                                    const char **out_origin);
 
 /*
- The failure's panic message — e.g. the assertion text or
- engine-emitted message like `"FailedHealthCheck: FilterTooMuch — …"`.
- Returns NULL if `f` is NULL.
- */
-const char *hegel_failure_panic_message(const hegel_failure_t *f);
-
-/*
- The failure's origin string — the stable identifier that the
- shrinker used to group probes for this bug. Returns NULL if `f` is
- NULL. See `hegel_mark_complete` for what makes a good origin
- string.
- */
-const char *hegel_failure_origin(const hegel_failure_t *f);
-
-/*
- The failure's reproduce blob — a base64 string encoding the minimal
+ Write the failure's reproduce blob — a base64 string encoding the minimal
  counterexample's choice sequence, suitable for deterministic replay via
- `hegel_test_case_from_blob`. Returns NULL if `f` is NULL or the
- engine produced no blob for this failure. The pointer is borrowed from the
- parent `hegel_run_result_t` and stays valid until `hegel_run_free`.
+ `hegel_test_case_from_blob` — into `*out_blob`, or NULL if the engine
+ produced no blob for this failure. The written pointer is borrowed from the
+ parent `hegel_run_result_t` and stays valid until `hegel_run_free`. Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL
+ `out_blob`.
  */
-const char *hegel_failure_reproduction_blob(const hegel_failure_t *f);
+hegel_result_t hegel_failure_reproduction_blob(hegel_context_t *ctx,
+                                               const hegel_failure_t *f,
+                                               const char **out_blob);
 
 /*
- Libhegel's version, matching the parent `hegeltest` crate's
- `CARGO_PKG_VERSION` (e.g. `"0.14.12"`). The returned pointer is
- static and valid for the program's lifetime.
+ Write libhegel's version — matching the parent `hegeltest` crate's
+ `CARGO_PKG_VERSION` (e.g. `"0.14.12"`) — into `*out_version`. The written
+ pointer is static and valid for the program's lifetime. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_version`.
  */
-const char *hegel_version(void);
+hegel_result_t hegel_version(hegel_context_t *ctx, const char **out_version);
 
 #ifdef __cplusplus
 }  // extern "C"

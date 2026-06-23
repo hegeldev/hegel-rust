@@ -325,7 +325,6 @@ fn draw_int(ds: &dyn DataSource, min: i64, max: i64) -> Result<i64, ()> {
 
 fn interesting() -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
-        panic_message: "boom".to_string(),
         origin: "Panic at <targeting-test>".to_string(),
         reproduce_blob: None,
     })

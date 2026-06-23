@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "hegel.h"
+#include "hegel_check.h"
 
 /* CBOR-encoded {"type": "integer", "min_value": 0, "max_value": 100} */
 static const uint8_t INTEGER_SCHEMA[] = {
@@ -48,82 +49,78 @@ static int decode_small_uint(const uint8_t *bytes, size_t len) {
 int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
-    hegel_settings_t *s = hegel_settings_new();
-    hegel_settings_test_cases(s, 200);
-    hegel_settings_database(ctx, s, "");
-    hegel_settings_derandomize(s, true);
-    hegel_settings_seed(s, 0xc0ffee, true);
+    hegel_settings_t *s;
+    HEGEL_CHECK(hegel_settings_new, ctx, &s);
+    HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 200);
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xc0ffee, true);
 
-    hegel_run_t *run = hegel_run_start(ctx, s);
-    if (!run) {
-        fprintf(stderr, "hegel_run_start: %s\n", hegel_context_last_error(ctx));
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
-        return 2;
-    }
+    hegel_run_t *run;
+    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
-    hegel_test_case_t *tc;
-    while ((tc = hegel_next_test_case(ctx, run)) != NULL) {
+    while (true) {
+        hegel_test_case_t *tc;
+        HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
+        if (tc == NULL) break;
+
         const uint8_t *value;
         size_t value_len;
         hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         if (rc != HEGEL_OK) {
-            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, hegel_context_last_error(ctx));
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+            const char *err = hegel_context_last_error(ctx);
+            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, err);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
             continue;
         }
 
         int n = decode_small_uint(value, value_len);
         if (n < 0) {
             fprintf(stderr, "decode failed\n");
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
             continue;
         }
 
         if (n < 5) {
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
         } else {
-            hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
         }
     }
 
-    const hegel_run_result_t *result = hegel_run_result(ctx, run);
-    if (hegel_run_result_status(result) != HEGEL_RUN_STATUS_FAILED) {
-        fprintf(stderr, "FAIL: expected a failing run, got status %d\n",
-                (int)hegel_run_result_status(result));
-        hegel_run_free(run);
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
+    const hegel_run_result_t *result;
+    HEGEL_CHECK(hegel_run_result, ctx, run, &result);
+    hegel_run_status_t status;
+    HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
+    if (status != HEGEL_RUN_STATUS_FAILED) {
+        fprintf(stderr, "FAIL: expected a failing run, got status %d\n", (int)status);
         return 1;
     }
 
-    size_t nf = hegel_run_result_failure_count(result);
+    size_t nf;
+    HEGEL_CHECK(hegel_run_result_failure_count, ctx, result, &nf);
     if (nf < 1) {
         fprintf(stderr, "FAIL: expected at least one failure, got %zu\n", nf);
-        hegel_run_free(run);
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
         return 1;
     }
 
-    const hegel_failure_t *f = hegel_run_result_failure(result, 0);
-    const char *origin = hegel_failure_origin(f);
+    const hegel_failure_t *f;
+    HEGEL_CHECK(hegel_run_result_failure, ctx, result, 0, &f);
+    const char *origin;
+    HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
     if (strstr(origin, ORIGIN) == NULL) {
         fprintf(stderr, "FAIL: expected origin to contain %s, got: %s\n", ORIGIN, origin);
-        hegel_run_free(run);
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
         return 1;
     }
 
     printf("got expected failure: origin=%s\n", origin);
 
-    hegel_run_free(run);
-    hegel_settings_free(s);
-    hegel_context_free(ctx);
+    HEGEL_CHECK(hegel_run_free, ctx, run);
+    HEGEL_CHECK(hegel_settings_free, ctx, s);
+    HEGEL_CHECK(hegel_context_free, ctx);
     return 0;
 }
