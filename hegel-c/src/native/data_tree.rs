@@ -1,4 +1,4 @@
-//! Choice-value tree used by [`super::test_runner::NativeTestRunner`] for
+//! Choice-value tree used by the engine driver ([`super::test_runner`]) for
 //! novel-prefix generation and non-determinism detection.
 //!
 //! A small port of the subset of Hypothesis's

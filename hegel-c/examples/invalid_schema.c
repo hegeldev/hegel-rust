@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "hegel.h"
+#include "hegel_check.h"
 
 /*
  * Hand-rolled CBOR encoding of { "type": "ipv4" }:
@@ -41,26 +42,20 @@ static const uint8_t IPV4_TYPE_SCHEMA[] = {
 int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
-    hegel_settings_t *s = hegel_settings_new();
-    hegel_settings_test_cases(s, 1);
-    hegel_settings_database(ctx, s, "");
-    hegel_settings_derandomize(s, true);
-    hegel_settings_seed(s, 1, true);
+    hegel_settings_t *s;
+    HEGEL_CHECK(hegel_settings_new, ctx, &s);
+    HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 1);
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 1, true);
 
-    hegel_run_t *run = hegel_run_start(ctx, s);
-    if (!run) {
-        fprintf(stderr, "hegel_run_start failed: %s\n", hegel_context_last_error(ctx));
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
-        return 1;
-    }
+    hegel_run_t *run;
+    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
-    hegel_test_case_t *tc = hegel_next_test_case(ctx, run);
+    hegel_test_case_t *tc;
+    HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
     if (!tc) {
         fprintf(stderr, "expected a test case\n");
-        hegel_run_free(run);
-        hegel_settings_free(s);
-        hegel_context_free(ctx);
         return 1;
     }
 
@@ -82,9 +77,9 @@ int main(void) {
         printf("invalid schema correctly rejected: rc=%d, message=\"%s\"\n", rc, err);
     }
 
-    hegel_mark_complete(ctx, tc, HEGEL_STATUS_INVALID, NULL);
-    hegel_run_free(run);
-    hegel_settings_free(s);
-    hegel_context_free(ctx);
+    HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INVALID, NULL);
+    HEGEL_CHECK(hegel_run_free, ctx, run);
+    HEGEL_CHECK(hegel_settings_free, ctx, s);
+    HEGEL_CHECK(hegel_context_free, ctx);
     return ok ? 0 : 1;
 }
