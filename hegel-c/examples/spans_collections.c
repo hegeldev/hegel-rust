@@ -98,7 +98,7 @@ int main(void) {
     size_t total = 0;
     size_t max_seen = 0;
 
-    for (;;) {
+    while (true) {
         hegel_test_case_t *tc;
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;

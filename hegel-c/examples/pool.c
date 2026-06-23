@@ -103,7 +103,7 @@ int main(void) {
     size_t max_pool = 0;
     bool ok = true;
 
-    for (;;) {
+    while (true) {
         hegel_test_case_t *tc;
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;

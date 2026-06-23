@@ -81,7 +81,7 @@ int main(void) {
     HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
     size_t cases = 0;
-    for (;;) {
+    while (true) {
         /* The run is finished when next returns HEGEL_OK with a NULL case. */
         hegel_test_case_t *tc;
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);

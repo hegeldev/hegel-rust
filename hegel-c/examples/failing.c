@@ -59,7 +59,7 @@ int main(void) {
     hegel_run_t *run;
     HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
-    for (;;) {
+    while (true) {
         hegel_test_case_t *tc;
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
