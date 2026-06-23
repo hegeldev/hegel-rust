@@ -29,9 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{
-    ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, NodeSortKey, Spans, sort_key,
-};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -123,24 +121,6 @@ pub struct Shrinker<'a> {
     /// checkpoint. `lower_common_node_offset` reads this to find correlated
     /// integer nodes that keep shrinking together.
     all_changed_nodes: HashSet<usize>,
-    /// Negative-result cache of candidate sort_keys. When two passes
-    /// propose the same candidate (or one with the same sort_key shape),
-    /// the cached negative result lets `consider` short-circuit without
-    /// re-running the closure.
-    ///
-    /// Positive (interesting) results are *not* cached because
-    /// `accept_improvement`'s `sort_key(actual) < sort_key(current)`
-    /// check is relative to the live shrink target — a positive that
-    /// didn't improve last time might improve now.
-    ///
-    /// Unbounded. Test cases produce a few hundred to a few thousand
-    /// distinct candidates; an unbounded cache caps memory at a few MB
-    /// on the largest seen runs. Bounding the cache with FIFO / LRU
-    /// eviction introduced seed-dependent shrink trajectories that
-    /// converged on neighbouring minima (cache eviction interacts with
-    /// the order in which redistribute candidates are revisited), so
-    /// eviction is simply dropped.
-    consider_cache: HashSet<Vec<(u8, NodeSortKey)>>,
     /// Optional debug callback. When set, the shrinker emits
     /// per-pass-step "Trying shrink pass: <name>" lines and an
     /// end-of-shrink "Shrink pass profiling" report. Wired by the test
@@ -156,21 +136,6 @@ pub struct Shrinker<'a> {
     /// Latched once `deadline` is first observed to have passed. The runner
     /// reads it after `shrink()` to emit the slow-shrink warning.
     pub timed_out: bool,
-}
-
-/// One-byte tag identifying a `ChoiceKind` variant — used by
-/// `consider_cache` to keep entries for kind-punned candidates
-/// separate.  Must agree across `Shrinker::consider` calls; only the
-/// shrinker reads it.
-fn kind_tag(kind: &crate::native::core::ChoiceKind) -> u8 {
-    use crate::native::core::ChoiceKind::*;
-    match kind {
-        Boolean(_) => 0,
-        Integer(_) => 1,
-        Float(_) => 2,
-        Bytes(_) => 3,
-        String(_) => 4,
-    }
 }
 
 impl<'a> Shrinker<'a> {
@@ -195,7 +160,6 @@ impl<'a> Shrinker<'a> {
             calls_at_last_shrink: 0,
             max_stall: MAX_SHRINKS,
             all_changed_nodes: HashSet::new(),
-            consider_cache: HashSet::new(),
             debug: None,
             deadline: None,
             timed_out: false,
@@ -302,31 +266,17 @@ impl<'a> Shrinker<'a> {
         {
             return Ok(false);
         }
-        // Negative-result cache: if we already asked the closure about a
-        // candidate with this sort_key and it was uninteresting,
-        // short-circuit. See the field docstring for why positive results
-        // aren't cached.
-        // Cache key bundles the kind discriminant with the per-node
-        // sort key: `Scalar(0, false)` is produced both by
-        // `Boolean(false)` and `Integer(0)`, and a cache shared on
-        // sort_key alone would falsely short-circuit kind-punned
-        // candidates that the test_fn would in fact accept.
-        let cache_key: Vec<(u8, NodeSortKey)> = nodes
-            .iter()
-            .map(|node| (kind_tag(&node.kind), node.sort_key()))
-            .collect();
-        if self.consider_cache.contains(&cache_key) {
-            return Ok(false);
-        }
+        // Repeated candidates are deduped by the engine's data cache and choice
+        // tree behind the closure (`Engine::cached_shrink`), the single source
+        // of truth — there is no separate shrinker-level negative cache, matching
+        // Hypothesis's `Shrinker.cached_test_function`, which delegates straight
+        // to `engine.cached_test_function` after its cheap sort_key pre-checks.
 
         // The wall-clock guard lives in `run_test_fn`: it errors out before
         // touching the test function once the deadline has passed.
         let (is_interesting, actual_nodes, actual_spans) =
             self.run_test_fn(ShrinkRun::Full(nodes))?;
         self.calls += 1;
-        if !is_interesting {
-            self.consider_cache.insert(cache_key);
-        }
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
         }

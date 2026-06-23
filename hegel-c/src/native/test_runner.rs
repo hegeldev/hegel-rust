@@ -1063,14 +1063,15 @@ impl<'a> Persister<'a> {
 /// targeting observations, and all run-level counters. Every executed test
 /// case passes through one of three sibling chokepoints, each of which records
 /// the run exactly once so the bookkeeping cannot drift between phases:
-/// generation through [`Self::test_function`] (the only writer of the choice
-/// tree), generation-phase span mutation through [`Self::cached_run`], and
-/// shrinking through [`Self::cached_shrink`]. Both `cached_run` and
-/// `cached_shrink` *read* the tree (and the data cache) to skip redundant
-/// executions but keep their own runs out of it, so the tree stays a faithful
-/// record of generation. `cached_shrink` returns the realised result; the
-/// interesting-origin filter is applied by its caller, and bugs with new
-/// origins surface through the same [`update_interesting`] path as generation.
+/// generation through [`Self::test_function`], generation-phase span mutation
+/// through [`Self::cached_run`], and shrinking through [`Self::cached_shrink`].
+/// All three read the data cache and the choice tree to skip redundant
+/// executions; `test_function` and `cached_shrink` also record into the tree
+/// (`cached_run` deliberately does not, to keep the novel-prefix RNG trajectory
+/// independent of generation-phase mutation). `cached_shrink` returns the
+/// realised result; the interesting-origin filter is applied by its caller, and
+/// bugs with new origins surface through the same [`update_interesting`] path as
+/// generation.
 pub(crate) struct Engine<'a> {
     settings: &'a Settings,
     database_key: Option<&'a str>,
@@ -1228,7 +1229,18 @@ impl<'a> Engine<'a> {
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle);
+        // An overrun is authoritative: if a draw was attempted past the
+        // replayed prefix, the case is an overrun no matter what the body
+        // reported. A body that swallows the overrun `Err` and reports VALID is
+        // acting on incomplete data; honouring that would, among other things,
+        // record a zero-length VALID conclusion that poisons the choice tree.
+        // Collapsing it into `Overrun` here means the overrun is handled in one
+        // place below.
+        let tc_result = if NativeDataSource::overran(&handle) {
+            TestCaseResult::Overrun
+        } else {
+            NativeDataSource::take_outcome(&handle)
+        };
 
         let (status, origin) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
@@ -1260,10 +1272,10 @@ impl<'a> Engine<'a> {
     /// non-interesting path is served without running the body, returning the
     /// realised nodes recovered from the tree walk ([`data_tree::simulate_realised`])
     /// so shrink passes that inspect a non-interesting run's shape still work
-    /// (spans are unused there). Executed runs are memoised in the data cache —
-    /// but, like [`Self::cached_run`], kept *out* of the choice tree
-    /// (`feed_tree: false`); see the call site for why a shrink-phase
-    /// conclusion must not be written back.
+    /// (spans are unused there). Executed runs are memoised in the data cache
+    /// and recorded into the choice tree (`feed_tree: true`), like generation
+    /// and exactly as Hypothesis records shrink candidates, so later candidates
+    /// retracing the path are short-circuited too.
     fn cached_shrink(
         &mut self,
         choices: &[ChoiceValue],
@@ -1302,19 +1314,15 @@ impl<'a> Engine<'a> {
         };
         let tc_start = std::time::Instant::now();
         let run = self.execute(ntc);
-        // Record counters / the interesting map / persistence, but keep the
-        // run *out* of the choice tree (`feed_tree: false`, as
-        // [`Self::cached_run`] does for generation-phase mutation). Two
-        // reasons: a shrink candidate that draws nothing (e.g. the empty
-        // sequence) can conclude at the root, and a test body that swallows an
-        // overrun into a VALID outcome would then record a zero-length
-        // conclusion that shadows the real first draw — poisoning `simulate`
-        // for every later candidate. Keeping the generation-only tree clean
-        // also leaves a future `generate_novel_prefix` walk's RNG trajectory
-        // unperturbed. The data cache below still dedupes exact repeats, and
-        // the tree *read* above still short-circuits candidates that retrace a
-        // generation path.
-        self.record_run(&run, tc_start.elapsed(), false);
+        // Record the run into the choice tree (`feed_tree: true`), like
+        // generation's `test_function` and exactly as Hypothesis records every
+        // executed shrink candidate. Later candidates that retrace this path
+        // are then short-circuited by the tree read above, not just exact
+        // repeats by the data cache. This is sound because `execute` reports an
+        // overrun as `EarlyStop` (never a conclusion), so a shrink candidate
+        // that draws fewer choices than the tree expects can't record a
+        // spurious conclusion that conflicts with a real draw.
+        self.record_run(&run, tc_start.elapsed(), true);
         let key: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
         self.cache.insert(key, run.clone());
         run

@@ -119,6 +119,17 @@ impl NativeDataSource {
         self.aborted.load(Ordering::Relaxed)
     }
 
+    /// Whether a draw overran the replayed prefix during this test case (the
+    /// test case's own status was set to [`Status::EarlyStop`] when a draw was
+    /// attempted past `max_size`). This is authoritative regardless of what the
+    /// body reported through [`DataSource::mark_complete`]: a body that swallows
+    /// the overrun `Err` and reports VALID is acting on incomplete data, so the
+    /// engine still treats the run as an overrun (mirroring Hypothesis's
+    /// `StopTest` unwind, which never lets such a run report a real outcome).
+    pub fn overran(handle: &NativeTestCaseHandle) -> bool {
+        handle.lock().unwrap_or_else(|e| e.into_inner()).ntc.status == Some(Status::EarlyStop)
+    }
+
     /// Acquire the test-case state under the abort guard.  Returns
     /// `DataSourceError::StopTest` immediately if a previous call has already
     /// aborted the test case so subsequent draws short-circuit without

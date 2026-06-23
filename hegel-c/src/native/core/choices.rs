@@ -198,11 +198,6 @@ impl BytesChoice {
         self.min_size <= value.len() && value.len() <= self.max_size
     }
 
-    /// Shortlex sort key: `(length, bytes)`.
-    pub fn sort_key(&self, value: &[u8]) -> (usize, Vec<u8>) {
-        (value.len(), value.to_vec())
-    }
-
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         self.to_index(&vec![0xffu8; self.max_size])
     }
@@ -337,12 +332,6 @@ impl StringChoice {
             return false;
         }
         value.iter().all(|&cp| self.intervals.contains(cp))
-    }
-
-    /// Shortlex sort key: `(length, Vec<shrink_order_position>)`.
-    pub fn sort_key(&self, value: &[u32]) -> (usize, Vec<u32>) {
-        let keys: Vec<u32> = value.iter().map(|&cp| self.codepoint_key(cp)).collect();
-        (keys.len(), keys)
     }
 
     /// Cardinality of the alphabet.
@@ -1039,56 +1028,16 @@ impl ChoiceNode {
             was_forced: self.was_forced,
         }
     }
-
-    pub fn sort_key(&self) -> NodeSortKey {
-        match (self.kind.as_ref(), &self.value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                let (mag, neg) = ic.sort_key(v);
-                NodeSortKey::Scalar(mag, neg)
-            }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKey::Scalar(BigUint::from(u32::from(*v)), false)
-            }
-            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
-                let (mag, neg) = fc.sort_key(*v);
-                NodeSortKey::Scalar(BigUint::from(mag), neg)
-            }
-            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => {
-                let (len, bytes) = bc.sort_key(v);
-                NodeSortKey::Sequence(len, bytes.into_iter().map(u32::from).collect())
-            }
-            (ChoiceKind::String(sc), ChoiceValue::String(v)) => {
-                let (len, keys) = sc.sort_key(v);
-                NodeSortKey::Sequence(len, keys)
-            }
-            _ => unreachable!("mismatched choice kind and value"),
-        }
-    }
 }
 
-/// Comparable key for ordering choice nodes during shrinking.
+/// Borrowed view of a [`ChoiceNode`]'s sort key, used to order nodes during
+/// shrinking (via [`NodesSortKey`]).
 ///
-/// Scalar kinds (integer, boolean, float) compare on a `(magnitude, sign)`
-/// pair; sequence kinds (bytes, strings) compare shortlex on `(length,
-/// elements)`. Per-element keys are stored as `u32` so the string choice kind
-/// (with codepoint-key elements up to `0x10FFFF`) fits the same shape.
-/// Variants are never mixed at a given node position; the cross-variant order
-/// `Scalar < Sequence` (by derived enum order) is a total-ordering
-/// fall-through for the sort key of an entire sequence-of-nodes that contains
-/// different shapes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NodeSortKey {
-    Scalar(crate::native::bignum::BigUint, bool),
-    Sequence(usize, Vec<u32>),
-}
-
-/// Borrowed view of a [`ChoiceNode`]'s sort key.
-///
-/// `Ord` matches [`NodeSortKey`]'s ordering exactly: `Scalar < Sequence`
-/// cross-variant, scalar by `(magnitude, sign)`, sequence variants shortlex on
-/// length then per-element keys. The per-element keys for `Bytes` and `String`
-/// are resolved lazily during comparison — `String` defers `codepoint_key` to
-/// the moment of compare — so no `Vec<u32>` ever gets allocated.
+/// Cross-variant order is `Scalar < Sequence`; scalars compare by
+/// `(magnitude, sign)`, sequence variants shortlex on length then per-element
+/// keys. The per-element keys for `Bytes` and `String` are resolved lazily
+/// during comparison — `String` defers `codepoint_key` to the moment of
+/// compare — so no `Vec<u32>` ever gets allocated.
 pub enum NodeSortKeyRef<'a> {
     Scalar(crate::native::bignum::BigUint, bool),
     Bytes(&'a [u8]),

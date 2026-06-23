@@ -301,6 +301,107 @@ fn shrink_replay_skips_execution_when_tree_knows_the_path() {
 }
 
 #[test]
+fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
+    // A body that draws past the available choices overruns; if it swallows the
+    // resulting error and reports VALID anyway, the engine must still treat the
+    // case as EarlyStop. An overrun means the replayed prefix was too short —
+    // not that the (incomplete) run passed — and recording it as a zero-length
+    // VALID conclusion would poison the choice tree for every later candidate.
+    with_counting_ctx(
+        |ds| {
+            // Empty prefix → `max_size` 0 → this draw overruns. The `Err` is
+            // deliberately swallowed, mimicking a raw test body that doesn't
+            // propagate the overrun.
+            let _ = rbool(ds);
+            TestCaseResult::Valid
+        },
+        |ctx, _| {
+            let run = ctx.execute(NativeTestCase::for_choices(&[], None, None));
+            assert_eq!(run.status, Status::EarlyStop);
+        },
+    );
+}
+
+#[test]
+fn cached_shrink_executes_novel_then_serves_repeat_from_data_cache() {
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx, count| {
+            let choices = [ChoiceValue::Boolean(true)];
+
+            // First call: novel, executes and is memoised in the data cache.
+            let first = ctx.cached_shrink(&choices, None, 0);
+            assert_eq!(first.status, Status::Valid);
+            assert_eq!(count.get(), 1);
+
+            // Second identical call: served from the data cache, no re-run.
+            let second = ctx.cached_shrink(&choices, None, 0);
+            assert_eq!(second.status, Status::Valid);
+            assert_eq!(count.get(), 1, "exact repeat must hit the data cache");
+        },
+    );
+}
+
+#[test]
+fn cached_shrink_reexecutes_known_interesting_tree_path_to_recover_payload() {
+    // A tree-known *Interesting* path can't carry the failure's origin/spans,
+    // so the chokepoint falls through to a real execution (mirroring
+    // `cached_run_reexecutes_known_interesting_path_to_recover_payload`).
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(true) => boom("boom"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx, count| {
+            record_tree(
+                &mut ctx.tree_root,
+                &[bool_node(true)],
+                Status::Interesting,
+                &[],
+            );
+
+            let run = ctx.cached_shrink(&[ChoiceValue::Boolean(true)], None, 0);
+            assert_eq!(run.status, Status::Interesting);
+            assert_eq!(
+                count.get(),
+                1,
+                "interesting path must execute to recover origin"
+            );
+            assert!(run.origin.is_some());
+        },
+    );
+}
+
+#[test]
+fn cached_shrink_probe_replays_prefix_then_draws_continuation() {
+    // `extend > 0` replays the prefix and draws the remaining choices from the
+    // engine RNG (the coarse / mutate_and_shrink probe path).
+    with_counting_ctx(
+        |ds| {
+            // Two boolean draws: the first is the replayed prefix, the second
+            // is drawn beyond it.
+            match (rbool(ds), rbool(ds)) {
+                (Ok(_), Ok(_)) => TestCaseResult::Valid,
+                _ => TestCaseResult::Overrun,
+            }
+        },
+        |ctx, count| {
+            let prefix = [ChoiceValue::Boolean(true)];
+            let run = ctx.cached_shrink(&prefix, None, 1);
+            assert_eq!(run.status, Status::Valid);
+            assert_eq!(count.get(), 1);
+            // Prefix value replayed, continuation drawn → two realised nodes.
+            assert_eq!(run.nodes.len(), 2);
+            assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
+        },
+    );
+}
+
+#[test]
 fn span_mutation_does_not_re_execute_identical_proposals() {
     with_counting_ctx(
         |ds| match rbool(ds) {

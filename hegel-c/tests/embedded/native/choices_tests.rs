@@ -1070,8 +1070,6 @@ fn node_sort_key_big_integer_orders_correctly() {
         false,
     )];
     assert!(sort_key(&big) < sort_key(&bytes));
-    // The owned NodeSortKey matches the borrowed comparison.
-    assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
 
 #[test]
