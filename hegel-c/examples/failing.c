@@ -51,10 +51,10 @@ int main(void) {
 
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
-    HEGEL_CHECK(hegel_settings_test_cases, ctx, s, 200);
-    HEGEL_CHECK(hegel_settings_database, ctx, s, "");
-    HEGEL_CHECK(hegel_settings_derandomize, ctx, s, true);
-    HEGEL_CHECK(hegel_settings_seed, ctx, s, 0xc0ffee, true);
+    HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 200);
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xc0ffee, true);
 
     hegel_run_t *run;
     HEGEL_CHECK(hegel_run_start, ctx, s, &run);

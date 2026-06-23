@@ -6,7 +6,7 @@
  * return HEGEL_OK. Use it for the setup / bookkeeping / teardown calls whose
  * only non-zero outcome would be a programming error:
  *
- *     HEGEL_CHECK(hegel_settings_test_cases, ctx, s, 50);
+ *     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 50);
  *
  * Do NOT wrap calls with a meaningful non-OK code, such as hegel_generate or
  * the draw primitives returning HEGEL_E_STOP_TEST on choice-budget

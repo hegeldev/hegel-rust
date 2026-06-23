@@ -121,15 +121,15 @@ impl SettingsHandle {
             // out parameter; hegel_settings_new writes a non-null handle.
             unsafe {
                 hegel_c::hegel_settings_new(ctx, &mut raw);
-                hegel_c::hegel_settings_mode(ctx, raw, map_mode(settings.mode));
-                hegel_c::hegel_settings_test_cases(ctx, raw, settings.test_cases);
-                hegel_c::hegel_settings_verbosity(ctx, raw, map_verbosity(settings.verbosity));
+                hegel_c::hegel_settings_set_mode(ctx, raw, map_mode(settings.mode));
+                hegel_c::hegel_settings_set_test_cases(ctx, raw, settings.test_cases);
+                hegel_c::hegel_settings_set_verbosity(ctx, raw, map_verbosity(settings.verbosity));
                 match settings.seed {
-                    Some(seed) => hegel_c::hegel_settings_seed(ctx, raw, seed, true),
-                    None => hegel_c::hegel_settings_seed(ctx, raw, 0, false),
+                    Some(seed) => hegel_c::hegel_settings_set_seed(ctx, raw, seed, true),
+                    None => hegel_c::hegel_settings_set_seed(ctx, raw, 0, false),
                 };
-                hegel_c::hegel_settings_derandomize(ctx, raw, settings.derandomize);
-                hegel_c::hegel_settings_report_multiple_failures(
+                hegel_c::hegel_settings_set_derandomize(ctx, raw, settings.derandomize);
+                hegel_c::hegel_settings_set_report_multiple_failures(
                     ctx,
                     raw,
                     settings.report_multiple_failures,
@@ -139,25 +139,25 @@ impl SettingsHandle {
                     // Unset leaves libhegel's default in place.
                     Database::Disabled => {
                         let empty = CString::new("").unwrap();
-                        hegel_c::hegel_settings_database(ctx, raw, empty.as_ptr());
+                        hegel_c::hegel_settings_set_database(ctx, raw, empty.as_ptr());
                     }
                     Database::Path(path) => {
                         let c = cstring_lossy(path);
-                        hegel_c::hegel_settings_database(ctx, raw, c.as_ptr());
+                        hegel_c::hegel_settings_set_database(ctx, raw, c.as_ptr());
                     }
                     Database::Unset => {}
                 }
                 if let Some(key) = database_key {
                     let c = cstring_lossy(key);
-                    hegel_c::hegel_settings_database_key(ctx, raw, c.as_ptr());
+                    hegel_c::hegel_settings_set_database_key(ctx, raw, c.as_ptr());
                 }
-                hegel_c::hegel_settings_phases(ctx, raw, phases_bitmask(&settings.phases));
-                hegel_c::hegel_settings_suppress_health_check(
+                hegel_c::hegel_settings_set_phases(ctx, raw, phases_bitmask(&settings.phases));
+                hegel_c::hegel_settings_set_suppress_health_check(
                     ctx,
                     raw,
                     health_check_bitmask(&settings.suppress_health_check),
                 );
-                hegel_c::hegel_settings_backend(ctx, raw, map_backend(settings.backend));
+                hegel_c::hegel_settings_set_backend(ctx, raw, map_backend(settings.backend));
             }
             SettingsHandle { raw }
         })

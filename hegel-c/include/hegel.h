@@ -133,7 +133,7 @@ typedef enum {
 
 /*
  Which source of randomness the engine draws from. Set via
- `hegel_settings_backend`.
+ `hegel_settings_set_backend`.
 
  - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
    `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
@@ -153,7 +153,7 @@ typedef enum {
 
 /*
  Verbosity of engine-emitted output (logs, per-case traces). Set via
- `hegel_settings_verbosity`.
+ `hegel_settings_set_verbosity`.
 
  - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
  - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
@@ -212,9 +212,9 @@ typedef enum {
 
 /*
  A phase of the property-test loop, used as a bit flag for
- `hegel_settings_phases`.
+ `hegel_settings_set_phases`.
 
- `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+ `hegel_settings_set_phases` takes a bitwise OR of these values (e.g.
  `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
  disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
  want — turning a phase off is mainly useful for debugging or replay tooling.
@@ -226,7 +226,7 @@ typedef enum {
     HEGEL_PHASE_EXPLICIT = (1 << 0),
     /*
      Replay counterexamples persisted from previous runs (requires a
-     database path + `hegel_settings_database_key`).
+     database path + `hegel_settings_set_database_key`).
      */
     HEGEL_PHASE_REUSE = (1 << 1),
     /*
@@ -250,9 +250,9 @@ typedef enum {
 
 /*
  A health check, used as a bit flag for
- `hegel_settings_suppress_health_check`.
+ `hegel_settings_set_suppress_health_check`.
 
- `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+ `hegel_settings_set_suppress_health_check` takes a bitwise OR of these values
  naming the checks to *disable*. The default is "all enabled"; suppress a
  check only when you understand why it is firing and accept the behavior.
  */
@@ -493,7 +493,9 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
  Set whether the engine should drive a full run loop or stop after
  one test case. See `hegel_mode_t`.
  */
-hegel_result_t hegel_settings_mode(hegel_context_t *ctx, hegel_settings_t *s, hegel_mode_t mode);
+hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx,
+                                       hegel_settings_t *s,
+                                       hegel_mode_t mode);
 
 /*
  Select the engine's randomness backend. See `hegel_backend_t`.
@@ -504,9 +506,9 @@ hegel_result_t hegel_settings_mode(hegel_context_t *ctx, hegel_settings_t *s, he
  pinning is one-way: there is no way to un-pin back to AUTO on a handle
  once an explicit backend has been set.
  */
-hegel_result_t hegel_settings_backend(hegel_context_t *ctx,
-                                      hegel_settings_t *s,
-                                      hegel_backend_t backend);
+hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
+                                          hegel_settings_t *s,
+                                          hegel_backend_t backend);
 
 /*
  Maximum number of valid test cases to run before declaring the
@@ -515,25 +517,25 @@ hegel_result_t hegel_settings_backend(hegel_context_t *ctx,
  see `HEGEL_HC_FILTER_TOO_MUCH` for the limit on consecutive
  rejections.
  */
-hegel_result_t hegel_settings_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
+hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
 
 /*
  Set the engine's output verbosity. See `hegel_verbosity_t`.
  */
-hegel_result_t hegel_settings_verbosity(hegel_context_t *ctx,
-                                        hegel_settings_t *s,
-                                        hegel_verbosity_t v);
+hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx,
+                                            hegel_settings_t *s,
+                                            hegel_verbosity_t v);
 
 /*
  Set the RNG seed. When `has_seed = true`, `seed` is used to
  initialise generation; when `has_seed = false`, the engine picks a
  fresh random seed at run start (the default). Combined with
- `hegel_settings_derandomize(s, true)` this gives reproducible runs.
+ `hegel_settings_set_derandomize(s, true)` this gives reproducible runs.
  */
-hegel_result_t hegel_settings_seed(hegel_context_t *ctx,
-                                   hegel_settings_t *s,
-                                   uint64_t seed,
-                                   bool has_seed);
+hegel_result_t hegel_settings_set_seed(hegel_context_t *ctx,
+                                       hegel_settings_t *s,
+                                       uint64_t seed,
+                                       bool has_seed);
 
 /*
  Make the run reproducible: derive the seed from a stable hash of
@@ -541,9 +543,9 @@ hegel_result_t hegel_settings_seed(hegel_context_t *ctx,
  supplied. Useful in CI where you want runs of the same test to be
  deterministic but different tests to still see different inputs.
  */
-hegel_result_t hegel_settings_derandomize(hegel_context_t *ctx,
-                                          hegel_settings_t *s,
-                                          bool derandomize);
+hegel_result_t hegel_settings_set_derandomize(hegel_context_t *ctx,
+                                              hegel_settings_t *s,
+                                              bool derandomize);
 
 /*
  When `yes = true` (the default), the engine keeps generating after
@@ -551,9 +553,9 @@ hegel_result_t hegel_settings_derandomize(hegel_context_t *ctx,
  origins), and the final `hegel_run_result_t` lists all of them.
  When `false`, the run stops after the first failing example.
  */
-hegel_result_t hegel_settings_report_multiple_failures(hegel_context_t *ctx,
-                                                       hegel_settings_t *s,
-                                                       bool yes);
+hegel_result_t hegel_settings_set_report_multiple_failures(hegel_context_t *ctx,
+                                                           hegel_settings_t *s,
+                                                           bool yes);
 
 /*
  Configure the on-disk example database used by `HEGEL_PHASE_REUSE`
@@ -566,24 +568,26 @@ hegel_result_t hegel_settings_report_multiple_failures(hegel_context_t *ctx,
  - Otherwise → use the directory at `database` as the database root.
    The directory is created lazily.
  */
-hegel_result_t hegel_settings_database(hegel_context_t *ctx,
-                                       hegel_settings_t *s,
-                                       const char *database);
+hegel_result_t hegel_settings_set_database(hegel_context_t *ctx,
+                                           hegel_settings_t *s,
+                                           const char *database);
 
 /*
  Set the database key used to scope stored / replayed examples for this run.
  `key = NULL` clears it (the default).
  */
-hegel_result_t hegel_settings_database_key(hegel_context_t *ctx,
-                                           hegel_settings_t *s,
-                                           const char *key);
+hegel_result_t hegel_settings_set_database_key(hegel_context_t *ctx,
+                                               hegel_settings_t *s,
+                                               const char *key);
 
 /*
  Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
  values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
  Passing 0 produces a run that does nothing.
  */
-hegel_result_t hegel_settings_phases(hegel_context_t *ctx, hegel_settings_t *s, uint32_t phases);
+hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
+                                         hegel_settings_t *s,
+                                         uint32_t phases);
 
 /*
  Suppress (disable) a set of health checks, given as a bitwise OR of
@@ -591,9 +595,9 @@ hegel_result_t hegel_settings_phases(hegel_context_t *ctx, hegel_settings_t *s, 
  when you know a check is going to fire and accept the underlying behavior
  (e.g. you intentionally have a high rejection rate).
  */
-hegel_result_t hegel_settings_suppress_health_check(hegel_context_t *ctx,
-                                                    hegel_settings_t *s,
-                                                    uint32_t checks);
+hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
+                                                        hegel_settings_t *s,
+                                                        uint32_t checks);
 
 /*
  Start a property-test run with the given settings, writing a handle the

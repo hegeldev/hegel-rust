@@ -211,12 +211,12 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             context_last_error: lib.get(b"hegel_context_last_error\0").unwrap(),
             settings_new: lib.get(b"hegel_settings_new\0").unwrap(),
             settings_free: lib.get(b"hegel_settings_free\0").unwrap(),
-            settings_test_cases: lib.get(b"hegel_settings_test_cases\0").unwrap(),
-            settings_database: lib.get(b"hegel_settings_database\0").unwrap(),
-            settings_database_key: lib.get(b"hegel_settings_database_key\0").unwrap(),
-            settings_seed: lib.get(b"hegel_settings_seed\0").unwrap(),
-            settings_derandomize: lib.get(b"hegel_settings_derandomize\0").unwrap(),
-            settings_backend: lib.get(b"hegel_settings_backend\0").unwrap(),
+            settings_test_cases: lib.get(b"hegel_settings_set_test_cases\0").unwrap(),
+            settings_database: lib.get(b"hegel_settings_set_database\0").unwrap(),
+            settings_database_key: lib.get(b"hegel_settings_set_database_key\0").unwrap(),
+            settings_seed: lib.get(b"hegel_settings_set_seed\0").unwrap(),
+            settings_derandomize: lib.get(b"hegel_settings_set_derandomize\0").unwrap(),
+            settings_backend: lib.get(b"hegel_settings_set_backend\0").unwrap(),
             run_start: lib.get(b"hegel_run_start\0").unwrap(),
             next_test_case: lib.get(b"hegel_next_test_case\0").unwrap(),
             run_result: lib.get(b"hegel_run_result\0").unwrap(),
@@ -279,19 +279,19 @@ impl Api<'_> {
     }
     unsafe fn settings_test_cases(&self, ctx: *mut u8, s: *mut u8, n: u64) {
         let rc = unsafe { (self.settings_test_cases)(ctx, s, n) };
-        unsafe { self.expect_ok(ctx, rc, "hegel_settings_test_cases") };
+        unsafe { self.expect_ok(ctx, rc, "hegel_settings_set_test_cases") };
     }
     unsafe fn settings_seed(&self, ctx: *mut u8, s: *mut u8, seed: u64, has_seed: bool) {
         let rc = unsafe { (self.settings_seed)(ctx, s, seed, has_seed) };
-        unsafe { self.expect_ok(ctx, rc, "hegel_settings_seed") };
+        unsafe { self.expect_ok(ctx, rc, "hegel_settings_set_seed") };
     }
     unsafe fn settings_derandomize(&self, ctx: *mut u8, s: *mut u8, derandomize: bool) {
         let rc = unsafe { (self.settings_derandomize)(ctx, s, derandomize) };
-        unsafe { self.expect_ok(ctx, rc, "hegel_settings_derandomize") };
+        unsafe { self.expect_ok(ctx, rc, "hegel_settings_set_derandomize") };
     }
     unsafe fn settings_backend(&self, ctx: *mut u8, s: *mut u8, backend: CBackend) {
         let rc = unsafe { (self.settings_backend)(ctx, s, backend) };
-        unsafe { self.expect_ok(ctx, rc, "hegel_settings_backend") };
+        unsafe { self.expect_ok(ctx, rc, "hegel_settings_set_backend") };
     }
     unsafe fn run_start(&self, ctx: *mut u8, s: *const u8) -> *mut u8 {
         let mut run: *mut u8 = ptr::null_mut();
@@ -495,7 +495,7 @@ fn libhegel_runs_passing_property() {
     }
 }
 
-/// Pinning the urandom backend via `hegel_settings_backend` drives a run to
+/// Pinning the urandom backend via `hegel_settings_set_backend` drives a run to
 /// completion through the urandom RNG path (rather than the default PRNG).
 /// A trivial always-valid property still passes; this just exercises the
 /// new setter end-to-end and confirms it wires through to a working run.

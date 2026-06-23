@@ -49,7 +49,7 @@ fn test_settings_backend_setter() {
 
 // The backend's *resolution* (explicit choice vs. auto-urandom-under-
 // Antithesis) is now the engine's job inside hegel-c, reached through the
-// `hegel_settings_backend` C setter; the frontend only records the choice.
+// `hegel_settings_set_backend` C setter; the frontend only records the choice.
 
 #[test]
 fn test_settings_has_phase() {

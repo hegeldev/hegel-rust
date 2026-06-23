@@ -72,10 +72,10 @@ int main(void) {
 
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
-    HEGEL_CHECK(hegel_settings_test_cases, ctx, s, 50);
-    HEGEL_CHECK(hegel_settings_database, ctx, s, "");      /* disable database */
-    HEGEL_CHECK(hegel_settings_derandomize, ctx, s, true); /* deterministic */
-    HEGEL_CHECK(hegel_settings_seed, ctx, s, 42, true);
+    HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 50);
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");      /* disable database */
+    HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true); /* deterministic */
+    HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
 
     hegel_run_t *run;
     HEGEL_CHECK(hegel_run_start, ctx, s, &run);

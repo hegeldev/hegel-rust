@@ -48,3 +48,9 @@ through the C ABI (e.g. hegel-go):
   and "error". The run is finished when it returns `HEGEL_OK` with the out
   handle set to NULL; a non-`HEGEL_OK` code is a real error. The idiomatic loop
   is now `while (hegel_next_test_case(ctx, run, &tc) == HEGEL_OK && tc != NULL)`.
+- The settings mutators are renamed with a `set_` prefix so they no longer read
+  like accessors: `hegel_settings_mode` → `hegel_settings_set_mode`, and
+  likewise for `backend`, `test_cases`, `verbosity`, `seed`, `derandomize`,
+  `report_multiple_failures`, `database`, `database_key`, `phases`, and
+  `suppress_health_check`. `hegel_settings_new` and `hegel_settings_free` keep
+  their names.

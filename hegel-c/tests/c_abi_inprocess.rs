@@ -18,11 +18,12 @@ use hegel_c::{
     hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_primitive_boolean,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_backend, hegel_settings_database, hegel_settings_database_key,
-    hegel_settings_free, hegel_settings_mode, hegel_settings_new, hegel_settings_phases,
-    hegel_settings_report_multiple_failures, hegel_settings_suppress_health_check,
-    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
+    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -131,39 +132,39 @@ fn null_handles_are_rejected_without_crashing() {
     unsafe {
         // Settings setters reject a null handle with HEGEL_E_INVALID_HANDLE.
         assert_eq!(
-            hegel_settings_mode(ctx, ptr::null_mut(), hegel_mode_t::HEGEL_MODE_TEST_RUN),
+            hegel_settings_set_mode(ctx, ptr::null_mut(), hegel_mode_t::HEGEL_MODE_TEST_RUN),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_backend(ctx, ptr::null_mut(), hegel_backend_t::HEGEL_BACKEND_AUTO),
+            hegel_settings_set_backend(ctx, ptr::null_mut(), hegel_backend_t::HEGEL_BACKEND_AUTO),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_database(ctx, ptr::null_mut(), c"x".as_ptr()),
+            hegel_settings_set_database(ctx, ptr::null_mut(), c"x".as_ptr()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_database_key(ctx, ptr::null_mut(), c"x".as_ptr()),
+            hegel_settings_set_database_key(ctx, ptr::null_mut(), c"x".as_ptr()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_phases(ctx, ptr::null_mut(), 0),
+            hegel_settings_set_phases(ctx, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_suppress_health_check(ctx, ptr::null_mut(), 0),
+            hegel_settings_set_suppress_health_check(ctx, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_report_multiple_failures(ctx, ptr::null_mut(), true),
+            hegel_settings_set_report_multiple_failures(ctx, ptr::null_mut(), true),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_settings_test_cases(ctx, ptr::null_mut(), 1),
+            hegel_c::hegel_settings_set_test_cases(ctx, ptr::null_mut(), 1),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_settings_verbosity(
+            hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
                 hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL
@@ -171,11 +172,11 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_settings_seed(ctx, ptr::null_mut(), 0, false),
+            hegel_c::hegel_settings_set_seed(ctx, ptr::null_mut(), 0, false),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_settings_derandomize(ctx, ptr::null_mut(), false),
+            hegel_c::hegel_settings_set_derandomize(ctx, ptr::null_mut(), false),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -315,7 +316,7 @@ fn out_parameters_are_rejected_when_null() {
         );
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
         assert_eq!(
             hegel_run_start(ctx, s, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -380,18 +381,21 @@ fn settings_string_setters_handle_bad_input() {
     unsafe {
         let s = make_settings(ctx);
         // database(null) leaves the default in place; key(null) clears it.
-        assert_eq!(hegel_settings_database(ctx, s, ptr::null()), HEGEL_OK);
-        assert_eq!(hegel_settings_database_key(ctx, s, ptr::null()), HEGEL_OK);
+        assert_eq!(hegel_settings_set_database(ctx, s, ptr::null()), HEGEL_OK);
+        assert_eq!(
+            hegel_settings_set_database_key(ctx, s, ptr::null()),
+            HEGEL_OK
+        );
 
         // Non-UTF-8 bytes are rejected.
         let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
         assert_eq!(
-            hegel_settings_database(ctx, s, bad.as_ptr()),
+            hegel_settings_set_database(ctx, s, bad.as_ptr()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         assert_eq!(
-            hegel_settings_database_key(ctx, s, bad.as_ptr()),
+            hegel_settings_set_database_key(ctx, s, bad.as_ptr()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
@@ -430,7 +434,7 @@ fn from_blob_rejects_bad_input() {
 }
 
 /// Drive a short passing run with the backend pinned, exercising
-/// `hegel_settings_backend`'s explicit arm and the run lifecycle, plus the
+/// `hegel_settings_set_backend`'s explicit arm and the run lifecycle, plus the
 /// misuse paths: reading the result before the run is drained, and asking for
 /// the next case before completing the current one.
 #[test]
@@ -438,11 +442,11 @@ fn explicit_backend_run_and_lifecycle_misuse() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
-        hegel_settings_backend(ctx, s, hegel_backend_t::HEGEL_BACKEND_DEFAULT);
+        hegel_settings_set_backend(ctx, s, hegel_backend_t::HEGEL_BACKEND_DEFAULT);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_seed(ctx, s, 1, true);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
 
         let run = start(ctx, s);
 
@@ -512,7 +516,7 @@ fn run_free_with_undrained_case_does_not_deadlock() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
@@ -548,8 +552,8 @@ fn next_after_drain_returns_null() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 3);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 3);
         let run = start(ctx, s);
         let schema = integer_schema();
         loop {
@@ -585,9 +589,9 @@ fn live_test_case_argument_validation() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_seed(ctx, s, 1, true);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
@@ -772,9 +776,9 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_seed(ctx, s, 1, true);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
         let run = start(ctx, s);
         let schema = integer_schema();
         loop {
@@ -844,8 +848,8 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_settings_mode(ctx, s, hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_settings_set_mode(ctx, s, hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE);
         let run = start(ctx, s);
         let schema = integer_schema();
         let origin = CString::new("single-case bug").unwrap();
@@ -899,8 +903,8 @@ fn primitives_after_overrun_all_report_stop_test() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 5);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
         let run = start(ctx, s);
         let schema = integer_schema();
 
@@ -999,8 +1003,8 @@ fn state_machine_and_primitive_boolean_paths() {
         // A live test case for the argument-validation and happy paths.
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_test_cases(ctx, s, 5);
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());

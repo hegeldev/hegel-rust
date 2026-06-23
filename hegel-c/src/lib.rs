@@ -215,7 +215,7 @@ pub enum hegel_mode_t {
 }
 
 /// Which source of randomness the engine draws from. Set via
-/// `hegel_settings_backend`.
+/// `hegel_settings_set_backend`.
 ///
 /// - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
 ///   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
@@ -256,7 +256,7 @@ pub enum hegel_run_status_t {
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
-/// `hegel_settings_verbosity`.
+/// `hegel_settings_set_verbosity`.
 ///
 /// - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
 /// - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
@@ -277,9 +277,9 @@ pub enum hegel_verbosity_t {
 // ─── Phases ─────────────────────────────────────────────────────────────────
 
 /// A phase of the property-test loop, used as a bit flag for
-/// `hegel_settings_phases`.
+/// `hegel_settings_set_phases`.
 ///
-/// `hegel_settings_phases` takes a bitwise OR of these values (e.g.
+/// `hegel_settings_set_phases` takes a bitwise OR of these values (e.g.
 /// `HEGEL_PHASE_GENERATE | HEGEL_PHASE_SHRINK`); the phases not included are
 /// disabled. The default is `HEGEL_PHASE_ALL`, which is almost always what you
 /// want — turning a phase off is mainly useful for debugging or replay tooling.
@@ -290,7 +290,7 @@ pub enum hegel_phase_t {
     /// Run hard-coded explicit examples (none today, reserved for future use).
     HEGEL_PHASE_EXPLICIT = 1 << 0,
     /// Replay counterexamples persisted from previous runs (requires a
-    /// database path + `hegel_settings_database_key`).
+    /// database path + `hegel_settings_set_database_key`).
     HEGEL_PHASE_REUSE = 1 << 1,
     /// Randomly generate fresh test cases up to the `test_cases` budget.
     HEGEL_PHASE_GENERATE = 1 << 2,
@@ -306,9 +306,9 @@ pub enum hegel_phase_t {
 // ─── Health checks ──────────────────────────────────────────────────────────
 
 /// A health check, used as a bit flag for
-/// `hegel_settings_suppress_health_check`.
+/// `hegel_settings_set_suppress_health_check`.
 ///
-/// `hegel_settings_suppress_health_check` takes a bitwise OR of these values
+/// `hegel_settings_set_suppress_health_check` takes a bitwise OR of these values
 /// naming the checks to *disable*. The default is "all enabled"; suppress a
 /// check only when you understand why it is firing and accept the behavior.
 #[repr(C)]
@@ -675,13 +675,13 @@ unsafe fn settings_mut<'a>(
 /// Set whether the engine should drive a full run loop or stop after
 /// one test case. See `hegel_mode_t`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_mode(
+pub unsafe extern "C" fn hegel_settings_set_mode(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     mode: hegel_mode_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_mode") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_mode") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -701,13 +701,13 @@ pub unsafe extern "C" fn hegel_settings_mode(
 /// pinning is one-way: there is no way to un-pin back to AUTO on a handle
 /// once an explicit backend has been set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_backend(
+pub unsafe extern "C" fn hegel_settings_set_backend(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     backend: hegel_backend_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_backend") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_backend") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -729,13 +729,13 @@ pub unsafe extern "C" fn hegel_settings_backend(
 /// see `HEGEL_HC_FILTER_TOO_MUCH` for the limit on consecutive
 /// rejections.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_test_cases(
+pub unsafe extern "C" fn hegel_settings_set_test_cases(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     n: u64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_test_cases") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_test_cases") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -745,13 +745,13 @@ pub unsafe extern "C" fn hegel_settings_test_cases(
 
 /// Set the engine's output verbosity. See `hegel_verbosity_t`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_verbosity(
+pub unsafe extern "C" fn hegel_settings_set_verbosity(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     v: hegel_verbosity_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_verbosity") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_verbosity") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -768,16 +768,16 @@ pub unsafe extern "C" fn hegel_settings_verbosity(
 /// Set the RNG seed. When `has_seed = true`, `seed` is used to
 /// initialise generation; when `has_seed = false`, the engine picks a
 /// fresh random seed at run start (the default). Combined with
-/// `hegel_settings_derandomize(s, true)` this gives reproducible runs.
+/// `hegel_settings_set_derandomize(s, true)` this gives reproducible runs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_seed(
+pub unsafe extern "C" fn hegel_settings_set_seed(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     seed: u64,
     has_seed: bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_seed") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_seed") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -793,13 +793,13 @@ pub unsafe extern "C" fn hegel_settings_seed(
 /// supplied. Useful in CI where you want runs of the same test to be
 /// deterministic but different tests to still see different inputs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_derandomize(
+pub unsafe extern "C" fn hegel_settings_set_derandomize(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     derandomize: bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_derandomize") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_derandomize") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -812,16 +812,17 @@ pub unsafe extern "C" fn hegel_settings_derandomize(
 /// origins), and the final `hegel_run_result_t` lists all of them.
 /// When `false`, the run stops after the first failing example.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_report_multiple_failures(
+pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     yes: bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_report_multiple_failures") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
+    let handle =
+        match unsafe { settings_mut(ctx, s, "hegel_settings_set_report_multiple_failures") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
     handle.inner = handle.inner.clone().report_multiple_failures(yes);
     HEGEL_OK
 }
@@ -836,13 +837,13 @@ pub unsafe extern "C" fn hegel_settings_report_multiple_failures(
 /// - Otherwise → use the directory at `database` as the database root.
 ///   The directory is created lazily.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_database(
+pub unsafe extern "C" fn hegel_settings_set_database(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     database: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_database") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -861,7 +862,7 @@ pub unsafe extern "C" fn hegel_settings_database(
             HEGEL_OK
         }
         Err(_) => {
-            set_last_error(ctx, "hegel_settings_database: path is not valid UTF-8");
+            set_last_error(ctx, "hegel_settings_set_database: path is not valid UTF-8");
             HEGEL_E_INVALID_ARG
         }
     }
@@ -870,13 +871,13 @@ pub unsafe extern "C" fn hegel_settings_database(
 /// Set the database key used to scope stored / replayed examples for this run.
 /// `key = NULL` clears it (the default).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_database_key(
+pub unsafe extern "C" fn hegel_settings_set_database_key(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     key: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let hs = match unsafe { settings_mut(ctx, s, "hegel_settings_database_key") } {
+    let hs = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database_key") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -890,7 +891,10 @@ pub unsafe extern "C" fn hegel_settings_database_key(
             HEGEL_OK
         }
         Err(_) => {
-            set_last_error(ctx, "hegel_settings_database_key: key is not valid UTF-8");
+            set_last_error(
+                ctx,
+                "hegel_settings_set_database_key: key is not valid UTF-8",
+            );
             HEGEL_E_INVALID_ARG
         }
     }
@@ -900,14 +904,14 @@ pub unsafe extern "C" fn hegel_settings_database_key(
 /// values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
 /// Passing 0 produces a run that does nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_phases(
+pub unsafe extern "C" fn hegel_settings_set_phases(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     phases: u32,
 ) -> hegel_result_t {
     use hegel_phase_t::*;
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_phases") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_phases") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
@@ -936,14 +940,14 @@ pub unsafe extern "C" fn hegel_settings_phases(
 /// when you know a check is going to fire and accept the underlying behavior
 /// (e.g. you intentionally have a high rejection rate).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_suppress_health_check(
+pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     checks: u32,
 ) -> hegel_result_t {
     use hegel_health_check_t::*;
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_suppress_health_check") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_suppress_health_check") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
