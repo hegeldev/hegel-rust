@@ -67,12 +67,14 @@ impl<'a> Shrinker<'a> {
                     .collect();
                 let max_size = self.current_nodes.len();
 
-                // Probe with a fixed seed (matches Hypothesis's `Random(0)`),
-                // then RANDOM_ATTEMPTS random continuations.
-                self.probe(&prefix, 0, max_size)?;
-                for attempt in 0..RANDOM_ATTEMPTS {
-                    let seed = (i as u64).wrapping_mul(1000).wrapping_add(attempt);
-                    self.probe(&prefix, seed, max_size)?;
+                // Re-run the mutated prefix with several random continuations,
+                // each drawn from the engine RNG inside the probe (no per-probe
+                // seed — see [`ShrinkRun::Probe`]). For a mutation that doesn't
+                // change the length (`max_size == prefix.len()`) there is no
+                // continuation to draw and these collapse to one replay, which
+                // the data cache serves after the first.
+                for _ in 0..=RANDOM_ATTEMPTS {
+                    self.probe(&prefix, max_size)?;
                 }
 
                 // Also try setting each of the next few positions to the
@@ -98,12 +100,8 @@ impl<'a> Shrinker<'a> {
                             two_prefix.push(self.current_nodes[k].kind.simplest());
                         }
                     }
-                    for attempt in 0..RANDOM_ATTEMPTS {
-                        let seed = (i as u64)
-                            .wrapping_mul(1000)
-                            .wrapping_add((j_offset as u64).wrapping_mul(100))
-                            .wrapping_add(attempt);
-                        self.probe(&two_prefix, seed, max_size)?;
+                    for _ in 0..RANDOM_ATTEMPTS {
+                        self.probe(&two_prefix, max_size)?;
                     }
                 }
             }

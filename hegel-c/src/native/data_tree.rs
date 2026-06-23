@@ -327,7 +327,27 @@ pub(crate) fn generate_novel_prefix(
 /// Only `Status >= Invalid` is ever recorded as a conclusion (see
 /// [`record_tree`]), so `EarlyStop` is never returned.
 pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
+    simulate_realised(tree_root, choices).map(|(status, _)| status)
+}
+
+/// As [`simulate`], but also returns the *realised* choice nodes along the
+/// walked path — the sequence a real `execute` would have produced.
+///
+/// The shrink chokepoint needs these: a tree-determined candidate is served
+/// without running the body, but shrink passes still inspect the realised
+/// nodes of non-interesting runs (e.g. the coarse alternative-reduction pass's
+/// shape check), so returning them — rather than an empty vector — keeps the
+/// tree fast-path behaviour-preserving. The realised value at each step is
+/// recovered losslessly from the child's [`ChoiceValueKey`] (see
+/// [`ChoiceValueKey::to_value`]); spans are not recorded in the tree, so the
+/// caller pairs these nodes with an empty span set (unused on the
+/// non-interesting path).
+pub(crate) fn simulate_realised(
+    tree_root: &DataTreeNode,
+    choices: &[ChoiceValue],
+) -> Option<(Status, Vec<ChoiceNode>)> {
     let mut current = tree_root;
+    let mut nodes: Vec<ChoiceNode> = Vec::new();
     // `i` tracks the prefix cursor, which equals `nodes.len()` in the real
     // run: every draw — forced or not — advances it by one.
     let mut i = 0usize;
@@ -335,7 +355,7 @@ pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Opt
         // A run terminated here drawing fewer choices than we walked past;
         // its outcome is fixed regardless of any later values.
         if let Some(status) = current.conclusion {
-            return Some(status);
+            return Some((status, nodes));
         }
         // No draw was ever made from this node (and it didn't conclude), so
         // the path beyond it is unknown.
@@ -346,18 +366,21 @@ pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Opt
         if i >= choices.len() {
             return None;
         }
-        let next = if current.forced {
+        let (realised, next) = if current.forced {
             // Forced: ignore the prefix value, follow the single recorded
-            // (forced) child.
-            current.children.values().next()?
+            // (forced) child; its key is the forced value.
+            let (key, next) = current.children.iter().next()?;
+            (key.to_value(), next.as_ref())
         } else {
             let realised = if kind.validate(&choices[i]) {
                 choices[i].clone()
             } else {
                 kind.unit()
             };
-            current.children.get(&ChoiceValueKey::from(&realised))?
+            let next = current.children.get(&ChoiceValueKey::from(&realised))?;
+            (realised, next.as_ref())
         };
+        nodes.push(ChoiceNode::new((**kind).clone(), realised, current.forced));
         i += 1;
         current = next;
     }

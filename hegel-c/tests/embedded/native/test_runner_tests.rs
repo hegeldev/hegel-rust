@@ -269,6 +269,38 @@ fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
 }
 
 #[test]
+fn shrink_replay_skips_execution_when_tree_knows_the_path() {
+    // The shrink-phase replay must consult the choice tree exactly as
+    // `cached_run` does: a candidate whose path the tree already records as
+    // non-interesting must not re-run the test body. Mirrors
+    // `cached_run_skips_execution_when_tree_knows_the_path`, but for the
+    // shrinker's replay entry point — the path that drives every `Full`
+    // shrink candidate.
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx, count| {
+            record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
+
+            // Replays the recorded one-boolean Valid path plus an unread
+            // trailing choice, as a shape-changing shrink candidate would.
+            // The tree fully determines the outcome, so the body must not run.
+            let candidate = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            let run = ctx.cached_shrink(&candidate, None, 0);
+
+            assert_ne!(run.status, Status::Interesting);
+            assert_eq!(
+                count.get(),
+                0,
+                "shrink replay must skip execution for a tree-known path"
+            );
+        },
+    );
+}
+
+#[test]
 fn span_mutation_does_not_re_execute_identical_proposals() {
     with_counting_ctx(
         |ds| match rbool(ds) {

@@ -37,12 +37,14 @@ use crate::native::core::{
 ///
 /// [`ShrinkRun::Full`] replays a full node sequence with punning (the shape used by
 /// most shrink passes). [`ShrinkRun::Probe`] replays a prefix of choice values and
-/// then draws randomly beyond it — needed by `mutate_and_shrink`.
+/// then draws randomly beyond it — the `extend` behaviour used by `mutate_and_shrink`
+/// and the coarse `try_lower_node_as_alternative` pass. The random continuation is
+/// drawn from the engine's RNG (mirroring Hypothesis's `cached_test_function(..., extend=N)`
+/// drawing from `self.random`), so there is no per-probe seed.
 pub enum ShrinkRun<'a> {
     Full(&'a [ChoiceNode]),
     Probe {
         prefix: &'a [ChoiceValue],
-        seed: u64,
         max_size: usize,
     },
 }
@@ -173,8 +175,9 @@ fn kind_tag(kind: &crate::native::core::ChoiceKind) -> u8 {
 
 impl<'a> Shrinker<'a> {
     /// Construct a Shrinker from a closure that handles both [`ShrinkRun::Full`]
-    /// and [`ShrinkRun::Probe`] requests. Required for `mutate_and_shrink` to
-    /// actually explore random continuations.
+    /// and [`ShrinkRun::Probe`] requests. The `Probe` arm is what lets
+    /// `mutate_and_shrink` and the coarse alternative-reduction pass explore
+    /// random continuations.
     pub fn with_probe(
         test_fn: Box<TestFn<'a>>,
         initial_nodes: Vec<ChoiceNode>,
@@ -348,16 +351,11 @@ impl<'a> Shrinker<'a> {
         Ok((self.test_fn)(run))
     }
 
-    /// Run a probe: replay `prefix` then continue with random draws from a
-    /// deterministic RNG seeded by `seed`, capped at `max_size` choices. If
-    /// the resulting run is interesting and shortlex-smaller than
-    /// `current_nodes`, update `current_nodes`.
-    pub(super) fn probe(
-        &mut self,
-        prefix: &[ChoiceValue],
-        seed: u64,
-        max_size: usize,
-    ) -> ShrinkResult<()> {
+    /// Run a probe: replay `prefix` then continue with random draws (capped at
+    /// `max_size` choices), the continuation drawn from the engine's RNG by the
+    /// test closure. If the resulting run is interesting and shortlex-smaller
+    /// than `current_nodes`, update `current_nodes`.
+    pub(super) fn probe(&mut self, prefix: &[ChoiceValue], max_size: usize) -> ShrinkResult<()> {
         // Global stop once the improvement cap is reached (see `consider`).
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
@@ -366,11 +364,8 @@ impl<'a> Shrinker<'a> {
             return Ok(());
         }
         // The wall-clock guard lives in `run_test_fn`.
-        let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(ShrinkRun::Probe {
-            prefix,
-            seed,
-            max_size,
-        })?;
+        let (is_interesting, actual_nodes, actual_spans) =
+            self.run_test_fn(ShrinkRun::Probe { prefix, max_size })?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
