@@ -43,17 +43,17 @@ int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
     hegel_settings_t *s;
-    HEGEL_CHECK(ctx, hegel_settings_new(ctx, &s));
-    HEGEL_CHECK(ctx, hegel_settings_test_cases(ctx, s, 1));
-    HEGEL_CHECK(ctx, hegel_settings_database(ctx, s, ""));
-    HEGEL_CHECK(ctx, hegel_settings_derandomize(ctx, s, true));
-    HEGEL_CHECK(ctx, hegel_settings_seed(ctx, s, 1, true));
+    HEGEL_CHECK(hegel_settings_new, ctx, &s);
+    HEGEL_CHECK(hegel_settings_test_cases, ctx, s, 1);
+    HEGEL_CHECK(hegel_settings_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_seed, ctx, s, 1, true);
 
     hegel_run_t *run;
-    HEGEL_CHECK(ctx, hegel_run_start(ctx, s, &run));
+    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
     hegel_test_case_t *tc;
-    HEGEL_CHECK(ctx, hegel_next_test_case(ctx, run, &tc));
+    HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
     if (!tc) {
         fprintf(stderr, "expected a test case\n");
         return 1;
@@ -77,9 +77,9 @@ int main(void) {
         printf("invalid schema correctly rejected: rc=%d, message=\"%s\"\n", rc, err);
     }
 
-    HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_INVALID, NULL));
-    HEGEL_CHECK(ctx, hegel_run_free(ctx, run));
-    HEGEL_CHECK(ctx, hegel_settings_free(ctx, s));
-    HEGEL_CHECK(ctx, hegel_context_free(ctx));
+    HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INVALID, NULL);
+    HEGEL_CHECK(hegel_run_free, ctx, run);
+    HEGEL_CHECK(hegel_settings_free, ctx, s);
+    HEGEL_CHECK(hegel_context_free, ctx);
     return ok ? 0 : 1;
 }

@@ -89,14 +89,14 @@ int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
     hegel_settings_t *s;
-    HEGEL_CHECK(ctx, hegel_settings_new(ctx, &s));
-    HEGEL_CHECK(ctx, hegel_settings_test_cases(ctx, s, 100));
-    HEGEL_CHECK(ctx, hegel_settings_database(ctx, s, ""));
-    HEGEL_CHECK(ctx, hegel_settings_derandomize(ctx, s, true));
-    HEGEL_CHECK(ctx, hegel_settings_seed(ctx, s, 0x5ca1ab1e, true));
+    HEGEL_CHECK(hegel_settings_new, ctx, &s);
+    HEGEL_CHECK(hegel_settings_test_cases, ctx, s, 100);
+    HEGEL_CHECK(hegel_settings_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_derandomize, ctx, s, true);
+    HEGEL_CHECK(hegel_settings_seed, ctx, s, 0x5ca1ab1e, true);
 
     hegel_run_t *run;
-    HEGEL_CHECK(ctx, hegel_run_start(ctx, s, &run));
+    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
     const int STEPS = 12;
     size_t total = 0;
@@ -105,13 +105,13 @@ int main(void) {
 
     for (;;) {
         hegel_test_case_t *tc;
-        HEGEL_CHECK(ctx, hegel_next_test_case(ctx, run, &tc));
+        HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
 
         struct live_set live = { .count = 0 };
         int64_t pool;
         if (hegel_new_pool(ctx, tc, &pool) != HEGEL_OK) {
-            HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
 
@@ -154,30 +154,30 @@ int main(void) {
         }
 
         if (bad) {
-            HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_INTERESTING,
-                                                 "drew a non-live variable"));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING,
+                        "drew a non-live variable");
             ok = false;
             continue;
         }
         if (overran) {
-            HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_OVERRUN, NULL));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             continue;
         }
         total++;
-        HEGEL_CHECK(ctx, hegel_mark_complete(ctx, tc, HEGEL_STATUS_VALID, NULL));
+        HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
     }
 
     const hegel_run_result_t *result;
-    HEGEL_CHECK(ctx, hegel_run_result(ctx, run, &result));
+    HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
-    HEGEL_CHECK(ctx, hegel_run_result_status(ctx, result, &status));
+    HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
     bool passed = status == HEGEL_RUN_STATUS_PASSED;
 
     printf("ran %zu valid cases (max live pool size seen: %zu), %s\n",
            total, max_pool, passed ? "PASSED" : "FAILED");
 
-    HEGEL_CHECK(ctx, hegel_run_free(ctx, run));
-    HEGEL_CHECK(ctx, hegel_settings_free(ctx, s));
-    HEGEL_CHECK(ctx, hegel_context_free(ctx));
+    HEGEL_CHECK(hegel_run_free, ctx, run);
+    HEGEL_CHECK(hegel_settings_free, ctx, s);
+    HEGEL_CHECK(hegel_context_free, ctx);
     return (passed && ok) ? 0 : 1;
 }
