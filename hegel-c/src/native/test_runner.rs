@@ -1229,18 +1229,7 @@ impl<'a> Engine<'a> {
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
-        // An overrun is authoritative: if a draw was attempted past the
-        // replayed prefix, the case is an overrun no matter what the body
-        // reported. A body that swallows the overrun `Err` and reports VALID is
-        // acting on incomplete data; honouring that would, among other things,
-        // record a zero-length VALID conclusion that poisons the choice tree.
-        // Collapsing it into `Overrun` here means the overrun is handled in one
-        // place below.
-        let tc_result = if NativeDataSource::overran(&handle) {
-            TestCaseResult::Overrun
-        } else {
-            NativeDataSource::take_outcome(&handle)
-        };
+        let tc_result = NativeDataSource::take_outcome(&handle);
 
         let (status, origin) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),

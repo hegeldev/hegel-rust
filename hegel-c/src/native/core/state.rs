@@ -1167,8 +1167,8 @@ impl NativeTestCase {
         let mut frame = HashSet::new();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
-        if depth + 1 > MAX_DEPTH && self.status.is_none() {
-            self.status = Some(Status::Invalid);
+        if depth + 1 > MAX_DEPTH {
+            self.conclude(Status::Invalid, None);
             self.freeze();
         }
         idx
@@ -1221,13 +1221,31 @@ impl NativeTestCase {
                 span.end = end;
             }
         }
-        if self.status.is_none() {
-            self.status = Some(Status::Valid);
-        }
+        self.conclude(Status::Valid, None);
         if let Some(ref mut obs) = self.observer {
             let origin = self.interesting_origin.clone();
             obs.conclude_test(self.status.unwrap(), origin);
         }
+    }
+
+    /// Conclude the test case with `status` (and `origin`, for an interesting
+    /// verdict). This is the single, write-once status assignment: if the case
+    /// has already concluded — an overrun or failed assume during a draw, a
+    /// too-deep nesting, or the body's reported verdict — that conclusion
+    /// stands and this is a no-op. Every status the engine or the test body
+    /// assigns flows through here, so a concluded case can never be
+    /// re-concluded.
+    pub fn conclude(&mut self, status: Status, origin: Option<InterestingOrigin>) {
+        if self.status.is_none() {
+            self.status = Some(status);
+            self.interesting_origin = origin;
+        }
+    }
+
+    /// The interesting origin recorded by [`Self::conclude`], if the case
+    /// concluded with [`Status::Interesting`].
+    pub fn interesting_origin(&self) -> Option<&InterestingOrigin> {
+        self.interesting_origin.as_ref()
     }
 
     /// Allocate a new collection ID and store the given state.
@@ -1520,7 +1538,7 @@ impl NativeTestCase {
             });
         }
         if self.nodes.len() >= self.max_size {
-            self.status = Some(Status::EarlyStop);
+            self.conclude(Status::EarlyStop, None);
             return Err(EngineError::Overrun);
         }
         Ok(())
@@ -1566,7 +1584,7 @@ impl NativeTestCase {
         // value.
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
-                self.status = Some(Status::EarlyStop);
+                self.conclude(Status::EarlyStop, None);
                 return Err(EngineError::Overrun);
             }
             let value = match template.kind {

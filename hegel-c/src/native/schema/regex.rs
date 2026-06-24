@@ -700,7 +700,7 @@ fn emit_from_chars(
 }
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
-    ntc.status = Some(Status::Invalid);
+    ntc.conclude(Status::Invalid, None);
     Err(EngineError::InvalidTestCase)
 }
 

@@ -11,23 +11,24 @@ use std::sync::{Arc, Mutex};
 
 use ciborium::Value;
 
-use crate::backend::{DataSource, DataSourceError, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::core::{ChoiceNode, EngineError, ManyState, NativeTestCase, Span, Status};
+use crate::native::core::{
+    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, Span, Status,
+};
 use crate::native::schema;
 
 /// Per-test-case state shared between `NativeDataSource` and the engine
 /// that owns the handle.  The engine constructs both halves up-front,
 /// hands the data source into the test body, and then reads back nodes,
-/// spans, and the outcome (populated by `mark_complete`) through the
-/// handle.
+/// spans, and the outcome through the handle.
+///
+/// The outcome lives on `ntc` as its (write-once) status plus interesting
+/// origin — set through [`NativeTestCase::conclude`], whether by a draw
+/// (overrun, assume, too-deep) or by [`DataSource::mark_complete`] — so there
+/// is a single source of truth that a late report cannot overwrite.
 pub struct NativeTestCaseInner {
     pub ntc: NativeTestCase,
-    /// Set by [`DataSource::mark_complete`] after the test body returns.
-    /// `None` only if `mark_complete` was never called — which the lifecycle
-    /// in `run_lifecycle::run_test_case` guarantees won't happen — so the
-    /// engine can safely unwrap when reading the outcome back.
-    pub outcome: Option<TestCaseResult>,
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Populated by [`DataSource::target_observation`]; read back by
     /// the targeting phase via [`NativeDataSource::take_target_observations`].
@@ -51,7 +52,6 @@ impl NativeDataSource {
     pub fn new(ntc: NativeTestCase) -> (Self, NativeTestCaseHandle) {
         let inner = Arc::new(Mutex::new(NativeTestCaseInner {
             ntc,
-            outcome: None,
             target_observations: HashMap::new(),
         }));
         let handle = Arc::clone(&inner);
@@ -98,17 +98,34 @@ impl NativeDataSource {
         )
     }
 
-    /// Read the outcome reported via [`DataSource::mark_complete`].
+    /// The test case's outcome, reconstructed from its write-once status (and
+    /// interesting origin). Whoever concluded the case first — a draw that
+    /// overran or hit a terminal assume, or the body via `mark_complete` — set
+    /// the status, and a later report could not change it.
     ///
-    /// Panics if `mark_complete` was never called; the cross-backend
-    /// lifecycle in `run_lifecycle::run_test_case` guarantees it always is.
+    /// Panics only if the case never concluded — i.e. `mark_complete` was never
+    /// called on a case that didn't conclude during a draw, which the
+    /// cross-backend lifecycle in `run_lifecycle::run_test_case` guarantees
+    /// won't occur.
     pub fn take_outcome(handle: &NativeTestCaseHandle) -> TestCaseResult {
-        handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .outcome
-            .take()
-            .expect("mark_complete must be called for every test case")
+        let inner = handle.lock().unwrap_or_else(|e| e.into_inner());
+        let status = inner
+            .ntc
+            .status
+            .expect("mark_complete must be called for every test case");
+        match status {
+            Status::Valid => TestCaseResult::Valid,
+            Status::Invalid => TestCaseResult::Invalid,
+            Status::EarlyStop => TestCaseResult::Overrun,
+            Status::Interesting => TestCaseResult::Interesting(Failure {
+                origin: inner
+                    .ntc
+                    .interesting_origin()
+                    .map(|o| o.0.clone())
+                    .unwrap_or_default(),
+                reproduce_blob: None,
+            }),
+        }
     }
 
     /// Returns true if a previous request triggered a EngineError abort.
@@ -117,17 +134,6 @@ impl NativeDataSource {
     #[cfg(test)]
     pub(crate) fn test_aborted(&self) -> bool {
         self.aborted.load(Ordering::Relaxed)
-    }
-
-    /// Whether a draw overran the replayed prefix during this test case (the
-    /// test case's own status was set to [`Status::EarlyStop`] when a draw was
-    /// attempted past `max_size`). This is authoritative regardless of what the
-    /// body reported through [`DataSource::mark_complete`]: a body that swallows
-    /// the overrun `Err` and reports VALID is acting on incomplete data, so the
-    /// engine still treats the run as an overrun (mirroring Hypothesis's
-    /// `StopTest` unwind, which never lets such a run report a real outcome).
-    pub fn overran(handle: &NativeTestCaseHandle) -> bool {
-        handle.lock().unwrap_or_else(|e| e.into_inner()).ntc.status == Some(Status::EarlyStop)
     }
 
     /// Acquire the test-case state under the abort guard.  Returns
@@ -151,6 +157,9 @@ impl NativeDataSource {
                 self.aborted.store(true, Ordering::Relaxed);
                 DataSourceError::Assume
             }
+            // Recoverable: the draw failed but the case is not concluded and
+            // not aborted, so the body may handle it and keep going.
+            EngineError::AssumeViolation => DataSourceError::Assume,
             EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
         })
     }
@@ -317,8 +326,10 @@ impl DataSource for NativeDataSource {
             let pool_idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
-                ntc.status = Some(Status::Invalid);
-                return Err(EngineError::InvalidTestCase);
+                // Recoverable: drawing from an exhausted pool can't be
+                // satisfied, but it doesn't conclude the test case — the caller
+                // may handle the rejection and still conclude however it likes.
+                return Err(EngineError::AssumeViolation);
             }
             // The variable ids drawn out of `active` are `i64`.
             let n = active.len();
@@ -368,7 +379,20 @@ impl DataSource for NativeDataSource {
         // channel for per-test-case results: the engine consumes
         // `mark_complete` through the `DataSource` interface.
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.outcome = Some(result.clone());
+        // Route the body's verdict through the test case's single write-once
+        // status interface. If a draw already concluded the case (overrun,
+        // terminal assume, too-deep nesting) that conclusion stands and this is
+        // a no-op — the body cannot re-conclude a concluded case.
+        let (status, origin) = match result {
+            TestCaseResult::Valid => (Status::Valid, None),
+            TestCaseResult::Invalid => (Status::Invalid, None),
+            TestCaseResult::Overrun => (Status::EarlyStop, None),
+            TestCaseResult::Interesting(failure) => (
+                Status::Interesting,
+                Some(InterestingOrigin(failure.origin.clone())),
+            ),
+        };
+        inner.ntc.conclude(status, origin);
     }
 }
 

@@ -77,7 +77,7 @@ fn encode_string(s: String) -> Value {
 }
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
-    ntc.status = Some(Status::Invalid);
+    ntc.conclude(Status::Invalid, None);
     Err(EngineError::InvalidTestCase)
 }
 

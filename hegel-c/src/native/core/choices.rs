@@ -1213,9 +1213,17 @@ pub enum Status {
 pub enum EngineError {
     /// The test case ran out of data (choice buffer exhausted).
     Overrun,
-    /// The engine rejected this test case as invalid (over-deep span,
-    /// exhausted unique collection, regex pattern mismatch, etc.).
+    /// The engine concluded this test case is invalid (over-deep span,
+    /// exhausted unique collection, regex pattern mismatch, etc.). Terminal:
+    /// it sets the test case's status, so the conclusion is write-once and the
+    /// body cannot later report a different outcome.
     InvalidTestCase,
+    /// A single draw could not be satisfied (e.g. drawing from an exhausted
+    /// variable pool), but the test case is *not* concluded. Recoverable: the
+    /// caller may handle the rejection and still conclude the case however it
+    /// likes. Unlike [`Self::InvalidTestCase`] it leaves the status unset and
+    /// does not abort the data source.
+    AssumeViolation,
     /// A caller-supplied schema was semantically invalid (unknown type,
     /// empty character set, unparseable regex, etc.). The string is a
     /// human-readable diagnostic.
@@ -1227,6 +1235,7 @@ impl std::fmt::Display for EngineError {
         match self {
             EngineError::Overrun => write!(f, "choice buffer exhausted (Overrun)"),
             EngineError::InvalidTestCase => write!(f, "engine rejected test case (Invalid)"),
+            EngineError::AssumeViolation => write!(f, "draw could not be satisfied (Assume)"),
             EngineError::InvalidArgument(msg) => write!(f, "{msg}"),
         }
     }

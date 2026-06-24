@@ -74,8 +74,8 @@ pub(crate) fn interpret_schema(
         discarded: false,
     });
     ntc.span_stack.push(span_idx);
-    if depth + 1 > MAX_DEPTH && ntc.status.is_none() {
-        ntc.status = Some(Status::Invalid);
+    if depth + 1 > MAX_DEPTH {
+        ntc.conclude(Status::Invalid, None);
         ntc.freeze();
     }
 
@@ -152,7 +152,7 @@ pub(crate) fn many_reject(
     state.rejections += 1;
     if state.rejections > std::cmp::max(3, 2 * state.count) {
         if state.count < state.min_size {
-            ntc.status = Some(Status::Invalid);
+            ntc.conclude(Status::Invalid, None);
             return Err(EngineError::InvalidTestCase);
         } else {
             state.force_stop = true;
