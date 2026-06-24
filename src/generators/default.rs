@@ -1,11 +1,13 @@
 use super::{
     BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
-    Generator, HashMapGenerator, IntegerGenerator, OptionalGenerator, TextGenerator, VecGenerator,
-    booleans, characters, collections::ArrayGenerator, durations, floats, hashmaps, integers,
-    optional, text, vecs,
+    Generator, HashMapGenerator, IntegerGenerator, IpAddressGenerator, Ipv4AddressGenerator,
+    Ipv6AddressGenerator, OptionalGenerator, TextGenerator, VecGenerator, booleans, characters,
+    collections::ArrayGenerator, durations, floats, hashmaps, integers, ip_addresses, optional,
+    text, vecs,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -208,6 +210,30 @@ impl DefaultGenerator for PathBuf {
     type Generator = BoxedGenerator<'static, PathBuf>;
     fn default_generator() -> Self::Generator {
         text().map(PathBuf::from).boxed()
+    }
+}
+
+impl DefaultGenerator for IpAddr {
+    type Generator = IpAddressGenerator;
+
+    fn default_generator() -> Self::Generator {
+        ip_addresses()
+    }
+}
+
+impl DefaultGenerator for Ipv4Addr {
+    type Generator = Ipv4AddressGenerator;
+
+    fn default_generator() -> Self::Generator {
+        ip_addresses().v4()
+    }
+}
+
+impl DefaultGenerator for Ipv6Addr {
+    type Generator = Ipv6AddressGenerator;
+
+    fn default_generator() -> Self::Generator {
+        ip_addresses().v6()
     }
 }
 

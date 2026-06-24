@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use super::{BasicGenerator, Generator, TestCase};
 use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
 use crate::control::hegel_internal_assert;
@@ -510,67 +512,84 @@ pub fn domains() -> DomainGenerator {
     DomainGenerator { max_length: 255 }
 }
 
-#[derive(Clone, Copy)]
-pub enum IpVersion {
-    V4,
-    V6,
-}
-
-/// Generator for IP address strings. Created by [`ip_addresses()`].
+/// Generator for IP addresses. Created by [`ip_addresses()`].
 ///
-/// By default generates both IPv4 and IPv6 addresses.
-pub struct IpAddressGenerator {
-    version: Option<IpVersion>,
-}
+/// Generates both IPv4 and IPv6 addresses.
+pub struct IpAddressGenerator {}
 
 impl IpAddressGenerator {
     /// Only generate IPv4 addresses.
-    pub fn v4(mut self) -> Self {
-        self.version = Some(IpVersion::V4);
-        self
+    pub fn v4(self) -> Ipv4AddressGenerator {
+        Ipv4AddressGenerator {}
     }
 
     /// Only generate IPv6 addresses.
-    pub fn v6(mut self) -> Self {
-        self.version = Some(IpVersion::V6);
-        self
+    pub fn v6(self) -> Ipv6AddressGenerator {
+        Ipv6AddressGenerator {}
     }
 
     fn build_schema(&self) -> Value {
-        match self.version {
-            Some(IpVersion::V4) => cbor_map! {"type" => "ip_address", "version" => 4u64},
-            Some(IpVersion::V6) => cbor_map! {"type" => "ip_address", "version" => 6u64},
-            None => cbor_map! {
-                "type" => "one_of",
-                "generators" => cbor_array![
-                    cbor_map!{"type" => "ip_address", "version" => 4u64},
-                    cbor_map!{"type" => "ip_address", "version" => 6u64}
-                ]
-            },
+        cbor_map! {
+            "type" => "one_of",
+            "generators" => cbor_array![
+                cbor_map!{"type" => "ip_address", "version" => 4u64},
+                cbor_map!{"type" => "ip_address", "version" => 6u64}
+            ]
         }
     }
 }
 
-impl Generator<String> for IpAddressGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        let version = self.version;
+impl Generator<std::net::IpAddr> for IpAddressGenerator {
+    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::IpAddr>> {
         Some(BasicGenerator::new(self.build_schema(), move |raw| {
-            // one_of returns [index, value]; extract the value for the mixed case.
-            let inner = if version.is_none() {
-                raw.into_array().unwrap().into_iter().nth(1).unwrap()
-            } else {
-                raw
-            };
-            super::deserialize_value(inner)
+            // one_of returns [index, value]; extract the value
+            let inner = raw.into_array().unwrap().into_iter().nth(1).unwrap();
+            let string: String = super::deserialize_value(inner);
+            std::net::IpAddr::from_str(&string).unwrap()
+        }))
+    }
+}
+/// Generator for IPv4 addresses. Created by [`IpAddressGenerator::v4`].
+pub struct Ipv4AddressGenerator {}
+
+impl Ipv4AddressGenerator {
+    fn build_schema(&self) -> Value {
+        cbor_map! {"type" => "ip_address", "version" => 4u64}
+    }
+}
+
+impl Generator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
+    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::Ipv4Addr>> {
+        Some(BasicGenerator::new(self.build_schema(), move |raw| {
+            let string: String = super::deserialize_value(raw);
+            std::net::Ipv4Addr::from_str(&string).unwrap()
         }))
     }
 }
 
-/// Generate IP address strings (IPv4 or IPv6).
+/// Generator for IPv6 addresses. Created by [`IpAddressGenerator::v6`].
+pub struct Ipv6AddressGenerator {}
+
+impl Ipv6AddressGenerator {
+    fn build_schema(&self) -> Value {
+        cbor_map! {"type" => "ip_address", "version" => 6u64}
+    }
+}
+
+impl Generator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
+    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::Ipv6Addr>> {
+        Some(BasicGenerator::new(self.build_schema(), move |raw| {
+            let string: String = super::deserialize_value(raw);
+            std::net::Ipv6Addr::from_str(&string).unwrap()
+        }))
+    }
+}
+
+/// Generate IP addresses (IPv4 or IPv6).
 ///
 /// See [`IpAddressGenerator`] for builder methods.
 pub fn ip_addresses() -> IpAddressGenerator {
-    IpAddressGenerator { version: None }
+    IpAddressGenerator {}
 }
 
 /// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].

@@ -4,6 +4,7 @@ use common::project::TempRustProject;
 use common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::generators as gs;
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 #[test]
@@ -74,6 +75,13 @@ fn test_default_hashmap() {
 #[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
+}
+
+#[test]
+fn test_default_ipaddress() {
+    check_can_generate_examples(gs::default::<IpAddr>());
+    check_can_generate_examples(gs::default::<Ipv4Addr>());
+    check_can_generate_examples(gs::default::<Ipv6Addr>());
 }
 
 #[test]

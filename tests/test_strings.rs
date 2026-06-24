@@ -222,33 +222,6 @@ fn test_datetimes_format() {
     });
 }
 
-#[test]
-fn test_ip_addresses_format() {
-    assert_all_examples(gs::ip_addresses(), |s: &String| {
-        // Accept any valid IPv4 or IPv6 address string (including compressed IPv6).
-        s.parse::<std::net::IpAddr>().is_ok()
-    });
-}
-
-#[test]
-fn test_ip_addresses_v4_only() {
-    assert_all_examples(gs::ip_addresses().v4(), |s: &String| {
-        let parts: Vec<&str> = s.split('.').collect();
-        parts.len() == 4
-            && parts
-                .iter()
-                .all(|p| p.parse::<u32>().is_ok_and(|n| n <= 255))
-    });
-}
-
-#[test]
-fn test_ip_addresses_v6_only() {
-    assert_all_examples(gs::ip_addresses().v6(), |s: &String| {
-        // Accept any valid IPv6 address string (including compressed form like "::").
-        s.parse::<std::net::Ipv6Addr>().is_ok()
-    });
-}
-
 const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
 #[test]
