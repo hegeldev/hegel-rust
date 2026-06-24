@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.23.0 - 2026-06-24
+
+This release:
+
+- changes the `ip_addresses()` generator to return `std::net::IpAddr` instead of `String`
+- changes the `IpAddressGenerator` builder methods (`v4()` and `v6()`) to return new `Ipv4AddressGenerator`/`Ipv6AddressGenerator` types so that they can be used to implement `DefaultGenerator`
+- implements `DefaultGenerator` for `std::net::IpAddr`, `std::net::Ipv4Addr` and `std::net::Ipv6Addr`
+
 ## 0.22.0 - 2026-06-23
 
 This release is a major breaking change to the libhegel C ABI, but will have
