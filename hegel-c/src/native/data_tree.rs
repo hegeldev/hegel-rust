@@ -8,6 +8,7 @@
 //! drawn, an optional terminal `Status`, and a cached exhaustion flag
 //! so the walker can short-circuit dead branches.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
@@ -16,7 +17,7 @@ use rand::seq::SliceRandom;
 
 use crate::control::hegel_internal_debug_assert;
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Status};
+use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, SpanEvent, Status};
 use crate::native::rng::EngineRng;
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
@@ -57,6 +58,28 @@ impl ChoiceValueKey {
     }
 }
 
+/// The terminal outcome recorded at a leaf: everything needed to rebuild the
+/// concluding [`RunResult`](super::test_runner::RunResult) without re-running
+/// the test body. Spans aren't here — they're reconstructed from the per-node
+/// [`SpanEvent`]s along the path — but the rest of the outcome is.
+struct Conclusion {
+    status: Status,
+    /// Interesting-origin string, for an `Interesting` conclusion.
+    origin: Option<String>,
+    target_observations: HashMap<String, f64>,
+}
+
+/// A test case fully reconstructed from the tree by [`simulate_full`], without
+/// executing the body: the realised nodes (from the walk), the spans (replayed
+/// from per-node [`SpanEvent`]s), and the recorded [`Conclusion`].
+pub(crate) struct SimulatedOutcome {
+    pub status: Status,
+    pub nodes: Vec<ChoiceNode>,
+    pub spans: Vec<Span>,
+    pub origin: Option<String>,
+    pub target_observations: HashMap<String, f64>,
+}
+
 #[derive(Default)]
 pub(crate) struct DataTreeNode {
     kind: Option<Arc<ChoiceKind>>,
@@ -67,9 +90,14 @@ pub(crate) struct DataTreeNode {
     /// this to predict realised values correctly.
     forced: bool,
     children: FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
-    /// Terminal status if the test case ended at this node. Only set
+    /// Span open/close events that fired at this node's draw position, in
+    /// order. Recorded once (per path) by [`record_tree_full`] and replayed by
+    /// [`simulate_full`] to rebuild the [`Span`] list faithfully — including
+    /// zero-width spans, whose order can't be recovered from the finished list.
+    span_events: Vec<SpanEvent>,
+    /// Terminal outcome if the test case ended at this node. Only set
     /// when the recording run concluded with `Status >= Invalid`.
-    conclusion: Option<Status>,
+    conclusion: Option<Conclusion>,
     /// Cached: true iff the subtree rooted here has been fully explored.
     pub(crate) is_exhausted: bool,
 }
@@ -144,10 +172,39 @@ impl DataTreeNode {
 /// schema at a position changed from a previous run), so the caller can fold
 /// it into a failing [`TestRunResult`] rather than panicking — keeping it from
 /// aborting an in-process engine driven over FFI. Returns `None` otherwise.
+/// Convenience wrapper for recording a path with only a status (no origin,
+/// observations, or span events) — used by the tree's own tests. Production
+/// records the full outcome via [`record_tree_full`].
+#[cfg(test)]
 pub(crate) fn record_tree(
     tree_root: &mut DataTreeNode,
     nodes: &[ChoiceNode],
     status: Status,
+    kill_depths: &[usize],
+) -> Option<String> {
+    record_tree_full(
+        tree_root,
+        nodes,
+        status,
+        None,
+        &HashMap::new(),
+        &[],
+        kill_depths,
+    )
+}
+
+/// As [`record_tree`], but also records everything needed to rebuild the full
+/// concluding [`RunResult`](super::test_runner::RunResult) from the tree alone:
+/// the interesting `origin`, the `target_observations`, and the per-position
+/// `span_events`. With these the tree is lossless — [`simulate_full`] can serve
+/// any recorded path, of any status, without re-executing the body.
+pub(crate) fn record_tree_full(
+    tree_root: &mut DataTreeNode,
+    nodes: &[ChoiceNode],
+    status: Status,
+    origin: Option<&str>,
+    target_observations: &HashMap<String, f64>,
+    span_events: &[(usize, SpanEvent)],
     kill_depths: &[usize],
 ) -> Option<String> {
     // Iterative descent: a single-path walk can be thousands deep and
@@ -184,10 +241,31 @@ pub(crate) fn record_tree(
         path.push(child.as_mut() as *mut _);
     }
 
+    // Distribute the span events onto the node for each draw position. A run is
+    // deterministic given its path, so re-assigning on a revisited node writes
+    // the same events (idempotent); genuine divergence is caught as a schema
+    // mismatch above or by the flaky re-verify.
+    let mut by_pos: Vec<Vec<SpanEvent>> = vec![Vec::new(); nodes.len() + 1];
+    for (pos, ev) in span_events {
+        if let Some(slot) = by_pos.get_mut(*pos) {
+            slot.push(ev.clone());
+        }
+    }
+    for (depth, events) in by_pos.into_iter().enumerate() {
+        // SAFETY: `path[depth]` is a unique pointer into the tree; no other
+        // live reference aliases it here.
+        let node = unsafe { &mut *path[depth] };
+        node.span_events = events;
+    }
+
     if status >= Status::Invalid {
         // SAFETY: leaf pointer is the only live reference into this subtree.
         let leaf = unsafe { &mut **path.last().unwrap() };
-        leaf.conclusion = Some(status);
+        leaf.conclusion = Some(Conclusion {
+            status,
+            origin: origin.map(str::to_string),
+            target_observations: target_observations.clone(),
+        });
     }
 
     for &depth in kill_depths {
@@ -326,16 +404,77 @@ pub(crate) fn generate_novel_prefix(
 ///
 /// Only `Status >= Invalid` is ever recorded as a conclusion (see
 /// [`record_tree`]), so `EarlyStop` is never returned.
+#[cfg(test)]
 pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
+    simulate_full(tree_root, choices).map(|o| o.status)
+}
+
+/// As [`simulate`], but returns the *entire* recorded outcome — realised nodes,
+/// reconstructed spans, status, origin, and target observations — so a
+/// tree-determined path of any status can be served without running the body.
+///
+/// The realised nodes are recovered from the walk (each value from the child's
+/// [`ChoiceValueKey`], losslessly — see [`ChoiceValueKey::to_value`]). The spans
+/// are rebuilt by replaying each node's [`SpanEvent`]s through the same
+/// span-stack discipline `start_span`/`stop_span` use live, deriving
+/// `start`/`end`/`depth`/`parent`/`discarded`; any spans still open at the
+/// conclusion are closed there exactly as `freeze` does.
+pub(crate) fn simulate_full(
+    tree_root: &DataTreeNode,
+    choices: &[ChoiceValue],
+) -> Option<SimulatedOutcome> {
     let mut current = tree_root;
+    let mut nodes: Vec<ChoiceNode> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    // Indices into `spans` for currently-open spans (nesting order), mirroring
+    // `NativeTestCase::span_stack`.
+    let mut span_stack: Vec<usize> = Vec::new();
     // `i` tracks the prefix cursor, which equals `nodes.len()` in the real
     // run: every draw — forced or not — advances it by one.
     let mut i = 0usize;
     loop {
-        // A run terminated here drawing fewer choices than we walked past;
-        // its outcome is fixed regardless of any later values.
-        if let Some(status) = current.conclusion {
-            return Some(status);
+        // Replay the span events recorded at this draw position, before either
+        // concluding or drawing — exactly when they fired live.
+        let pos = nodes.len();
+        for ev in &current.span_events {
+            match ev {
+                SpanEvent::Open { label } => {
+                    let parent = span_stack.last().copied();
+                    let depth = span_stack.len() as u32;
+                    let idx = spans.len();
+                    spans.push(Span {
+                        start: pos,
+                        end: pos,
+                        label: label.to_string(),
+                        depth,
+                        parent,
+                        discarded: false,
+                    });
+                    span_stack.push(idx);
+                }
+                SpanEvent::Close { discarded } => {
+                    if let Some(idx) = span_stack.pop() {
+                        spans[idx].end = pos;
+                        spans[idx].discarded = *discarded;
+                    }
+                }
+            }
+        }
+        // A run terminated here (drawing fewer choices than we may have walked
+        // past); its outcome is fixed regardless of any later values.
+        if let Some(concl) = &current.conclusion {
+            // Close any spans still open at conclusion, as `freeze` does
+            // (`end` = current position; `discarded` stays false).
+            while let Some(idx) = span_stack.pop() {
+                spans[idx].end = pos;
+            }
+            return Some(SimulatedOutcome {
+                status: concl.status,
+                nodes,
+                spans,
+                origin: concl.origin.clone(),
+                target_observations: concl.target_observations.clone(),
+            });
         }
         // No draw was ever made from this node (and it didn't conclude), so
         // the path beyond it is unknown.
@@ -346,18 +485,21 @@ pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Opt
         if i >= choices.len() {
             return None;
         }
-        let next = if current.forced {
+        let (realised, next) = if current.forced {
             // Forced: ignore the prefix value, follow the single recorded
-            // (forced) child.
-            current.children.values().next()?
+            // (forced) child; its key is the forced value.
+            let (key, next) = current.children.iter().next()?;
+            (key.to_value(), next.as_ref())
         } else {
             let realised = if kind.validate(&choices[i]) {
                 choices[i].clone()
             } else {
                 kind.unit()
             };
-            current.children.get(&ChoiceValueKey::from(&realised))?
+            let next = current.children.get(&ChoiceValueKey::from(&realised))?;
+            (realised, next.as_ref())
         };
+        nodes.push(ChoiceNode::new((**kind).clone(), realised, current.forced));
         i += 1;
         current = next;
     }

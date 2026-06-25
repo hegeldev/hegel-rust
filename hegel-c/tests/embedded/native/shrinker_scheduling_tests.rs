@@ -493,7 +493,7 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
     assert!(shrinker.consider(&[int_node(0)]).is_err());
     assert!(
         shrinker
-            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8)
+            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)
             .is_err()
     );
     assert_eq!(shrinker.calls, 0, "the cap stops before any execution");
@@ -520,7 +520,7 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     assert!(shrinker.consider(&[int_node(0)]).is_err());
     assert!(
         shrinker
-            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 0, 8)
+            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)
             .is_err()
     );
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");

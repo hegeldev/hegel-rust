@@ -1027,6 +1027,7 @@ fn choice_kind_unit_dispatches_to_each_sub_kind() {
 fn engine_error_display_covers_all_variants() {
     assert!(EngineError::Overrun.to_string().contains("Overrun"));
     assert!(EngineError::InvalidTestCase.to_string().contains("Invalid"));
+    assert!(EngineError::AssumeViolation.to_string().contains("Assume"));
     assert_eq!(
         EngineError::InvalidArgument("nope".to_string()).to_string(),
         "nope"
@@ -1070,8 +1071,6 @@ fn node_sort_key_big_integer_orders_correctly() {
         false,
     )];
     assert!(sort_key(&big) < sort_key(&bytes));
-    // The owned NodeSortKey matches the borrowed comparison.
-    assert!(big_small[0].sort_key() < big_large[0].sort_key());
 }
 
 #[test]
@@ -1158,6 +1157,29 @@ fn random_value_boolean_consumes_exactly_one_byte() {
     assert_eq!(got, u32::from(byte[0]) >= 128);
     // Exactly one byte was consumed: the two RNGs are now in lockstep.
     assert_eq!(a.next_u64(), b.next_u64());
+}
+
+#[test]
+fn choice_value_equality_is_false_across_variants() {
+    // `ChoiceValue`'s `PartialEq` only matches like-with-like; the cross-variant
+    // fallback arm makes values of different kinds unequal even when they look
+    // alike (e.g. integer 0, boolean false, float 0.0, empty bytes/string).
+    let values = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Float(0.0),
+        ChoiceValue::Bytes(Vec::new()),
+        ChoiceValue::String(Vec::new()),
+    ];
+    for (i, a) in values.iter().enumerate() {
+        for (j, b) in values.iter().enumerate() {
+            if i == j {
+                assert_eq!(a, b);
+            } else {
+                assert_ne!(a, b);
+            }
+        }
+    }
 }
 
 #[test]

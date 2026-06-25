@@ -97,8 +97,11 @@ impl<'a> Shrinker<'a> {
         prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
-        for seed in 0..3u64 {
-            self.probe(&prefix, seed, max_size)?;
+        // Three random continuations, mirroring Hypothesis's
+        // `try_lower_node_as_alternative` (`for _ in range(3)`); each draws a
+        // fresh suffix from the engine RNG.
+        for _ in 0..3 {
+            self.probe(&prefix, max_size)?;
             if self.improvements > epoch {
                 return Ok(true);
             }

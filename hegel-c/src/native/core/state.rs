@@ -823,6 +823,18 @@ pub struct Span {
     pub discarded: bool,
 }
 
+/// A span-boundary event, captured live (in `start_span` / `stop_span`) in
+/// fire order so the data tree can faithfully replay the span structure —
+/// including zero-width spans, whose open/close order can't be recovered from
+/// the finished [`Span`] list alone — without re-executing the test body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpanEvent {
+    /// `start_span(label)` was called.
+    Open { label: u64 },
+    /// `stop_span(discarded)` was called.
+    Close { discarded: bool },
+}
+
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.
 pub const MAX_DEPTH: u32 = 100;
@@ -1024,6 +1036,10 @@ pub struct NativeTestCase {
     /// Each entry was pushed by `start_span` and is awaiting a matching
     /// `stop_span` call.
     pub span_stack: Vec<usize>,
+    /// Span open/close events in fire order, each tagged with the draw
+    /// position (`nodes.len()`) at which it occurred. Recorded so the data
+    /// tree can replay the span structure faithfully (see [`SpanEvent`]).
+    pub span_events: Vec<(usize, SpanEvent)>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
@@ -1090,6 +1106,7 @@ impl NativeTestCase {
             state_machines: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
+            span_events: Vec::new(),
             has_discards: false,
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
@@ -1164,11 +1181,12 @@ impl NativeTestCase {
             discarded: false,
         });
         self.span_stack.push(idx);
+        self.span_events.push((start, SpanEvent::Open { label }));
         let mut frame = HashSet::new();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
-        if depth + 1 > MAX_DEPTH && self.status.is_none() {
-            self.status = Some(Status::Invalid);
+        if depth + 1 > MAX_DEPTH {
+            self.conclude(Status::Invalid, None);
             self.freeze();
         }
         idx
@@ -1187,6 +1205,8 @@ impl NativeTestCase {
             span.end = end;
             span.discarded = discard;
         }
+        self.span_events
+            .push((end, SpanEvent::Close { discarded: discard }));
         if discard {
             self.has_discards = true;
         }
@@ -1221,13 +1241,31 @@ impl NativeTestCase {
                 span.end = end;
             }
         }
-        if self.status.is_none() {
-            self.status = Some(Status::Valid);
-        }
+        self.conclude(Status::Valid, None);
         if let Some(ref mut obs) = self.observer {
             let origin = self.interesting_origin.clone();
             obs.conclude_test(self.status.unwrap(), origin);
         }
+    }
+
+    /// Conclude the test case with `status` (and `origin`, for an interesting
+    /// verdict). This is the single, write-once status assignment: if the case
+    /// has already concluded — an overrun or failed assume during a draw, a
+    /// too-deep nesting, or the body's reported verdict — that conclusion
+    /// stands and this is a no-op. Every status the engine or the test body
+    /// assigns flows through here, so a concluded case can never be
+    /// re-concluded.
+    pub fn conclude(&mut self, status: Status, origin: Option<InterestingOrigin>) {
+        if self.status.is_none() {
+            self.status = Some(status);
+            self.interesting_origin = origin;
+        }
+    }
+
+    /// The interesting origin recorded by [`Self::conclude`], if the case
+    /// concluded with [`Status::Interesting`].
+    pub fn interesting_origin(&self) -> Option<&InterestingOrigin> {
+        self.interesting_origin.as_ref()
     }
 
     /// Allocate a new collection ID and store the given state.
@@ -1520,7 +1558,7 @@ impl NativeTestCase {
             });
         }
         if self.nodes.len() >= self.max_size {
-            self.status = Some(Status::EarlyStop);
+            self.conclude(Status::EarlyStop, None);
             return Err(EngineError::Overrun);
         }
         Ok(())
@@ -1566,7 +1604,7 @@ impl NativeTestCase {
         // value.
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
-                self.status = Some(Status::EarlyStop);
+                self.conclude(Status::EarlyStop, None);
                 return Err(EngineError::Overrun);
             }
             let value = match template.kind {

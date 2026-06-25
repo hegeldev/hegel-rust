@@ -61,7 +61,7 @@ impl<'a> Shrinker<'a> {
             .iter()
             .map(|&i| {
                 (
-                    self.current_nodes[i].sort_key(),
+                    self.current_nodes[i].sort_key_ref(),
                     self.current_nodes[i].value.clone(),
                 )
             })
@@ -100,7 +100,9 @@ impl<'a> Shrinker<'a> {
                 }
                 let idx_j = valid[j];
                 let idx_prev = valid[j - 1];
-                if self.current_nodes[idx_prev].sort_key() <= self.current_nodes[idx_j].sort_key() {
+                if self.current_nodes[idx_prev].sort_key_ref()
+                    <= self.current_nodes[idx_j].sort_key_ref()
+                {
                     break;
                 }
                 let v_j = self.current_nodes[idx_j].value.clone();

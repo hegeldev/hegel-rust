@@ -236,66 +236,6 @@ fn forced_nodes_survive_every_shrinker_pass() {
 }
 
 #[test]
-fn consider_cache_evicts_when_over_capacity() {
-    // The cache is bounded at 4096 entries; once we cross that limit
-    // each new insertion evicts an arbitrary existing entry.  Driving
-    // 4100 distinct uninteresting candidates exercises the eviction
-    // path at mod.rs:~167.
-    let initial = vec![int_node(0)];
-    let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
-            // Always uninteresting → every candidate gets cached.
-            ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
-            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
-        }),
-        initial,
-        Spans::new(),
-    );
-    for v in 1..=4100i128 {
-        // Each candidate has a distinct value → distinct sort_key →
-        // distinct cache key.
-        shrinker.consider(&[int_node(v)]).unwrap();
-    }
-    // No panic, no growth past the bound (we only assert the rough
-    // upper bound — exact size depends on hashing).
-    // The behaviour we care about is that `consider` keeps working
-    // even after the bound is reached.
-    assert!(!shrinker.consider(&[int_node(99999)]).unwrap());
-}
-
-#[test]
-fn consider_cache_short_circuits_repeated_candidate() {
-    // Closure increments a counter on each invocation.  Calling
-    // `consider` twice with the same candidate should only invoke the
-    // closure once.
-    use std::cell::Cell;
-    use std::rc::Rc;
-    let count = Rc::new(Cell::new(0u32));
-    let inner = Rc::clone(&count);
-    let initial = vec![int_node(5)];
-    let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
-            ShrinkRun::Full(nodes) => {
-                inner.set(inner.get() + 1);
-                // Return false so the candidate stays in cache without
-                // becoming the new shrink target.
-                (false, nodes.to_vec(), Spans::new())
-            }
-            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
-        }),
-        initial,
-        Spans::new(),
-    );
-    // Shortlex-SMALLER than the initial target [5] so it reaches the run/cache
-    // path (a larger candidate would be free-rejected before the cache).
-    let candidate = vec![int_node(3)];
-    shrinker.consider(&candidate).unwrap();
-    shrinker.consider(&candidate).unwrap();
-    shrinker.consider(&candidate).unwrap();
-    assert_eq!(count.get(), 1);
-}
-
-#[test]
 fn clear_change_tracking_rebaselines_and_empties_set() {
     let initial = vec![int_node(10), int_node(10)];
     let mut shrinker = Shrinker::with_probe(
