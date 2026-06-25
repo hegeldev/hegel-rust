@@ -196,29 +196,36 @@ fn bool_node(value: bool) -> ChoiceNode {
 }
 
 #[test]
-fn cached_run_skips_execution_when_tree_knows_the_path() {
+fn cached_test_function_serves_tree_known_path_without_executing() {
     with_counting_ctx(
         |ds| match rbool(ds) {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
-            // The tree already records a one-boolean run that concluded
-            // Valid; replaying that path (plus an unread trailing choice,
-            // as a duplicated span would produce) must not run the body.
+            // The tree already records a one-boolean Valid run; replaying that
+            // path (plus an unread trailing choice, as a shape-changing shrink
+            // candidate would produce) is served from the tree without running
+            // the body. This is the single chokepoint both generation mutation
+            // and shrinking go through.
             record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
 
-            let (run, executed) =
-                ctx.cached_run(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)]);
+            let run = ctx.cached_test_function(
+                &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
+                None,
+                0,
+            );
             assert_eq!(run.status, Status::Valid);
-            assert!(!executed);
-            assert_eq!(count.get(), 0);
+            assert_eq!(count.get(), 0, "tree-known path must not run the body");
+            // Realised nodes are recovered from the tree walk (the trailing
+            // choice was never read).
+            assert_eq!(run.nodes.len(), 1);
         },
     );
 }
 
 #[test]
-fn cached_run_executes_novel_then_serves_repeat_from_cache() {
+fn cached_test_function_executes_novel_then_serves_repeat() {
     with_counting_ctx(
         |ds| match rbool(ds) {
             Ok(_) => TestCaseResult::Valid,
@@ -227,75 +234,62 @@ fn cached_run_executes_novel_then_serves_repeat_from_cache() {
         |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let (first, executed_first) = ctx.cached_run(&choices);
-            assert!(executed_first);
+            // Novel: executes and records the run into the tree.
+            let first = ctx.cached_test_function(&choices, None, 0);
+            assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            // A second identical replay is served without re-running.
-            let (second, executed_second) = ctx.cached_run(&choices);
-            assert!(!executed_second);
-            assert_eq!(count.get(), 1);
-            assert_eq!(first.status, second.status);
+            // Exact repeat: served from the tree, no re-run.
+            let second = ctx.cached_test_function(&choices, None, 0);
+            assert_eq!(second.status, Status::Valid);
+            assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
         },
     );
 }
 
 #[test]
-fn cached_run_reexecutes_known_interesting_path_to_recover_payload() {
-    // The tree can record that a path was Interesting but not the failure's
-    // nodes/origin, so a cached_run on a tree-known Interesting path falls
-    // through to a real execution to recover that payload.
+fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
+    // The lossless tree records the full outcome — status, origin, and the
+    // spans (replayed from per-node events). So an interesting path is served
+    // from the tree with its origin and spans intact and *without* re-running
+    // the body; there is no separate result cache and no re-execution.
     with_counting_ctx(
-        |ds| match rbool(ds) {
-            Ok(true) => boom("boom"),
-            Ok(false) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
+        |ds| {
+            // A span around the single draw, so the recorded path carries one
+            // span to reconstruct. Interesting on `true`.
+            ds.start_span(7).unwrap();
+            let b = rbool(ds);
+            ds.stop_span(false).unwrap();
+            match b {
+                Ok(true) => boom("boom-on-true"),
+                Ok(false) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
         },
         |ctx, count| {
-            record_tree(
-                &mut ctx.tree_root,
-                &[bool_node(true)],
-                Status::Interesting,
-                &[],
-            );
+            let choices = [ChoiceValue::Boolean(true)];
 
-            let (run, executed) = ctx.cached_run(&[ChoiceValue::Boolean(true)]);
-            assert_eq!(run.status, Status::Interesting);
-            assert!(executed);
+            // First call executes, finds the bug, and records it (origin +
+            // spans + status) into the tree.
+            let first = ctx.cached_test_function(&choices, None, 0);
+            assert_eq!(first.status, Status::Interesting);
+            assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
-            assert!(run.origin.is_some());
-        },
-    );
-}
 
-#[test]
-fn shrink_replay_skips_execution_when_tree_knows_the_path() {
-    // The shrink-phase replay must consult the choice tree exactly as
-    // `cached_run` does: a candidate whose path the tree already records as
-    // non-interesting must not re-run the test body. Mirrors
-    // `cached_run_skips_execution_when_tree_knows_the_path`, but for the
-    // shrinker's replay entry point — the path that drives every `Full`
-    // shrink candidate.
-    with_counting_ctx(
-        |ds| match rbool(ds) {
-            Ok(_) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
-        },
-        |ctx, count| {
-            record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
-
-            // Replays the recorded one-boolean Valid path plus an unread
-            // trailing choice, as a shape-changing shrink candidate would.
-            // The tree fully determines the outcome, so the body must not run.
-            let candidate = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
-            let run = ctx.cached_shrink(&candidate, None, 0);
-
-            assert_ne!(run.status, Status::Interesting);
+            // Second identical call: served entirely from the tree — no
+            // execution — with the origin and spans reconstructed.
+            let second = ctx.cached_test_function(&choices, None, 0);
+            assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
-                0,
-                "shrink replay must skip execution for a tree-known path"
+                1,
+                "interesting path must be served from the tree, not re-run"
             );
+            assert_eq!(second.origin, first.origin);
+            assert_eq!(second.spans.len(), 1);
+            assert_eq!(second.spans[0].label, "7");
+            assert_eq!(second.spans[0].start, 0);
+            assert_eq!(second.spans[0].end, 1);
         },
     );
 }
@@ -323,63 +317,10 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
 }
 
 #[test]
-fn cached_shrink_executes_novel_then_serves_repeat_from_data_cache() {
-    with_counting_ctx(
-        |ds| match rbool(ds) {
-            Ok(_) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
-        },
-        |ctx, count| {
-            let choices = [ChoiceValue::Boolean(true)];
-
-            // First call: novel, executes and is memoised in the data cache.
-            let first = ctx.cached_shrink(&choices, None, 0);
-            assert_eq!(first.status, Status::Valid);
-            assert_eq!(count.get(), 1);
-
-            // Second identical call: served from the data cache, no re-run.
-            let second = ctx.cached_shrink(&choices, None, 0);
-            assert_eq!(second.status, Status::Valid);
-            assert_eq!(count.get(), 1, "exact repeat must hit the data cache");
-        },
-    );
-}
-
-#[test]
-fn cached_shrink_reexecutes_known_interesting_tree_path_to_recover_payload() {
-    // A tree-known *Interesting* path can't carry the failure's origin/spans,
-    // so the chokepoint falls through to a real execution (mirroring
-    // `cached_run_reexecutes_known_interesting_path_to_recover_payload`).
-    with_counting_ctx(
-        |ds| match rbool(ds) {
-            Ok(true) => boom("boom"),
-            Ok(false) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
-        },
-        |ctx, count| {
-            record_tree(
-                &mut ctx.tree_root,
-                &[bool_node(true)],
-                Status::Interesting,
-                &[],
-            );
-
-            let run = ctx.cached_shrink(&[ChoiceValue::Boolean(true)], None, 0);
-            assert_eq!(run.status, Status::Interesting);
-            assert_eq!(
-                count.get(),
-                1,
-                "interesting path must execute to recover origin"
-            );
-            assert!(run.origin.is_some());
-        },
-    );
-}
-
-#[test]
-fn cached_shrink_probe_replays_prefix_then_draws_continuation() {
+fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
     // `extend > 0` replays the prefix and draws the remaining choices from the
-    // engine RNG (the coarse / mutate_and_shrink probe path).
+    // engine RNG (the coarse / mutate_and_shrink probe path). The realised path
+    // isn't known up front, so it always executes.
     with_counting_ctx(
         |ds| {
             // Two boolean draws: the first is the replayed prefix, the second
@@ -391,7 +332,7 @@ fn cached_shrink_probe_replays_prefix_then_draws_continuation() {
         },
         |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_shrink(&prefix, None, 1);
+            let run = ctx.cached_test_function(&prefix, None, 1);
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             // Prefix value replayed, continuation drawn → two realised nodes.

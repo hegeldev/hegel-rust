@@ -19,8 +19,8 @@ use rand::RngExt;
 
 use crate::backend::{DataSource, Failure, RunError, TestCaseResult};
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
-    Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
+    Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
@@ -44,6 +44,10 @@ pub struct RunResult {
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
+    /// Live span open/close events (with draw positions) from this execution,
+    /// for folding into the choice tree. Empty on a result reconstructed from
+    /// the tree (the events are already recorded there).
+    pub span_events: Vec<(usize, SpanEvent)>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -583,7 +587,7 @@ impl<'a> Engine<'a> {
             let shrink_deadline = std::time::Instant::now() + shrink_budget;
             let mut shrink_timed_out = false;
             // Worklist rather than a fixed snapshot: a shrink run can stumble
-            // onto a bug with a *new* origin, which `cached_shrink`'s
+            // onto a bug with a *new* origin, which `cached_test_function`'s
             // `record_run` folds straight into `self.interesting` (sort-key
             // gated, like every interesting result). Re-scanning the keys each
             // iteration therefore picks those up and shrinks them too, exactly
@@ -628,12 +632,10 @@ impl<'a> Engine<'a> {
                             if verbosity == Verbosity::Verbose {
                                 eprintln!("Running test case");
                             }
-                            // Single replay chokepoint: `cached_shrink` consults
-                            // the data cache and the choice tree, executes only
-                            // when neither already determines the outcome, and
-                            // records every executed run (counters, the
-                            // interesting map, persistence, the tree) via
-                            // `record_run`. The interesting-origin filter is
+                            // Single replay chokepoint: `cached_test_function`
+                            // serves a path the lossless tree already records
+                            // (no execution, any status), and otherwise executes
+                            // and records it. The interesting-origin filter is
                             // applied here, to the result — replay and matching
                             // are not entangled, mirroring Hypothesis's shrink
                             // predicate.
@@ -641,9 +643,9 @@ impl<'a> Engine<'a> {
                                 ShrinkRun::Full(nodes) => {
                                     let choices: Vec<ChoiceValue> =
                                         nodes.iter().map(|n| n.value.clone()).collect();
-                                    this.cached_shrink(&choices, Some(nodes), 0)
+                                    this.cached_test_function(&choices, Some(nodes), 0)
                                 }
-                                ShrinkRun::Probe { prefix, max_size } => this.cached_shrink(
+                                ShrinkRun::Probe { prefix, max_size } => this.cached_test_function(
                                     prefix,
                                     None,
                                     max_size.saturating_sub(prefix.len()),
@@ -1058,19 +1060,22 @@ impl<'a> Persister<'a> {
 /// The native engine — Hegel's analogue of Hypothesis's `ConjectureRunner`.
 ///
 /// One object owns everything a test run touches: the `run_case` executor
-/// callback, the RNG, the example database (via the [`Persister`]), the
-/// shrink-result cache, the choice tree, the per-origin interesting map,
-/// targeting observations, and all run-level counters. Every executed test
-/// case passes through one of three sibling chokepoints, each of which records
-/// the run exactly once so the bookkeeping cannot drift between phases:
-/// generation through [`Self::test_function`], generation-phase span mutation
-/// through [`Self::cached_run`], and shrinking through [`Self::cached_shrink`].
-/// All three read the data cache and the choice tree to skip redundant
-/// executions; `test_function` and `cached_shrink` also record into the tree
-/// (`cached_run` deliberately does not, to keep the novel-prefix RNG trajectory
-/// independent of generation-phase mutation). `cached_shrink` returns the
-/// realised result; the interesting-origin filter is applied by its caller, and
-/// bugs with new origins surface through the same [`update_interesting`] path as
+/// callback, the RNG, the example database (via the [`Persister`]), the choice
+/// tree, the per-origin interesting map, targeting observations, and all
+/// run-level counters. The choice tree is the single source of truth for
+/// already-seen paths: it is *lossless* (each conclusion records nodes via the
+/// path, plus span events, status, origin, and target observations), so any
+/// recorded path is replayed by [`data_tree::simulate_full`] without re-running
+/// the body — there is no separate result cache.
+///
+/// Every execution records into the tree via [`Self::record_run`].
+/// [`Self::test_function`] is the raw executor+recorder (generation's novel
+/// prefixes go straight through it); [`Self::cached_test_function`] is the
+/// single replay chokepoint shared by generation-phase span mutation and
+/// shrinking — it serves a recorded path from the tree and otherwise falls
+/// through to `test_function`. `cached_test_function` returns the realised
+/// result; the interesting-origin filter is applied by its caller, and bugs
+/// with new origins surface through the same [`update_interesting`] path as
 /// generation.
 pub(crate) struct Engine<'a> {
     settings: &'a Settings,
@@ -1078,7 +1083,6 @@ pub(crate) struct Engine<'a> {
     run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     rng: EngineRng,
     persister: Persister<'a>,
-    cache: HashMap<Vec<ChoiceValue>, RunResult>,
     pub(crate) tree_root: crate::native::data_tree::DataTreeNode,
     /// Per-origin tracking: each distinct panic site (file:line:col captured
     /// by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
@@ -1119,7 +1123,6 @@ impl<'a> Engine<'a> {
             run_case,
             rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
-            cache: HashMap::new(),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::new(),
             targeting: crate::native::targeting::TargetingState::new(),
@@ -1153,30 +1156,28 @@ impl<'a> Engine<'a> {
     pub(crate) fn test_function(&mut self, ntc: NativeTestCase) -> (RunResult, Option<String>) {
         let tc_start = std::time::Instant::now();
         let run = self.execute(ntc);
-        let mismatch = self.record_run(&run, tc_start.elapsed(), true);
+        let mismatch = self.record_run(&run, tc_start.elapsed());
         (run, mismatch)
     }
 
-    /// Record one executed test case: counters, test time, triviality, the
-    /// targeting observations, the per-origin interesting map (with its
-    /// incremental database save), the bug-window markers, and — unless
-    /// `feed_tree` is false — the choice tree.
+    /// Record one executed test case: the choice tree (losslessly — nodes,
+    /// span events, and the full conclusion), counters, test time, triviality,
+    /// the targeting observations, the per-origin interesting map (with its
+    /// incremental database save), and the bug-window markers.
     ///
-    /// `feed_tree: false` is for span-mutation probes, whose paths are
-    /// deliberately kept out of the tree so the seeded novel-prefix walk's
-    /// RNG trajectory stays independent of mutation (see
-    /// [`Self::cached_run`]).
-    fn record_run(
-        &mut self,
-        run: &RunResult,
-        elapsed: std::time::Duration,
-        feed_tree: bool,
-    ) -> Option<String> {
-        let mismatch = if feed_tree {
-            crate::native::data_tree::record_tree(&mut self.tree_root, &run.nodes, run.status, &[])
-        } else {
-            None
-        };
+    /// Every execution feeds the tree, so a later replay of the same path is
+    /// served by [`data_tree::simulate_full`] without re-running the body.
+    ///
+    fn record_run(&mut self, run: &RunResult, elapsed: std::time::Duration) -> Option<String> {
+        let mismatch = crate::native::data_tree::record_tree_full(
+            &mut self.tree_root,
+            &run.nodes,
+            run.status,
+            run.origin.as_deref(),
+            &run.target_observations,
+            &run.span_events,
+            &[],
+        );
         self.calls += 1;
         // Test time accrues for every status (Hypothesis records draw times
         // regardless of outcome), so a slow generator that is mostly
@@ -1228,6 +1229,7 @@ impl<'a> Engine<'a> {
         (self.run_case)(Box::new(data_source));
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
+        let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle);
 
@@ -1244,55 +1246,41 @@ impl<'a> Engine<'a> {
             spans,
             origin,
             target_observations,
+            span_events,
         }
     }
 
-    /// Single shrink-phase replay chokepoint, the analogue of Hypothesis's
-    /// `cached_test_function`. Replays `choices`, drawing up to `extend` further
-    /// choices beyond them, and returns the realised [`RunResult`]. The
-    /// interesting-origin filter is applied by the caller to this result, so
-    /// replay and origin-matching are not entangled — exactly as Hypothesis
-    /// applies its shrink predicate.
+    /// The single replay chokepoint — Hypothesis's `cached_test_function` —
+    /// shared by generation-phase span mutation and shrinking. Replays
+    /// `choices` (drawing up to `extend` further choices beyond them) and
+    /// returns the realised [`RunResult`]. Any predicate (e.g. the
+    /// interesting-origin filter) is applied by the caller, so replay and
+    /// matching are not entangled.
     ///
-    /// Before executing it consults, in order: the exact-input data cache (only
-    /// when `extend == 0` — with an extend the realised sequence is not known up
-    /// front, like Hypothesis skipping the cache for a `ChoiceTemplate`), then
-    /// the choice tree via [`data_tree::simulate`]. A tree-determined
-    /// non-interesting path is served without running the body, returning the
-    /// realised nodes recovered from the tree walk ([`data_tree::simulate_realised`])
-    /// so shrink passes that inspect a non-interesting run's shape still work
-    /// (spans are unused there). Executed runs are memoised in the data cache
-    /// and recorded into the choice tree (`feed_tree: true`), like generation
-    /// and exactly as Hypothesis records shrink candidates, so later candidates
-    /// retracing the path are short-circuited too.
-    fn cached_shrink(
+    /// With `extend == 0` the realised path is known up front, so a path the
+    /// lossless tree already records is served by [`data_tree::simulate_full`]
+    /// with its full outcome — nodes, spans, status, origin, observations —
+    /// without running the body, for *any* status (interesting included). With
+    /// `extend > 0` the random continuation isn't known ahead of time, so it
+    /// always executes. A genuine miss (a novel or undetermined path) runs
+    /// through [`Self::test_function`], which records the run into the tree so a
+    /// later replay of the same path is served. There is no separate result
+    /// cache: the tree is the single source of truth.
+    fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> RunResult {
         if extend == 0 {
-            if let Some(cached) = self.cache.get(choices) {
-                return cached.clone();
-            }
-        }
-        if let Some((status, realised)) =
-            crate::native::data_tree::simulate_realised(&self.tree_root, choices)
-        {
-            if status != Status::Interesting {
-                // Non-interesting and fully determined by the tree: serve it
-                // without running the body. Return the *realised* nodes (the
-                // tree walk recovers them) so shrink passes that inspect a
-                // non-interesting run's shape still work; spans are unused on
-                // this path. An interesting (or undetermined) path falls
-                // through to a real execution, which recovers the spans and
-                // origin the tree doesn't carry.
+            if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices) {
                 return RunResult {
-                    status,
-                    nodes: realised,
-                    spans: Vec::new(),
-                    origin: None,
-                    target_observations: HashMap::new(),
+                    status: out.status,
+                    nodes: out.nodes,
+                    spans: out.spans,
+                    origin: out.origin,
+                    target_observations: out.target_observations,
+                    span_events: Vec::new(),
                 };
             }
         }
@@ -1301,75 +1289,12 @@ impl<'a> Engine<'a> {
         } else {
             NativeTestCase::for_probe(choices, self.rng_spawn(), choices.len() + extend)
         };
-        let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc);
-        // Record the run into the choice tree (`feed_tree: true`), like
-        // generation's `test_function` and exactly as Hypothesis records every
-        // executed shrink candidate. Later candidates that retrace this path
-        // are then short-circuited by the tree read above, not just exact
-        // repeats by the data cache. This is sound because `execute` reports an
-        // overrun as `EarlyStop` (never a conclusion), so a shrink candidate
-        // that draws fewer choices than the tree expects can't record a
-        // spurious conclusion that conflicts with a real draw.
-        self.record_run(&run, tc_start.elapsed(), true);
-        let key: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
-        self.cache.insert(key, run.clone());
+        // A miss: run and record through `test_function`, which feeds the tree
+        // like any other executed case. The non-determinism mismatch is dropped
+        // — the per-origin flaky re-verify is authoritative for shrinking, and a
+        // generation-mutation mismatch is benign.
+        let (run, _mismatch) = self.test_function(ntc);
         run
-    }
-
-    /// Hypothesis's `cached_test_function`, ported: replay `choices` only
-    /// when their outcome isn't already known. First the exact-input data
-    /// cache is consulted; failing that, `choices` are *simulated* against
-    /// the generation `tree_root` (read-only) — if that simulation reaches a
-    /// recorded conclusion without hitting a previously-unseen draw, the test
-    /// body is not run at all. Only a genuinely novel sequence (or a
-    /// known-`Interesting` one, whose nodes/origin the tree can't carry)
-    /// falls through to a real [`Self::execute`], whose result is memoised in
-    /// the data cache.
-    ///
-    /// The realised result is deliberately *not* recorded back into
-    /// `tree_root`. The tree drives generation's `generate_novel_prefix`
-    /// walk, whose RNG consumption depends on the tree's shape; folding the
-    /// mutation pass's paths into it would perturb that walk and so shift the
-    /// entire (seeded) generation trajectory — changing *which* inputs and
-    /// mutations are explored — for no gain to this cache, which only needs
-    /// to recognise paths generation already covered. Leaving the tree
-    /// generation-only keeps the search identical to the pre-cache behaviour
-    /// (where mutations never touched the tree) while still skipping the
-    /// redundant re-executions; the data cache catches exact mutation repeats
-    /// the tree can't.
-    ///
-    /// Returns the result plus whether the test body actually ran, so
-    /// callers charge their execution budget to real runs only. Span
-    /// mutation proposes many sequences whose paths are already covered by
-    /// generation (e.g. duplicating a span the test never reads past);
-    /// pre-cache the native backend ran the body for every one of them,
-    /// executing the test several times more often than Hypothesis.
-    fn cached_run(&mut self, choices: &[ChoiceValue]) -> (RunResult, bool) {
-        if let Some(cached) = self.cache.get(choices) {
-            return (cached.clone(), false);
-        }
-        if let Some(status) = crate::native::data_tree::simulate(&self.tree_root, choices) {
-            if status != Status::Interesting {
-                let result = RunResult {
-                    status,
-                    nodes: Vec::new(),
-                    spans: Vec::new(),
-                    origin: None,
-                    target_observations: HashMap::new(),
-                };
-                return (result, false);
-            }
-        }
-        let ntc = NativeTestCase::for_choices(choices, None, None);
-        let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc);
-        // Mutation probes are recorded like any other executed run, except
-        // that their paths deliberately stay out of the choice tree (see the
-        // doc comment above).
-        self.record_run(&run, tc_start.elapsed(), false);
-        self.cache.insert(choices.to_vec(), run.clone());
-        (run, true)
     }
 }
 
@@ -1380,14 +1305,12 @@ impl<'a> Engine<'a> {
 /// the probe loop stops at the first such find.
 ///
 /// Makes up to [`SPAN_MUTATION_ATTEMPTS`] probes through
-/// [`Engine::cached_run`], so a proposed sequence whose path is already
-/// covered by the choice tree (or sits in the data cache) costs no test-body
-/// execution — matching Hypothesis, which routes mutations through
-/// `cached_test_function`. Each probe that *does* execute is recorded
-/// through [`Self::record_run`] (with `feed_tree: false` — see
-/// [`Engine::cached_run`] for why mutation paths stay out of the tree),
-/// so it counts toward the same budgets as a freshly generated example;
-/// cached or simulated probes were recorded when first executed and are not
+/// [`Engine::cached_test_function`], so a proposed sequence whose path the
+/// lossless choice tree already records costs no test-body execution — matching
+/// Hypothesis, which routes mutations through `cached_test_function`. Each probe
+/// that *does* execute is recorded into the tree through [`Self::record_run`],
+/// so it counts toward the same budgets as a freshly generated example and a
+/// later identical proposal is served from the tree; tree-served probes are not
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
     fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
@@ -1465,7 +1388,7 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let (run, _executed) = self.cached_run(&attempt);
+            let run = self.cached_test_function(&attempt, None, 0);
             if run.status == Status::Interesting {
                 return;
             }

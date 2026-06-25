@@ -305,13 +305,16 @@ fn target_observation_records_finite_score() {
 }
 
 #[test]
-fn target_observation_take_drains() {
+fn target_observation_read_does_not_mutate() {
+    // Reading the observations is a non-mutating clone: the handle may still be
+    // shared with a run-owned test case, so a read must not empty it. A second
+    // read returns the same data.
     let (ds, handle) = random_source();
     ds.target_observation(1.0, "x").unwrap();
     let first = NativeDataSource::take_target_observations(&handle);
     assert_eq!(first.len(), 1);
     let second = NativeDataSource::take_target_observations(&handle);
-    assert!(second.is_empty());
+    assert_eq!(second.len(), 1);
 }
 
 // A non-finite score / a repeated label are caller usage errors. libhegel

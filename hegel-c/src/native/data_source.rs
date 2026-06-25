@@ -14,7 +14,7 @@ use ciborium::Value;
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
-    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, Span, Status,
+    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, Span, SpanEvent, Status,
 };
 use crate::native::schema;
 
@@ -85,17 +85,30 @@ impl NativeDataSource {
             .into_vec()
     }
 
-    /// Drain the `tc.target()` observations the test body recorded.
+    /// Convenience: extract the live span-open/close events (with their draw
+    /// positions) recorded during the test case, so the engine can fold them
+    /// into the choice tree for faithful replay.
+    pub fn take_span_events(handle: &NativeTestCaseHandle) -> Vec<(usize, SpanEvent)> {
+        handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ntc
+            .span_events
+            .clone()
+    }
+
+    /// Read the `tc.target()` observations the test body recorded.
     ///
     /// Used by the targeting phase in `test_runner` to read back per-label
-    /// scores after a test case completes.
+    /// scores after a test case completes. A non-mutating clone, like
+    /// [`Self::take_nodes`]/[`Self::take_spans`]: the handle may still be shared
+    /// with a run-owned [`crate::HegelTestCase`], so reading it must not mutate it.
     pub fn take_target_observations(handle: &NativeTestCaseHandle) -> HashMap<String, f64> {
-        std::mem::take(
-            &mut handle
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .target_observations,
-        )
+        handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .target_observations
+            .clone()
     }
 
     /// The test case's outcome, reconstructed from its write-once status (and

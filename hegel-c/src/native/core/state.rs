@@ -823,6 +823,18 @@ pub struct Span {
     pub discarded: bool,
 }
 
+/// A span-boundary event, captured live (in `start_span` / `stop_span`) in
+/// fire order so the data tree can faithfully replay the span structure —
+/// including zero-width spans, whose open/close order can't be recovered from
+/// the finished [`Span`] list alone — without re-executing the test body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpanEvent {
+    /// `start_span(label)` was called.
+    Open { label: u64 },
+    /// `stop_span(discarded)` was called.
+    Close { discarded: bool },
+}
+
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.
 pub const MAX_DEPTH: u32 = 100;
@@ -1024,6 +1036,10 @@ pub struct NativeTestCase {
     /// Each entry was pushed by `start_span` and is awaiting a matching
     /// `stop_span` call.
     pub span_stack: Vec<usize>,
+    /// Span open/close events in fire order, each tagged with the draw
+    /// position (`nodes.len()`) at which it occurred. Recorded so the data
+    /// tree can replay the span structure faithfully (see [`SpanEvent`]).
+    pub span_events: Vec<(usize, SpanEvent)>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
@@ -1090,6 +1106,7 @@ impl NativeTestCase {
             state_machines: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
+            span_events: Vec::new(),
             has_discards: false,
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
@@ -1164,6 +1181,7 @@ impl NativeTestCase {
             discarded: false,
         });
         self.span_stack.push(idx);
+        self.span_events.push((start, SpanEvent::Open { label }));
         let mut frame = HashSet::new();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
@@ -1187,6 +1205,8 @@ impl NativeTestCase {
             span.end = end;
             span.discarded = discard;
         }
+        self.span_events
+            .push((end, SpanEvent::Close { discarded: discard }));
         if discard {
             self.has_discards = true;
         }
