@@ -1160,6 +1160,29 @@ fn random_value_boolean_consumes_exactly_one_byte() {
 }
 
 #[test]
+fn choice_value_equality_is_false_across_variants() {
+    // `ChoiceValue`'s `PartialEq` only matches like-with-like; the cross-variant
+    // fallback arm makes values of different kinds unequal even when they look
+    // alike (e.g. integer 0, boolean false, float 0.0, empty bytes/string).
+    let values = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Float(0.0),
+        ChoiceValue::Bytes(Vec::new()),
+        ChoiceValue::String(Vec::new()),
+    ];
+    for (i, a) in values.iter().enumerate() {
+        for (j, b) in values.iter().enumerate() {
+            if i == j {
+                assert_eq!(a, b);
+            } else {
+                assert_ne!(a, b);
+            }
+        }
+    }
+}
+
+#[test]
 fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
     // The schema layer must reject empty alphabets before a `StringChoice`
     // is built; reaching here with one is a hegel bug, surfaced as an
