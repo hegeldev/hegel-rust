@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.23.1 - 2026-06-25
+
+This fixes caching of test-cases during shrinking, which was happening only for some
+test executions. This should significantly speed up shrinking in some cases.
+
 ## 0.23.0 - 2026-06-24
 
 This release:
