@@ -453,7 +453,14 @@ pub struct HegelRun {
     worker: Option<JoinHandle<()>>,
     from_worker: mpsc::Receiver<WorkerMessage>,
     abort: Arc<AtomicBool>,
-    current_tc: Option<Box<HegelTestCase>>,
+    // The current test case.
+    //
+    // This is a logically owned pointer, and would be
+    // `Option<Box<HegelTestCase>>` but for the fact that `Box` also asserts
+    // noalias (i.e., that there are no mutable references that aren't derived
+    // from `current_tc`). Since the caller mutates the current test case
+    // through a different pointer, we use a raw pointer instead.
+    current_tc: Option<*mut HegelTestCase>,
     result: Option<HegelRunResult>,
     /// Set once a TestRunDone (or worker-died Err) has been observed on
     /// `from_worker`. Stops `hegel_next_test_case` from blocking forever
@@ -1041,8 +1048,11 @@ pub unsafe extern "C" fn hegel_next_test_case(
         return HEGEL_E_INVALID_HANDLE;
     };
 
-    if let Some(tc) = run.current_tc.as_ref() {
-        if !tc.completed {
+    if let Some(tc) = run.current_tc {
+        // SAFETY: `run.current_tc` only ever holds a live pointer created by
+        // `Box::into_raw`, and the caller is expected to not be concurrently
+        // mutating the test case while calling this function.
+        if !unsafe { (*tc).completed } {
             set_last_error(
                 ctx,
                 "hegel_next_test_case: previous test case was not marked complete \
@@ -1050,8 +1060,14 @@ pub unsafe extern "C" fn hegel_next_test_case(
             );
             return HEGEL_E_NOT_COMPLETE;
         }
+        // At this point, the test case has been marked completed, so...
+        //
+        // SAFETY: `run.current_tc` only ever holds a live pointer created by
+        // `Box::into_raw`, and the caller is expected to not dereference this
+        // pointer once it has been freed here.
+        drop(unsafe { Box::from_raw(tc) });
+        run.current_tc = None;
     }
-    run.current_tc = None;
 
     if run.drained {
         return HEGEL_OK;
@@ -1059,14 +1075,13 @@ pub unsafe extern "C" fn hegel_next_test_case(
 
     match run.from_worker.recv() {
         Ok(WorkerMessage::TestCase { ds, ack }) => {
-            let tc = Box::new(HegelTestCase {
+            let case = Box::into_raw(Box::new(HegelTestCase {
                 ds,
                 completed: false,
                 last_value: Vec::new(),
                 ack: Some(ack),
-            });
-            let case = (&*tc) as *const HegelTestCase as *mut HegelTestCase;
-            run.current_tc = Some(tc);
+            }));
+            run.current_tc = Some(case);
             unsafe { *out_test_case = case };
             HEGEL_OK
         }
@@ -1145,7 +1160,11 @@ pub unsafe extern "C" fn hegel_run_free(
 
     run.abort.store(true, Ordering::Release);
 
-    if let Some(mut tc) = run.current_tc.take() {
+    if let Some(tc) = run.current_tc.take() {
+        // SAFETY: `run.current_tc` only ever holds a live pointer created by
+        // `Box::into_raw`, and the caller is expected to not dereference this
+        // pointer once it has been freed here.
+        let mut tc = unsafe { Box::from_raw(tc) };
         if !tc.completed {
             tc.ds.mark_complete(&TestCaseResult::Valid);
             if let Some(ack) = &tc.ack {
