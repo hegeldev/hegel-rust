@@ -489,15 +489,10 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
             }
             Ok(ClassEscapeResult::Literal(n))
         }
-        'N' => {
-            // \N{NAME} named Unicode escape — CPython delegates to
-            // `unicodedata.lookup`. No name-to-codepoint table here, so
-            // surface the gap rather than silently dropping the escape.
-            Err(source.error(
-                r"\N{...} named unicode escapes not yet supported in native regex parser",
-                0,
-            ))
-        }
+        'N' => Err(source.error(
+            r"\N{...} named unicode escapes not yet supported in native regex parser",
+            0,
+        )),
         ch if OCTDIGITS.contains(ch) => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
@@ -598,13 +593,10 @@ fn escape_code(
             }
             Ok(EscapeResult::Literal(n))
         }
-        'N' => {
-            // See class_escape above — same gap applies outside classes.
-            Err(source.error(
-                r"\N{...} named unicode escapes not yet supported in native regex parser",
-                0,
-            ))
-        }
+        'N' => Err(source.error(
+            r"\N{...} named unicode escapes not yet supported in native regex parser",
+            0,
+        )),
         '0' => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
@@ -642,8 +634,6 @@ fn escape_code(
                 }
             }
             let dec: String = escape.chars().skip(1).collect();
-            // At most two DIGITS read above (the leading char plus one more),
-            // so the dec slice is 1-2 chars and parses as u32 unconditionally.
             let group = dec
                 .parse::<u32>()
                 .expect("escape decimal is at most 2 digits");
@@ -721,7 +711,6 @@ fn parse_sub(
 
     let mut subpattern = SubPattern::new();
 
-    // Pull out shared prefixes (exact port of the Python loop).
     loop {
         let mut prefix: Option<OpCode> = None;
         let mut all_share = true;
@@ -750,7 +739,6 @@ fn parse_sub(
         subpattern.push(p);
     }
 
-    // Check if the branch can be replaced by a character set.
     let mut set: Vec<SetItem> = Vec::new();
     let mut flatten_ok = true;
     for item in &items {
@@ -873,10 +861,6 @@ fn parse(
                     } else {
                         Either::Literal(that.chars().next().unwrap() as u32)
                     };
-                    // CPython's `_class_escape` resolves \xNN / \uNNNN /
-                    // octal / identity escapes to LITERAL codes, which are
-                    // valid range endpoints (`[\x00-\x1f]`); only category
-                    // escapes (\d, \w, ...) cannot anchor a range.
                     let endpoint = |code: &Either| match code {
                         Either::Literal(cp) => Some(*cp),
                         Either::Class(ClassEscapeResult::Literal(cp)) => Some(*cp),
@@ -1013,9 +997,6 @@ fn parse(
                     source.tell().saturating_sub(here) + this.chars().count(),
                 ));
             }
-            // Unwrap unnamed/unflagged non-capturing groups: the Python
-            // parser collapses `(?:X){m,n}` to just repeating X when the
-            // group has no group id or flags.
             let inner = match item_op {
                 OpCode::Subpattern {
                     group: None,
@@ -1296,7 +1277,6 @@ fn parse(
         unreachable!("unhandled special character {:?}", this);
     }
 
-    // Unpack non-capturing groups with no flags.
     let mut i = subpattern.data.len();
     while i > 0 {
         i -= 1;

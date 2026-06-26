@@ -64,9 +64,6 @@ fn test_can_find_nans() {
 
 #[test]
 fn test_negative_non_integer_shrinks_through_integer_range() {
-    // Restrict to negative non-integer floats so the shrinker stays in the
-    // non-simple lex region and the negative-bound integer-range step in
-    // `shrink_floats` actually fires.
     let x = minimal(
         gs::floats::<f64>()
             .min_value(-1000.0)
@@ -80,12 +77,6 @@ fn test_negative_non_integer_shrinks_through_integer_range() {
 
 #[test]
 fn test_nan_canonicalization_prefers_finite_when_predicate_admits() {
-    // Predicate accepts NaN or any infinite. When the shrinker lands on a
-    // NaN node, its NaN-canonicalization branch tries `f64::MAX` (rejected)
-    // then `f64::INFINITY` (accepted) and steps the choice over to it.
-    // Run a handful of seeds because which boundary value the random sampler
-    // discovers first is luck-of-the-draw — every seed that lands on NaN
-    // first walks the accept path.
     for _ in 0..10 {
         let x = minimal(gs::floats::<f64>(), |x: &f64| x.is_nan() || x.is_infinite());
         assert!(x.is_nan() || x.is_infinite());

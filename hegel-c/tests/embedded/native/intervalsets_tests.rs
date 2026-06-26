@@ -35,7 +35,6 @@ fn index_returns_position_when_present() {
 
 #[test]
 fn index_returns_none_between_intervals() {
-    // value falls in the gap between two intervals — the `u > value` arm.
     let iv = IntervalSet::new(vec![(0, 5), (10, 15)]);
     assert!(iv.index(7).is_none());
 }
@@ -80,8 +79,6 @@ fn union_merges_adjacent_intervals() {
 
 #[test]
 fn difference_advances_past_smaller_other_interval() {
-    // `other` interval ends before any `self` interval begins — exercises
-    // the `yr < xl` advance branch.
     let a = IntervalSet::new(vec![(20, 30)]);
     let b = IntervalSet::new(vec![(0, 5)]);
     let d = a.difference(&b);
@@ -98,8 +95,6 @@ fn difference_carves_middle() {
 
 #[test]
 fn intersection_advances_past_smaller_self_interval() {
-    // `self` interval ends before any `other` interval begins — exercises
-    // the `uu > v` advance branch.
     let a = IntervalSet::new(vec![(0, 5)]);
     let b = IntervalSet::new(vec![(20, 30)]);
     let r = a.intersection(&b);

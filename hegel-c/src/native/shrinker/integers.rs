@@ -1,13 +1,3 @@
-// Integer-based shrink passes: zero_choices, swap_integer_sign,
-// binary_search_integer_towards_zero, redistribute_integers, shrink_duplicates,
-// lower_common_node_offset.
-//
-// Integer choice values use `BigInt` directly, so these passes do their
-// arithmetic in arbitrary precision and write candidates back through
-// `IntegerChoice::value_from_bigint` (which rejects out-of-range candidates).
-// Shrinking is far colder than generation, so the `BigInt` allocation here is
-// acceptable.
-
 use std::collections::HashMap;
 
 use crate::native::bignum::{BigInt, Sign, Signed};
@@ -106,7 +96,6 @@ impl<'a> Shrinker<'a> {
                 if v != ic.simplest() {
                     self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]))?;
                 }
-                // Re-read in case the replace changed things.
                 if i < self.current_nodes.len() {
                     if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
                         let v = v.clone();
@@ -144,12 +133,9 @@ impl<'a> Shrinker<'a> {
             };
             let target = ic.clamped_shrink_towards();
 
-            // short_circuit: distances 0 and 1 are always tried.
             self.try_at_distance(i, &ic, &target, &BigInt::from(0))?;
             self.try_at_distance(i, &ic, &target, &BigInt::from(1))?;
 
-            // mask_high_bits: keep only the low `bits - k` bits of the
-            // distance.
             let base = self.distance_from(i, &target);
             let n_bits = base.bits();
             find_integer_r(|k| {
@@ -161,8 +147,6 @@ impl<'a> Shrinker<'a> {
                 self.try_at_distance(i, &ic, &target, &masked)
             })?;
 
-            // Squeeze the distance into a single byte: its top byte, then
-            // its bottom byte.
             let base = self.distance_from(i, &target);
             if base.bits() > 8 {
                 let top = &base >> (base.bits() as usize - 8);
@@ -171,8 +155,6 @@ impl<'a> Shrinker<'a> {
                 self.try_at_distance(i, &ic, &target, &bottom)?;
             }
 
-            // run_step to a fixpoint: shift_right, then multiples of 2 and 1
-            // (the latter two guarantee `d - 2` and `d - 1` are probed).
             loop {
                 let before = self.distance_from(i, &target);
                 if before == BigInt::from(0) {
@@ -257,7 +239,6 @@ impl<'a> Shrinker<'a> {
             let n = int_indices.len();
             let mut pair_idx = n.saturating_sub(gap + 1);
             loop {
-                // Re-collect integer indices since earlier passes may have changed the nodes.
                 let current_ints: Vec<usize> = self
                     .current_nodes
                     .iter()
@@ -271,9 +252,6 @@ impl<'a> Shrinker<'a> {
                     })
                     .collect();
 
-                // Defensive edge case: only reached when a prior shrink removed
-                // enough integer nodes that `pair_idx + gap` overshoots the new
-                // length.
                 if pair_idx + gap >= current_ints.len() {
                     if pair_idx == 0 {
                         break;
@@ -294,9 +272,6 @@ impl<'a> Shrinker<'a> {
                     ),
                 };
 
-                // Shrink i's distance from its shrink target (staying on its
-                // current side, like Hypothesis's `k > abs(m - shrink_towards)`
-                // cap), moving the difference onto j so the sum is preserved.
                 let prev_dist = BigInt::from((&prev_i - &target_i).magnitude());
                 if prev_dist.sign() == Sign::Plus {
                     let on_low_side = prev_i < target_i;
@@ -343,8 +318,6 @@ impl<'a> Shrinker<'a> {
             .collect();
 
         for pair_idx in 0..int_indices.len() {
-            // Cap the look-ahead at 3 integers to avoid quadratic behaviour
-            // on long sequences.
             for gap in 1..=3 {
                 if pair_idx + gap >= int_indices.len() {
                     break;
@@ -369,17 +342,8 @@ impl<'a> Shrinker<'a> {
                     _ => unreachable!("kind/value mismatch: Integer kind with non-Integer value"),
                 };
 
-                // N10: cap k at the i-th element's distance from
-                // `shrink_towards`. The sort_key score is U-shaped around
-                // `shrink_towards`, so capping keeps `find_integer`'s probe
-                // monotone; `validate()` (via `replace`) trims further if v_j's
-                // constraints bind first. Direction is decided by the i-th
-                // element (shortlex dominates on element 0): move it toward its
-                // own shrink target, the j-th follows.
                 let st_i = ic_i.clamped_shrink_towards();
 
-                // Lower direction: run when v_i > st_i. Largest useful k is
-                // `v_i - st_i` (the i-th's distance to st).
                 if v_i > st_i {
                     let max_k = &v_i - &st_i;
                     find_integer_r(|n| {
@@ -393,8 +357,6 @@ impl<'a> Shrinker<'a> {
                     })?;
                 }
 
-                // Raise direction: run when v_i < st_i. Largest useful k:
-                // `st_i - v_i`.
                 if v_i < st_i {
                     let max_k = &st_i - &v_i;
                     find_integer_r(|n| {
@@ -423,15 +385,6 @@ impl<'a> Shrinker<'a> {
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
     pub(super) fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
-        // Group nodes by (kind discriminant, value).  The discriminant
-        // gate keeps an Integer and a Bytes that happen to coexist with
-        // the same numeric payload apart.
-        //
-        // `HashMap` iteration order is randomised, so we keep groups in
-        // source-position order (by smallest index) before processing —
-        // otherwise a `replace` that truncates `current_nodes` invalidates
-        // later groups in seed-dependent ways and the shrinker converges
-        // on neighbouring rather than canonical minima.
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
@@ -447,11 +400,6 @@ impl<'a> Shrinker<'a> {
             if indices.len() < 2 {
                 continue;
             }
-            // A prior group's `replace` may have truncated `current_nodes`
-            // (the test function can return a shorter realised sequence).
-            // Skip any indices that fell out of range, then make sure
-            // enough members still match the original group's
-            // (kind, value) before proposing a replacement.
             let valid: Vec<usize> = indices
                 .iter()
                 .copied()
@@ -464,9 +412,6 @@ impl<'a> Shrinker<'a> {
             if valid.len() < 2 {
                 continue;
             }
-            // Try the simplest-replacement step for every group.  For
-            // boolean / float / bytes / string this is the main win; the
-            // integer branch below adds a deeper binary search.
             let simplest = self.current_nodes[valid[0]].kind.simplest();
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
@@ -474,9 +419,6 @@ impl<'a> Shrinker<'a> {
                 self.replace(&replacements)?;
             }
         }
-        // The remainder of this function is the legacy integer-only
-        // binary-search loop, kept verbatim so the existing tests still
-        // pass.
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
             if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) =
@@ -485,8 +427,6 @@ impl<'a> Shrinker<'a> {
                 groups.entry(v.clone()).or_default().push(i);
             }
         }
-        // Iterate groups in source-position order; see the comment above
-        // the first-half iteration for why HashMap randomisation matters.
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
         ordered_groups.sort_by_key(|(_, indices)| indices[0]);
 
@@ -495,7 +435,6 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            // Re-validate that all indices still have the same value.
             let valid: Vec<usize> = indices
                 .iter()
                 .copied()
@@ -516,7 +455,6 @@ impl<'a> Shrinker<'a> {
                 ),
             };
 
-            // Try setting all to simplest simultaneously.
             let simplest = ic.simplest();
             if simplest != value {
                 let replacements: HashMap<usize, ChoiceValue> = valid
@@ -526,13 +464,8 @@ impl<'a> Shrinker<'a> {
                 self.replace(&replacements)?;
             }
 
-            // Re-read current value after possible replacement.
             let cur_value = self.int_value_bigint(valid[0]);
 
-            // Shift-right adaptive descent of all members in lockstep,
-            // followed by shrink_by_multiples(2) and (1) to land on the
-            // boundary. Each probe re-reads the current value of `valid[0]`
-            // so the descent starts from the live shrink target.
             let valid_capture = valid.clone();
             let group_replace = |sh: &mut Shrinker<'_>, candidate: &BigInt| -> ShrinkResult<bool> {
                 let current_valid: Vec<usize> = valid_capture
@@ -619,8 +552,6 @@ impl<'a> Shrinker<'a> {
     /// integer values; clears the change-tracking set on exit.
     pub(crate) fn lower_common_node_offset(&mut self) -> ShrinkResult<()> {
         let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
-        // `changed_nodes` is a `HashSet`; sort for a deterministic, run-to-run
-        // stable iteration order.
         changed.sort_unstable();
         if changed.len() <= 1 {
             return Ok(());
@@ -629,8 +560,6 @@ impl<'a> Shrinker<'a> {
         let mut ic_targets: Vec<BigInt> = Vec::new();
         let mut distances: Vec<BigInt> = Vec::new();
         for &i in &changed {
-            // `changed` came from `update_change_tracking`, which only
-            // populates indices < current_nodes.len().
             hegel_internal_debug_assert!(i < self.current_nodes.len());
             let (target, v) = match (
                 self.current_nodes[i].kind.as_ref(),
@@ -642,7 +571,6 @@ impl<'a> Shrinker<'a> {
                 _ => continue,
             };
             if v == target {
-                // Already trivial; can't offset further.
                 continue;
             }
             distances.push((&v - &target).abs());
@@ -657,17 +585,9 @@ impl<'a> Shrinker<'a> {
             .min()
             .expect("non-empty by check above")
             .clone();
-        // `offset > 0`: every entry in `distances` came from a `v != target`
-        // node (the loop above skips equal entries), so all are strictly
-        // positive.
         hegel_internal_debug_assert!(offset.sign() == Sign::Plus);
-        // residual[k] = distance[k] - offset; the "common offset" portion is
-        // what we'll try to drive toward zero.
         let residual: Vec<BigInt> = distances.iter().map(|d| d - &offset).collect();
 
-        // The predicate signs are deduced from the sign of `(v - target)` for
-        // each node. Shrink the offset in both directions to handle the case
-        // where absolute distances are equal but signs differ.
         let signs: Vec<i128> = indices
             .iter()
             .zip(ic_targets.iter())
@@ -683,7 +603,6 @@ impl<'a> Shrinker<'a> {
             })
             .collect();
 
-        // Try lowering by an additional `n` units in both directions.
         for sign_multiplier in [1i128, -1] {
             find_integer_r(|n| {
                 let n_big = BigInt::from(n as u64);

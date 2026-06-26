@@ -22,9 +22,6 @@ impl<'a> Shrinker<'a> {
     /// pass shouldn't try this work again on the same target).
     pub(crate) fn remove_discarded(&mut self) -> ShrinkResult<bool> {
         loop {
-            // Gather the outermost discarded spans in source order.  A span
-            // nested inside an already-collected discarded region is skipped
-            // because the outer deletion subsumes it.
             let mut discarded: Vec<(usize, usize)> = Vec::new();
             for span in self.current_spans.iter() {
                 if span.end > span.start
@@ -48,9 +45,6 @@ impl<'a> Shrinker<'a> {
             if !self.consider(&attempt)? {
                 return Ok(false);
             }
-            // If `consider` accepted but the actual run produced no new
-            // discards, the next loop iteration will find an empty
-            // `discarded` and return.
         }
     }
 
@@ -66,10 +60,6 @@ impl<'a> Shrinker<'a> {
     pub(crate) fn try_trivial_spans(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_spans.len() {
-            // Capture the shrink epoch before any mutation so we can
-            // detect whether the first attempt improved the shrink
-            // target. `improvements` only bumps on a strict shrink, so
-            // its delta is exactly "did we shrink?".
             let epoch_before = self.improvements;
             let span = self.current_spans[i].clone();
             if span.end > self.current_nodes.len() {
@@ -94,10 +84,6 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Manually invoke the closure so we keep hold of the actual
-            // realised nodes and spans even when the attempt isn't an
-            // improvement — we retry with the realised span content
-            // below.
             let (is_interesting, actual_nodes, actual_spans) =
                 self.run_test_fn(ShrinkRun::Full(&attempt))?;
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
@@ -106,13 +92,6 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            // First attempt didn't improve.  If the run produced a valid
-            // (or interesting-but-not-smaller) result that still records
-            // a span at this index, splice its realised content back into
-            // the original sequence and try once more.
-            //
-            // `if let` chains stabilised after MSRV 1.86, so this is
-            // spelled out as nested conditions instead.
             if self.improvements == epoch_before {
                 if let Some(new_span) = actual_spans.get(i) {
                     if new_span.start <= new_span.end && new_span.end <= actual_nodes.len() {
@@ -139,21 +118,12 @@ impl<'a> Shrinker<'a> {
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
     pub(crate) fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
-        // Snapshot (start, end, label) tuples up front. Each consider()
-        // may rebuild current_spans, which would invalidate live indices
-        // — re-reading from the snapshot after every consider would mean
-        // recomputing the per-label index every time. Instead we iterate
-        // all candidates from the initial snapshot and let each
-        // consider() bail naturally on a stale ancestor — the
-        // negative-result cache in `consider` covers cross-invocation
-        // deduplication.
         let spans: Vec<(usize, usize, String)> = self
             .current_spans
             .iter()
             .map(|s| (s.start, s.end, s.label.clone()))
             .collect();
 
-        // Group span indices by label.
         let mut by_label: std::collections::BTreeMap<&str, Vec<usize>> =
             std::collections::BTreeMap::new();
         for (idx, (_, _, label)) in spans.iter().enumerate() {
@@ -173,8 +143,6 @@ impl<'a> Shrinker<'a> {
                 }
                 for &descendant_idx in &indices[ai + 1..] {
                     let (d_start, d_end, _) = spans[descendant_idx].clone();
-                    // Past the ancestor's range: no further descendants
-                    // because spans are ordered by `start`.
                     if d_start >= a_end {
                         break;
                     }
@@ -182,15 +150,9 @@ impl<'a> Shrinker<'a> {
                     if descendant_len == 0 || descendant_len >= ancestor_len {
                         continue;
                     }
-                    // Sanity: indices must still be in range of the current
-                    // node list — if a prior consider() shortened it past
-                    // the ancestor's end, skip.
                     if a_end > self.current_nodes.len() {
                         continue;
                     }
-                    // Spans are tree-structured: any span starting inside
-                    // an ancestor must also end inside it.  Guard for
-                    // future deviations from that invariant.
                     hegel_internal_debug_assert!(d_start >= a_start && d_end <= a_end);
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
@@ -216,8 +178,6 @@ impl<'a> Shrinker<'a> {
     /// symmetric alternative.
     pub(crate) fn reorder_spans(&mut self) -> ShrinkResult<()> {
         let parents: Vec<Option<usize>> = {
-            // Build the set of parent indices that have direct children
-            // (including the implicit root, parent == None).
             let mut seen: std::collections::BTreeSet<Option<usize>> =
                 std::collections::BTreeSet::new();
             for span in self.current_spans.iter() {
@@ -227,10 +187,6 @@ impl<'a> Shrinker<'a> {
         };
 
         for parent in parents {
-            // Group this parent's children by label, with owned label
-            // strings so the BTreeMap doesn't keep a borrow on
-            // `self.current_spans` while the closure later asks
-            // `self.consider` for a borrow.
             let mut by_label: std::collections::BTreeMap<String, Vec<usize>> =
                 std::collections::BTreeMap::new();
             for (idx, span) in self.current_spans.iter().enumerate() {
@@ -250,15 +206,10 @@ impl<'a> Shrinker<'a> {
                         (s.start, s.end)
                     })
                     .collect();
-                // Sanity: endpoints must all fit in current_nodes.
                 let nodes_len = self.current_nodes.len();
                 if endpoints.iter().any(|&(_, e)| e > nodes_len) {
                     continue;
                 }
-                // Sibling spans are always non-overlapping and in source
-                // order under the span recorder's invariants.  A
-                // debug_assert documents the precondition; we don't try
-                // to recover from a violation at runtime.
                 hegel_internal_debug_assert!({
                     let mut sorted_eps = endpoints.clone();
                     sorted_eps.sort();
@@ -268,28 +219,15 @@ impl<'a> Shrinker<'a> {
                 let n = child_indices.len();
                 let snapshot_nodes = self.current_nodes.clone();
 
-                // The keys for sorting are the sort_keys of each child's
-                // realised node slice.  `NodesSortKey` is a `Copy` view
-                // over `snapshot_nodes` — the snapshot lives until after
-                // `shrink_ordering` returns, so cached refs stay valid.
                 let cached_keys: Vec<crate::native::core::NodesSortKey<'_>> = endpoints
                     .iter()
                     .map(|&(s, e)| sort_key(&snapshot_nodes[s..e]))
                     .collect();
 
-                // Snapshot is needed to translate a permutation back into a
-                // full node list: prefix + ordered slices + suffix.  We
-                // splice into the *snapshot* not the live current_nodes,
-                // because each accept call may modify current_nodes.
                 shrink_ordering::<crate::native::core::NodesSortKey<'_>, _, _>(
                     n,
                     |i| cached_keys[i],
                     |permutation| -> ShrinkResult<bool> {
-                        // Build the candidate by interleaving the
-                        // permuted slices with the unchanged regions
-                        // between sibling endpoints.  shrink_ordering
-                        // only ever calls accept with length-`n`
-                        // permutations.
                         hegel_internal_debug_assert_eq!(permutation.len(), n);
                         let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
                         attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
@@ -297,7 +235,6 @@ impl<'a> Shrinker<'a> {
                             let src_idx = permutation[k];
                             let (src_start, src_end) = endpoints[src_idx];
                             attempt.extend_from_slice(&snapshot_nodes[src_start..src_end]);
-                            // Gap to next sibling (or to suffix).
                             if k + 1 < endpoints.len() {
                                 attempt.extend_from_slice(
                                     &snapshot_nodes[target_end..endpoints[k + 1].0],

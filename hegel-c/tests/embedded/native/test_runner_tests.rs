@@ -16,8 +16,6 @@ use crate::settings::{Mode, Phase};
 use ciborium::Value;
 use std::time::Duration;
 
-// ── raw DataSource draw helpers ─────────────────────────────────────────────
-
 fn bool_schema() -> Value {
     Value::Map(vec![(
         Value::Text("type".into()),
@@ -83,56 +81,31 @@ fn boom(msg: &str) -> TestCaseResult {
     })
 }
 
-// ── health-check helpers (pure) ─────────────────────────────────────────────
-
 #[test]
 fn too_slow_check_reports_when_under_threshold_and_unsuppressed() {
-    let msg = too_slow_check(
-        /* valid_test_cases */ 1,
-        /* total_test_time */ Duration::from_secs(60),
-        /* threshold */ Duration::from_secs(30),
-        /* suppressed */ false,
-    );
+    let msg = too_slow_check(1, Duration::from_secs(60), Duration::from_secs(30), false);
     assert!(msg.is_some(), "expected too_slow_check to report a failure");
     assert!(msg.unwrap().contains("TooSlow"));
 }
 
 #[test]
 fn too_slow_check_quiet_when_suppressed() {
-    assert!(
-        too_slow_check(
-            /* valid_test_cases */ 1,
-            /* total_test_time */ Duration::from_secs(60),
-            /* threshold */ Duration::from_secs(30),
-            /* suppressed */ true,
-        )
-        .is_none()
-    );
+    assert!(too_slow_check(1, Duration::from_secs(60), Duration::from_secs(30), true,).is_none());
 }
 
 #[test]
 fn too_slow_check_quiet_when_under_threshold() {
-    assert!(
-        too_slow_check(
-            /* valid_test_cases */ 1,
-            /* total_test_time */ Duration::from_secs(1),
-            /* threshold */ Duration::from_secs(30),
-            /* suppressed */ false,
-        )
-        .is_none()
-    );
+    assert!(too_slow_check(1, Duration::from_secs(1), Duration::from_secs(30), false,).is_none());
 }
 
 #[test]
 fn too_slow_check_quiet_when_enough_valid_cases() {
-    // Once enough valid cases have run, the health check is no longer
-    // applied even if total_test_time exceeds the threshold.
     assert!(
         too_slow_check(
-            /* valid_test_cases */ 10_000,
-            /* total_test_time */ Duration::from_secs(60),
-            /* threshold */ Duration::from_secs(30),
-            /* suppressed */ false,
+            10_000,
+            Duration::from_secs(60),
+            Duration::from_secs(30),
+            false,
         )
         .is_none()
     );
@@ -145,20 +118,8 @@ fn flaky_diagnostic_mentions_flaky() {
 
 #[test]
 fn invalid_thresholds_match_hypothesis() {
-    // Ported from Hypothesis's `_invalid_thresholds(r=0.01, c=0.99)`
-    // (`engine.py`), which evaluates to `INVALID_THRESHOLD_BASE = 458` and
-    // `INVALID_PER_VALID = 100`. Pin the port so an always-reject run gives up
-    // after `458 + 1 = 459` cases, matching the core engine.
     assert_eq!(invalid_thresholds(0.01, 0.99), (458, 100));
 }
-
-// ── cached_run / span-mutation caching ──
-//
-// Span mutation proposes choice sequences whose paths are frequently
-// already covered by generation. Pre-fix the native backend ran the test
-// body for every proposal (`ctx.execute`), executing the test ~6× as often
-// as Hypothesis, which routes mutations through `cached_test_function`.
-// These tests pin the cache/tree short-circuits that close that gap.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -203,11 +164,6 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
             Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
-            // The tree already records a one-boolean Valid run; replaying that
-            // path (plus an unread trailing choice, as a shape-changing shrink
-            // candidate would produce) is served from the tree without running
-            // the body. This is the single chokepoint both generation mutation
-            // and shrinking go through.
             record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
 
             let run = ctx.cached_test_function(
@@ -217,8 +173,6 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
             );
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 0, "tree-known path must not run the body");
-            // Realised nodes are recovered from the tree walk (the trailing
-            // choice was never read).
             assert_eq!(run.nodes.len(), 1);
         },
     );
@@ -234,12 +188,10 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            // Novel: executes and records the run into the tree.
             let first = ctx.cached_test_function(&choices, None, 0);
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            // Exact repeat: served from the tree, no re-run.
             let second = ctx.cached_test_function(&choices, None, 0);
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
@@ -249,14 +201,8 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
 
 #[test]
 fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
-    // The lossless tree records the full outcome — status, origin, and the
-    // spans (replayed from per-node events). So an interesting path is served
-    // from the tree with its origin and spans intact and *without* re-running
-    // the body; there is no separate result cache and no re-execution.
     with_counting_ctx(
         |ds| {
-            // A span around the single draw, so the recorded path carries one
-            // span to reconstruct. Interesting on `true`.
             ds.start_span(7).unwrap();
             let b = rbool(ds);
             ds.stop_span(false).unwrap();
@@ -269,15 +215,11 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
         |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            // First call executes, finds the bug, and records it (origin +
-            // spans + status) into the tree.
             let first = ctx.cached_test_function(&choices, None, 0);
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            // Second identical call: served entirely from the tree — no
-            // execution — with the origin and spans reconstructed.
             let second = ctx.cached_test_function(&choices, None, 0);
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
@@ -296,16 +238,8 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
 
 #[test]
 fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
-    // A body that draws past the available choices overruns; if it swallows the
-    // resulting error and reports VALID anyway, the engine must still treat the
-    // case as EarlyStop. An overrun means the replayed prefix was too short —
-    // not that the (incomplete) run passed — and recording it as a zero-length
-    // VALID conclusion would poison the choice tree for every later candidate.
     with_counting_ctx(
         |ds| {
-            // Empty prefix → `max_size` 0 → this draw overruns. The `Err` is
-            // deliberately swallowed, mimicking a raw test body that doesn't
-            // propagate the overrun.
             let _ = rbool(ds);
             TestCaseResult::Valid
         },
@@ -318,24 +252,16 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
 
 #[test]
 fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
-    // `extend > 0` replays the prefix and draws the remaining choices from the
-    // engine RNG (the coarse / mutate_and_shrink probe path). The realised path
-    // isn't known up front, so it always executes.
     with_counting_ctx(
-        |ds| {
-            // Two boolean draws: the first is the replayed prefix, the second
-            // is drawn beyond it.
-            match (rbool(ds), rbool(ds)) {
-                (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                _ => TestCaseResult::Overrun,
-            }
+        |ds| match (rbool(ds), rbool(ds)) {
+            (Ok(_), Ok(_)) => TestCaseResult::Valid,
+            _ => TestCaseResult::Overrun,
         },
         |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
             let run = ctx.cached_test_function(&prefix, None, 1);
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
-            // Prefix value replayed, continuation drawn → two realised nodes.
             assert_eq!(run.nodes.len(), 2);
             assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
         },
@@ -350,10 +276,6 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
-            // Two spans of the same label, one nested in the other. Every
-            // span-mutation attempt then proposes the *same* duplicated
-            // choice sequence, so only the first proposal runs the body and
-            // the rest are served from the cache.
             let nodes = vec![
                 bool_node(false),
                 bool_node(true),
@@ -373,8 +295,6 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             ctx.try_span_mutation(&nodes, &spans);
 
             assert_eq!(count.get(), 1);
-            // The single executed probe was recorded: one call, one valid
-            // example consumed from the budget, nothing interesting.
             assert_eq!(ctx.calls, 1);
             assert_eq!(ctx.valid_test_cases, 1);
             assert!(ctx.interesting.is_empty());
@@ -385,17 +305,12 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
 #[test]
 fn span_mutation_returns_interesting_proposal() {
     with_counting_ctx(
-        // INTERESTING on a `false` draw, so the all-`false` mutated proposal
-        // is Interesting.
         |ds| match rbool(ds) {
             Ok(false) => boom("boom on false"),
             Ok(true) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
         |ctx, count| {
-            // Nested same-label spans → the deterministic proposal duplicates
-            // the (false) prefix, and the body's single draw resolves to
-            // `false` → Interesting on the first probe.
             let nodes = vec![
                 bool_node(false),
                 bool_node(false),
@@ -416,7 +331,6 @@ fn span_mutation_returns_interesting_proposal() {
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
-            // An Interesting probe is not a valid example; budget untouched.
             assert_eq!(ctx.valid_test_cases, 0);
             let origin = ctx
                 .interesting
@@ -452,7 +366,6 @@ fn span_mutation_stops_when_example_budget_is_full() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            // Budget already full: no probe should run.
             ctx.valid_test_cases = 100;
             ctx.try_span_mutation(&nodes, &spans);
 
@@ -490,9 +403,6 @@ fn complete_native(
 
 #[test]
 fn run_single_case_returns_the_failure() {
-    // `Mode::SingleTestCase` bypasses the TestRunner machinery: its one
-    // test case runs as its own final, and the failure (if any) comes back
-    // directly.
     let failure = run_single_case(
         &Settings::new()
             .database(None)
@@ -524,9 +434,6 @@ fn run_single_case_returns_none_for_a_passing_case() {
 
 #[test]
 fn run_main_with_urandom_backend_generates_and_passes() {
-    // End-to-end: the urandom backend drives the full engine (every draw
-    // reads /dev/urandom) for a passing test. Exercises the urandom fill
-    // path through the biased samplers.
     let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
@@ -552,9 +459,6 @@ fn run_main_with_urandom_backend_generates_and_passes() {
 
 #[test]
 fn run_main_with_urandom_backend_finds_counterexample() {
-    // A test that always fails must still surface a failure under the
-    // urandom backend, going through generation, shrinking (deterministic
-    // concrete-choice replay), and final replay.
     let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
         Ok(_) => boom("always fails"),
         Err(()) => TestCaseResult::Overrun,
@@ -591,13 +495,6 @@ fn slow_shrink_warning_mentions_shrinking() {
 
 #[test]
 fn run_main_stops_shrinking_when_budget_is_exhausted() {
-    // Drive `run_main` with a zero shrink budget so the wall-clock cutoff
-    // fires deterministically instead of after five minutes. The run must
-    // still surface the failure (with the best, un-shrunk example) rather
-    // than hang, and the slow-shrink warning path is exercised.
-    //
-    // A collection of integers gives real shrinking work for the zero budget
-    // to cut short.
     let body = |ds: &dyn DataSource| -> TestCaseResult {
         let cid = match ds.new_collection(0, None) {
             Ok(c) => c,
@@ -650,10 +547,6 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
 
 #[test]
 fn run_main_reports_too_slow_at_call_site() {
-    // Drive `run_main` with a zero TooSlow threshold so the (otherwise
-    // 30s-gated) call-site early-return fires deterministically — instead of
-    // relying on a test happening to exceed 30s of generation under coverage
-    // instrumentation. The body draws a value so each case is non-trivial.
     let body = |ds: &dyn DataSource| match rbool(ds) {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
@@ -679,13 +572,9 @@ fn run_main_reports_too_slow_at_call_site() {
     }
 }
 
-// ── TestCasesTooLarge (too_large_check) ──
-
 #[test]
 fn too_large_check_reports_when_over_threshold_and_unsuppressed() {
-    let msg = too_large_check(
-        /* valid */ 0, /* overrun */ 20, /* suppressed */ false,
-    );
+    let msg = too_large_check(0, 20, false);
     assert!(msg.is_some());
     assert!(msg.unwrap().contains("TestCasesTooLarge"));
 }
@@ -705,8 +594,6 @@ fn too_large_check_quiet_when_enough_valid_cases() {
     assert!(too_large_check(10, 100, false).is_none());
 }
 
-// ── LargeInitialTestCase (large_initial_check) ──
-
 #[test]
 fn large_initial_check_reports_on_overrun() {
     let msg = large_initial_check(true, Status::Invalid, 0, false);
@@ -715,7 +602,6 @@ fn large_initial_check_reports_on_overrun() {
 
 #[test]
 fn large_initial_check_reports_on_large_valid_example() {
-    // node_count * 2 > BUFFER_SIZE.
     let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
@@ -732,22 +618,13 @@ fn large_initial_check_quiet_when_suppressed() {
 
 #[test]
 fn large_initial_check_quiet_for_interesting() {
-    // A bug found at the simplest example is reported as a failure, not a
-    // health-check failure.
     assert!(large_initial_check(false, Status::Interesting, BUFFER_SIZE, false).is_none());
 }
 
-// ── overrun vs invalid distinction ──
-
 #[test]
 fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
-    // A genuine choice-budget overrun must be `Status::EarlyStop`, not
-    // `Status::Invalid`. `record_tree` only records a conclusion for
-    // `status >= Invalid`, so mislabelling an overrun would pin the path into
-    // the data tree as a permanent dead-end.
     with_counting_ctx(
         |ds| {
-            // Two draws against a one-choice budget: the second overruns.
             if rbool(ds).is_err() {
                 return TestCaseResult::Overrun;
             }
@@ -760,9 +637,6 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1));
             assert_eq!(run.status, Status::EarlyStop);
 
-            // The overrun path is therefore not concluded in the tree: a later
-            // walk of the same prefix must re-execute (returns `None`) rather
-            // than serve a cached dead-end.
             let mut tree = DataTreeNode::default();
             record_tree(&mut tree, &run.nodes, run.status, &[]);
             let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
@@ -770,12 +644,6 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
         },
     );
 }
-
-// ── database reuse semantics ──
-//
-// These drive the reuse phase via `run_main` (with the database configured)
-// rather than the `Hegel` frontend, populating the on-disk corpus directly
-// with `serialize_choices` so a precise stored prefix can be pinned.
 
 /// A reuse-phase `run_main` over `path`/`key`, returning the aggregate result.
 fn reuse_run<F>(
@@ -802,10 +670,6 @@ where
 
 #[test]
 fn reuse_replay_extends_past_stored_prefix() {
-    // Hypothesis replays stored entries with extend="full": when the test now
-    // draws more choices than the stored prefix holds, the replay continues
-    // with fresh random draws instead of overrunning. The stored `[true]` is
-    // one boolean short of what the test reads; it must still reproduce.
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
@@ -845,9 +709,6 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    // The primary entry no longer fails; the still-failing example only
-    // exists in the secondary (historical) corpus, which the reuse phase
-    // samples when the primary corpus comes up short.
     db.save(
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
@@ -883,12 +744,6 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    // One primary entry that no longer reproduces, plus a secondary corpus
-    // larger than the shortfall (desired_size 2 - 1 primary = 1).  That
-    // drives the partial Fisher-Yates sampling path: more historical
-    // entries exist than the reuse phase wants, so only a random subset is
-    // replayed.  Every secondary entry reproduces the bug, so the run must
-    // fail no matter which one the sample happens to keep.
     db.save(
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
@@ -930,9 +785,6 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
     let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
     db.save(&secondary_key, &stale);
 
-    // A failing run replays small secondary entries as shrink jump-starts
-    // and deletes them either way (Hypothesis's clear_secondary_key) — the
-    // secondary corpus must not grow without bound across runs.
     let result = reuse_run(
         Settings::new()
             .database(Some(path.clone()))
@@ -957,8 +809,6 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
 
 #[test]
 fn should_generate_more_stops_ten_seconds_after_first_bug() {
-    // Within the call-count window but past the 10-second wall-clock cutoff
-    // (engine.py's first_bug_found_time): stop hunting for more origins.
     assert!(should_generate_more(
         false,
         20,
@@ -986,7 +836,6 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    // Two stored entries that both still reproduce.
     db.save(
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
@@ -1017,7 +866,6 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
         result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "the stored bug should be reported"
     );
-    // One reuse replay: the first entry reproduces, so the loop breaks.
     assert!(
         calls.load(Ordering::SeqCst) <= 2,
         "expected reuse to stop after the first reproduced bug, ran {} cases",
@@ -1037,12 +885,6 @@ fn reuse_found_bug_skips_generation_entirely() {
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
     );
 
-    // Hypothesis skips generation when the database replay already
-    // reproduced a failure ("we'd rather report that they're still failing
-    // ASAP than take the time to look for new ones"). With reuse replays
-    // now recorded like any other run, the bug-window heuristic alone would
-    // let generation probe for several extra calls; the explicit skip must
-    // keep the body-call count at exactly the one reuse replay.
     let calls = AtomicUsize::new(0);
     let result = reuse_run(
         Settings::new()
@@ -1072,10 +914,6 @@ fn reuse_found_bug_skips_generation_entirely() {
 
 #[test]
 fn should_generate_more_stops_without_bug_markers() {
-    // Defensive arm: a non-empty interesting map with no bug-window markers
-    // cannot arise from run_main any more (every interesting run passes
-    // through record_run, which sets them), but the standalone function
-    // must still answer sensibly.
     assert!(!should_generate_more(
         false, 5, None, None, true, true, None
     ));
@@ -1087,14 +925,9 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    // Two stored entries, so the reuse phase replays twice.
     db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
     db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
 
-    // The generator alternates the drawn kind per invocation: with reuse
-    // replays now recorded into the choice tree, the second replay
-    // contradicts the first and must surface the non-determinism diagnostic
-    // instead of silently mispredicting.
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
         Settings::new()
@@ -1131,12 +964,6 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    // A single stored entry: the reuse phase replays it once (no second replay
-    // to contradict, so the reuse-phase determinism check stays quiet) and
-    // feeds the choice tree. Generation then runs its simplest-example probe,
-    // whose draw the flipping generator makes contradict the reuse-fed tree —
-    // exercising the post-reuse `for_simplest` non-determinism check rather
-    // than the reuse-replay one.
     db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
 
     let flip = AtomicUsize::new(0);
@@ -1172,9 +999,6 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
 
 #[test]
 fn run_single_case_derandomize_is_keyed_by_test_identity() {
-    // Two different tests (database keys) running derandomized in
-    // `Mode::SingleTestCase` must not draw identical streams; the same key
-    // must replay the same stream.
     let settings = Settings::new()
         .database(None)
         .derandomize(true)

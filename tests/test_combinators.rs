@@ -36,9 +36,6 @@ fn test_optional_respects_inner_generator_bounds(tc: TestCase) {
     }
 }
 
-// Exercises the non-basic OptionalGenerator::do_draw path (flat_map produces a
-// non-basic generator, so optional falls back to compositional generation
-// rather than schema-based generation).
 #[hegel::test]
 fn test_optional_with_non_basic_inner(tc: TestCase) {
     let inner = gs::integers::<i32>()
@@ -117,7 +114,6 @@ fn test_boxed_generator_clone(tc: TestCase) {
 
 #[hegel::test]
 fn test_boxed_generator_double_boxed(tc: TestCase) {
-    // Calling .boxed() on an already-boxed generator should not re-wrap
     let gen1 = gs::integers::<i32>().min_value(0).max_value(10).boxed();
     let gen2 = gen1.boxed();
     let value = tc.draw(gen2);
@@ -126,7 +122,6 @@ fn test_boxed_generator_double_boxed(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_accepts_slice(tc: TestCase) {
-    // Pass a borrowed slice directly — no `.to_vec()` or `.iter().collect()` needed.
     const NAMES: &[&str] = &["alice", "bob", "carol"];
     let value = tc.draw(gs::sampled_from(NAMES));
     assert!(NAMES.contains(&value));
@@ -134,7 +129,6 @@ fn test_sampled_from_accepts_slice(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_accepts_array(tc: TestCase) {
-    // Pass a borrowed fixed-size array — coerces to &[T].
     let options = [1i32, 2, 3, 4, 5];
     let value = tc.draw(gs::sampled_from(&options));
     assert!(options.contains(&value));
@@ -172,7 +166,6 @@ fn test_optional_mapped(tc: TestCase) {
 
 #[hegel::test]
 fn test_draw_silent_non_debug(tc: TestCase) {
-    // Closure is not Debug, so this can only work with draw_silent
     let f = tc.draw_silent(
         gs::integers::<i32>()
             .min_value(0)
@@ -194,8 +187,6 @@ fn test_optional_mapped_find_any() {
         |v| v.is_none(),
     );
 }
-
-// Tests for enumerate_values / filtered sampled_from optimization.
 
 /// A rare value (x == 0) should always be found via the enumerate_values fallback.
 #[test]
@@ -475,10 +466,6 @@ mod arbitrary_data {
 
     #[test]
     fn test_prints_on_failure() {
-        // Python: asserts "Draw 1: [0, 0]" and "Draw 2: 0" are in the failure
-        // output's PEP 678 `__notes__`. hegel-rust writes drawn values to
-        // stderr as `let draw_N = …;` when they aren't bound to a named
-        // variable, so the equivalent assertion is on those lines.
         const CODE: &str = r#"
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
@@ -521,10 +508,6 @@ fn main() {
 
     #[test]
     fn test_prints_labels_if_given_on_failure() {
-        // Python: `data.draw(strategy, label="Some numbers")` attaches a label
-        // used in the failure output as `Draw 1 (Some numbers): …`. The
-        // hegel-rust equivalent is `tc.__draw_named(generator, name, false)`,
-        // which renders as `let name = value;` — we assert on those lines.
         const CODE: &str = r#"
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
@@ -569,11 +552,6 @@ fn main() {
 
     #[test]
     fn test_given_twice_is_same() {
-        // Python: `@given(st.data(), st.data())` with `data1.draw(...)` and
-        // `data2.draw(...)` asserts `Draw 1: 0` / `Draw 2: 0` appear in the
-        // failure's `__notes__`. hegel-rust has a single `tc`, so the port is
-        // two consecutive `tc.draw()` calls; the same Draw-N numbering appears
-        // as `let draw_N = ...;` lines in stderr.
         const CODE: &str = r#"
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
@@ -608,12 +586,6 @@ fn main() {
 
     #[test]
     fn test_data_supports_find() {
-        // Python: `find(st.data(), lambda data: data.draw(st.integers()) >= 10)`
-        // then `assert data.conjecture_data.choices == (10,)`. In hegel-rust,
-        // `compose!` plays the role of `st.data()` (dynamic draws inside a
-        // generator) and `minimal()` plays the role of `find()`; the
-        // engine-internal `choices` accessor has no public counterpart, so we
-        // assert on the returned minimal value instead.
         let value: i64 = minimal(
             hegel::compose!(|tc| { tc.draw(gs::integers::<i64>()) }),
             |x: &i64| *x >= 10,
@@ -961,9 +933,6 @@ mod nocover_deferred_errors {
 
     #[test]
     fn test_does_not_error_on_initial_calculation() {
-        // Constructing generators with bounds that will fail on draw must not
-        // panic at construction time. Mirrors upstream's "creating a broken
-        // strategy is allowed; using it is not" contract.
         gs::floats::<f64>().max_value(f64::NAN);
         gs::vecs(gs::integers::<i64>()).min_size(5).max_size(2);
         gs::floats::<f64>().min_value(2.0).max_value(1.0);
@@ -997,10 +966,6 @@ mod nocover_deferred_errors {
 
     #[test]
     fn test_errors_on_find() {
-        // Python: `find(s, lambda x: True)` with an invalid strategy. Hegel
-        // has no public `find()`; the nearest helper is `minimal()`, which
-        // also drives a `Hegel::new(...).run()` under the hood and surfaces
-        // the deferred bounds panic.
         expect_panic(
             || {
                 minimal(

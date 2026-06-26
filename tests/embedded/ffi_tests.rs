@@ -12,8 +12,6 @@ use ciborium::Value;
 
 #[test]
 fn ffi_settings_builds_with_each_explicit_backend() {
-    // Exercises `map_backend`'s explicit arms (the default tests leave the
-    // backend at AUTO). Building the settings handle is enough to hit them.
     for backend in [Backend::Default, Backend::Urandom] {
         let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None);
     }
@@ -61,8 +59,6 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     while let Some(tc) = run.next_test_case() {
         cases += 1;
 
-        // A span wrapping a small engine-managed collection of ints, rejecting
-        // any zero element so collection_reject is exercised.
         tc.start_span(hegel_c::hegel_label_t::HEGEL_LABEL_LIST as u64)
             .unwrap();
         let cid = tc.new_collection(0, Some(3)).unwrap();
@@ -96,7 +92,6 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
             continue;
         }
 
-        // A variable pool: register one variable and draw it back.
         let pool = tc.new_pool().unwrap();
         let added = tc.pool_add(pool).unwrap();
         match tc.pool_generate(pool, false) {
@@ -108,7 +103,6 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
             Err(rc) => panic!("pool_generate rc={rc:?}"),
         }
 
-        // A targeting observation, then the actual draw the "property" sees.
         tc.target(0.0, "score").unwrap();
         match tc.generate(&schema) {
             Ok(bytes) => {
@@ -137,8 +131,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     let run = RunHandle::start(&sh).unwrap();
     let schema = int_schema(0, 100);
 
-    // Property: n must be 0. Fails for any n > 0 and shrinks to the minimal
-    // counterexample, 1.
     let origin = "n != 0";
     while let Some(tc) = run.next_test_case() {
         match tc.generate(&schema) {
@@ -160,7 +152,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
     let failure = result.failure(0).unwrap();
-    // An out-of-range failure index yields None rather than faulting.
     assert!(
         result.failure(result.failure_count()).is_none(),
         "failure index past the end must be None"
@@ -169,7 +160,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 
-    // Replay the blob as a standalone, caller-owned, final test case.
     let sh2 = SettingsHandle::build(&settings, None);
     let replay = CTestCase::from_blob(&sh2, &blob).unwrap();
     let bytes = replay.generate(&schema).unwrap();
@@ -179,7 +169,6 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         "the blob replays the minimal counterexample"
     );
     replay.mark_complete(INTERESTING, Some(origin)).unwrap();
-    // `replay` is owned; dropping it frees the standalone test case.
 }
 
 #[test]

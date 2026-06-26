@@ -1,8 +1,3 @@
-// Interpreters for the internet-flavoured string schemas: domain, email, url.
-// All produce ciborium tag-91 strings matching the output of Hypothesis's
-// `provisional.domains()` / `strategies.emails()` / `provisional.urls()`
-// strategies.
-
 use std::sync::LazyLock;
 
 use crate::cbor_utils::{as_u64, map_get};
@@ -42,16 +37,16 @@ static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 /// here as merged codepoint intervals in ascending order.
 fn email_local_part_intervals() -> IntervalSet {
     IntervalSet::new(vec![
-        (b'!' as u32, b'!' as u32),  // !
-        (b'#' as u32, b'\'' as u32), // # $ % & '
-        (b'*' as u32, b'+' as u32),  // * +
-        (b'-' as u32, b'-' as u32),  // -
-        (b'/' as u32, b'9' as u32),  // / 0-9
-        (b'=' as u32, b'=' as u32),  // =
-        (b'A' as u32, b'Z' as u32),  // A-Z
-        (b'^' as u32, b'`' as u32),  // ^ _ `
-        (b'a' as u32, b'z' as u32),  // a-z
-        (b'{' as u32, b'~' as u32),  // { | } ~
+        (b'!' as u32, b'!' as u32),
+        (b'#' as u32, b'\'' as u32),
+        (b'*' as u32, b'+' as u32),
+        (b'-' as u32, b'-' as u32),
+        (b'/' as u32, b'9' as u32),
+        (b'=' as u32, b'=' as u32),
+        (b'A' as u32, b'Z' as u32),
+        (b'^' as u32, b'`' as u32),
+        (b'a' as u32, b'z' as u32),
+        (b'{' as u32, b'~' as u32),
     ])
 }
 
@@ -107,9 +102,6 @@ pub(super) fn interpret_domain(
 /// and `interpret_url`. `max_length` follows `DomainNameStrategy.max_length`
 /// (RFC 1035 §2.3.4): 4..=255.
 fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, EngineError> {
-    // RFC 1035 §2.3.4 limits a single label to 63 octets. Hypothesis
-    // exposes this as a parameter, but the `DomainGenerator` schema doesn't,
-    // so we hard-code the RFC limit here.
     const MAX_LABEL_LEN: usize = 63;
 
     let eligible: Vec<&'static str> = TOP_LEVEL_DOMAINS
@@ -117,11 +109,6 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
         .copied()
         .filter(|tld| tld.len() + 2 <= max_length)
         .collect();
-    // `DomainGenerator::build_schema` rejects `max_length < 4` upstream and
-    // the shortest TLD in the IANA list is 2 chars, so `eligible` is only
-    // empty for a malformed schema from another client — surface that as
-    // InvalidArgument like every other malformed-schema path here
-    // (Hypothesis's provisional.domains() raises InvalidArgument too).
     if eligible.is_empty() {
         return Err(EngineError::InvalidArgument(format!(
             "domain max_length={max_length} leaves no eligible TLDs"
@@ -133,20 +120,12 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
         .unwrap() as usize;
     let tld = eligible[idx];
 
-    // Random recase: each char is flipped with p=0.5 (i.e. result is upper
-    // or lower with equal probability). TLDs in the IANA list are
-    // uppercase, so this matches Hypothesis's `_recase_randomly`.
     let mut domain = String::with_capacity(tld.len());
     for c in tld.chars() {
         let flip = ntc.weighted(0.5, None)?;
         domain.push(if flip { c.to_ascii_lowercase() } else { c });
     }
 
-    // Prepend 1..=126 subdomain labels. The min_size=1 ensures the domain
-    // always has at least one subdomain (so it always parses as
-    // `<sub>.<tld>` — two dot-separated parts). The cap at 126 is from
-    // Hypothesis: with 1-char labels at minimum, 126 * 2 = 252 chars plus
-    // 3 for the TLD = 255, fitting the RFC 1035 §2.3.4 limit.
     let mut state = ManyState::new(1, Some(126));
     loop {
         if !many_more(ntc, &mut state)? {
@@ -154,9 +133,6 @@ fn draw_domain(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, En
         }
         let label = draw_dns_label(ntc, MAX_LABEL_LEN)?;
         if domain.len() + 1 + label.len() > max_length {
-            // Adding this label would overflow `max_length`. Hypothesis
-            // discards the just-opened span and breaks the loop; native
-            // doesn't open a span per element here, so we just stop.
             break;
         }
         let mut next = String::with_capacity(label.len() + 1 + domain.len());
@@ -278,8 +254,6 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, EngineErr
 
     let domain = draw_domain(ntc, 255)?;
 
-    // `st.just("") | ports` is a `one_of` over two alternatives — uniform
-    // index selection. The port range matches `integers(1, 65535)`.
     let port = if ntc.weighted(0.5, None)? {
         format!(
             ":{}",
@@ -291,10 +265,6 @@ pub(super) fn interpret_url(ntc: &mut NativeTestCase) -> Result<Value, EngineErr
         String::new()
     };
 
-    // `paths = lists(text(string.printable).map(url_encode)).map("/".join)`
-    // — variable-length list of url-encoded printable strings, joined by
-    // `/`. The outer `"{}://{}{}/{}{}".format` already supplies the leading
-    // `/`, so a `paths_list == []` produces `…/`.
     let printable = printable_ascii_intervals();
     let mut state = ManyState::new(0, None);
     let mut components: Vec<String> = Vec::new();

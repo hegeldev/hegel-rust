@@ -1,5 +1,3 @@
-// Choice types: the recorded decisions a test case makes.
-
 use std::sync::Arc;
 
 use crate::control::hegel_internal_assert;
@@ -85,29 +83,16 @@ impl IntegerChoice {
         }
         let above = (&self.max_value - &s).magnitude();
         let below = (&s - &self.min_value).magnitude();
-        // Values are enumerated by increasing distance `d` from `s`, emitting
-        // the up value `s + d` before the down value `s - d` at each distance,
-        // and dropping whichever side has run past its bound. The number of
-        // values within distance `d` is therefore
-        //     total(d) = min(d, above) + min(d, below),
-        // a piecewise-linear function of `d` with breakpoints at `a` and `b`
-        // (the smaller and larger of `above`/`below`):
-        //     d <= a       -> 2d        (both sides live)
-        //     a < d <= b   -> a + d     (small side exhausted)
-        //     d >  b       -> a + b     (both sides exhausted = max_index)
-        // Each regime inverts in closed form, so no search over `d` is needed.
         if index > &above + &below {
             return None;
         }
         let two_a = std::cmp::min(&above, &below) << 1usize;
         let one = BigUint::from(1u32);
         let (d, up) = if index <= two_a {
-            // Both sides live: index 2d-1 is `s + d`, index 2d is `s - d`.
             let d = (&index + &one) >> 1u32;
             let up = !(&index % &BigUint::from(2u32)).is_zero();
             (d, up)
         } else {
-            // Only the larger side continues, one value per distance beyond `a`.
             let d = &index - std::cmp::min(&above, &below);
             (d, above > below)
         };
@@ -300,10 +285,6 @@ impl StringChoice {
     /// Second-simplest codepoint sequence, used for type-punning during replay.
     pub fn unit(&self) -> Vec<u32> {
         let simplest_cp = self.simplest_codepoint();
-        // Pick the second-simplest character in the alphabet's shrink order
-        // (position 1). If the alphabet has only one character, fall back to
-        // lengthening the simplest, or to `simplest()` if the length is also
-        // fixed.
         let second_cp = self.key_to_codepoint(1);
         match second_cp {
             Some(cp) if cp != simplest_cp => {
@@ -446,7 +427,6 @@ impl FloatChoice {
     pub fn simplest(&self) -> f64 {
         use super::float_index::{float_to_index, simplest_in_range};
 
-        // The two zeros hold the lowest global ranks (0 and 1).
         if self.validate(0.0) {
             return 0.0;
         }
@@ -454,10 +434,6 @@ impl FloatChoice {
             return -0.0;
         }
 
-        // Find each sign's minimum-lex magnitude with the exact search, then
-        // compare the two by the (magnitude index, is_negative) sort key.
-        // Magnitudes start at `smallest_nonzero_magnitude` — the band below
-        // it is invalid.
         let mut best: Option<((u64, bool), f64)> = None;
         if self.max_value > 0.0 {
             let lo = self.min_value.max(self.smallest_nonzero_magnitude);
@@ -551,10 +527,6 @@ impl FloatChoice {
     /// (both signs) followed by `+inf`, `-inf`, then all NaN payloads.
     pub fn max_index(&self) -> crate::native::bignum::BigUint {
         use crate::native::bignum::BigUint;
-        // NaN payloads 1..2^52 ranked by payload XOR 2^51 over 2 signs; the
-        // largest occupied slot is offset 2 + 2^53 past the finite ranks
-        // (the XOR leaves two dead slots where payload 0 would sit, which
-        // `from_index` reports as None).
         max_finite_global_rank() + BigUint::from(2u32) + BigUint::from(1u64 << 53)
     }
 
@@ -590,10 +562,6 @@ fn float_global_rank(v: f64) -> crate::native::bignum::BigUint {
     use crate::native::bignum::BigUint;
 
     if v.is_nan() {
-        // Rank NaNs by payload XOR 2^51 so the canonical quiet NaN (payload
-        // 2^51) ranks first; the XOR is self-inverse, so
-        // `float_from_global_rank` recovers every payload — quiet or
-        // signaling — bit-exactly.
         let bits = v.to_bits();
         let nan_offset = (bits & ((1u64 << 52) - 1)) ^ (1u64 << 51);
         let sign = bits >> 63;
@@ -637,12 +605,8 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
             .expect("mod 2 fits in u64");
         let mantissa_base: u64 = (nan_rel / BigUint::from(2u32)).try_into().ok()?;
         if mantissa_base >> 52 != 0 {
-            // Past the last NaN payload slot — out of range, not a value.
             return None;
         }
-        // Undo the XOR applied by `float_global_rank` (self-inverse). The
-        // slot where this yields payload 0 decodes to an infinity bit
-        // pattern, which the `is_nan` check below rejects.
         let mantissa = mantissa_base ^ (1u64 << 51);
         let bits = (sign << 63) | (0x7FFu64 << 52) | mantissa;
         let v = f64::from_bits(bits);
@@ -654,10 +618,6 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
     let mag_big = rank / BigUint::from(2u32);
     let mag_idx: u64 = (&mag_big).try_into().ok()?;
     if mag_idx >> 63 == 0 && mag_idx >> 56 != 0 {
-        // Non-canonical tag-0 index: `float_to_index` only produces simple
-        // integers below 2^56, but `index_to_float` masks bits 56..62 away,
-        // so decoding here would alias a small integer and break the
-        // to_index/from_index inverse.
         return None;
     }
     let mag = index_to_float(mag_idx);
@@ -747,7 +707,7 @@ fn sequence_max_children_saturating(
     cap: u128,
 ) -> u128 {
     let mut total: u128 = 0;
-    let mut power: u128 = 1; // alphabet^0
+    let mut power: u128 = 1;
     for len in 0..=max_size {
         if len >= min_size {
             total = total.saturating_add(power);
@@ -888,10 +848,6 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => {
                 ChoiceValue::Integer(crate::native::core::state::biased_integer_sample(ic, rng))
             }
-            // An unbiased boolean is `weighted_boolean_sample` at p = 0.5, which
-            // spends exactly one byte of entropy (a bare `rng.random::<bool>()`
-            // would pull a whole `u32`). One byte per boolean matters for the
-            // urandom backend, where every byte is fuzzer-controlled entropy.
             ChoiceKind::Boolean(_) => ChoiceValue::Boolean(
                 crate::native::core::state::weighted_boolean_sample(0.5, rng),
             ),
@@ -929,18 +885,9 @@ impl ChoiceKind {
                 ChoiceValue::Boolean(false),
                 ChoiceValue::Boolean(true),
             ]),
-            // `max_children` for a `FloatChoice` is at least `2^53` (the NaN
-            // payload count), which always exceeds the `cap: u64` early-return
-            // threshold above. No caller can ever land here.
             ChoiceKind::Float(_) => {
                 unreachable!("FloatChoice max_children always exceeds u64::MAX cap")
             }
-            // For `BytesChoice` only the `max_size == 0` corner has a
-            // sensible enumeration (one empty value). Any non-zero
-            // `max_size` technically fits the `u64::MAX` cap up to
-            // `max_size = 7` (`Σ 256^k` through `k = 7` stays just under
-            // `2^64`), but the 256-way fan-out makes materialising the list
-            // pointless for any caller that would actually want it.
             ChoiceKind::Bytes(bc) => {
                 if bc.max_size == 0 {
                     Some(vec![ChoiceValue::Bytes(Vec::new())])
@@ -948,9 +895,6 @@ impl ChoiceKind {
                     None
                 }
             }
-            // Mirror the `BytesChoice` arm: only `max_size == 0` has a sensible
-            // enumeration. Any larger size has alpha-way fan-out that makes
-            // materialising the list pointless even when it fits in `cap`.
             ChoiceKind::String(sc) => {
                 if sc.max_size == 0 {
                     Some(vec![ChoiceValue::String(Vec::new())])
@@ -1100,7 +1044,6 @@ impl<'a> Ord for NodeSortKeyRef<'a> {
                 self.category().cmp(&other.category())
             }
             _ => {
-                // Both sides are sequence variants.
                 let la = self.seq_len();
                 let lb = other.seq_len();
                 match la.cmp(&lb) {

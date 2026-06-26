@@ -40,11 +40,6 @@ fn run_property_panicking_with(msg: &'static str) -> String {
         .unwrap_or_default()
 }
 
-// Regression tests: these exact strings used to be Hegel's internal
-// control-flow sentinels, classified by comparing panic-message text. A user
-// panic that happened to match one was silently reclassified — an
-// assume-style rejection, an overrun, or (worst) a *passing* test case.
-
 #[test]
 fn user_panic_matching_assume_sentinel_is_a_failure() {
     assert_eq!(

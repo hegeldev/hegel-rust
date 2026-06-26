@@ -7,12 +7,6 @@ use crate::common::{
     extract_reproduce_failure, rewrite_draws_in_block,
 };
 
-// Vendored from tokio 1fc450aefba4b05cdff9b7825ca5e39cccb3780e (thanks!)
-//
-// Check whether given attribute is a test attribute of forms:
-// * `#[test]`
-// * `#[core::prelude::*::test]` or `#[::core::prelude::*::test]`
-// * `#[std::prelude::*::test]` or `#[::std::prelude::*::test]`
 fn is_test_attribute(attr: &Attribute) -> bool {
     let path = match &attr.meta {
         syn::Meta::Path(path) => path,
@@ -78,7 +72,6 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let param_pat = &*param_typed.pat;
     let param_ty = &*param_typed.ty;
 
-    // If #[tokio::test] (or similar) did its job, we shouldn't be seeing an async function.
     if let Some(asy) = func.sig.asyncness {
         return syn::Error::new_spanned(
             asy,
@@ -110,11 +103,6 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let test_name = func.sig.ident.to_string();
     let settings_expr = test_args.to_settings_expr();
-    // Chain `.reproduce_failure((<expr>).to_string())` onto the `Hegel`
-    // builder so the run replays only the encoded example. The blob
-    // expression flows straight from the attribute into generated code
-    // (`.to_string()` accepts a string literal, a `const`/`static` `&str`,
-    // or a `String`); decoding happens at runtime.
     let reproduce_call = match &reproduce_blob {
         Some(blob) => quote! { .reproduce_failure((#blob).to_string()) },
         None => quote! {},

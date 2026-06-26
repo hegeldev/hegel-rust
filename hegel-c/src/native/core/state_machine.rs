@@ -1,11 +1,3 @@
-// Engine-owned state machines: swarm rule selection for stateful testing.
-//
-// Each test case enables a random subset
-// of rules ("swarm testing", Groce et al. 2012); rule selection then draws
-// only from the enabled subset. The flags shrink open: the disabling
-// probability shrinks to zero, so swarm restrictions vanish from minimal
-// counterexamples.
-
 use std::collections::HashSet;
 
 use super::choices::EngineError;
@@ -43,8 +35,6 @@ struct FeatureFlags {
 
 impl FeatureFlags {
     fn new(ntc: &mut NativeTestCase, num_rules: usize) -> Result<Self, EngineError> {
-        // Drawn as an integer in [0, 254] so the shrunk value 0 enables
-        // everything: we shrink in the direction of more rules enabled.
         let raw = ntc.draw_integer(BigInt::from(0), BigInt::from(254))?;
         Ok(FeatureFlags {
             p_disabled: raw.to_i128().unwrap() as f64 / 255.0,
@@ -60,8 +50,6 @@ impl FeatureFlags {
         } else {
             self.is_disabled[i]
         };
-        // On Err the span is left open; `freeze` closes intervals left open
-        // by an overrun.
         let is_disabled = ntc.weighted(self.p_disabled, forced)?;
         self.is_disabled[i] = Some(is_disabled);
         if !is_disabled {
@@ -89,9 +77,6 @@ pub struct NativeStateMachine {
 
 impl NativeStateMachine {
     pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
-        // The caller (`DataSource::new_state_machine`) rejects an empty rule
-        // set with `InvalidArgument` before constructing one, so reaching here
-        // empty is an engine invariant violation, not a caller error.
         hegel_internal_assert!(
             !rule_names.is_empty(),
             "Stateful testing: there must be at least one rule"
@@ -115,8 +100,6 @@ impl NativeStateMachine {
         }
         let flags = self.flags.as_mut().unwrap();
 
-        // Ordinary rejection sampling first: fast when most rules are
-        // enabled, cheap when it fails.
         let mut known_bad: HashSet<usize> = HashSet::new();
         for _ in 0..3 {
             let i = draw_index(ntc, n)?;
@@ -128,14 +111,6 @@ impl NativeStateMachine {
             }
         }
 
-        // Fallback: enumerate the remaining candidates. Before we know how
-        // many are enabled, speculatively draw a position into the enabled
-        // list so we can early-exit the enumeration at that point; if the
-        // speculative position turns out to be past the end of the list,
-        // draw again from the now-known list. Either way, record the chosen
-        // rule index as a forced draw in the same domain as the
-        // rejection-sampling tries, so shrinking and replay see a uniform
-        // node shape.
         let max_good = n - known_bad.len();
         let speculative = draw_index(ntc, max_good)?;
         let mut allowed: Vec<usize> = Vec::new();
@@ -155,8 +130,6 @@ impl NativeStateMachine {
                 }
             }
         }
-        // Guaranteed by at_least_one_of: enumerating every rule decides them
-        // all, and the last undecided candidate is forced enabled.
         hegel_internal_assert!(!allowed.is_empty());
         let k = draw_index(ntc, allowed.len())?;
         let i = allowed[k];

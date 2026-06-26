@@ -1,5 +1,3 @@
-// Stateful types: NativeTestCase, ManyState, NativeVariables, Span.
-
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{LazyLock, Mutex};
@@ -70,37 +68,31 @@ pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64
 /// neighbours and negations.
 static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
     let mut base: Vec<i128> = Vec::new();
-    // Powers of 2 (2^16 to 2^65)
     for n in 16u32..66 {
         base.push(1i128 << n);
     }
-    // Powers of 10 (10^5 to 10^19)
     let mut p10 = 100_000i128;
     for _ in 5..20u32 {
         base.push(p10);
         p10 *= 10;
     }
-    // Factorials (9! to 20!)
-    let mut f = 362_880i128; // 9!
+    let mut f = 362_880i128;
     base.push(f);
     for i in 10u32..=20 {
         f *= i as i128;
         base.push(f);
     }
-    // Primorial numbers
     base.extend_from_slice(&[
         510_510i128,
         6_469_693_230,
         304_250_263_527_210,
         32_589_158_477_190_044_730,
     ]);
-    // Extend with n-1 and n+1
     let n_base = base.len();
     for i in 0..n_base {
         base.push(base[i] - 1);
         base.push(base[i] + 1);
     }
-    // Extend with negations of all values so far
     let n_half = base.len();
     for i in 0..n_half {
         base.push(-base[i]);
@@ -120,10 +112,6 @@ fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> us
         return min_size;
     }
     let p_continue = length_p_continue(min_size, Some(max_size));
-    // Geometric variate: `extra ~ floor(log(U) / log(p_continue))` for
-    // `U ~ Uniform(0, 1)`. `rng.random::<f64>()` returns `[0, 1)`, so `U`
-    // can be exactly `0` — that yields `-inf / log(p) = +inf` which
-    // saturates to `usize::MAX` via the float cast; the final `.min` clamps.
     let u: f64 = rng.random();
     let extra = (u.ln() / p_continue.ln()).floor();
     hegel_internal_assert!(extra >= 0.0);
@@ -160,24 +148,12 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 /// return is handled at the [`biased_integer_sample`] call site.
 fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
     let dist = &*INTEGERS_DISTRIBUTION;
-    // i128 endpoints can lose precision crossing into f64, but the final
-    // `clamp` mops up any out-of-range round-off so the contract holds.
     let lo = dist.cdf(min_value as f64 - 0.5);
     let hi = dist.cdf(max_value as f64 + 0.5);
-    // A tighter CDF window than ~1e-13 leaves the inverse-CDF nothing to
-    // spread samples across, so collapse to uniform.
     if hi - lo < 1e-13 {
         return rng.random_range(min_value..=max_value);
     }
-    // `inverse_cdf` requires strictly `0 < p < 1`. `rng.random::<f64>()`
-    // returns `[0, 1)`, so `p < hi ≤ 1` already; the only way to land on
-    // an endpoint is `p == 0.0`, which needs `lo == 0.0` and a zero-bit
-    // draw. `.max(f64::MIN_POSITIVE)` nudges that case to the smallest
-    // positive float — equivalent to the inverse-CDF at the very far
-    // tail, which the final `clamp` then brings back into range.
     let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
-    // `f64 as i128` saturates out-of-range values to ±i128::MAX, then
-    // `clamp` brings them into the requested range.
     (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
 }
 
@@ -281,22 +257,13 @@ fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> 
     if min_value == max_value {
         return min_value;
     }
-    // The static boundary pool is sorted, so the in-range subset is a
-    // contiguous slice that two binary searches locate in O(log n).
     let pool = &*SORTED_NASTY_POOL;
     let lo = pool.partition_point(|&v| v < min_value);
     let hi = pool.partition_point(|&v| v <= max_value);
     let static_slice = &pool[lo..hi];
-    // `min_value` / `max_value` are always candidates; add them only
-    // if the static slice doesn't already cover them (then `min < max` past
-    // the early return guarantees they're distinct).
     let need_min = static_slice.first() != Some(&min_value);
     let need_max = static_slice.last() != Some(&max_value);
     let count = static_slice.len() + (need_min as usize) + (need_max as usize);
-    // Cap at 0.5 so the distribution branch always keeps meaningful
-    // probability — a wide range (e.g. all of `i64`) has hundreds of in-range
-    // pool entries, and the uncapped `count * BOUNDARY_PROBABILITY` exceeds 1,
-    // turning `integer_sample_from_distribution` into dead code.
     let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
@@ -324,8 +291,6 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> B
     let span: BigUint = (max - min).magnitude();
     let bits = span.bits();
 
-    // In-range "nasty" candidates: the bounds, 0, ±1, and small powers of two
-    // (capped so a huge span doesn't build an unboundedly long pool).
     let mut nasty: Vec<BigInt> = vec![min.clone(), max.clone()];
     let push_in_range = |v: BigInt, nasty: &mut Vec<BigInt>| {
         if &v >= min && &v <= max {
@@ -343,9 +308,6 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> B
     nasty.sort();
     nasty.dedup();
 
-    // Cap at 0.5 so the uniform branch always keeps meaningful probability —
-    // a wide span's nasty pool can otherwise be large enough that
-    // `count * BOUNDARY_PROBABILITY` exceeds 1 and the uniform draw never runs.
     let threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..nasty.len());
@@ -389,9 +351,6 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// otherwise. Shared with the data-tree walk so novel-prefix exploration
 /// hits the same boundary distribution as fresh draws.
 pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
-    // A quiet NaN with the lowest mantissa bit set — Hypothesis's
-    // SIGNALING_NAN (the signaling/quiet distinction is the cleared bit 51;
-    // the set bit 0 keeps the mantissa nonzero so it stays a NaN).
     const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
     let candidates = [
         fc.min_value,
@@ -417,14 +376,10 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         -f64::MAX,
     ];
     let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
-    // Capped like the integer/string pools, though with ~21 candidates the
-    // uncapped value never exceeds ~0.2 today.
     let nasty_threshold = (valid_count as f64 * BOUNDARY_PROBABILITY).min(0.5);
 
     if rng.random::<f64>() < nasty_threshold {
         let idx = rng.random_range(0..valid_count);
-        // Walk the fixed-size array again to find the idx-th in-range entry.
-        // 21 elements, no allocation; cheaper than the legacy Vec<f64>.
         let mut skip = idx;
         for &v in candidates.iter() {
             if fc.validate(v) {
@@ -436,22 +391,12 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         }
         unreachable!("valid_count agrees with the second validate pass");
     }
-    // Hypothesis-style raw draw (`HypothesisProvider._draw_float`): decode a
-    // uniformly random 64-bit pattern through the lex ordering — half the
-    // mass lands on non-negative integers below 2^56, the rest spreads over
-    // the fractional space (biased toward simple fractions) — then attach a
-    // uniformly random sign. Out-of-range results are remapped into the
-    // constraint by `float_clamp`; in-range results (including NaN when
-    // allowed) pass through untouched, preserving the simple-value bias
-    // inside bounded ranges.
     let mag = index_to_float(rng.random::<u64>());
     let raw = if rng.random::<u64>() & 1 == 1 {
         -mag
     } else {
         mag
     };
-    // `validate` covers Python's separate allowed-NaN passthrough: NaN
-    // validates exactly when `allow_nan` is set.
     let f = if fc.validate(raw) {
         raw
     } else {
@@ -465,10 +410,6 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
 /// the range so that distinct raw draws keep producing distinct in-range
 /// values, and re-routing around the `smallest_nonzero_magnitude` band.
 fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
-    // An infinite bound with `allow_infinity=false` (a Hegel-only combination
-    // that the schema layer avoids, but `FloatChoice` can express) would make
-    // the arithmetic below produce the very infinity it must exclude, so work
-    // with the finite effective bounds in that case.
     let (min_value, max_value) = if fc.allow_infinity {
         (fc.min_value, fc.max_value)
     } else {
@@ -478,16 +419,12 @@ fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
     let range_size = (max_value - min_value).min(f64::MAX);
     let mant = raw.abs().to_bits() & MANTISSA_MASK;
     let mut f = min_value + range_size * (mant as f64 / MANTISSA_MASK as f64);
-    // Remapped into the excluded near-zero band: default to the smallest
-    // allowed magnitude, negated when only the negative side admits it
-    // (mirrors `make_float_clamper`).
     if f != 0.0 && f.abs() < fc.smallest_nonzero_magnitude {
         f = fc.smallest_nonzero_magnitude;
         if fc.smallest_nonzero_magnitude > max_value {
             f = -f;
         }
     }
-    // Re-enforce the bounds in case of floating-point rounding error.
     f.max(min_value).min(max_value)
 }
 
@@ -499,8 +436,6 @@ fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
 pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
     let want_zero = bc.min_size == 0 && bc.max_size > 0;
     let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
-    // At most 3 candidates: simplest(), [0x00], [0xff]. Compute the count
-    // without materialising the Vec<Vec<u8>>, then synthesise the chosen one.
     let count = 1 + want_zero as usize + want_ff as usize;
     let nasty_threshold = count as f64 * BOUNDARY_PROBABILITY;
     if rng.random::<f64>() < nasty_threshold {
@@ -566,7 +501,6 @@ pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bo
 /// be validated against and inserted into the draw_string nasty pool.
 static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
     let strings: &[&str] = &[
-        // strings interpretable as code / logic
         "undefined",
         "null",
         "NULL",
@@ -585,7 +519,6 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
         "else",
         "__dict__",
         "__proto__",
-        // strings interpretable as numbers
         "0",
         "1e100",
         "0..0",
@@ -598,50 +531,34 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
         "INF",
         "NaN",
         "999999999999999999999999999999",
-        // common ASCII punctuation / special chars
         ",./;'[]\\-=<>?:\"{}|_+!@#$%^&*()`~",
-        // common Unicode characters
         "Ω≈ç√∫˜µ≤≥÷åß∂ƒ©˙∆˚¬…æœ∑´®†¥¨ˆøπ\u{201C}\u{2018}¡™£¢∞§¶•ªº–≠¸˛Ç◊ı˜Â¯˘¿ÅÍÎÏ˝ÓÔÒÚÆ☃Œ„´‰ˇÁ¨ˆØ∏\u{201D}\u{2019}`⁄€‹›ﬁﬂ‡°·‚—±",
-        // characters that increase in length when lowercased
         "Ⱥ",
         "Ⱦ",
-        // ligatures
         "æœÆŒﬀʤʨß",
-        // emoticons
         "(╯°□°）╯︵ ┻━┻)",
-        // emojis
         "😍",
         "🇺🇸",
         "🏻",
         "👍🏻",
-        // RTL text
         "الكل في المجمو عة",
-        // Ogham text
         "᚛ᚄᚓᚐᚋᚒᚄ ᚑᚄᚂᚑᚏᚅ᚜",
-        // Thai consonant + spacing vowel
         "กา",
         "ก ำกำ",
-        // mathematical bold/fraktur/script text
         "𝐓𝐡𝐞 𝐪𝐮𝐢𝐜𝐤 𝐛𝐫𝐨𝐰𝐧 𝐟𝐨𝐱 𝐣𝐮𝐦𝐩𝐬 𝐨𝐯𝐞𝐫 𝐭𝐡𝐞 𝐥𝐚𝐳𝐲 𝐝𝐨𝐠",
         "𝕿𝖍𝖊 𝖖𝖚𝖎𝖈𝖐 𝖇𝖗𝖔𝖜𝖓 𝖋𝖔𝖝 𝖏𝖚𝖒𝖕𝖘 𝖔𝖛𝖊𝖗 𝖙𝖍𝖊 𝖑𝖆𝖟𝖞 𝖉𝖔𝖌",
         "𝑻𝒉𝒆 𝒒𝒖𝒊𝒄𝒌 𝒃𝒓𝒐𝒘𝒏 𝒇𝒐𝒙 𝒋𝒖𝒎𝒑𝒔 𝒐𝒗𝒆𝒓 𝒕𝒉𝒆 𝒍𝒂𝒛𝒚 𝒅𝒐𝒈",
         "𝓣𝓱𝓮 𝓺𝓾𝓲𝓬𝓴 𝓫𝓻𝓸𝔀𝓷 𝓯𝓸𝔁 𝓳𝓾𝓶𝓹𝓼 𝓸𝓿𝓮𝓻 𝓽𝓱𝓮 𝓵𝓪𝔃𝔂 𝓭𝓸𝓰",
         "𝕋𝕙𝕖 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨𝕟 𝕗𝕠𝕩 𝕛𝕦𝕞𝕡𝕤 𝕠𝕧𝕖𝕣 𝕥𝕙𝕖 𝕝𝕒𝕫𝕪 𝕕𝕠𝕘",
-        // upside-down text
         "ʇǝɯɐ ʇᴉs ɹolop ɯnsdᴉ ɯǝɹo˥",
-        // Windows reserved names
         "NUL",
         "COM1",
         "LPT1",
-        // Scunthorpe problem
         "Scunthorpe",
-        // zalgo text
         "Ṱ̺̺̕o͞ ̷i̲̬͇̪͙n̝̗͕v̟̜̘̦͟o̶̙̰̠kè͚̮̺̪̹̱̤ ̖t̝͕̳̣̻̪͞h̼͓̲̦̳̘̲e͇̣̰̦̬͎ ̢̼̻̱̘h͚͎͙̜̣̲ͅi̦̲̣̰̤v̻͍e̺̭̳̪̰-m̢iͅn̖̺̞̲̯̰d̵̼̟͙̩̼̘̳ ̞̥̱̳̭r̛̗̘e͙p͠r̼̞̻̭̗e̺̠̣͟s̘͇̳͍̝͉e͉̥̯̞̲͚̬͜ǹ̬͎͎̟̖͇̤t͍̬̤͓̼̭͘ͅi̪̱n͠g̴͉ ͏͉ͅc̬̟h͡a̫̻̯͘o̫̟̖͍̙̝͉s̗̦̲.̨̹͈̣",
-        // examples from https://faultlore.com/blah/text-hates-you/
         "मनीष منش",
         "पन्ह पन्ह त्र र्च कृकृ ड्ड न्हृे إلا بسم الله",
         "lorem لا بسم الله ipsum 你好1234你好",
-        // unconditional Unicode line-break characters (UAX #14)
         "a\u{000A}b\u{000D}c\u{0085}d\u{000B}e\u{000C}f\u{2028}g\u{2029}h\u{000D}\u{000A}i",
     ];
     strings
@@ -669,26 +586,13 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
     let want_one = sc.min_size <= 1 && sc.max_size >= 1;
     let want_two = sc.min_size <= 2 && sc.max_size >= 2;
     let small_count = 1 + want_empty as usize + want_one as usize + want_two as usize;
-    // Count the in-range global candidates without materialising them. The
-    // pool only has ~70 entries; one validate pass is cheap and avoids the
-    // per-call `Vec<Vec<u32>>` allocation and the legacy O(n²) `contains`.
-    // Note: the legacy code also deduped against the small-candidate set, but
-    // those entries are all monomorphic runs of `simplest_codepoint()`, none
-    // of which occur in `GLOBAL_CONSTANTS_STRINGS` — so the dedup never fired
-    // in practice.
     let global_pool = &*GLOBAL_CONSTANTS_STRINGS;
     let valid_global_count = global_pool.iter().filter(|cps| sc.validate(cps)).count();
     let count = small_count + valid_global_count;
-    // Cap at 0.5 so the alphabet-driven sampler always keeps meaningful
-    // probability: for a permissive alphabet every global constant validates
-    // and the uncapped `count * BOUNDARY_PROBABILITY` reaches ~0.6, skewing
-    // most draws to the constant pool.
     let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if idx < small_count {
-            // Materialise the chosen small candidate. Order is fixed:
-            // simplest, then empty, [cp], [cp, cp] in the conditional slots.
             let simplest_cp = sc.simplest_codepoint();
             let mut slot = idx;
             if slot == 0 {
@@ -710,8 +614,6 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
             hegel_internal_debug_assert!(want_two && slot == 0);
             return vec![simplest_cp, simplest_cp];
         }
-        // Walk the global pool again to find the `(idx - small_count)`-th
-        // in-range entry. Two passes of ~70 ≪ the old `clone` + `contains`.
         let mut skip = idx - small_count;
         for cps in global_pool.iter() {
             if sc.validate(cps) {
@@ -1580,11 +1482,6 @@ impl NativeTestCase {
 
         let idx = self.nodes.len();
 
-        // Branch 1: replay from the concrete prefix. When the prefix value's
-        // recorded kind doesn't match the requested kind (e.g. a schema
-        // shifted between runs), `prefix_nodes` carries the original kind so
-        // we can route to `simplest()` or `unit()` of the *new* kind — the
-        // "punning" logic.
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
             if validate(prefix_value) {
@@ -1598,10 +1495,6 @@ impl NativeTestCase {
             return Ok((if is_simplest { simplest() } else { unit() }, false));
         }
 
-        // Branch 2: trailing template. Resolves every post-prefix draw to
-        // the template's kind, decrementing `count` if finite. When `count`
-        // reaches zero the next draw marks overrun without producing a
-        // value.
         if let Some(template) = self.trailing_template.as_mut() {
             if matches!(template.count, Some(0)) {
                 self.conclude(Status::EarlyStop, None);
@@ -1616,7 +1509,6 @@ impl NativeTestCase {
             return Ok((value, false));
         }
 
-        // Branch 3: random fallback.
         let rng = self
             .rng
             .as_mut()

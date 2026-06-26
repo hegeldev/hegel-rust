@@ -31,9 +31,6 @@ fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
 
 #[test]
 fn redistribute_string_pair_moves_entire_value_when_accepted() {
-    // Accepting predicate lets the first step (move everything from `s`
-    // into `t`) succeed and triggers the early `return` after the
-    // `combined` candidate is accepted.
     let initial = vec![
         string_node(vec![b'a' as u32, b'b' as u32, b'c' as u32], 0, 0x10FFFF),
         string_node(vec![b'd' as u32, b'e' as u32], 0, 0x10FFFF),
@@ -62,10 +59,6 @@ fn redistribute_string_pair_moves_entire_value_when_accepted() {
 
 #[test]
 fn redistribute_string_pair_partial_move_triggers_bin_search() {
-    // Reach the bin_search arm: the full-move candidate is rejected (because
-    // `nodes[1]` would exceed 3 codepoints), the single-codepoint move is
-    // accepted (so the second early-return doesn't fire), and bin_search
-    // then probes the remaining suffixes.
     let initial = vec![
         string_node(vec![b'a' as u32, b'b' as u32, b'c' as u32], 0, 0x10FFFF),
         string_node(vec![b'd' as u32, b'e' as u32], 0, 0x10FFFF),
@@ -93,8 +86,6 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
 
 #[test]
 fn shrink_strings_collapses_accepting_run_toward_simplest() {
-    // Accepting test_fn drives the shrinker to settle on the empty value
-    // (alphabet [a-z], min_size = 0).
     let initial = vec![string_node(
         vec![b'a' as u32, b'b' as u32],
         b'a' as u32,
@@ -111,18 +102,6 @@ fn shrink_strings_collapses_accepting_run_toward_simplest() {
 
 #[test]
 fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
-    // Reach the `if !changed { return false }` guard inside `try_replace_all`:
-    // step-3.5's `bin_search_down` over a duplicated codepoint's shrink-key
-    // range probes multiple keys; once the first successful probe replaces
-    // every instance of `val`, subsequent probes call `try_replace_all`
-    // with `val` no longer present in `cur` — the guard short-circuits
-    // those calls.
-    //
-    // Predicate accepts only `[100, 100]` or `[200, 200]` (both codepoints
-    // sit above the 62-position semantic-candidates range, forcing the
-    // loop to fall through to `bin_search_down`). `bin_search` probes
-    // mid=100 → replace succeeds → `val=200` removed → subsequent probes
-    // hit the `!changed` early-return.
     let initial = vec![string_node(vec![200, 200], 0, 0x10FFFF)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -150,10 +129,6 @@ fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
 
 #[test]
 fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
-    // 'À' (U+00C0) has NFD base 'A' (U+0041). With a wide alphabet that
-    // contains both, `semantic_candidates` walks the alphabet's first 62
-    // shrink-order positions and then falls back to the NFD base for
-    // non-ASCII input.
     let initial = vec![string_node(vec![0x00C0], b'A' as u32, 0x00FF)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {

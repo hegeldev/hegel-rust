@@ -3,10 +3,6 @@ use hegel::extras::jiff as jiff_gs;
 use hegel::generators as gs;
 use jiff::civil::{Date, DateTime, ISOWeekDate, Time};
 
-// ---------------------------------------------------------------------------
-// civil::Date
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_dates_default() {
     check_can_generate_examples(jiff_gs::dates());
@@ -28,10 +24,6 @@ fn test_jiff_dates_in_vec() {
 fn test_jiff_date_default_generator() {
     check_can_generate_examples(gs::default::<Date>());
 }
-
-// ---------------------------------------------------------------------------
-// civil::Time
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_jiff_times_default() {
@@ -58,10 +50,6 @@ fn test_jiff_times_in_vec() {
 fn test_jiff_time_default_generator() {
     check_can_generate_examples(gs::default::<Time>());
 }
-
-// ---------------------------------------------------------------------------
-// civil::DateTime
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_jiff_datetimes_default() {
@@ -109,10 +97,6 @@ fn test_jiff_datetime_default_generator() {
     check_can_generate_examples(gs::default::<DateTime>());
 }
 
-// ---------------------------------------------------------------------------
-// civil::ISOWeekDate
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_iso_week_dates_default() {
     check_can_generate_examples(gs::default::<ISOWeekDate>());
@@ -121,7 +105,6 @@ fn test_jiff_iso_week_dates_default() {
 #[test]
 fn test_jiff_iso_week_dates_year_in_range() {
     assert_all_examples(gs::default::<ISOWeekDate>(), |w| {
-        // Date::year() is 1..=9999, so the ISO week year is at most 1 off.
         (0..=9999).contains(&w.year())
     });
 }

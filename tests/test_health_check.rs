@@ -97,8 +97,6 @@ mod health_checks {
         let c = Arc::clone(&count);
         Hegel::new(move |tc: TestCase| {
             c.fetch_add(1, Ordering::SeqCst);
-            // A wide domain so the choice tree never exhausts; every input is
-            // rejected, so no valid example is ever produced.
             let _: i64 = tc.draw(gs::integers::<i64>());
             tc.reject();
         })
@@ -172,8 +170,6 @@ mod health_checks {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(|tc: TestCase| {
                 let n: i64 = tc.draw(gs::integers::<i64>());
-                // ~6% acceptance: a few valid examples appear before 50
-                // invalid draws accumulate, but valid stays well below 10.
                 tc.assume(n.rem_euclid(16) == 0);
             })
             .settings(
@@ -197,14 +193,11 @@ mod health_checks {
     }
 }
 
-// Size-based health checks (TestCasesTooLarge / LargeInitialTestCase) are
-// native-engine features, so these run only under `--features native`.
 mod size_checks {
     use super::common::utils::expect_panic;
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
 
-    // A generator whose elements alone overrun the choice buffer.
     fn oversized(tc: hegel::TestCase) {
         tc.draw(gs::vecs(gs::booleans()).min_size(20_000));
     }

@@ -1,9 +1,3 @@
-// Embedded tests for src/native/schema/internet.rs — drive each interpreter
-// across many seeds and assert structural invariants. The integration tests
-// in tests/test_strings.rs and tests/test_standard_generators.rs cover the
-// same interpreters via the user-facing API; these tests exercise the
-// private helpers (TLD list, draw_dns_label, url_encode_path) directly.
-
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
@@ -27,8 +21,6 @@ fn domain_schema(max_length: u64) -> ciborium::Value {
     cbor_map! {"type" => "domain", "max_length" => max_length}
 }
 
-// ── TLD list ─────────────────────────────────────────────────────────────────
-
 #[test]
 fn top_level_domains_excludes_arpa() {
     assert!(
@@ -47,16 +39,12 @@ fn top_level_domains_starts_with_com() {
 
 #[test]
 fn top_level_domains_is_non_trivial() {
-    // ~1500 entries from the IANA list (1438 file lines minus header minus
-    // ARPA, plus the COM front-pin).
     assert!(
         TOP_LEVEL_DOMAINS.len() > 1000,
         "expected ~1500 TLDs, got {}",
         TOP_LEVEL_DOMAINS.len()
     );
 }
-
-// ── interpret_domain ─────────────────────────────────────────────────────────
 
 #[test]
 fn interpret_domain_default_max_length() {
@@ -78,11 +66,6 @@ fn interpret_domain_default_max_length() {
 
 #[test]
 fn interpret_domain_respects_max_length_4() {
-    // The smallest configurable max_length. Most draws give the dotted form
-    // (e.g. "x.aa"); some draw a too-long label first and break before
-    // appending, in which case the output is just the TLD ("aa"). Both
-    // shapes are produced by Hypothesis too and accepted here — the only
-    // hard invariant is the length cap.
     let mut saw_dotted = false;
     for seed in 0..500 {
         let mut ntc = fresh_ntc(seed);
@@ -109,8 +92,6 @@ fn interpret_domain_respects_max_length_8() {
 
 #[test]
 fn interpret_domain_labels_obey_rfc1035() {
-    // Labels start with a letter, end with alphanumeric, contain only
-    // letters/digits/hyphens, length ≤ 63.
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
         let s = decode_string(
@@ -118,8 +99,6 @@ fn interpret_domain_labels_obey_rfc1035() {
                 .ok()
                 .unwrap(),
         );
-        // The last label is the TLD (IANA list — all letters, may be mixed-case).
-        // The earlier labels are RFC 1035 labels.
         let labels: Vec<&str> = s.split('.').collect();
         for label in &labels[..labels.len() - 1] {
             assert!(!label.is_empty() && label.len() <= 63, "label {label:?}");
@@ -143,9 +122,6 @@ fn interpret_domain_labels_obey_rfc1035() {
                 "RFC 5890 reserved `xx--` prefix in {label:?}"
             );
         }
-        // TLD comes from the IANA list (which includes XN-- punycode TLDs)
-        // and is randomly recased. So digits, hyphens, and either case of
-        // ASCII letter are all valid.
         let tld = labels[labels.len() - 1];
         assert!(
             tld.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
@@ -156,7 +132,6 @@ fn interpret_domain_labels_obey_rfc1035() {
 
 #[test]
 fn interpret_domain_recases_tld() {
-    // Across 200 seeds we should see at least one all-lower and one all-upper TLD.
     let mut saw_lower = false;
     let mut saw_upper = false;
     for seed in 0..200 {
@@ -178,14 +153,12 @@ fn interpret_domain_recases_tld() {
     assert!(saw_upper, "expected to see at least one all-uppercase TLD");
 }
 
-// ── interpret_email ──────────────────────────────────────────────────────────
-
 #[test]
 fn interpret_email_has_one_at_sign() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
         let Ok(v) = interpret_email(&mut ntc) else {
-            continue; // length filter rejection
+            continue;
         };
         let s = decode_string(v);
         let parts: Vec<&str> = s.split('@').collect();
@@ -215,7 +188,6 @@ fn interpret_email_local_part_in_atext_set() {
 
 #[test]
 fn interpret_email_never_ends_with_arpa() {
-    // ARPA was filtered out of TOP_LEVEL_DOMAINS; verify nothing leaks.
     for seed in 0..500 {
         let mut ntc = fresh_ntc(seed);
         let Ok(v) = interpret_email(&mut ntc) else {
@@ -225,8 +197,6 @@ fn interpret_email_never_ends_with_arpa() {
         assert!(!s.to_lowercase().ends_with(".arpa"), "ARPA leaked in {s:?}");
     }
 }
-
-// ── interpret_url ────────────────────────────────────────────────────────────
 
 #[test]
 fn interpret_url_has_http_scheme_and_authority() {
@@ -244,8 +214,6 @@ fn interpret_url_has_http_scheme_and_authority() {
 
 #[test]
 fn interpret_url_path_chars_url_safe() {
-    // url_encode_path keeps chars in URL_SAFE_CHARACTERS ∪ {%, digits}.
-    // The full URL alphabet for the path is letters, digits, $-_.+!*'(),~%/
     let url_safe: std::collections::HashSet<char> = ('a'..='z')
         .chain('A'..='Z')
         .chain('0'..='9')
@@ -263,7 +231,6 @@ fn interpret_url_path_chars_url_safe() {
                 "path char {c:?} not URL-safe in {s:?}"
             );
         }
-        // Every `%` must be followed by two hex chars.
         for chunk in path.split('%').skip(1) {
             let bytes = chunk.as_bytes();
             assert!(
@@ -298,8 +265,6 @@ fn interpret_url_fragments_chars_in_safe_set() {
     }
 }
 
-// ── url_encode_path edge cases ───────────────────────────────────────────────
-
 #[test]
 fn url_encode_path_safe_chars_passthrough() {
     assert_eq!(
@@ -310,32 +275,22 @@ fn url_encode_path_safe_chars_passthrough() {
 
 #[test]
 fn url_encode_path_encodes_space_and_slash() {
-    // Space (32) and `/` (47, not url-safe in a single component since `/`
-    // is the component separator) get percent-encoded.
     assert_eq!(url_encode_path("a b/c"), "a%20b%2Fc");
 }
 
 #[test]
 fn url_encode_path_encodes_control_chars() {
-    // \t (9) and \n (10) are in the path alphabet (string.printable) but
-    // not URL-safe — they should be percent-encoded.
     assert_eq!(url_encode_path("\t\n"), "%09%0A");
 }
 
 #[test]
 fn url_encode_path_encodes_high_latin1() {
-    // The fragment alphabet covers codepoints up to 0xFF; the encoder
-    // should emit %XX for those, with uppercase hex.
     let s: String = ['\u{00FF}', '\u{0080}'].iter().collect();
     assert_eq!(url_encode_path(&s), "%FF%80");
 }
 
 #[test]
 fn interpret_domain_rejects_tiny_max_length_as_invalid_argument() {
-    // The schema interpreter is a protocol surface (other clients can send
-    // malformed schemas); `max_length` too small for any TLD must surface
-    // as InvalidArgument like every other malformed-schema path here, not
-    // abort the process via an assert.
     use crate::cbor_utils::cbor_map;
     use crate::native::rng::EngineRng;
     let schema = cbor_map! { "type" => "domain", "max_length" => 3 };

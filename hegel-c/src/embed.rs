@@ -40,8 +40,6 @@ pub fn run_native(
     database_key: Option<&str>,
     mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Result<TestRunResult, RunError> {
-    // A single test case is the whole run: the caller treats it as final by
-    // mode.
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
             crate::native::test_runner::run_single_case(settings, database_key, &mut run_case);

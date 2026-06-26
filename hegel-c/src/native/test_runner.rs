@@ -109,10 +109,6 @@ pub(crate) fn explore(
     )
 }
 
-// (The old `ReproduceRunner` TestRunner lived here. Blob replay now goes
-// through the C ABI's `hegel_test_case_from_blob` / `data_source_for_blob`,
-// driven by hegeltest's `drive_blob_replay`, so the runner is gone.)
-
 /// Run one test case (used by `Mode::SingleTestCase`) and return its
 /// failure, if any.
 ///
@@ -124,13 +120,6 @@ pub(crate) fn run_single_case(
     database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
 ) -> Option<Failure> {
-    // Honour `settings.seed` / `settings.derandomize` here for the same
-    // reason `run_main` does: callers (Antithesis runs especially) pass
-    // a deterministic seed expecting `Mode::SingleTestCase` to replay
-    // the same draws on every invocation. Without this, a `seed(Some(42))`
-    // is silently ignored and each call produces fresh OS-random draws.
-    // The database key seeds derandomized runs, so different tests draw
-    // different streams.
     let mut rng = create_rng(settings, database_key);
     let ntc = NativeTestCase::new_random(rng.spawn());
     let (data_source, handle) = NativeDataSource::new(ntc);
@@ -147,12 +136,7 @@ fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
     run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
-    // Injected (rather than read from the `TOO_SLOW_THRESHOLD` constant) so a
-    // test can trip the TooSlow check deterministically without a 30s sleep.
     too_slow_threshold: std::time::Duration,
-    // Wall-clock budget for the whole shrinking phase. Injected (rather than
-    // read from `MAX_SHRINKING_SECONDS`) so a test can trip the slow-shrink
-    // cutoff deterministically with a zero budget instead of a 5-minute wait.
     shrink_budget: std::time::Duration,
 ) -> Result<Vec<Failure>, RunError> {
     Engine::new(settings, database_key, run_case).run(too_slow_threshold, shrink_budget)
@@ -180,25 +164,10 @@ impl<'a> Engine<'a> {
 
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
         let target_enabled = settings.phases.contains(&Phase::Target);
-        // `(base, per_valid)` of the generation-phase invalid budget, computed once
-        // per run (the formula uses floating-point `ln`/`ceil`, which can't run in
-        // const context).
         let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
         let mut replay_aligned = false;
         let report_multiple = settings.report_multiple_failures;
 
-        // --- Database replay phase ---
-        //
-        // Every stored value is replayed, not just the first interesting
-        // one. A test that previously discovered N distinct bugs has N
-        // stored choice sequences in the DB; each must be replayed so each
-        // bug's shrunk counterexample re-surfaces in `interesting`.
-        //
-        // `replay_aligned` tracks whether *every* interesting replay's
-        // realised choice sequence matches the stored prefix length —
-        // when true the runner can skip the shrink phase because each
-        // stored value is already minimal.  Any single divergence flips
-        // it to false so the shrinker re-runs over the full set.
         if settings.phases.contains(&Phase::Reuse) {
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 log_phase("Reuse", "Start");
@@ -208,10 +177,6 @@ impl<'a> Engine<'a> {
                 values.sort_by(|a, b| shortlex(a, b));
                 replay_aligned = !values.is_empty();
                 let primary_count = values.len();
-                // When the primary corpus is small, top it up with a sample of
-                // the secondary (historical near-miss) corpus, mirroring
-                // engine.py's reuse_existing_examples: a stale primary entry
-                // can stop reproducing while an older secondary one still does.
                 let desired_factor = if settings.phases.contains(&Phase::Generate) {
                     0.1
                 } else {
@@ -226,8 +191,6 @@ impl<'a> Engine<'a> {
                         .unwrap_or_default();
                     let shortfall = desired_size - values.len();
                     if extra.len() > shortfall {
-                        // Random sample without replacement: partial
-                        // Fisher-Yates over the first `shortfall` slots.
                         for i in 0..shortfall {
                             let j = self.rng.random_range(i..extra.len());
                             extra.swap(i, j);
@@ -239,8 +202,6 @@ impl<'a> Engine<'a> {
                 }
                 let mut found_interesting_in_primary = false;
                 for (i, raw) in values.into_iter().enumerate() {
-                    // Fast path: if a primary entry reproduced, skip the
-                    // secondary portion entirely.
                     if i >= primary_count && found_interesting_in_primary {
                         break;
                     }
@@ -251,17 +212,8 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    // Replay with extension (Hypothesis's extend="full"): if the
-                    // test now draws more choices than the stored prefix holds,
-                    // continue with fresh random draws rather than treating the
-                    // entry as stale.
                     let ntc =
                         NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE);
-                    // `test_function` re-saves the realised choice sequence (the
-                    // stored raw bytes may not match `serialize_choices` of the
-                    // realised nodes if the replay realised a shorter prefix);
-                    // stale raw bytes still in primary are reconciled to
-                    // `secondary` by the end-of-run save.
                     let (run, mismatch) = self.test_function(ntc);
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
@@ -273,19 +225,12 @@ impl<'a> Engine<'a> {
                                 replay_aligned = false;
                             }
                         } else {
-                            // A secondary entry is by construction not a shrunk
-                            // example.
                             replay_aligned = false;
                         }
                         if !report_multiple {
-                            // Single-failure reporting: one reproduced bug is
-                            // all we need.
                             break;
                         }
                     } else {
-                        // Non-interesting (or invalid) replay: the stored
-                        // value no longer reproduces the bug, drop it from
-                        // both corpora.
                         if let Some(db) = self.db() {
                             db.delete(&key_bytes, &raw);
                             db.delete(&secondary_key, &raw);
@@ -293,59 +238,30 @@ impl<'a> Engine<'a> {
                     }
                 }
                 if self.interesting.is_empty() {
-                    // No replay survived — fall back to the pre-replay
-                    // alignment state so the shrink phase decides based on
-                    // generation results instead.
                     replay_aligned = false;
                 }
                 log_phase("Reuse", "End");
             }
         }
 
-        // --- Generation phase ---
-        //
-        // Pre-bug we run until either the `max_test_cases` budget or the choice
-        // tree is exhausted; post-bug we keep running for a bounded extra
-        // window so that a test with multiple distinct failure origins
-        // surfaces all of them, not just the first one to fire.
         let shrink_enabled = settings.phases.contains(&Phase::Shrink);
-        // Hypothesis skips generation entirely when the database replay already
-        // reproduced a failure: "we'd rather report that they're still failing
-        // ASAP than take the time to look for new ones"
-        // (engine.py::generate_new_examples).
         let found_in_reuse = !self.interesting.is_empty();
 
-        // The generation phase runs (simplest pre-trial + random batches) unless
-        // it is disabled, the reuse phase already reproduced a bug, or the test
-        // is trivial.
         let actually_generate =
             settings.phases.contains(&Phase::Generate) && !found_in_reuse && !self.test_is_trivial;
         if actually_generate {
             log_phase("Generate", "Start");
         }
 
-        // All-simplest pre-trial: a deterministic "draw every choice at its
-        // shrink target" probe before random generation starts. Gives
-        // find-any tests over multi-component generators (e.g. midnight =
-        // h=m=s=μ=0 across four draws) a chance to hit the all-zeros joint
-        // event before
-        // random sampling — the joint event grows vanishingly unlikely as
-        // the number of components increases.
         if settings.phases.contains(&Phase::Generate)
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
         {
-            // The reuse phase may already have fed the tree, so even this first
-            // generation probe can contradict it under a non-deterministic
-            // generator.
             let (run, mismatch) = self.test_function(NativeTestCase::for_simplest(BUFFER_SIZE));
             if let Some(msg) = mismatch {
                 return Err(RunError::NonDeterministic(msg));
             }
-            // The simplest example is Hypothesis's "zero" example: if even it
-            // overruns or already uses more than half the buffer, shrinking will
-            // be ineffective.
             if let Some(msg) = large_initial_check(
                 run.status == Status::EarlyStop,
                 run.status,
@@ -418,11 +334,6 @@ impl<'a> Engine<'a> {
                     );
                 }
 
-                // "Once we've actually found a bug, there's no point in trying
-                // to run health checks - they'll just mask the actually
-                // important information." (engine.py, record_for_health_check.)
-                // `self.interesting` already includes the current run, so
-                // the iteration that discovers the first bug is exempt too.
                 if self.interesting.is_empty() {
                     if run.status == Status::Invalid
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
@@ -463,12 +374,6 @@ impl<'a> Engine<'a> {
                     }
                 }
 
-                // Fire `optimise_targets` periodically once enough valid
-                // test cases have accumulated. Counts share the generation
-                // budget — targeting trials count toward `valid_test_cases`
-                // and `calls`, so `max_test_cases` remains a hard cap across
-                // both. Skipped once a bug has been found (matching
-                // `optimise_targets`'s own short-circuit).
                 if target_enabled
                     && self.interesting.is_empty()
                     && !self.targeting.is_empty()
@@ -482,12 +387,6 @@ impl<'a> Engine<'a> {
                     optimiser.optimise_targets();
                 }
 
-                // Span mutation runs only once the health-check warm-up is over,
-                // as in Hypothesis (generate_mutations_from is gated on
-                // `health_check_state is None`): mutated probes routinely
-                // overrun, and with every probe now recorded like any other run,
-                // counting those overruns against TestCasesTooLarge during
-                // warm-up would punish the test for the mutator's appetite.
                 if run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
@@ -497,9 +396,6 @@ impl<'a> Engine<'a> {
             }
         }
 
-        // Tree-exhaustion fallback: a small choice domain (e.g. integer in
-        // [0, 10] = 11 children) can exhaust the tree well before
-        // FILTER_TOO_MUCH_THRESHOLD rejections; re-fire the check here.
         if self.tree_root.is_exhausted
             && self.valid_test_cases == 0
             && self.interesting.is_empty()
@@ -523,7 +419,6 @@ impl<'a> Engine<'a> {
             log_phase("Generate", "End");
         }
 
-        // --- Shrinking phase ---
         if !self.interesting.is_empty()
             && !replay_aligned
             && settings.phases.contains(&Phase::Shrink)
@@ -537,11 +432,6 @@ impl<'a> Engine<'a> {
                     total
                 );
             }
-            // Try stored secondary-corpus entries smaller than the current
-            // examples as shrink jump-starts, then drop them — each is either
-            // promoted to primary by the persister or worse than what we already
-            // hold. Port of engine.py's clear_secondary_key; this is also what
-            // keeps the secondary corpus from growing without bound across runs.
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 let key_bytes = key.as_bytes().to_vec();
                 let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
@@ -568,33 +458,16 @@ impl<'a> Engine<'a> {
                     }
                     if let Some(stored_choices) = deserialize_choices(&raw) {
                         let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                        // A tree mismatch here is dropped: a generator that is
-                        // non-deterministic during earlier phases was already
-                        // caught by their recordings, and one that only diverges
-                        // now will fail the per-origin re-verify below as flaky.
                         let _ = self.test_function(ntc);
                     }
-                    // Unconditionally removed: now primary, or worse than the
-                    // primary example of its origin.
                     if let Some(db) = self.db() {
                         db.delete(&secondary_key, &raw);
                     }
                 }
             }
 
-            // One wall-clock deadline shared across every origin's shrink, matching
-            // Hypothesis's single `finish_shrinking_deadline` for the whole phase.
             let shrink_deadline = std::time::Instant::now() + shrink_budget;
             let mut shrink_timed_out = false;
-            // Worklist rather than a fixed snapshot: a shrink run can stumble
-            // onto a bug with a *new* origin, which `cached_test_function`'s
-            // `record_run` folds straight into `self.interesting` (sort-key
-            // gated, like every interesting result). Re-scanning the keys each
-            // iteration therefore picks those up and shrinks them too, exactly
-            // as Hypothesis's
-            // `while len(self.shrunk_examples) < len(self.interesting_examples)`
-            // loop does. Origins are processed in sorted order for determinism
-            // (`interesting` is a HashMap with randomised iteration order).
             let mut shrunk_origins: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
             loop {
@@ -611,13 +484,8 @@ impl<'a> Engine<'a> {
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
 
-                // Re-validate that this origin's example still fails. If not,
-                // the test is flaky.
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                // A tree mismatch here is dropped for the same reason as in the
-                // secondary-corpus drain above: the flaky-replay check below is
-                // the authoritative non-determinism report for this phase.
                 let (verify, _) = self.test_function(verify_ntc);
                 if verify.status != Status::Interesting {
                     return Err(RunError::Flaky(flaky_diagnostic()));
@@ -632,13 +500,6 @@ impl<'a> Engine<'a> {
                             if verbosity == Verbosity::Verbose {
                                 eprintln!("Running test case");
                             }
-                            // Single replay chokepoint: `cached_test_function`
-                            // serves a path the lossless tree already records
-                            // (no execution, any status), and otherwise executes
-                            // and records it. The interesting-origin filter is
-                            // applied here, to the result — replay and matching
-                            // are not entangled, mirroring Hypothesis's shrink
-                            // predicate.
                             let run = match req {
                                 ShrinkRun::Full(nodes) => {
                                     let choices: Vec<ChoiceValue> =
@@ -659,11 +520,6 @@ impl<'a> Engine<'a> {
                         initial_spans,
                     );
                     shrinker.deadline = Some(shrink_deadline);
-                    // Pre-shrink coarse reduction — runs once before the
-                    // main shrink loop to rerandomise small one_of-style
-                    // branch selectors. A `ShrinkStop` here just means the
-                    // deadline passed; `shrink()` below is a no-op in that case
-                    // and `timed_out` is already latched.
                     let _ = shrinker.initial_coarse_reduction();
                     if verbosity == Verbosity::Debug {
                         shrinker.set_debug(|msg| eprintln!("{msg}"));
@@ -676,9 +532,6 @@ impl<'a> Engine<'a> {
                 shrunk_origins.insert(origin);
             }
 
-            // The shrink phase ran past its wall-clock budget and bailed with the
-            // best example so far. Warn unless output is suppressed, mirroring
-            // Hypothesis's slow-shrink notice.
             if shrink_timed_out && verbosity != Verbosity::Quiet {
                 eprintln!("{}", slow_shrink_warning());
             }
@@ -693,20 +546,10 @@ impl<'a> Engine<'a> {
             }
             log_phase("Shrink", "End");
         } else if self.interesting.is_empty() && verbosity == Verbosity::Debug {
-            // No bug found — nothing to shrink; left for symmetry with the
-            // `Test done.` line below.
         } else if replay_aligned && verbosity == Verbosity::Debug {
             eprintln!("Skipping shrink: reused aligned database replay");
         }
 
-        // --- Save to database ---
-        //
-        // For each interesting origin, save the shrunk counterexample to
-        // primary. Any *displaced* primary entry — present at start of
-        // run but no longer in `interesting` — moves to the
-        // `<key>.secondary` sub-corpus rather than disappearing. The
-        // secondary key is the historical fallback corpus the next reuse
-        // pass consults if primary doesn't have enough entries.
         if let (Some(db), Some(key)) = (self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
@@ -736,24 +579,10 @@ impl<'a> Engine<'a> {
             );
         }
 
-        // --- Report ---
-        //
-        // Surface each origin's shrunk counterexample (origin + reproduce
-        // blob) in shortlex-descending order: the smallest counterexample is
-        // listed *last*, so when the client replays them in order a user-side
-        // `Mutex<Option<…>>` that overwrites on each panic ends up holding
-        // the simplest example.
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
             std::mem::take(&mut self.interesting).into_iter().collect();
-        // Descending sort_key order. `sort_by` instead of `sort_by_key` because
-        // `NodesSortKey` borrows from the origin's nodes and the key would
-        // otherwise outlive its borrow.
         origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
-        // When `report_multiple_failures` is `false`, drop all but the
-        // smallest origin (the one observed *last* under the
-        // shortlex-descending sort above), so the runner surfaces a single
-        // failure rather than every distinct bug Hegel found.
         if !settings.report_multiple_failures {
             if let Some(last) = origins_sorted.pop() {
                 origins_sorted.clear();
@@ -761,8 +590,6 @@ impl<'a> Engine<'a> {
             }
         }
 
-        // Surface each counterexample as a `Failure` carrying the origin it
-        // grouped on and a reproduce blob for the client to replay.
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
@@ -953,20 +780,9 @@ fn should_generate_more(
     if no_bug_yet {
         return true;
     }
-    // Once a bug is found, the post-bug probing window exists to surface
-    // *other* origins so each can be shrunk independently. If `Phase::Shrink`
-    // isn't in the active phases there will be no shrinking, so additional
-    // origins add nothing — stop generation immediately. This is what
-    // `tests/test_phases.rs::test_disabling_shrink_limits_interesting_calls`
-    // asserts (body called at most twice: initial discovery + final replay).
-    // The same goes for single-failure reporting: extra origins would be
-    // discarded, so don't spend calls hunting them.
     if !shrink_enabled || !report_multiple {
         return false;
     }
-    // For slow tests the call-count window can take far too long; stop
-    // probing for additional origins 10 seconds after the first bug
-    // (engine.py's first_bug_found_time cutoff).
     if first_bug_elapsed.is_some_and(|d| d > std::time::Duration::from_secs(10)) {
         return false;
     }
@@ -1107,11 +923,6 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
     ) -> Self {
-        // `Database::Unset` is the non-CI default (set by `Settings::new` in
-        // `src/runner.rs`); it means "the user didn't pick, so use the
-        // sensible default." That default is `.hegel/examples` relative to
-        // cwd. `Disabled` is the explicit opt-out; `Path(p)` is the explicit
-        // choice.
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
@@ -1179,9 +990,6 @@ impl<'a> Engine<'a> {
             &[],
         );
         self.calls += 1;
-        // Test time accrues for every status (Hypothesis records draw times
-        // regardless of outcome), so a slow generator that is mostly
-        // assume()-rejected still trips TooSlow.
         self.total_test_time += elapsed;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             self.test_is_trivial = true;
@@ -1191,8 +999,6 @@ impl<'a> Engine<'a> {
             self.targeting.record(&choices, &run.target_observations);
         }
         match run.status {
-            // Only exactly-valid runs count toward the budget; Hypothesis
-            // never counts INTERESTING results as valid examples.
             Status::Valid => self.valid_test_cases += 1,
             Status::Invalid => self.invalid_test_cases += 1,
             Status::EarlyStop => self.overrun_test_cases += 1,
@@ -1289,10 +1095,6 @@ impl<'a> Engine<'a> {
         } else {
             NativeTestCase::for_probe(choices, self.rng_spawn(), choices.len() + extend)
         };
-        // A miss: run and record through `test_function`, which feeds the tree
-        // like any other executed case. The non-determinism mismatch is dropped
-        // — the per-origin flaky re-verify is authoritative for shrinking, and a
-        // generation-mutation mismatch is benign.
         let (run, _mismatch) = self.test_function(ntc);
         run
     }
@@ -1314,10 +1116,6 @@ impl<'a> Engine<'a> {
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
     fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
-        // Fast, non-DoS-resistant hashers: these maps are keyed by our own span
-        // labels / extents (never adversarial) and are rebuilt for every recorded
-        // result, so the default SipHash showed up prominently in generation
-        // profiles. FxHash is a clear win here.
         let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
             rustc_hash::FxHashMap::default();
         for span in spans.iter() {
@@ -1342,8 +1140,6 @@ impl<'a> Engine<'a> {
         let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
 
         for _ in 0..SPAN_MUTATION_ATTEMPTS {
-            // A mutation probe is a generated example: once the example budget is
-            // full there is no room for another, so stop proposing.
             if self.valid_test_cases >= self.settings.test_cases {
                 break;
             }
@@ -1397,8 +1193,6 @@ impl<'a> Engine<'a> {
 }
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
-    // The urandom backend reads fresh OS entropy on every draw, so the seed /
-    // derandomize knobs (which only control a PRNG seed) don't apply to it.
     if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis())
         == Backend::Urandom
     {

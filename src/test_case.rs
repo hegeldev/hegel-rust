@@ -14,15 +14,7 @@ use std::sync::Arc;
 
 use crate::generators::value;
 
-// We use the __IsTestCase trait internally to provide nice error messages for misuses of #[composite].
-// It should not be used by users.
-//
-// The idea is #[composite] calls __assert_is_test_case(<first param>), which errors with our on_unimplemented
-// message iff the first param does not have type TestCase.
-
 #[diagnostic::on_unimplemented(
-    // NOTE: worth checking if edits to this message should also be applied to the similar-but-different
-    // error message in #[composite] in hegel-macros.
     message = "The first parameter in a #[composite] generator must have type TestCase.",
     label = "This type does not match `TestCase`."
 )]
@@ -216,9 +208,6 @@ pub(crate) struct TestCaseLocalData {
 /// so Hegel's runner can observe it.
 pub struct TestCase {
     global: Arc<TestCaseGlobalData>,
-    // RefCell makes `TestCase: !Sync`. Local data is per-clone: each clone gets
-    // its own span depth, indent, and on_draw. Concurrent use across threads
-    // therefore requires cloning, which is enforced by the `!Sync` bound.
     local: RefCell<TestCaseLocalData>,
 }
 
@@ -482,10 +471,6 @@ impl TestCase {
     /// Has no effect during replays or if the test case has been aborted.
     pub fn target_labelled(&self, score: f64, label: impl Into<String>) {
         let label = label.into();
-        // libhegel validates the observation (finite score, each label at most
-        // once per case) and returns HEGEL_E_INVALID_ARG with a diagnostic if
-        // it's misused; `raise_for_rc` turns that into a clean invalid-argument
-        // unwind, exactly like every other per-test-case primitive.
         let outcome = self.with_shared(|shared| shared.ctc.target(score, &label));
         if let Err(rc) = outcome {
             raise_for_rc(rc);
@@ -554,13 +539,7 @@ impl TestCase {
 
             match result {
                 Ok(()) => {}
-                // A rejected assumption discards this iteration; the loop
-                // moves on to the next one.
                 Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {}
-                // Out-of-data and usage errors are terminal for the whole
-                // test case: re-raise them directly so the lifecycle
-                // classifies them, without the marker draw the
-                // counterexample path below adds.
                 Err(e)
                     if e.downcast_ref::<StopTest>().is_some()
                         || e.downcast_ref::<InvalidArgument>().is_some()
@@ -591,13 +570,6 @@ impl TestCase {
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
-        // The drawn-value record is only ever surfaced through `on_draw`, which
-        // is a no-op unless this is the final replay or verbose output is on.
-        // On ordinary generation/shrinking runs we therefore skip the
-        // display-name allocation and the (often expensive, e.g. Unicode) Debug
-        // render entirely. The usage-error checks below still run every test
-        // case so that misuse fails deterministically, not only on a failure's
-        // final replay.
         let emit = self.global.emit;
 
         let display_name = self.with_shared(|shared| {
@@ -614,7 +586,6 @@ impl TestCase {
                     );
                 }
                 Some(_) => {}
-                // Only the first occurrence of a name needs to allocate the key.
                 None => {
                     draw_state
                         .named_draw_repeatable
@@ -622,9 +593,6 @@ impl TestCase {
                 }
             }
 
-            // Look the counter up by `&str` first so repeated draws of the same
-            // name (e.g. a `draw` inside a loop) don't allocate a fresh key on
-            // every call.
             let current_count = match draw_state.named_draw_counts.get_mut(name) {
                 Some(count) => {
                     *count += 1;
@@ -643,8 +611,6 @@ impl TestCase {
                 );
             }
 
-            // Display-name uniqueness bookkeeping is output-only; skip it (and
-            // its allocations) when nothing will be emitted.
             if !emit {
                 return None;
             }
@@ -709,10 +675,6 @@ impl TestCase {
                 Some(failure.origin.as_str()),
             ),
         };
-        // mark_complete runs once per case with a valid handle, status and
-        // UTF-8 origin, so it does not fail here. Surfaced as a structured
-        // internal error (not `unreachable!`) so a real invariant break aborts
-        // the run with a bug report rather than being shrunk as a counterexample.
         if let Err(rc) = self.with_ctc(|ctc| ctc.mark_complete(status, origin)) {
             // nocov start
             hegel_internal_error!(

@@ -1,10 +1,3 @@
-// Regex schema interpreter.
-//
-// Port of Hypothesis's `strategies._internal.regex._strategy`, walked
-// against the in-tree CPython `_parser` port (`src/native/re`) so we match
-// Python's `re` module semantics exactly rather than adapt the subtly
-// different Rust regex-syntax grammar.
-
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -57,9 +50,6 @@ pub(super) fn interpret_regex(
     let mut result = String::new();
 
     if parsed.pattern.is_empty() {
-        // Empty regex: emit a padded arbitrary string when fullmatch is
-        // false (matches hypothesis's `st.text(alphabet=alphabet)` path),
-        // or an empty string when fullmatch is true.
         if !fullmatch {
             draw_pad(ntc, &alphabet, &mut result)?;
         }
@@ -74,10 +64,6 @@ pub(super) fn interpret_regex(
         draw_suffix(ntc, &parsed, &alphabet, &mut result)?;
     }
 
-    // Validate any deferred negative-lookahead assertions against the final
-    // output. This mirrors Python's `.filter(regex.search)` for `(?!...)`
-    // bodies — we only check the assertion position, but that's enough to
-    // reject the impossible/violating cases the test suite cares about.
     if !state.pending_lookaheads.is_empty() {
         let final_chars: Vec<char> = result.chars().collect();
         for pending in &state.pending_lookaheads {
@@ -178,7 +164,6 @@ fn draw_prefix(
     alphabet: &Option<IntervalSet>,
     out: &mut String,
 ) -> Result<(), EngineError> {
-    // Mirror of hypothesis.regex_strategy's left-pad logic.
     if let Some(OpCode::At(at)) = effective_first(&parsed.pattern) {
         match at {
             AtCode::BeginningString => return Ok(()),
@@ -203,7 +188,6 @@ fn draw_suffix(
     alphabet: &Option<IntervalSet>,
     out: &mut String,
 ) -> Result<(), EngineError> {
-    // Mirror of hypothesis.regex_strategy's right-pad logic.
     if let Some(OpCode::At(at)) = effective_last(&parsed.pattern) {
         match at {
             AtCode::EndString => return Ok(()),
@@ -282,30 +266,22 @@ fn generate_op(
             let chars = gather_chars(alphabet, |c| allow_newline || c != '\n');
             emit_from_chars(ntc, &chars, out)?;
         }
-        OpCode::At(at) => {
-            // Zero-width anchors don't emit a character, but some of them
-            // constrain the current position in `out`. Python's
-            // `regex_strategy` handles this by filtering the final result
-            // through `regex.search`; we don't have a Python-compatible
-            // matcher, so we validate inline for the position anchors we
-            // can check against the partial output.
-            match at {
-                AtCode::BeginningString if !out.is_empty() => {
-                    mark_invalid(ntc)?;
-                }
-                AtCode::BeginningString => {}
-                AtCode::Beginning => {
-                    if state.flags & SRE_FLAG_MULTILINE != 0 {
-                        if !out.is_empty() && !out.ends_with('\n') {
-                            mark_invalid(ntc)?;
-                        }
-                    } else if !out.is_empty() {
+        OpCode::At(at) => match at {
+            AtCode::BeginningString if !out.is_empty() => {
+                mark_invalid(ntc)?;
+            }
+            AtCode::BeginningString => {}
+            AtCode::Beginning => {
+                if state.flags & SRE_FLAG_MULTILINE != 0 {
+                    if !out.is_empty() && !out.ends_with('\n') {
                         mark_invalid(ntc)?;
                     }
+                } else if !out.is_empty() {
+                    mark_invalid(ntc)?;
                 }
-                _ => {}
             }
-        }
+            _ => {}
+        },
         OpCode::In(items) => {
             if alphabet.is_none() {
                 let chars = cached_default_in_set(items, state.flags);
@@ -364,22 +340,9 @@ fn generate_op(
             }
         }
         OpCode::Assert { p, .. } => {
-            // Positive lookahead/lookbehind: emit the asserted content so
-            // the surrounding context sees it. (Hypothesis's strategy does
-            // this too.)
             generate_subpattern(ntc, p, state, alphabet, out)?;
         }
         OpCode::AssertNot { direction, p } => {
-            // Negative lookaround emits nothing itself, but we still have to
-            // enforce the assertion. Python relies on `.filter(regex.search)`
-            // to reject violating outputs; we don't have a Python-compatible
-            // matcher to filter against, so we run a small SRE interpreter
-            // (`match_seq`) against the output instead.
-            //
-            // Lookbehind (`dir < 0`) fires immediately: `p` must not match as
-            // a suffix of what's been emitted so far. Lookahead defers until
-            // after generation so we can check the body against what comes
-            // next in the final string.
             if *direction < 0 {
                 let out_chars: Vec<char> = out.chars().collect();
                 let end = out_chars.len();
@@ -400,9 +363,6 @@ fn generate_op(
             }
         }
         OpCode::Failure => {
-            // Explicit FAILURE is emitted for empty negative lookahead `(?!)`:
-            // a position that can never match. Reject the generation rather
-            // than producing a value that the regex wouldn't accept.
             mark_invalid(ntc)?;
         }
         OpCode::AtomicGroup(p) => {
@@ -485,8 +445,6 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
 fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -> Vec<char> {
     let negate = matches!(items.first(), Some(SetItem::Negate));
 
-    // Characters explicitly listed (positive-set case) or to blacklist
-    // (negated case).
     let mut positive: Vec<char> = Vec::new();
     let mut categories: Vec<ChCode> = Vec::new();
 
@@ -513,9 +471,6 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
     let ascii_only = flags & SRE_FLAG_ASCII != 0;
 
     if !negate {
-        // Use a HashSet for O(1) deduplication. Category gathers can yield
-        // tens of thousands of characters (e.g. `\w`), so any linear-scan
-        // membership check turns this into an O(n²) hot loop.
         let mut out: Vec<char> = Vec::new();
         let mut seen: HashSet<char> = HashSet::new();
         for c in positive {
@@ -561,9 +516,6 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
     }
 }
 fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
-    // Duplicates are fine: both consumers deduplicate with a `HashSet`, and
-    // a linear `contains` scan here would make large class ranges (up to
-    // ~1.1M codepoints) quadratic — an effective hang.
     v.push(c);
     if flags & SRE_FLAG_IGNORECASE != 0 {
         if let Some(sw) = char_swapcase(c) {
@@ -675,12 +627,6 @@ fn emit_from_chars(
     if chars.is_empty() {
         mark_invalid(ntc)?;
     }
-    // Mirror `HypothesisProvider.draw_string`: when the pool is larger than
-    // 256, pick from the first 256 entries 80% of the time. `gather_chars`
-    // returns codepoints in ascending order, so the low-index slice covers
-    // the low codepoints (ASCII / control chars). Without this bias,
-    // interesting characters like '\n' are astronomically rare draws out of
-    // the full BMP alphabet.
     let n = chars.len();
     let idx = if n > 256 && ntc.weighted(0.8, None)? {
         ntc.draw_integer(BigInt::from(0), BigInt::from(255))?
@@ -758,20 +704,6 @@ fn swapcase_blacklist(c: char, flags: u32) -> Vec<char> {
     blacklist
 }
 
-// -- SRE-style matcher -------------------------------------------------------
-//
-// Minimal backtracking matcher over our parsed `SubPattern` AST, used to
-// validate `AssertNot` bodies during generation. Python's `regex_strategy`
-// does this externally via `regex.search` on the final output; we don't have a
-// Python-compatible matcher to filter against, so we roll a small one that
-// understands the subset of `OpCode`s that legitimately appear in lookaround
-// bodies.
-//
-// `match_seq` tries to match the opcode sequence `ops` starting at `pos` in
-// `chars` and returns `Some(end_pos)` on success. Backtracking is handled
-// inline for `Branch` and the repeat opcodes; `Subpattern` scoped flags are
-// approximated by matching the body with its modified flags and then
-// continuing the tail with the outer flags.
 fn match_seq(
     ops: &[OpCode],
     pos: usize,

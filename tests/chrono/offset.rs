@@ -3,10 +3,6 @@ use chrono::FixedOffset;
 use hegel::extras::chrono as chrono_gs;
 use hegel::generators::{self as gs, Generator};
 
-// ---------------------------------------------------------------------------
-// FixedOffset
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_fixed_offsets_default() {
     assert_all_examples(chrono_gs::fixed_offsets(), |o| {

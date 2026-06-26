@@ -1,16 +1,3 @@
-// String shrink passes. The main `shrink_strings` pass runs, for each
-// `StringChoice` node in the choice sequence: try the simplest value;
-// shorten from `min_size` upward; delete single codepoints; reduce each
-// codepoint toward the alphabet's simplest in shrink-order; and
-// insertion-sort the resulting codepoints. `redistribute_string_pairs`
-// moves codepoints between adjacent string nodes for sum-of-length-style
-// predicates.
-//
-// Reduction order is alphabet-relative: `StringChoice::codepoint_key`
-// returns each codepoint's position in `IntervalSet::char_in_shrink_order`,
-// so shrinking on `[a-z]` walks toward `'a'` while shrinking on
-// `[0-9A-Za-z]` walks toward `'0'`.
-
 use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
@@ -34,16 +21,11 @@ impl<'a> Shrinker<'a> {
                 }
             };
 
-            // Try simplest.
             let simplest = kind.simplest();
             if simplest != current {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]))?;
             }
 
-            // Shorten via linear scan up from min_size. For strings the
-            // per-codepoint key is not monotonic under prefix-taking (the suffix
-            // we drop may have been the only "interesting" part), so a linear
-            // scan is simpler and small.
             let cur_len = self.current_string(i).len();
             if cur_len > kind.min_size {
                 for target_len in kind.min_size..cur_len {
@@ -54,7 +36,6 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Delete individual codepoints, right-to-left.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
@@ -67,24 +48,12 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
             }
 
-            // Shrink duplicated codepoints simultaneously.
-            //
-            // When two or more positions hold the same codepoint and the
-            // predicate links them (e.g. `decode(rle_encode(s)) != s`
-            // requires at least two positions to share a value to trigger
-            // the bug), reducing one position alone breaks the link. This
-            // pass tries replacing *every* instance of a duplicated
-            // codepoint at once.
             let dup_codepoints: Vec<u32> = {
                 let cur = self.current_string(i);
                 let mut counts: HashMap<u32, usize> = HashMap::new();
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
-                // Sort the duplicated-codepoint list by alphabet-relative
-                // shrink-order position so the iteration order is
-                // deterministic regardless of `HashMap`'s unspecified
-                // bucketing.
                 let mut dups: Vec<u32> = counts
                     .into_iter()
                     .filter(|(_, n)| *n > 1)
@@ -114,8 +83,6 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for cand_cp in semantic_candidates(val, &kind) {
-                    // `semantic_candidates` only returns codepoints with
-                    // strictly smaller shrink-key than `val`.
                     try_replace_all(self, cand_cp)?;
                     if !self.current_string(i).contains(&val) {
                         break;
@@ -126,9 +93,6 @@ impl<'a> Shrinker<'a> {
                     let cur_key = kind.codepoint_key(val);
                     if cur_key > 0 {
                         bin_search_down_r(0, cur_key as i128, &mut |k| {
-                            // `key_to_codepoint(k)` is `Some` for every
-                            // `k < alpha_size`, and our upper bound `cur_key`
-                            // is itself a valid position in the alphabet.
                             let cp = kind
                                 .key_to_codepoint(k as u32)
                                 .expect("bin_search probe stays within alpha_size");
@@ -138,24 +102,6 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Reduce each codepoint via a small set of semantic
-            // candidates (digits, ASCII letters, NFD base) followed by
-            // `bin_search_down` over the remaining key range.
-            //
-            // Why not a linear scan over all keys < current_key? The default
-            // `gs::text()` alphabet has ~1.1M valid codepoints, so a worst-
-            // case scan from a high-codepoint character is prohibitive.
-            //
-            // Why not just `bin_search_down`? It's not robust to non-monotone
-            // predicates: midpoint probes can miss valid simpler characters
-            // sitting between failing midpoints (e.g. 'A' at key 17 when
-            // shrinking from 'À' at a higher key — bin_search probes
-            // midpoints and might miss the basin). Same trap as the
-            // per-element Integer shrinker.
-            //
-            // The hybrid: try a fixed list of "obvious smaller candidates"
-            // first to cover the common ASCII / Latin-with-diacritic basins,
-            // then `bin_search_down` for the long tail.
             let mut j = self.current_string(i).len();
             while j > 0 {
                 j -= 1;
@@ -187,8 +133,6 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Insertion-sort pass — swap adjacent out-of-order
-            // codepoints (under the alphabet's shrink ordering).
             let mut pos = 1;
             loop {
                 let cur_len = self.current_string(i).len();
@@ -272,13 +216,11 @@ impl<'a> Shrinker<'a> {
             return Ok(());
         }
 
-        // Try moving everything from s to t.
         let combined: Vec<u32> = s.iter().copied().chain(t.iter().copied()).collect();
         if self.try_redistribute(i, j, Vec::new(), combined, &kind_j)? {
             return Ok(());
         }
 
-        // Try moving the last codepoint of s to the start of t.
         let (last, s_init) = s.split_last().unwrap();
         let mut t_prepended = Vec::with_capacity(t.len() + 1);
         t_prepended.push(*last);
@@ -287,7 +229,6 @@ impl<'a> Shrinker<'a> {
             return Ok(());
         }
 
-        // Binary search for the longest suffix of s that can be moved.
         let s_len = s.len();
         bin_search_down_r(1, s_len as i128, &mut |n| {
             let n = n as usize;
@@ -327,7 +268,6 @@ impl<'a> Shrinker<'a> {
         let len = self.current_nodes.len();
         for i in 0..len {
             for j in (i + 1)..(i + 1 + 4).min(len) {
-                // Both must be String kinds.
                 let (kind_i, val_i) = match (
                     self.current_nodes[i].kind.as_ref(),
                     &self.current_nodes[i].value,
@@ -346,18 +286,11 @@ impl<'a> Shrinker<'a> {
                 let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
                 let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
                 for ch in shared {
-                    // Binary-search the codepoint key downward.
                     let original_key = kind_i.codepoint_key(ch);
                     if original_key == 0 {
                         continue;
                     }
                     bin_search_down_r(0, original_key as i128, &mut |new_key| {
-                        // `key_to_codepoint(new_key)` is `Some` for
-                        // every key in `0..alpha_size`, and our search
-                        // upper bound is `original_key` which is itself
-                        // a valid alphabet position.  Likewise the
-                        // resulting `new_cp` differs from `ch` (whose
-                        // key was `original_key > new_key`).
                         let new_cp = kind_i
                             .key_to_codepoint(new_key as u32)
                             .expect("key < original_key < alpha_size");
@@ -370,11 +303,6 @@ impl<'a> Shrinker<'a> {
                             .iter()
                             .map(|&c| if c == ch { new_cp } else { c })
                             .collect();
-                        // The two nodes can have different alphabets: the
-                        // lowered codepoint comes from node i's alphabet and
-                        // may not exist in node j's. Hypothesis's equivalent
-                        // attempt is silently rejected by choice_permitted;
-                        // do the same.
                         if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
                             return Ok(false);
                         }
@@ -411,9 +339,6 @@ impl<'a> Shrinker<'a> {
             for pos in 0..value.len() {
                 let cp = value[pos];
                 let candidates = natural_simpler_chars(cp, &kind);
-                // `current_nodes[i]` is the same kind we matched at the
-                // top of the loop; only its value may have changed
-                // under intervening `replace` calls.
                 let cur = match &self.current_nodes[i].value {
                     ChoiceValue::String(v) => v.clone(),
                     _ => unreachable!("kind invariant violated mid-pass"),
@@ -424,11 +349,6 @@ impl<'a> Shrinker<'a> {
                 for replacement in candidates {
                     let mut new_value = cur.clone();
                     new_value[pos] = replacement;
-                    // `natural_simpler_chars` already filters
-                    // candidates to those `intervals.contains(c)`, and
-                    // the alphabet check is the only validate gate for
-                    // single-char replacements at fixed-length —
-                    // therefore the candidate is always valid.
                     hegel_internal_debug_assert!(kind.validate(&new_value));
                     if self.replace(&HashMap::from([(i, ChoiceValue::String(new_value))]))? {
                         break;
@@ -492,9 +412,6 @@ fn semantic_candidates(cp: u32, kind: &StringChoice) -> Vec<u32> {
     let mut out = Vec::with_capacity(64);
     let cur_key = kind.codepoint_key(cp);
 
-    // The first ~62 alphabet positions in shrink order are digits + ASCII
-    // letters when the alphabet contains them. Walking them directly gives
-    // exactly the "ASCII basin" candidates without needing fixed key indices.
     let cap = 62u32.min(kind.alpha_size() as u32);
     for k in 0..cap {
         if k >= cur_key {

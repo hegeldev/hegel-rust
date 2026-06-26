@@ -111,7 +111,6 @@ fn run_two_origin_failure(verbosity: Verbosity) -> String {
 /// each diagnostic.
 #[test]
 fn test_multi_failure_panic_with_default_verbosity() {
-    // Just need to swallow the captured value to silence unused warnings.
     let _ = run_two_origin_failure(Verbosity::Normal);
 }
 
@@ -196,14 +195,11 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
     let output = TempRustProject::new()
         .main_file(TWO_BUG_CODE)
         .invoke()
-        // No backtraces: each diagnostic must end right after its panic
-        // message so the block structure below is exact.
         .env_remove("RUST_BACKTRACE")
         .expect_failure("Property-based test failed with 2 distinct failures.")
         .cargo_run(&[]);
     let stderr = &output.stderr;
 
-    // The headline comes before any drawn value or diagnostic.
     let headline_pos = stderr
         .find("Property-based test failed with 2 distinct failures.")
         .unwrap();
@@ -214,7 +210,6 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
         "expected the failure-count headline before the per-failure blocks:\n{stderr}"
     );
 
-    // Two blocks, each a draw line immediately followed by its diagnostic.
     assert_matches_regex(
         stderr,
         concat!(
@@ -226,8 +221,6 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
             r"\n",
             r"let draw_1 = \d+;\n",
             r"thread '[^']+' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
-            // The report is the last thing on stderr: the closing unwind is
-            // a hook-silent re-raise, so nothing prints after the blocks.
             r"(?:big|small) branch: \d+$",
         ),
     );

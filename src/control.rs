@@ -1,17 +1,5 @@
 use std::cell::Cell;
 
-// ─── Control-flow unwind payloads ───────────────────────────────────────────
-//
-// Hegel's internal control flow (a rejected assumption, the engine running
-// out of data, `TestCase::repeat` finishing, an invalid-argument usage
-// error) unwinds out of the test body through the lifecycle's
-// `catch_unwind`. These payload types are raised with
-// [`std::panic::resume_unwind`] rather than `panic!`, which skips the panic
-// hook entirely: no `thread '...' panicked` line is printed on any thread,
-// no backtrace is captured, and no per-unwind hook work happens on the
-// rejection-heavy generation path. Classification is by downcast, so no
-// user panic — whatever its message — can be mistaken for control flow.
-
 /// A rejected assumption (`tc.assume(false)` / `tc.reject()`): discard this
 /// test case as `Invalid` without counting it against the budget.
 pub(crate) struct AssumeFailed;
@@ -68,10 +56,6 @@ pub(crate) fn raise_internal_error(message: std::fmt::Arguments<'_>) -> ! {
 /// test failure and gets shrunk as a counterexample, while a violated
 /// internal invariant must abort the run with a bug-report message.
 macro_rules! hegel_internal_assert {
-    // `if $cond {} else` rather than `if !$cond`: identical semantics
-    // (NaN-involving comparisons fail the assertion, as with `assert!`),
-    // without tripping clippy's negated-partial-ord lint at expansion
-    // sites that compare floats.
     ($cond:expr $(,)?) => {
         if $cond {
         } else {
@@ -124,9 +108,6 @@ thread_local! {
 
 #[doc(hidden)]
 pub(crate) fn with_test_context<R>(f: impl FnOnce() -> R) -> R {
-    // Restore (rather than clear) on a drop guard: the flag survives a
-    // panic unwinding out of `f`, and nested uses don't clear the outer
-    // context early.
     struct Restore(bool);
     impl Drop for Restore {
         fn drop(&mut self) {

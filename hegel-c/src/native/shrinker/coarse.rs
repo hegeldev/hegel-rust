@@ -49,7 +49,6 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            // Probe: does zeroing the node change the shape?
             let zero_val = ic
                 .value_from_bigint(&BigInt::from(0))
                 .expect("0 fits a min==0 integer choice");
@@ -79,17 +78,10 @@ impl<'a> Shrinker<'a> {
     /// Lower the integer at `i` to `v`, retrying the suffix as random
     /// continuations to repair any shape changes the lower caused.
     fn try_lower_node_as_alternative(&mut self, i: usize, v: &BigInt) -> ShrinkResult<bool> {
-        // Callers iterate `i < self.current_nodes.len()`, so this is a
-        // documented precondition.
         hegel_internal_debug_assert!(i < self.current_nodes.len());
-        // First try the bare lowering.
         if self.replace_int(i, v)? {
             return Ok(true);
         }
-        // Couldn't lower directly; re-randomise the suffix via `probe`.
-        // Use the lowered prefix as the probe's prefix and let the engine pick
-        // a random continuation. The prefix is replayed (and width-coerced) by
-        // `for_choices`, so a `BigInt`-wrapped value is fine here.
         let mut prefix: Vec<ChoiceValue> = self.current_nodes[..i]
             .iter()
             .map(|n| n.value.clone())
@@ -97,9 +89,6 @@ impl<'a> Shrinker<'a> {
         prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = self.current_nodes.len() + 16;
         let epoch = self.improvements;
-        // Three random continuations, mirroring Hypothesis's
-        // `try_lower_node_as_alternative` (`for _ in range(3)`); each draws a
-        // fresh suffix from the engine RNG.
         for _ in 0..3 {
             self.probe(&prefix, max_size)?;
             if self.improvements > epoch {

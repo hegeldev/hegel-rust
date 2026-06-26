@@ -39,11 +39,6 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                // Decrement targets: simplest (index 0), then `current-1`.
-                // Trying simplest first handles cases where intermediate steps
-                // don't produce interesting results but the full decrement
-                // does (e.g. sampled_from where only index 0 satisfies a
-                // downstream constraint).
                 let mut decrement_targets: Vec<ChoiceValue> = Vec::new();
                 if current_idx > BigUint::from(1u32) {
                     let v0 = kind_i
@@ -51,18 +46,12 @@ impl<'a> Shrinker<'a> {
                         .expect("from_index(0) is simplest and always valid");
                     decrement_targets.push(v0);
                 }
-                // `from_index(current_idx - 1)` can be None for bounded float
-                // ranges with gaps.
                 if let Some(v_prev) = kind_i.from_index(&current_idx - BigUint::from(1u32)) {
                     if !decrement_targets.contains(&v_prev) {
                         decrement_targets.push(v_prev);
                     }
                 }
 
-                // Find bump target `j`: the gap'th node after i. Use
-                // `checked_add` proper so that an index near `usize::MAX`
-                // doesn't silently wrap in release builds; the trailing
-                // `filter` then bounds-checks against the node-list length.
                 let j_opt = i.checked_add(gap).filter(|&j| j < self.current_nodes.len());
                 let Some(j) = j_opt else {
                     idx += 1;
@@ -70,10 +59,6 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for new_val in &decrement_targets {
-                    // Build the decrement attempt and run it. Running both
-                    // `attempt` and the zero-padded variant is for the
-                    // side-effect on `current` (the shrinker auto-updates
-                    // to smaller interesting results).
                     let mut attempt = self.current_nodes.clone();
                     attempt[i] = attempt[i].with_value(new_val.clone());
                     self.consider(&attempt)?;
@@ -85,11 +70,6 @@ impl<'a> Shrinker<'a> {
                     }
                     self.consider(&zeroed)?;
 
-                    // Try bumping node `j` at relative and absolute index
-                    // offsets — replace-with-validate skips when the
-                    // bumped value doesn't fit the *current* kind at j
-                    // (which may have shifted under punning between
-                    // iterations).
                     if j < self.current_nodes.len() && !is_sequence(&self.current_nodes[j].kind) {
                         let kind_j = self.current_nodes[j].kind.clone();
                         let target_idx = kind_j.to_index(&self.current_nodes[j].value);
@@ -160,8 +140,6 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            // Also try powers of 2 (and negatives) as raw values. This covers
-            // large index-space jumps that exponential index probing misses.
             if let ChoiceKind::Integer(ic) = kind.as_ref() {
                 for e in 0u32..11 {
                     let magnitude = BigInt::from(1u64 << e);
@@ -214,10 +192,6 @@ pub(super) fn try_bump_ij(
     j: usize,
     bump_val: &ChoiceValue,
 ) -> ShrinkResult<bool> {
-    // `replace` checks `j < len` (via its `i >= attempt.len()`
-    // short-circuit) and `kind.validate(bump_val)` itself, so the
-    // pre-checks here would be redundant.  Let `replace` reject
-    // invalid attempts on its own.
     let replacements: HashMap<usize, ChoiceValue> = [(i, new_val.clone()), (j, bump_val.clone())]
         .into_iter()
         .collect();

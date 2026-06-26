@@ -21,13 +21,9 @@ impl From<ciborium::Value> for HegelValue {
         match v {
             ciborium::Value::Null => HegelValue::Null, // nocov
             ciborium::Value::Bool(b) => HegelValue::Bool(b),
-            ciborium::Value::Float(f) => {
-                // NaN and Infinity are preserved natively by ciborium::Value
-                HegelValue::Number(f)
-            }
+            ciborium::Value::Float(f) => HegelValue::Number(f),
             ciborium::Value::Integer(i) => {
                 let n: i128 = i.into();
-                // Check if the integer can be represented precisely as f64
                 let abs = n.unsigned_abs();
                 if abs > (1u128 << 53) {
                     HegelValue::BigInt(n.to_string())
@@ -38,7 +34,6 @@ impl From<ciborium::Value> for HegelValue {
             // nocov start
             ciborium::Value::Bytes(b) => {
                 // nocov end
-                // Encode bytes as array of numbers
                 HegelValue::Array(
                     // nocov start
                     b.into_iter()
@@ -64,7 +59,6 @@ impl From<ciborium::Value> for HegelValue {
                 // nocov end
             ),
             ciborium::Value::Tag(2, inner) => {
-                // CBOR tag 2: positive bignum, encoded as big-endian bytes
                 let ciborium::Value::Bytes(bytes) = *inner else {
                     panic!("Expected Bytes inside bignum tag 2, got {:?}", inner) // nocov
                 };
@@ -75,7 +69,6 @@ impl From<ciborium::Value> for HegelValue {
                 HegelValue::BigInt(n.to_string())
             }
             ciborium::Value::Tag(3, inner) => {
-                // CBOR tag 3: negative bignum, value is -1 - n
                 let ciborium::Value::Bytes(bytes) = *inner else {
                     panic!("Expected Bytes inside bignum tag 3, got {:?}", inner) // nocov
                 };
@@ -87,11 +80,6 @@ impl From<ciborium::Value> for HegelValue {
                 HegelValue::BigInt(result.to_string())
             }
             ciborium::Value::Tag(91, inner) => {
-                // Hegel encodes strings as tag 91, encoded as raw UTF-8 bytes.
-                // The exception is Hegel allows surrogate code points over the wire.
-                //
-                // However, hegel-rust will never request a payload that can contain
-                // surrogate code points, so this will only throw if we have messed up.
                 let ciborium::Value::Bytes(bytes) = *inner else {
                     panic!("Expected Bytes inside string tag 91, got {:?}", inner) // nocov
                 };
@@ -138,10 +126,6 @@ impl<'de> Deserializer<'de> for HegelValue {
             HegelValue::Null => visitor.visit_unit(), // nocov
             HegelValue::Bool(b) => visitor.visit_bool(b),
             HegelValue::Number(n) => {
-                // For whole numbers that fit in i64, use visit_i64 so integer
-                // deserialization works. NaN/Inf have fract() != 0, so they
-                // go to visit_f64. Negative zero must also go to visit_f64 to
-                // preserve the sign bit (`-0.0 as i64` is `0`, losing the sign).
                 let is_neg_zero = n == 0.0 && n.is_sign_negative();
                 if n.fract() == 0.0 && !is_neg_zero && n >= i64::MIN as f64 && n <= i64::MAX as f64
                 {
@@ -151,8 +135,6 @@ impl<'de> Deserializer<'de> for HegelValue {
                 }
             }
             HegelValue::BigInt(s) => {
-                // Parse the string and use the smallest visitor type that fits.
-                // This ensures compatibility with serde's primitive deserializers.
                 if let Ok(n) = s.parse::<u64>() {
                     visitor.visit_u64(n)
                 } else if let Ok(n) = s.parse::<i64>() {

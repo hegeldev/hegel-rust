@@ -63,11 +63,9 @@ fn remove_discarded_returns_true_when_no_discards() {
 
 #[test]
 fn remove_discarded_skips_zero_length_discarded_span() {
-    // `span.end > span.start` is required — empty discarded spans never
-    // contribute to the deletion list (the `ex.choice_count > 0` guard).
     let initial = vec![int_node(7)];
     let mut spans = Spans::new();
-    spans.push(span(0, 0, true)); // zero-length discarded
+    spans.push(span(0, 0, true));
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
     assert!(shrinker.remove_discarded().unwrap());
     assert_eq!(shrinker.current_nodes.len(), 1);
@@ -75,9 +73,6 @@ fn remove_discarded_skips_zero_length_discarded_span() {
 
 #[test]
 fn remove_discarded_deletes_a_single_discarded_region() {
-    // current_nodes = [a, b, c, d]; spans = [0..4 root, 1..3 discarded].
-    // Expect remove_discarded to attempt deletion of indices 1..3,
-    // leaving [a, d].
     let initial = vec![int_node(1), int_node(2), int_node(3), int_node(4)];
     let mut spans = Spans::new();
     spans.push(span(0, 4, false));
@@ -85,8 +80,6 @@ fn remove_discarded_deletes_a_single_discarded_region() {
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
     assert!(shrinker.remove_discarded().unwrap());
-    // Closure now returns no discards, so the next loop iteration finds
-    // an empty list and exits.
     assert_eq!(shrinker.current_nodes.len(), 2);
     let values: Vec<_> = shrinker
         .current_nodes
@@ -101,9 +94,6 @@ fn remove_discarded_deletes_a_single_discarded_region() {
 
 #[test]
 fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
-    // Two disjoint discarded regions: [1..3) and [5..7).  Both should be
-    // deleted in a single attempt, in reverse order so earlier deletions
-    // don't shift the later indices.
     let initial = vec![
         int_node(1),
         int_node(2),
@@ -133,10 +123,6 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
 
 #[test]
 fn remove_discarded_skips_nested_discarded_spans() {
-    // The outer span (1..5) is discarded; the inner span (2..3) is also
-    // discarded but lies entirely inside the outer one — the outer
-    // deletion subsumes it, and the `ex.start >= discarded[-1][-1]`
-    // guard skips the inner.
     let initial = vec![
         int_node(0),
         int_node(1),
@@ -160,15 +146,11 @@ fn remove_discarded_skips_nested_discarded_spans() {
             _ => unreachable!(),
         })
         .collect();
-    // 1..5 removed; 0 and 5 survive.
     assert_eq!(values, vec![0, 5]);
 }
 
 #[test]
 fn remove_discarded_returns_false_when_consider_rejects() {
-    // When the test_fn returns false (uninteresting), `consider` returns
-    // false and `remove_discarded` returns false — signalling that the
-    // discarded data is structurally required.
     let initial = vec![bool_node(true), bool_node(true)];
     let mut spans = Spans::new();
     spans.push(span(0, 2, false));
@@ -183,22 +165,16 @@ fn remove_discarded_returns_false_when_consider_rejects() {
         spans,
     );
     assert!(!shrinker.remove_discarded().unwrap());
-    // The original sequence is preserved.
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
 #[test]
 fn remove_discarded_iterates_when_new_target_still_has_discards() {
-    // First call: closure reports the new run still has a discarded
-    // region.  remove_discarded should loop once more, delete that, and
-    // then exit when the closure clears the discards.
     let initial = vec![int_node(1), int_node(2), int_node(3), int_node(4)];
     let mut spans = Spans::new();
     spans.push(span(0, 4, false));
     spans.push(span(2, 4, true));
 
-    // Switching spans table: first call leaves [0..2 discarded], second
-    // call clears.
     let next_spans = {
         let mut s = Spans::new();
         s.push(span(0, 2, true));
@@ -222,7 +198,5 @@ fn remove_discarded_iterates_when_new_target_still_has_discards() {
         spans,
     );
     assert!(shrinker.remove_discarded().unwrap());
-    // First call removed [2..4); second iteration found [0..2) still
-    // marked discarded and removed it too — leaving nothing.
     assert_eq!(shrinker.current_nodes.len(), 0);
 }

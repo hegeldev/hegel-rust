@@ -4,8 +4,6 @@ use common::utils::{assert_all_examples, find_any};
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
-// tuples0 (unit)
-
 #[hegel::test]
 fn test_tuple0_basic(tc: TestCase) {
     let _: () = tc.draw(gs::tuples!());
@@ -21,8 +19,6 @@ fn test_tuple0_default_generator() {
     assert_all_examples(gs::default::<()>(), |_| true);
 }
 
-// tuples1
-
 #[hegel::test]
 fn test_tuple1_basic(tc: TestCase) {
     let (a,): (i32,) = tc.draw(gs::tuples!(gs::integers(),));
@@ -34,8 +30,6 @@ fn test_tuple1_respects_bounds(tc: TestCase) {
     let (a,): (i32,) = tc.draw(gs::tuples!(gs::integers().min_value(0).max_value(10),));
     assert!((0..=10).contains(&a));
 }
-
-// tuples2
 
 #[hegel::test]
 fn test_tuple2_basic(tc: TestCase) {
@@ -52,8 +46,6 @@ fn test_tuple2_respects_bounds(tc: TestCase) {
     assert!((0..=10).contains(&a));
     assert!((100..=200).contains(&b));
 }
-
-// tuples3
 
 #[hegel::test]
 fn test_tuple3_basic(tc: TestCase) {
@@ -74,8 +66,6 @@ fn test_tuple3_respects_bounds(tc: TestCase) {
     assert!((40..=50).contains(&c));
 }
 
-// tuples4
-
 #[hegel::test]
 fn test_tuple4_basic(tc: TestCase) {
     let (a, b, c, d): (i32, i32, i32, i32) = tc.draw(gs::tuples!(
@@ -90,8 +80,6 @@ fn test_tuple4_basic(tc: TestCase) {
     assert!((0..=10).contains(&d));
 }
 
-// tuples5
-
 #[hegel::test]
 fn test_tuple5_basic(tc: TestCase) {
     let t: (i32, i32, i32, i32, i32) = tc.draw(gs::tuples!(
@@ -103,8 +91,6 @@ fn test_tuple5_basic(tc: TestCase) {
     ));
     let _ = t;
 }
-
-// larger arities compile and run
 
 #[hegel::test]
 fn test_tuple6(tc: TestCase) {
@@ -211,8 +197,6 @@ fn test_tuple12(tc: TestCase) {
     ));
 }
 
-// mapped tuples
-
 #[hegel::test]
 fn test_tuple2_with_mapped_elements(tc: TestCase) {
     let (a, b): (i32, i32) = tc.draw(gs::tuples!(
@@ -229,8 +213,6 @@ fn test_tuple2_with_mapped_elements(tc: TestCase) {
     assert!((1..=101).contains(&b));
 }
 
-// mixed types
-
 #[hegel::test]
 fn test_tuple_mixed_types(tc: TestCase) {
     let (n, s, b, f): (i32, String, bool, f64) = tc.draw(gs::tuples!(
@@ -240,11 +222,9 @@ fn test_tuple_mixed_types(tc: TestCase) {
         gs::floats(),
     ));
     assert!((0..=100).contains(&n));
-    assert!(s.len() <= 40); // max_size is in chars, UTF-8 can expand
+    assert!(s.len() <= 40);
     let _ = (b, f);
 }
-
-// tuples in collections
 
 #[hegel::test]
 fn test_vec_of_tuples(tc: TestCase) {
@@ -260,8 +240,6 @@ fn test_vec_of_tuples(tc: TestCase) {
     }
 }
 
-// tuple can find specific values
-
 #[test]
 fn test_tuple2_can_find_both_true_and_false() {
     find_any(gs::tuples!(gs::booleans(), gs::booleans()), |(a, b)| {
@@ -271,8 +249,6 @@ fn test_tuple2_can_find_both_true_and_false() {
         !*a && *b
     });
 }
-
-// assert_all_examples with tuples
 
 #[test]
 fn test_tuple2_all_examples_in_bounds() {

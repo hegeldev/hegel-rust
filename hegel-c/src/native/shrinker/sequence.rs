@@ -1,5 +1,3 @@
-// Sequence-ordering shrink passes: sort_values, swap_adjacent_blocks.
-
 use std::collections::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue};
@@ -18,9 +16,7 @@ impl<'a> Shrinker<'a> {
     /// punning on collection-bearing kinds) that would make the full
     /// sort's replace unreachable.
     pub(super) fn sort_values(&mut self) -> ShrinkResult<()> {
-        // Sort integer choices by absolute value.
         self.sort_values_integers()?;
-        // Sort boolean choices: false (0) before true (1).
         self.sort_values_booleans()
     }
 
@@ -80,10 +76,6 @@ impl<'a> Shrinker<'a> {
             }
         }
 
-        // Insertion-sort fallback. Each iteration refreshes the valid
-        // indices because a prior successful swap can shorten
-        // current_nodes or change kinds at fixed positions via value
-        // punning.
         for pos in 1..indices.len() {
             let mut j = pos;
             while j > 0 {
@@ -131,7 +123,6 @@ impl<'a> Shrinker<'a> {
             while i + 2 * block_size <= self.current_nodes.len() {
                 let j = i + block_size;
 
-                // Check that both blocks have matching type structure.
                 let types_a: Vec<std::mem::Discriminant<ChoiceKind>> = (0..block_size)
                     .map(|k| std::mem::discriminant(self.current_nodes[i + k].kind.as_ref()))
                     .collect();
@@ -156,7 +147,6 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                // Try swapping block_a and block_b.
                 let mut swap = HashMap::new();
                 for k in 0..block_size {
                     swap.insert(i + k, block_b[k].clone());

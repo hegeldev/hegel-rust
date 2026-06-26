@@ -38,9 +38,6 @@ fn int_value(node: &ChoiceNode) -> i128 {
 
 #[test]
 fn initial_coarse_reduction_no_op_when_shape_stable() {
-    // Predicate accepts everything, returns same shape → coarse phase
-    // detects no shape change and defers to the main loop, leaving the
-    // value untouched.
     let initial = vec![small_int_node(5)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -56,9 +53,6 @@ fn initial_coarse_reduction_no_op_when_shape_stable() {
 
 #[test]
 fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
-    // The closure returns a shape that depends on the integer value:
-    // when the integer is N, the realised sequence has length N+1.
-    // Zeroing changes the shape, so the coarse pass fires.
     let initial = vec![
         small_int_node(3),
         small_int_node(0),
@@ -81,13 +75,11 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         Spans::new(),
     );
     shrinker.initial_coarse_reduction().unwrap();
-    // The shape-aware coarse pass should drop the integer.
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
 }
 
 #[test]
 fn initial_coarse_reduction_skips_large_values() {
-    // value > 10 → the heuristic skips it.
     let initial = vec![big_range_int_node(50)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -98,14 +90,11 @@ fn initial_coarse_reduction_skips_large_values() {
         Spans::new(),
     );
     shrinker.initial_coarse_reduction().unwrap();
-    // Unchanged.
     assert_eq!(int_value(&shrinker.current_nodes[0]), 50);
 }
 
 #[test]
 fn initial_coarse_reduction_skips_non_zero_min_value() {
-    // Node has min_value=1; not a one_of selector pattern (those start
-    // from zero).  Should be left alone.
     let mut node = small_int_node(3);
     if let ChoiceKind::Integer(ic) = std::sync::Arc::make_mut(&mut node.kind) {
         ic.min_value = BigInt::from(1);
@@ -150,7 +139,6 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Always interesting iff first value == 1.
                 let interesting = nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
                 (interesting, nodes.to_vec(), Spans::new())
             }
@@ -160,8 +148,6 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
         Spans::new(),
     );
     shrinker.initial_coarse_reduction().unwrap();
-    // Sequence should remain (1, 0); coarse phase doesn't lower the
-    // selector when there's no shape change to exploit.
     assert_eq!(shrinker.current_nodes.len(), 2);
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 0);
@@ -182,8 +168,6 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
         small_int_node(0),
         small_int_node(0),
     ];
-    // Track how many times the probe branch responded — used to assert
-    // we actually reached it.
     let probe_calls = Rc::new(Cell::new(0_usize));
     let probe_calls_for_closure = probe_calls.clone();
     let mut shrinker = Shrinker::with_probe(
@@ -194,28 +178,19 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 if head == 3 && nodes.len() == 4 {
-                    // The initial counterexample.  Interesting.
                     return (true, nodes.to_vec(), Spans::new());
                 }
                 if head == 0 && nodes.len() == 4 {
-                    // The coarse pass's zeroing probe.  Return a
-                    // different-shape realised sequence to flag
-                    // shape_changed = true.
                     return (
                         false,
                         vec![small_int_node(0), small_int_node(0)],
                         Spans::new(),
                     );
                 }
-                // try_lower's direct `replace` lowers `head` to v in
-                // 0..3.  Reject those so the probe branch runs.
                 (false, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => {
                 probe_calls_for_closure.set(probe_calls_for_closure.get() + 1);
-                // Return a strictly shorter interesting sequence so
-                // sort_key < initial_key and the probe arm at
-                // `coarse.rs:96` fires.
                 (
                     true,
                     vec![small_int_node(0), small_int_node(0)],

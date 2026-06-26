@@ -26,7 +26,6 @@ pub use crate::test_case::{
     Collection, TestCase, deserialize_value, generate_from_schema, generate_raw, labels,
 };
 
-// public api
 #[doc(inline)]
 pub use crate::tuples;
 pub use collections::{

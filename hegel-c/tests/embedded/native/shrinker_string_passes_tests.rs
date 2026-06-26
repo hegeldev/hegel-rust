@@ -21,8 +21,6 @@ fn string_node_with(min_cp: u32, max_cp: u32, value: Vec<u32>) -> ChoiceNode {
 
 #[test]
 fn lower_duplicated_characters_lowers_shared_codepoint_in_pair() {
-    // Both strings contain 'b' (codepoint 98).  With the lowercase
-    // alphabet [a-z], the shared char should be reduced to 'a'.
     let initial = vec![
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32, b'c' as u32]),
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32, b'd' as u32]),
@@ -36,8 +34,6 @@ fn lower_duplicated_characters_lowers_shared_codepoint_in_pair() {
         Spans::new(),
     );
     shrinker.lower_duplicated_characters().unwrap();
-    // The 'b' shared codepoint should be lowered to the smallest in the
-    // shrink order ('a').
     if let ChoiceValue::String(s0) = &shrinker.current_nodes[0].value {
         assert!(s0.contains(&(b'a' as u32)) || !s0.contains(&(b'b' as u32)));
     }
@@ -70,7 +66,6 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
         Spans::new(),
     );
     shrinker.lower_duplicated_characters().unwrap();
-    // No second string to pair with → no change.
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s, &vec![b'b' as u32]);
     }
@@ -78,7 +73,6 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
 
 #[test]
 fn normalize_unicode_chars_replaces_accented_letter_with_base() {
-    // 'À' (U+00C0) has NFD base 'A' (U+0041); the alphabet covers both.
     let initial = vec![string_node_with(b'A' as u32, 0x00FF, vec![0x00C0])];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -90,7 +84,6 @@ fn normalize_unicode_chars_replaces_accented_letter_with_base() {
     );
     shrinker.normalize_unicode_chars().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
-        // Either lowered to 'A' (NFD) or 'a' (case map) — both fine.
         assert!(s == &vec![b'A' as u32] || s == &vec![b'a' as u32]);
     } else {
         unreachable!();
@@ -99,7 +92,6 @@ fn normalize_unicode_chars_replaces_accented_letter_with_base() {
 
 #[test]
 fn normalize_unicode_chars_skips_when_no_simpler_chars() {
-    // 'A' has no simpler natural form within the [A-Z] alphabet.
     let initial = vec![string_node_with(
         b'A' as u32,
         b'Z' as u32,
@@ -123,17 +115,10 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
 
 #[test]
 fn normalize_unicode_chars_handles_string_truncated_by_closure() {
-    // Closure truncates the realised string to length 1 — after the
-    // first position is normalised, current[i].value becomes shorter
-    // than the originally-captured `value`.  The outer loop's
-    // `pos >= cur.len()` continue at strings.rs:~414 is exercised
-    // when the loop reaches the now-out-of-bounds position.
     let initial = vec![string_node_with(b'A' as u32, 0x00FF, vec![0x00C0, 0x00C0])];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Closure: accept the candidate but return an actual
-                // sequence with the string truncated to length 1.
                 let mut actual: Vec<ChoiceNode> = nodes.to_vec();
                 if let Some(node) = actual.first_mut() {
                     if let ChoiceValue::String(s) = &mut node.value {
@@ -148,8 +133,6 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
         Spans::new(),
     );
     shrinker.normalize_unicode_chars().unwrap();
-    // No panic on the second iteration; current_nodes converged on a
-    // length-1 string.
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s.len(), 1);
     } else {
@@ -196,8 +179,6 @@ fn normalize_unicode_chars_respects_intervals() {
     );
     shrinker.normalize_unicode_chars().unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
-        // The 'A' base (0x41) sits outside the allowed range; 'À' (0xC0)
-        // remains unchanged.
         assert!(
             s.iter().all(|&cp| (0xC0..=0xFF).contains(&cp)),
             "produced out-of-alphabet codepoints: {:?}",
@@ -208,11 +189,6 @@ fn normalize_unicode_chars_respects_intervals() {
 
 #[test]
 fn lower_duplicated_characters_handles_mismatched_alphabets() {
-    // The two string nodes share 'b', but their alphabets differ: lowering
-    // 'b' in the first node's [a-z] alphabet proposes 'a', which the second
-    // node's [b-z] alphabet does not contain. The attempt must be rejected
-    // gracefully (Hypothesis's choice_permitted silently rejects it), not
-    // trip a debug assertion.
     let initial = vec![
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32]),
         string_node_with(b'b' as u32, b'z' as u32, vec![b'b' as u32]),
@@ -226,7 +202,6 @@ fn lower_duplicated_characters_handles_mismatched_alphabets() {
         Spans::new(),
     );
     shrinker.lower_duplicated_characters().unwrap();
-    // The second node must still hold a value its own alphabet permits.
     if let (ChoiceKind::String(k1), ChoiceValue::String(s1)) = (
         shrinker.current_nodes[1].kind.as_ref(),
         &shrinker.current_nodes[1].value,

@@ -41,8 +41,6 @@ pub struct UrandomRng;
 impl UrandomRng {
     fn read_exact(dst: &mut [u8]) {
         use std::io::Read;
-        // `File` reads are unbuffered, so this is equivalent to Python's
-        // `open("/dev/urandom", "rb", buffering=0)`.
         let mut file = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
         file.read_exact(dst)
             .expect("failed to read from /dev/urandom");

@@ -59,7 +59,6 @@ impl CharacterFields {
             let arr = Value::Array(cats.iter().map(|c| Value::from(c.as_str())).collect());
             map_insert(&mut schema, "categories", arr);
         } else {
-            // Always exclude surrogates (Cs) since Rust strings cannot contain them.
             let mut excl = self.exclude_categories.clone().unwrap_or_default();
             if !excl.iter().any(|c| c == "Cs") {
                 excl.push("Cs".to_string());
@@ -542,7 +541,6 @@ impl IpAddressGenerator {
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
     fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::IpAddr>> {
         Some(BasicGenerator::new(self.build_schema(), move |raw| {
-            // one_of returns [index, value]; extract the value
             let inner = raw.into_array().unwrap().into_iter().nth(1).unwrap();
             let string: String = super::deserialize_value(inner);
             std::net::IpAddr::from_str(&string).unwrap()

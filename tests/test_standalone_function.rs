@@ -5,10 +5,6 @@ use common::utils::{assert_matches_regex, expect_panic};
 use hegel::TestCase;
 use hegel::generators as gs;
 
-// ============================================================
-// Success cases using the macro inline
-// ============================================================
-
 #[hegel::standalone_function(test_cases = 5)]
 fn standalone_no_args(tc: TestCase) {
     let _: bool = tc.draw(gs::booleans());
@@ -41,13 +37,8 @@ fn test_standalone_with_string_arg_runs() {
     standalone_with_string_arg("hello".to_string());
 }
 
-// ============================================================
-// Draw name rewriting
-// ============================================================
-
 #[test]
 fn test_standalone_draw_name_rewriting() {
-    // Use TempRustProject so we can observe the actual rewritten output on failure.
     let code = r#"
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -67,13 +58,8 @@ fn main() {
         .expect_failure("got")
         .cargo_run(&[]);
 
-    // Draw rewriting should make the printed variable use the user's name.
     assert_matches_regex(&output.stderr, r"let my_var = -?\d+;");
 }
-
-// ============================================================
-// Explicit test cases
-// ============================================================
 
 #[hegel::standalone_function(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42i32)]
@@ -111,10 +97,6 @@ fn main() {
     let _ = output;
 }
 
-// ============================================================
-// Panic on failing property
-// ============================================================
-
 #[test]
 fn test_standalone_function_fails_on_failing_property() {
     #[hegel::standalone_function(test_cases = 200)]
@@ -125,10 +107,6 @@ fn test_standalone_function_fails_on_failing_property() {
 
     expect_panic(always_fails, "unexpectedly got nonneg");
 }
-
-// ============================================================
-// Compile errors
-// ============================================================
 
 #[test]
 fn test_standalone_function_no_params_compile_error() {

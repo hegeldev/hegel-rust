@@ -1,34 +1,3 @@
-// Persistence layer for the native backend.
-//
-// A multi-value key/value store where each key maps to a *set* of values.
-// The `TestCaseDatabase` trait captures the shared surface
-// (`save` / `fetch` / `delete` / `move_value`); `DirectoryTestCaseDatabase`
-// is the directory-backed implementation and `InMemoryNativeDatabase` is
-// a non-persistent sibling.
-//
-// Minimal-native: the change-listener / watcher infrastructure, the
-// `ReadOnly` / `Multiplexed` / `BackgroundWrite` wrapper databases, and
-// the cross-process tempfile-rename dance live in the full native
-// branch but are not part of this minimal version.
-//
-// # On-disk format
-//
-// Storage layout (directory backend):
-//
-//   db_root/<key_hash(key)>/<fnv_hex(value)>
-//
-// where `key_hash(k) = fnv_hex(b"native:" ++ k)` and the file contents
-// are the raw value bytes.  `serialize_choices` and `deserialize_choices`
-// are the canonical binary encoding used for ChoiceValue sequences (the
-// value bytes); they are kept here so that the replay path in
-// `test_runner.rs` can round-trip them.
-//
-// The `native:` key prefix ensures that even if a user accidentally
-// points `database` at a directory containing another store, our hashes
-// are disjoint and the two stores can't overwrite each other's entries.
-// It also leaves room for a differently-prefixed store to coexist at the
-// same `db_root`.
-
 use std::path::PathBuf;
 
 use crate::native::bignum::BigInt;
@@ -118,9 +87,6 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
     }
 
     fn save(&self, key: &[u8], value: &[u8]) {
-        // The "metakeys" entry is a bookkeeping key whose values are the
-        // raw bytes of every other key ever saved. Avoid infinite
-        // recursion when we're already saving under it.
         if key_hash(key) != self.metakeys_hash {
             self.save(METAKEYS_NAME, key);
         }
@@ -132,10 +98,6 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         if path.exists() {
             return;
         }
-        // Write to a temp file in the same directory, then atomically rename it
-        // into place, so a concurrent reader never sees a partially-written
-        // value. (The value's content is fixed by its path — its own hash — so
-        // racing writers of the same value are harmless.)
         if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(&dir) {
             use std::io::Write;
             if tmp.write_all(value).is_ok() {
@@ -148,8 +110,6 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
         if std::fs::remove_file(self.value_path(key, value)).is_err() {
             return;
         }
-        // `remove_dir` only succeeds if the directory is empty; that's
-        // exactly the "value was the last entry" case.
         if std::fs::remove_dir(self.key_path(key)).is_ok() && key_hash(key) != self.metakeys_hash {
             self.delete(METAKEYS_NAME, key);
         }
@@ -310,9 +270,6 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
         return None;
     }
     let count = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
-    // A corrupted entry can claim a count far larger than the input
-    // buffer can possibly back.  Cap pre-allocation at the buffer
-    // length so a bogus `count = u32::MAX` doesn't OOM the process.
     let mut choices = Vec::with_capacity(count.min(bytes.len()));
     let mut pos = 4;
     for _ in 0..count {

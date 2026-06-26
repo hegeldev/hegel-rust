@@ -1,4 +1,3 @@
-// internal helper code
 #![allow(dead_code)]
 
 use std::panic::{UnwindSafe, catch_unwind};
@@ -9,12 +8,10 @@ use hegel::{HealthCheck, Hegel, Phase, Settings};
 use regex::Regex;
 use std::fmt::Debug;
 
-// some of our tests differ in behavior in our nightly rust job.
 pub fn is_nightly() -> bool {
     std::env::var("HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY").is_ok_and(|v| v == "1")
 }
 
-// some of our tests don't work on NixOS
 pub fn is_nixos() -> bool {
     std::fs::exists("/etc/NIXOS").unwrap_or_default()
 }
@@ -150,11 +147,6 @@ where
     }
 
     pub fn run(self) {
-        // These checks are about "can we generate at all", not speed, and
-        // instrumented coverage binaries routinely trip the TooSlow check.
-        // FilterTooMuch is suppressed because generators that use filtering
-        // (e.g. regex with lookaheads) legitimately reject many inputs; what
-        // matters here is that valid examples *can* be produced.
         self.inner
             .run_with_health_checks_suppressed(&[HealthCheck::TooSlow, HealthCheck::FilterTooMuch]);
     }
@@ -235,7 +227,7 @@ where
                 let value = tc.draw(&self.generator);
                 if (self.condition)(&value) {
                     *found_clone.lock().unwrap() = Some(value);
-                    panic!("HEGEL_FOUND"); // Early exit marker
+                    panic!("HEGEL_FOUND");
                 }
             })
             .settings(
@@ -250,8 +242,6 @@ where
         }));
 
         if let Err(e) = hegel_result {
-            // If found is None, this panic is not from HEGEL_FOUND — re-propagate
-            // the real error instead of swallowing it.
             if found.lock().unwrap().is_none() {
                 std::panic::resume_unwind(e);
             }
@@ -404,10 +394,6 @@ where
     }
 
     pub fn run(self) {
-        // Matches Python's `assert_no_examples`, which catches Unsatisfiable:
-        // if the strategy only produces invalid inputs, the assertion holds
-        // vacuously. Suppress FilterTooMuch so the run completes instead of
-        // panicking on excess rejections.
         let condition = self.condition;
         Hegel::new(move |tc| {
             let value = tc.draw(&self.generator);

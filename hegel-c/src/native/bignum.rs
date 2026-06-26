@@ -22,7 +22,6 @@ use dashu_int::{IBig, Sign as DashuSign, UBig};
 /// (distinct from both [`Sign::Plus`] and [`Sign::Minus`]). Callers rely on this:
 /// `value.sign() == Sign::Plus` means *strictly positive*.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// Variant names deliberately mirror the old `num_bigint::Sign` API.
 #[allow(clippy::enum_variant_names)]
 pub enum Sign {
     Minus,
@@ -75,8 +74,6 @@ impl ::core::fmt::Display for BigUint {
 fn to_dashu_sign(sign: Sign) -> DashuSign {
     match sign {
         Sign::Minus => DashuSign::Negative,
-        // A zero magnitude normalises to a non-negative `IBig` regardless, so
-        // mapping `NoSign` to `Positive` is faithful.
         Sign::NoSign | Sign::Plus => DashuSign::Positive,
     }
 }
@@ -119,10 +116,6 @@ impl BigInt {
             return vec![0];
         }
         let mut bytes = mag.to_le_bytes().into_vec();
-        // The most-significant byte's top bit is the sign bit. A positive value
-        // whose top bit is set needs a leading `0x00`; a negative value is then
-        // two's-complemented in place (and likewise needs the spare byte so the
-        // sign bit lands clear-of-magnitude before negation).
         if bytes.last().unwrap() & 0x80 != 0 {
             bytes.push(0);
         }
@@ -319,13 +312,6 @@ macro_rules! impl_try_into_native_uint {
 }
 impl_try_into_native_uint!(u8, u16, u32, u64, u128);
 
-// --- Arithmetic operators -------------------------------------------------
-//
-// Each binary op is forwarded for all four owned/borrowed operand combinations
-// (cloning into the owned `dashu` op). `BigInt`/`BigUint` only appear on cold
-// paths — every native-width draw stays in `u128` — so the clones never touch
-// the generation hot loop.
-
 macro_rules! impl_binop {
     ($wrapper:ident, $trait:ident, $method:ident) => {
         impl ::core::ops::$trait for $wrapper {
@@ -364,7 +350,6 @@ impl_binop!(BigUint, Mul, mul);
 impl_binop!(BigUint, Div, div);
 impl_binop!(BigUint, Rem, rem);
 
-// In-place assignment forms, each reusing the borrowing binary op above.
 impl ::core::ops::AddAssign<i32> for BigInt {
     fn add_assign(&mut self, rhs: i32) {
         *self = &*self + rhs;
@@ -391,7 +376,6 @@ impl ::core::ops::DivAssign<&BigUint> for BigUint {
     }
 }
 
-// `BigInt ± i32`, for the `value ± 1` steps the choice arithmetic performs.
 macro_rules! impl_binop_i32 {
     ($trait:ident, $method:ident) => {
         impl ::core::ops::$trait<i32> for BigInt {

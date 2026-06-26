@@ -1,8 +1,3 @@
-// Embedded tests for src/native/schema/special.rs — drive each interpreter
-// across many seeds and assert structural invariants. The integration tests
-// in tests/test_strings.rs and tests/test_time.rs exercise the same
-// interpreters via the user-facing API, but at coarser granularity.
-
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::*;
@@ -15,8 +10,6 @@ fn fresh_ntc(seed: u64) -> NativeTestCase {
 }
 
 fn decode_string(v: ciborium::Value) -> String {
-    // The interpreters wrap strings in tag-91 (HEGEL_STRING_TAG). Match the
-    // `deserialize_value` path in src/test_case.rs.
     let ciborium::Value::Tag(91, inner) = v else {
         panic!("expected tag-91 string, got {v:?}")
     };
@@ -41,14 +34,11 @@ where
         .collect()
 }
 
-// ── interpret_date ───────────────────────────────────────────────────────────
-
 #[test]
 fn interpret_date_produces_iso_format() {
     for seed in 0..50 {
         let mut ntc = fresh_ntc(seed);
         let s = decode_string(interpret_date(&mut ntc).ok().unwrap());
-        // YYYY-MM-DD (10 chars) and parses as date components in valid ranges.
         assert_eq!(s.len(), 10, "wrong length for {s:?}");
         let parts: Vec<&str> = s.split('-').collect();
         assert_eq!(parts.len(), 3, "{s:?}");
@@ -63,7 +53,6 @@ fn interpret_date_produces_iso_format() {
 
 #[test]
 fn interpret_date_day_respects_month_length() {
-    // Feb 30 must never appear: day is drawn against days_in_month(year, month).
     let mut seen_feb = false;
     for seed in 0..1000 {
         let mut ntc = fresh_ntc(seed);
@@ -88,23 +77,18 @@ fn interpret_date_day_respects_month_length() {
     assert!(seen_feb, "no February dates drawn across 1000 seeds");
 }
 
-// ── interpret_time ───────────────────────────────────────────────────────────
-
 #[test]
 fn interpret_time_format_omits_microseconds_when_zero() {
-    // Force microsecond to 0 by running until we get one (high prob given
-    // biased_integer_sample favours boundary values).
     let mut seen_microsecond_zero = false;
     let mut seen_microsecond_nonzero = false;
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
         let s = decode_string(interpret_time(&mut ntc).ok().unwrap());
         match s.len() {
-            8 => seen_microsecond_zero = true,     // HH:MM:SS
-            15 => seen_microsecond_nonzero = true, // HH:MM:SS.ffffff
+            8 => seen_microsecond_zero = true,
+            15 => seen_microsecond_nonzero = true,
             _ => panic!("unexpected time format: {s:?}"),
         }
-        // Components in valid ranges.
         let head: &str = s.split('.').next().unwrap();
         let parts: Vec<&str> = head.split(':').collect();
         let hour: u32 = parts[0].parse().unwrap();
@@ -122,8 +106,6 @@ fn interpret_time_format_omits_microseconds_when_zero() {
     );
 }
 
-// ── interpret_datetime ───────────────────────────────────────────────────────
-
 #[test]
 fn interpret_datetime_format_has_t_separator() {
     for seed in 0..50 {
@@ -132,15 +114,12 @@ fn interpret_datetime_format_has_t_separator() {
         let parts: Vec<&str> = s.splitn(2, 'T').collect();
         assert_eq!(parts.len(), 2, "missing T separator in {s:?}");
         assert_eq!(parts[0].len(), 10, "date part wrong length in {s:?}");
-        // Time part: 8 chars (HH:MM:SS) or 15 chars (HH:MM:SS.ffffff).
         assert!(
             matches!(parts[1].len(), 8 | 15),
             "time part wrong length in {s:?}"
         );
     }
 }
-
-// ── interpret_uuid ───────────────────────────────────────────────────────────
 
 #[test]
 fn interpret_uuid_default_format() {
@@ -149,11 +128,9 @@ fn interpret_uuid_default_format() {
         let schema = cbor_map! { "type" => "uuid" };
         let s = decode_string(interpret_uuid(&mut ntc, &schema).ok().unwrap());
         assert_eq!(s.len(), 36, "{s:?}");
-        // Hyphens at positions 8, 13, 18, 23.
         for &pos in &[8usize, 13, 18, 23] {
             assert_eq!(s.as_bytes()[pos], b'-', "missing hyphen at {pos} in {s:?}");
         }
-        // Everything else is a lowercase hex digit.
         for (i, b) in s.bytes().enumerate() {
             if matches!(i, 8 | 13 | 18 | 23) {
                 continue;
@@ -173,11 +150,9 @@ fn interpret_uuid_respects_version_field() {
         for seed in 0..30 {
             let mut ntc = fresh_ntc(seed);
             let s = decode_string(interpret_uuid(&mut ntc, &schema).ok().unwrap());
-            // Version nibble is at index 14.
             let v_hex = s.as_bytes()[14];
             let v_digit = (v_hex as char).to_digit(16).unwrap() as u8;
             assert_eq!(v_digit, version, "version mismatch in {s:?}");
-            // Variant nibble at index 19 must be one of 8, 9, a, b.
             let var_hex = s.as_bytes()[19];
             let var_digit = (var_hex as char).to_digit(16).unwrap();
             assert!(
@@ -187,8 +162,6 @@ fn interpret_uuid_respects_version_field() {
         }
     }
 }
-
-// ── interpret_ip_address ─────────────────────────────────────────────────────
 
 #[test]
 fn interpret_ipv4_parses_back() {
@@ -214,10 +187,6 @@ fn interpret_ipv6_parses_back() {
 
 #[test]
 fn interpret_ipv4_hits_special_ranges() {
-    // With 50/50 between uniform and special-range, ~half of draws should
-    // land inside one of the SPECIAL_IPV4_RANGES. We assert the much weaker
-    // "at least one loopback, one private, and one documentation address
-    // appears across 200 seeds" — vanishingly unlikely under pure uniform.
     let schema = cbor_map! { "type" => "ip_address", "version" => 4u64 };
     let addrs: Vec<Ipv4Addr> = (0..200)
         .map(|seed| {
@@ -254,11 +223,9 @@ fn interpret_ipv6_hits_special_ranges() {
         })
         .collect();
 
-    // Loopback (::1) or unspecified (::) — the /128 entries in SPECIAL_IPV6_RANGES.
     let saw_loopback_or_unspecified = addrs
         .iter()
         .any(|a| *a == Ipv6Addr::LOCALHOST || *a == Ipv6Addr::UNSPECIFIED);
-    // Documentation prefix 2001:db8::/32.
     let saw_doc = addrs.iter().any(|a| {
         let s = a.segments();
         s[0] == 0x2001 && s[1] == 0x0db8
@@ -288,16 +255,8 @@ fn interpret_ip_address_missing_version_is_invalid_argument() {
     assert!(err.to_string().contains("\"version\""));
 }
 
-// ── interpret_uuid: distribution across versions ─────────────────────────────
-
 #[test]
 fn interpret_uuid_default_can_produce_non_rfc_versions() {
-    // Hypothesis's `uuids(version=None)` uses raw 128 random bits — every
-    // version nibble in 0..=f is reachable. The agent's port restricted the
-    // nibble to 1..=5; the Hypothesis-faithful port must not. Across 200
-    // draws of a uniform 4-bit value, P(no nibble outside 1..=5) =
-    // (5/16)^200 ≈ 0, so seeing one is essentially certain when the port
-    // is correct.
     let schema = cbor_map! { "type" => "uuid" };
     let strings = collect(200, |ntc| interpret_uuid(ntc, &schema));
     let saw_non_rfc = strings.iter().any(|s| {

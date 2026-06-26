@@ -134,18 +134,6 @@ impl DataTreeNode {
             return true;
         }
         if let Some(ref kind) = self.kind {
-            // Exhausted iff every possible child value has its own node. A
-            // forced position has exactly one possible child — the forced
-            // value — regardless of the kind's full domain (datatree.py
-            // counts forced indices as complete in `check_exhausted`);
-            // comparing against the full domain would keep any path through
-            // a forced draw from ever exhausting. For unforced positions we
-            // only need `max_children <= explored`, and `explored` is a small
-            // count, so the saturating form avoids building the huge
-            // cardinality `BigUint` (and its `pow`) that `max_children()`
-            // would for sequence kinds:
-            // `max_children_saturating(explored + 1) <= explored` is exactly
-            // `max_children <= explored`.
             let explored = self.children.len() as u128;
             let complete = if self.forced {
                 explored >= 1
@@ -207,16 +195,12 @@ pub(crate) fn record_tree_full(
     span_events: &[(usize, SpanEvent)],
     kill_depths: &[usize],
 ) -> Option<String> {
-    // Iterative descent: a single-path walk can be thousands deep and
-    // a recursive walk would blow the stack.
     let mut path: Vec<*mut DataTreeNode> = Vec::with_capacity(nodes.len() + 1);
     path.push(tree_root as *mut _);
 
     for first in nodes {
         let parent_ptr = *path.last().unwrap();
         // SAFETY: `parent_ptr` is either the original `tree_root` or a
-        // pointer derived from the previous `or_insert_with` borrow; no
-        // other live `&mut` aliases the node.
         let node = unsafe { &mut *parent_ptr };
         match &node.kind {
             Some(expected_kind) if *expected_kind != first.kind => {
@@ -241,10 +225,6 @@ pub(crate) fn record_tree_full(
         path.push(child.as_mut() as *mut _);
     }
 
-    // Distribute the span events onto the node for each draw position. A run is
-    // deterministic given its path, so re-assigning on a revisited node writes
-    // the same events (idempotent); genuine divergence is caught as a schema
-    // mismatch above or by the flaky re-verify.
     let mut by_pos: Vec<Vec<SpanEvent>> = vec![Vec::new(); nodes.len() + 1];
     for (pos, ev) in span_events {
         if let Some(slot) = by_pos.get_mut(*pos) {
@@ -253,7 +233,6 @@ pub(crate) fn record_tree_full(
     }
     for (depth, events) in by_pos.into_iter().enumerate() {
         // SAFETY: `path[depth]` is a unique pointer into the tree; no other
-        // live reference aliases it here.
         let node = unsafe { &mut *path[depth] };
         node.span_events = events;
     }
@@ -276,10 +255,8 @@ pub(crate) fn record_tree_full(
         }
     }
 
-    // Ascend, calling `check_exhausted` bottom-up.
     while let Some(p) = path.pop() {
         // SAFETY: `p` is the just-popped pointer; no other live
-        // reference exists to that node at this point.
         let node = unsafe { &mut *p };
         node.check_exhausted();
     }
@@ -317,9 +294,6 @@ fn pick_non_exhausted_value(
         })
         .collect();
     if untried.is_empty() {
-        // `check_exhausted` propagates exhausted-ness up the tree as
-        // soon as every child is exhausted, so by the time we reach
-        // here the caller would already have stopped walking.
         return None; // nocov
     }
     untried.shuffle(rng);
@@ -342,22 +316,12 @@ pub(crate) fn generate_novel_prefix(
     let mut current = tree_root;
     while let Some(ref kind) = current.kind {
         if current.forced {
-            // A forced position always realises the recorded value: the
-            // replay ignores the prefix slot (though one must be present for
-            // the cursor to advance), so emitting anything else would
-            // truncate the walk here and "novelly" land on an
-            // already-explored path. Mirror datatree.py, which appends the
-            // forced value and keeps descending.
             let (key, child) = current
                 .children
                 .iter()
                 .next()
                 .expect("a forced node records its single child in the same run");
             prefix.push(key.to_value());
-            // `check_exhausted` treats a forced position as having exactly
-            // one possible child, so an exhausted child would have marked
-            // `current` exhausted — and the walk never enters exhausted
-            // nodes.
             hegel_internal_debug_assert!(!child.is_exhausted);
             current = child;
             continue;
@@ -426,15 +390,9 @@ pub(crate) fn simulate_full(
     let mut current = tree_root;
     let mut nodes: Vec<ChoiceNode> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
-    // Indices into `spans` for currently-open spans (nesting order), mirroring
-    // `NativeTestCase::span_stack`.
     let mut span_stack: Vec<usize> = Vec::new();
-    // `i` tracks the prefix cursor, which equals `nodes.len()` in the real
-    // run: every draw — forced or not — advances it by one.
     let mut i = 0usize;
     loop {
-        // Replay the span events recorded at this draw position, before either
-        // concluding or drawing — exactly when they fired live.
         let pos = nodes.len();
         for ev in &current.span_events {
             match ev {
@@ -460,11 +418,7 @@ pub(crate) fn simulate_full(
                 }
             }
         }
-        // A run terminated here (drawing fewer choices than we may have walked
-        // past); its outcome is fixed regardless of any later values.
         if let Some(concl) = &current.conclusion {
-            // Close any spans still open at conclusion, as `freeze` does
-            // (`end` = current position; `discarded` stays false).
             while let Some(idx) = span_stack.pop() {
                 spans[idx].end = pos;
             }
@@ -476,18 +430,11 @@ pub(crate) fn simulate_full(
                 target_observations: concl.target_observations.clone(),
             });
         }
-        // No draw was ever made from this node (and it didn't conclude), so
-        // the path beyond it is unknown.
         let kind = current.kind.as_ref()?;
-        // `for_choices` caps `max_size` at `choices.len()`, so the draw that
-        // would read position `choices.len()` overruns (EarlyStop) — and
-        // that is never recorded as a conclusion. We can't predict it.
         if i >= choices.len() {
             return None;
         }
         let (realised, next) = if current.forced {
-            // Forced: ignore the prefix value, follow the single recorded
-            // (forced) child; its key is the forced value.
             let (key, next) = current.children.iter().next()?;
             (key.to_value(), next.as_ref())
         } else {

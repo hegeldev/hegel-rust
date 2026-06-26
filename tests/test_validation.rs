@@ -165,8 +165,6 @@ fn test_vecs_min_greater_than_max() {
     g.as_basic();
 }
 
-// --- hashsets ---
-
 #[test]
 #[should_panic(expected = "max_size < min_size")]
 fn test_hashsets_min_greater_than_max() {
@@ -202,10 +200,6 @@ fn test_one_of_empty() {
     let _g = gs::one_of(Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new());
 }
 
-// The surrogate codepoint range (0xD800..=0xDFFF) contains no scalar values, so
-// a `characters()` generator pinned to it has an empty alphabet. The Rust
-// builder doesn't pre-validate this; the engine rejects it as an
-// `InvalidArgument` usage error while interpreting the schema.
 #[hegel::test]
 #[should_panic(expected = "InvalidArgument")]
 fn test_surrogate_only_character_range_is_invalid_argument(tc: hegel::TestCase) {
@@ -236,8 +230,6 @@ mod validation {
 
     #[test]
     fn test_float_ranges() {
-        // floats(float("nan"), 0): NaN min compares as `!(min <= max)`, tripping
-        // the bound check.
         expect_draw_panic(
             gs::floats::<f64>().min_value(f64::NAN).max_value(0.0),
             "max_value < min_value",
@@ -275,8 +267,6 @@ mod validation {
     fn test_does_not_error_if_min_size_is_bigger_than_default_size() {
         check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50));
         check_can_generate_examples(gs::hashsets(gs::integers::<i64>()).min_size(50));
-        // Python also tests `frozensets(...)`; hegel-rust has no `gs::frozensets()`,
-        // but `hashsets` covers the same set-shaped case.
         check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50).unique(true));
     }
 
@@ -290,8 +280,6 @@ mod validation {
 
     #[test]
     fn test_filter_validates() {
-        // Python: integers(min_value=1, max_value=0).filter(bool).validate().
-        // The bad bounds inside the filter wrapper still surface when we draw.
         expect_draw_panic(
             gs::integers::<i64>()
                 .min_value(1)
@@ -303,10 +291,6 @@ mod validation {
 
     #[test]
     fn test_validation_happens_on_draw() {
-        // Python port uses `nothing()` inside flatmap; hegel-rust has no
-        // `gs::nothing()`, so we use invalid integer bounds as the always-bad
-        // inner generator. The point is the same: the inner strategy produced
-        // by the flat_map callback is only validated when it is drawn.
         expect_draw_panic(
             gs::integers::<i64>().flat_map(|_| gs::integers::<i64>().min_value(1).max_value(0)),
             "max_value < min_value",

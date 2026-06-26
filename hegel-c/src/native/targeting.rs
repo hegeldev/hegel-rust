@@ -1,16 +1,3 @@
-// Targeted property-based search for the native runner.
-//
-// Records `tc.target()` observations during the generation phase, keeps
-// the best-scoring choice sequence seen for each label, and — when
-// `Phase::Target` is enabled and no bug has been found yet — hill-climbs
-// each label by perturbing climbable choices (integers, floats, booleans,
-// bytes) in the best-scoring sequence.
-//
-// Mirrors Hypothesis's `internal/conjecture/optimiser.py::Optimiser.hill_climb`
-// and the `optimise_targets` driver in `internal/conjecture/engine.py`. The
-// integer-search step uses the same linear/exponential/binary pattern as
-// `junkdrawer.find_integer`.
-
 use std::collections::{HashMap, HashSet};
 
 use crate::native::core::{
@@ -130,9 +117,6 @@ impl Optimiser<'_, '_> {
             return None;
         }
         let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE);
-        // A non-determinism mismatch here is dropped: it's a generator
-        // property, so the next generation-loop recording re-detects it and
-        // returns a clean failure.
         let (run, _mismatch) = self.engine.test_function(ntc);
         Some(run)
     }
@@ -147,9 +131,6 @@ impl Optimiser<'_, '_> {
             .keys()
             .cloned()
             .collect();
-        // Iterate in a deterministic order: each hill-climb consumes the
-        // shared call budget, so `HashMap`'s per-process-randomised key
-        // order would make a seeded multi-target run non-reproducible.
         targets.sort();
         let mut max_improvements: usize = 10;
         loop {
@@ -172,9 +153,6 @@ impl Optimiser<'_, '_> {
     /// the end backwards, hill-climbing each one in both directions.
     /// Mirrors `Optimiser._optimise_target`.
     fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
-        // `record` keeps `best_choices_for_target` in sync with
-        // `best_observed_targets`, so any label our caller iterates from
-        // `best_observed_targets` must have a matching choice sequence here.
         let start_choices = self
             .engine
             .targeting
@@ -202,11 +180,6 @@ impl Optimiser<'_, '_> {
         let mut i: isize = current_nodes.len() as isize - 1;
         let mut prev_len = current_nodes.len();
         while i >= 0 && improvements <= max_improvements {
-            // When `find_integer` lengthens or shortens `current_nodes`, `i`
-            // no longer indexes the same logical position. Reset to the new
-            // tail and start afresh — but keep `nodes_examined` populated so
-            // indices we already optimised in the pre-resize pass don't get
-            // redone. Mirrors `optimiser.py:95-97`.
             if current_nodes.len() != prev_len {
                 i = current_nodes.len() as isize - 1;
                 prev_len = current_nodes.len();
@@ -220,15 +193,6 @@ impl Optimiser<'_, '_> {
             let node = &current_nodes[idx];
             if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
                 let len_before = current_nodes.len();
-                // Hill-climb in the +1 direction. `find_integer` itself is the
-                // general `junkdrawer.find_integer` from `shrinker/mod.rs`: it
-                // probes deltas 1, 2, 3, 4, then 5, 10, 20, … with binary
-                // bisection in between, calling the closure once per probe.
-                // The closure threads through all the per-climb state; its
-                // return value (the largest accepted delta) is discarded —
-                // commit happens as a side effect inside `try_replace`, and
-                // the `improvements` counter it bumps is what drives the
-                // outer `while improvements <= max_improvements` loop.
                 find_integer(|k| {
                     self.try_replace(
                         target,
@@ -240,10 +204,6 @@ impl Optimiser<'_, '_> {
                         k as i128,
                     )
                 });
-                // If the +1 direction grew `current_nodes`, idx no longer points
-                // at the same logical position; trying -1 there almost always
-                // shrinks the sequence back below the new score, so skip.
-                // Mirrors the same guard in Hypothesis's `Optimiser.hill_climb`.
                 if idx < current_nodes.len() && current_nodes.len() == len_before {
                     find_integer(|k| {
                         self.try_replace(
@@ -281,8 +241,6 @@ impl Optimiser<'_, '_> {
         idx: usize,
         delta: i128,
     ) -> bool {
-        // Cap the perturbation magnitude to avoid driving an unbounded score
-        // up forever. Mirrors `optimiser.py::attempt_replace` line 122.
         if delta.saturating_abs() > (1 << 20) {
             return false;
         }
@@ -383,9 +341,6 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
                 x >>= 8;
             }
             new_bytes.reverse();
-            // Pad up to the original length so a shorter encoding doesn't
-            // collapse the byte string. Mirrors upstream's
-            // `max(len(node.value), bits_to_bytes(v.bit_length()))`.
             while new_bytes.len() < b.len() {
                 new_bytes.insert(0, 0);
             }

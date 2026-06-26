@@ -1,11 +1,3 @@
-// Core types for the native test engine.
-//
-// Split into submodules:
-//   choices       — choice types (ChoiceKind, ChoiceNode, ChoiceValue, etc.)
-//   float_index   — float lex ordering (float_to_index, index_to_float)
-//   state         — NativeTestCase, ManyState, NativeVariables, Span
-//   state_machine — NativeStateMachine (swarm rule selection)
-
 pub(crate) mod choices;
 pub(crate) mod float_index;
 pub(crate) mod state;

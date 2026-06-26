@@ -139,8 +139,6 @@ fn pair_predicate(i: i64, f: f64) -> bool {
 
 #[test]
 fn test_redistribute_int_float_pair() {
-    // A sum-style predicate where the per-kind simplest values are
-    // excluded: only the joint redistribute pass can find the minimum.
     let (i, f) = minimal(
         hegel::tuples!(
             gs::integers::<i64>().min_value(1).max_value(10_000),
@@ -157,8 +155,6 @@ fn test_redistribute_int_float_pair() {
 
 #[test]
 fn test_redistribute_float_int_pair() {
-    // Mirror of the above with `(f64, i64)` ordering — exercises the
-    // (Float, Int) adjacency direction of `redistribute_numeric_pairs`.
     let (f, i) = minimal(
         hegel::tuples!(
             gs::floats::<f64>()
@@ -175,9 +171,6 @@ fn test_redistribute_float_int_pair() {
 
 #[test]
 fn test_redistribute_pair_with_boolean_in_sequence() {
-    // A boolean adjacent to the (int, float) pair forces the
-    // `redistribute_numeric_pairs` walk to skip non-numeric kinds via
-    // `is_float_or_integer`.
     let (b, i, f) = minimal(
         hegel::tuples!(
             gs::booleans(),
@@ -194,10 +187,6 @@ fn test_redistribute_pair_with_boolean_in_sequence() {
     assert_tight_joint_minimum(i, f);
 }
 
-// Port of `tests/quality/test_shrink_quality.py::test_sum_of_pair_float`.
-//
-// Two floats whose sum must exceed 1000 should land at (1.0, 1000.0)
-// after `redistribute_numeric_pairs`.
 #[test]
 fn test_sum_of_pair_float() {
     let (a, b) = minimal(

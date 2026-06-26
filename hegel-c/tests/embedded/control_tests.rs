@@ -79,7 +79,6 @@ fn internal_debug_asserts_follow_debug_assertions() {
     .is_err();
     assert_eq!(fired, cfg!(debug_assertions));
 
-    // The passing direction is free either way.
     hegel_internal_debug_assert!(true);
     hegel_internal_debug_assert_eq!(1, 1);
     hegel_internal_debug_assert_ne!(1, 2);

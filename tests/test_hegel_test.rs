@@ -1,7 +1,5 @@
-// Ported tests merged from hypothesis/{testdecorators, flakiness,
 // nocover_baseexception, nocover_nesting, nocover_limits,
 // nocover_unusual_settings_configs, pytest_runs, nocover_completion,
-// core} and pbtkit/core, each wrapped in its own private module.
 
 mod common;
 
@@ -86,8 +84,6 @@ fn test_database_persists_failing_examples() {
             .__database_key("test_database_persists".to_string())
             .run();
         },
-        // The property panics with an empty message; the run re-raises it
-        // verbatim.
         "^$",
     );
 
@@ -145,8 +141,6 @@ mod testdecorators {
                 gs::integers::<i64>()
             ),
             |(x, y, z): &(i64, i64, i64)| {
-                // wrapping arithmetic mirrors Python's arbitrary-precision int semantics for the
-                // commutativity and associativity properties (both hold in Z/2^64).
                 x.wrapping_add(y.wrapping_add(*z)) == (x.wrapping_add(*y)).wrapping_add(*z)
             },
         );
@@ -186,11 +180,8 @@ mod testdecorators {
         });
     }
 
-    // Tests from TestCases — ported as top-level fns (no class/self in Rust).
-
     #[test]
     fn test_abs_non_negative() {
-        // Python integers don't overflow; use saturating_abs() so i64::MIN doesn't panic.
         assert_all_examples(gs::integers::<i64>(), |x: &i64| x.saturating_abs() >= 0);
     }
 
@@ -212,7 +203,6 @@ mod testdecorators {
 
     #[test]
     fn test_can_be_given_keyword_args() {
-        // @fails: find (x, name) with x > 0 and len(name) >= x.
         find_any(
             gs::tuples!(gs::integers::<i64>().min_value(1).max_value(3), gs::text()),
             |(x, name): &(i64, String)| name.chars().count() as i64 >= *x,
@@ -273,7 +263,6 @@ mod testdecorators {
 
     #[test]
     fn test_removing_an_element_from_a_non_unique_list() {
-        // @fails: [1, 1] with y=1 — removing first 1 leaves 1 still in list.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(|tc| {
                 let xs: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(2));
@@ -317,12 +306,6 @@ mod testdecorators {
 
     #[test]
     fn test_can_find_large_sum_frozenset() {
-        // HashSet iteration order is randomised per instance, so `iter().sum::<i64>()`
-        // is order-dependent under overflow: in debug builds, a partial-sum overflow
-        // panics, which can flip the predicate between runs with identical choices
-        // (one iteration order triggers it, another doesn't). `wrapping_add` is
-        // associative and commutative mod 2^64, so the final value is the same
-        // regardless of order.
         find_any(
             gs::hashsets(gs::integers::<i64>()),
             |xs: &std::collections::HashSet<i64>| {
@@ -362,13 +345,11 @@ mod testdecorators {
 
     #[test]
     fn test_is_ascii() {
-        // @fails_with(UnicodeEncodeError): text() can produce non-ASCII characters.
         find_any(gs::text(), |x: &String| !x.is_ascii());
     }
 
     #[test]
     fn test_is_not_ascii() {
-        // @fails: the test asserts x is not ascii, failing when x IS ascii.
         find_any(gs::text(), |x: &String| x.is_ascii());
     }
 
@@ -383,7 +364,6 @@ mod testdecorators {
 
     #[test]
     fn test_has_ascii() {
-        // @fails: the test asserts at least one char is ASCII; fails when none are.
         let ascii_chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ \t\n";
         find_any(gs::text().min_size(1), move |x: &String| {
             !x.is_empty() && !x.chars().any(|c| ascii_chars.contains(c))
@@ -469,7 +449,6 @@ mod testdecorators {
 
     #[test]
     fn test_can_call_an_argument_f() {
-        // Regression: argument named `f` should not conflict with test framework internals.
         assert_all_examples(gs::integers::<i64>(), |_f: &i64| true);
     }
 
@@ -492,7 +471,6 @@ mod testdecorators {
 
     #[test]
     fn test_fails_in_reify() {
-        // @fails_with(AttributeError): .map() closure panics, propagating the error.
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -519,8 +497,6 @@ mod testdecorators {
 
     #[test]
     fn test_empty_text() {
-        // text("") in Python generates only empty strings; max_size(0) is the Rust equivalent
-        // since an empty alphabet causes an InvalidArgument error.
         assert_all_examples(gs::text().max_size(0), |x: &String| x.is_empty());
     }
 
@@ -541,7 +517,6 @@ mod testdecorators {
 
     #[test]
     fn test_can_map_nameless() {
-        // nameless_const(2) returns a partial that always returns 2 regardless of input.
         assert_all_examples(gs::hashsets(gs::booleans()).map(|_set| 2_i32), |x: &i32| {
             *x == 2
         });
@@ -549,7 +524,6 @@ mod testdecorators {
 
     #[test]
     fn test_can_flatmap_nameless() {
-        // integers(0, 10).flatmap(nameless_const(just(3))) always yields 3.
         assert_all_examples(
             gs::integers::<i64>()
                 .min_value(0)
@@ -621,7 +595,6 @@ mod flakiness {
             move || {
                 Hegel::new(move |tc: TestCase| {
                     let x: i64 = tc.draw(gs::integers());
-                    // Lock is released before assert fires, so no mutex poisoning.
                     values.lock().unwrap().push(x);
                     let n = values.lock().unwrap().len();
                     assert!(n != 1);
@@ -661,9 +634,6 @@ mod nocover_baseexception {
         expect_panic(
             || {
                 Hegel::new(|tc| {
-                    // black_box keeps the macro's trailing stop_span/result
-                    // reachable from the compiler's view. Python's original
-                    // uses a dead `return draw(none())` for the same reason.
                     let _: () = tc.draw(&hegel::compose!(|_tc| {
                         if std::hint::black_box(true) {
                             panic!("test_exception_propagates_fine_from_strategy_payload");
@@ -728,15 +698,6 @@ mod nocover_nesting {
 
     #[test]
     fn test_nesting_1() {
-        // Each outer test case runs an *entire* inner `Hegel::new(...).run()` to
-        // exhaustion before yielding back. With 100 inner cases and the system
-        // under concurrent load (other test binaries running in the same
-        // `cargo test`), one outer iteration can comfortably exceed the
-        // 200 ms / case TooSlow threshold — that's the point of this test, not
-        // a bug. Suppress the check on both runners. Mirrors the upstream
-        // Python `suppress_health_check=[HealthCheck.nested_given]` (Hegel
-        // doesn't have a `nested_given` variant, so TooSlow + FilterTooMuch is
-        // the equivalent set: nested_given covered both shapes upstream).
         let outer_settings = Settings::new()
             .test_cases(5)
             .database(None)
@@ -808,7 +769,6 @@ mod nocover_unusual_settings_configs {
     fn test_hard_to_find_single_example() {
         Hegel::new(|tc: TestCase| {
             let n: i64 = tc.draw(gs::integers());
-            // Numbers are arbitrary, just deliberately unlikely to hit this too soon.
             tc.assume(n.rem_euclid(50) == 11);
         })
         .settings(
@@ -837,9 +797,6 @@ mod pytest_runs {
 
     #[test]
     fn test_ints_are_floats() {
-        // @fails in the original: `isinstance(x, float)` is always False for ints.
-        // Rust's type system makes the isinstance check a no-op, so the faithful
-        // port is a guaranteed-failing property; we verify Hegel reports failure.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(|tc| {
                 tc.draw(gs::integers::<i64>());
@@ -880,13 +837,6 @@ mod hypothesis_core {
         .settings(Settings::new().test_cases(100).database(None))
         .run();
     }
-
-    // test_characters_codec parametrize rows: each row drives one assertion that
-    // the codec / max_codepoint / categories / exclude_categories constraint is
-    // honoured by every drawn character. The Python original asserts the full
-    // codec round-trip (`example.encode(codec).decode(codec) == example`); Rust
-    // `char` is always a Unicode scalar, so for "ascii" the round-trip reduces to
-    // `c.is_ascii()` and for "utf-8" it is trivially true.
 
     #[test]
     fn test_characters_codec_ascii_unbounded() {
@@ -931,9 +881,6 @@ mod hypothesis_core {
 
     #[test]
     fn test_characters_codec_utf8_exclude_cs() {
-        // Rust `char` already excludes the surrogate range by construction, so
-        // exclude_categories=["Cs"] is a no-op for the round-trip property; we
-        // still exercise the schema path to make sure it doesn't reject.
         Hegel::new(|tc| {
             let _: char = tc.draw(gs::characters().codec("utf-8").exclude_categories(&["Cs"]));
         })
@@ -956,8 +903,6 @@ mod pbtkit_core {
 
     #[hegel::test]
     fn test_can_choose_full_64_bits(tc: TestCase) {
-        // pbtkit's `tc.choice(2**64 - 1)` samples the full unsigned 64-bit
-        // range. hegel-rust's typed equivalent is `gs::integers::<u64>()`.
         let _: u64 = tc.draw(gs::integers::<u64>());
     }
 
@@ -998,8 +943,6 @@ mod pbtkit_core {
 
     #[test]
     fn test_one_of_empty_core() {
-        // pbtkit raises Unsatisfiable when drawing from one_of() with no
-        // alternatives; hegel-rust panics at construction.
         expect_panic(
             || {
                 let empty: Vec<gs::BoxedGenerator<i32>> = vec![];
@@ -1079,10 +1022,6 @@ mod pbtkit_core {
 
     #[test]
     fn test_weighted_forced_true() {
-        // pbtkit: `tc.weighted(1.0)` deterministically returns True. hegel-rust
-        // has no `tc.weighted(p)` public API, but `gs::booleans().map(|_| true)`
-        // combined with a forced-to-true predicate produces the same shape:
-        // the test body unconditionally panics.
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -1097,6 +1036,4 @@ mod pbtkit_core {
             "forced-true branch reached",
         );
     }
-
-    // Port of pbtkit/tests/test_core.py::test_error_on_too_strict_precondition.
 }

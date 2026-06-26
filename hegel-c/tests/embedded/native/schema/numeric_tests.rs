@@ -1,7 +1,3 @@
-// Embedded tests for src/native/schema/numeric.rs — focuses on the
-// caller-reachable `InvalidArgument` paths for malformed integer/constant
-// schemas. The happy paths are covered by the integration generator tests.
-
 use super::*;
 use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;

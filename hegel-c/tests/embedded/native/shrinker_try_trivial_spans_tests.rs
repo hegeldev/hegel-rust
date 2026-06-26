@@ -69,7 +69,6 @@ fn try_trivial_spans_zeroes_non_forced_children() {
 
 #[test]
 fn try_trivial_spans_preserves_forced_children() {
-    // The middle node is forced; even when we zero the span, it stays at 8.
     let initial = vec![int_node(7), forced_int_node(8), int_node(9)];
     let mut spans = Spans::new();
     spans.push(span(0, 3));
@@ -103,8 +102,6 @@ fn try_trivial_spans_preserves_forced_children() {
 
 #[test]
 fn try_trivial_spans_skips_already_trivial_span() {
-    // Both children are already at their simplest; the pass shouldn't run
-    // any test cases.  We assert by counting closure invocations.
     use std::cell::Cell;
     use std::rc::Rc;
     let calls = Rc::new(Cell::new(0u32));
@@ -126,14 +123,11 @@ fn try_trivial_spans_skips_already_trivial_span() {
         spans,
     );
     shrinker.try_trivial_spans().unwrap();
-    // No test invocations: the span was trivial up front.
     assert_eq!(calls.get(), 0);
 }
 
 #[test]
 fn try_trivial_spans_handles_oversized_span_end() {
-    // A pathological span whose `end > nodes.len()` (e.g. inherited from
-    // a previous shrink) must not panic; the pass should skip it.
     let initial = vec![int_node(5)];
     let mut spans = Spans::new();
     spans.push(span(0, 99));
@@ -147,7 +141,6 @@ fn try_trivial_spans_handles_oversized_span_end() {
         spans,
     );
     shrinker.try_trivial_spans().unwrap();
-    // No change — the oversized span was skipped.
     assert_eq!(shrinker.current_nodes.len(), 1);
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 5),
@@ -157,10 +150,6 @@ fn try_trivial_spans_handles_oversized_span_end() {
 
 #[test]
 fn try_trivial_spans_retries_with_realised_span_content() {
-    // First attempt: simplify span 0 → predicate rejects (uninteresting).
-    // Closure also reports a different actual realisation (shorter span
-    // content) — the pass should splice that realised content back in
-    // and retry, this time succeeding.
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -176,14 +165,11 @@ fn try_trivial_spans_retries_with_realised_span_content() {
                 let n = cc.get();
                 cc.set(n + 1);
                 if n == 0 {
-                    // First attempt: simplest span → reject.  Pretend the
-                    // run "actually" produced a single-node span.
                     let realised = vec![int_node(2), nodes[2].clone()];
                     let mut s = Spans::new();
                     s.push(span(0, 1));
                     (false, realised, s)
                 } else {
-                    // Retry attempt: prefix + realised replacement + suffix.
                     let mut s = Spans::new();
                     s.push(span(0, nodes.len().saturating_sub(1)));
                     (true, nodes.to_vec(), s)
@@ -196,7 +182,6 @@ fn try_trivial_spans_retries_with_realised_span_content() {
     );
     shrinker.try_trivial_spans().unwrap();
     assert_eq!(call_count.get(), 2);
-    // Retry succeeded — the spliced sequence is now the current target.
     assert_eq!(shrinker.current_nodes.len(), 2);
     match (
         &shrinker.current_nodes[0].value,

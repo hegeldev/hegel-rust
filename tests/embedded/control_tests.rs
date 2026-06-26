@@ -11,8 +11,6 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 #[test]
 fn raise_internal_error_panics_directly_outside_a_test_context() {
-    // Outside a run there is no lifecycle to catch a control payload, so
-    // the message (with location and bug-report framing) panics directly.
     let payload = catch_unwind(|| raise_internal_error(format_args!("boom: {}", 7))).unwrap_err();
     let msg = panic_message(payload);
     assert!(msg.contains("Internal error in hegel at "), "{msg}");
@@ -59,7 +57,3 @@ fn internal_assert_eq_reports_both_values() {
     assert!(msg.contains("left: 4, right: 5"), "{msg}");
     hegel_internal_assert_eq!(2 + 2, 4);
 }
-
-// The `_ne` and `debug_*` assert macros were engine-only; they live with the
-// engine in hegel-c now. The frontend keeps only `hegel_internal_assert`,
-// `hegel_internal_assert_eq`, and `hegel_internal_error`.

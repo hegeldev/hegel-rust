@@ -311,7 +311,6 @@ where
         }
 
         Some(BasicGenerator::new(schema, move |raw| {
-            // schema expects format [[key, value], ...]
             let values = match raw {
                 Value::Array(arr) => arr,
                 _ => panic!("Expected array, got {:?}", raw), // nocov

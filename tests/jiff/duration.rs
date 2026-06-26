@@ -3,10 +3,6 @@ use hegel::extras::jiff as jiff_gs;
 use hegel::generators::{self as gs, Generator};
 use jiff::{SignedDuration, Span, Timestamp};
 
-// ---------------------------------------------------------------------------
-// Timestamp
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_timestamps_default() {
     check_can_generate_examples(jiff_gs::timestamps());
@@ -65,10 +61,6 @@ fn test_jiff_timestamps_min_greater_than_max() {
     g.as_basic();
 }
 
-// ---------------------------------------------------------------------------
-// Span
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_spans_default() {
     check_can_generate_examples(jiff_gs::spans());
@@ -103,7 +95,6 @@ fn test_jiff_span_default_generator() {
 
 #[hegel::test]
 fn test_jiff_spans_property(tc: hegel::TestCase) {
-    // Span allows -i64::MAX..=i64::MAX nanoseconds (i64::MIN is excluded).
     let lo = tc.draw(
         gs::integers::<i64>()
             .min_value(-i64::MAX)
@@ -128,10 +119,6 @@ fn test_jiff_spans_min_below_span_limit() {
     let g = jiff_gs::spans().min_nanoseconds(i64::MIN);
     g.as_basic();
 }
-
-// ---------------------------------------------------------------------------
-// SignedDuration
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_jiff_signed_durations_default() {
@@ -188,8 +175,6 @@ fn test_jiff_signed_durations_property(tc: hegel::TestCase) {
 
 #[test]
 fn test_jiff_signed_durations_full_range_bounds() {
-    // The full SignedDuration range exceeds i64 nanoseconds; the generator
-    // must accept SignedDuration::MIN..=MAX as bounds.
     check_can_generate_examples(
         jiff_gs::signed_durations()
             .min_value(SignedDuration::MIN)
@@ -199,8 +184,6 @@ fn test_jiff_signed_durations_full_range_bounds() {
 
 #[test]
 fn test_jiff_signed_durations_beyond_i64_nanos() {
-    // 1000 years is past the i64-nanos cap (~292 years) but well within
-    // SignedDuration::MAX. Both bound and drawn values must round-trip.
     let one_kyear = SignedDuration::from_secs(1_000 * 365 * 86_400);
     let two_kyears = SignedDuration::from_secs(2_000 * 365 * 86_400);
     assert_all_examples(

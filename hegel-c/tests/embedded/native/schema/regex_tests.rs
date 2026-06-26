@@ -29,8 +29,6 @@ fn sub(ops: Vec<OpCode>) -> SubPattern {
     SubPattern { data: ops }
 }
 
-// ----- Literal / NotLiteral / Any -----
-
 #[test]
 fn match_seq_literal_match() {
     let groups = HashMap::new();
@@ -97,8 +95,6 @@ fn match_seq_any_matches_newline_with_dotall() {
     );
 }
 
-// ----- In / char_matches_set / SetItem -----
-
 #[test]
 fn match_seq_in_set_literal_match() {
     let groups = HashMap::new();
@@ -131,8 +127,6 @@ fn match_seq_in_set_range_match() {
 fn match_seq_in_set_range_ignorecase() {
     let groups = HashMap::new();
     let items = vec![SetItem::Range('a' as u32, 'z' as u32)];
-    // With IGNORECASE, the matcher folds the input char's case before
-    // checking the range, so 'M' matches the lowercase a-z range.
     assert_eq!(
         match_seq(
             &[OpCode::In(items)],
@@ -172,8 +166,6 @@ fn match_seq_in_set_negated() {
         None
     );
 }
-
-// ----- At / at_matches -----
 
 #[test]
 fn match_seq_at_beginning_string() {
@@ -217,7 +209,6 @@ fn match_seq_at_beginning() {
         ),
         None
     );
-    // MULTILINE: matches at start of line (after newline).
     assert_eq!(
         match_seq(
             &[OpCode::At(AtCode::Beginning)],
@@ -241,12 +232,10 @@ fn match_seq_at_end() {
         match_seq(&[OpCode::At(AtCode::End)], 1, &chars("ab"), 0, &groups),
         None
     );
-    // End matches just before a trailing newline.
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::End)], 1, &chars("a\n"), 0, &groups),
         Some(1)
     );
-    // MULTILINE: matches at end of any line.
     assert_eq!(
         match_seq(
             &[OpCode::At(AtCode::End)],
@@ -281,17 +270,14 @@ fn match_seq_at_end_string() {
 #[test]
 fn match_seq_at_word_boundary() {
     let groups = HashMap::new();
-    // Word boundary at position 1 in "ab": between two word chars → false.
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::Boundary)], 1, &chars("ab"), 0, &groups),
         None
     );
-    // Word boundary at start of "ab" (transition from non-word to word).
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::Boundary)], 0, &chars("ab"), 0, &groups),
         Some(0)
     );
-    // Non-boundary: between two word chars → matches.
     assert_eq!(
         match_seq(
             &[OpCode::At(AtCode::NonBoundary)],
@@ -303,8 +289,6 @@ fn match_seq_at_word_boundary() {
         Some(1)
     );
 }
-
-// ----- Branch -----
 
 #[test]
 fn match_seq_branch_first_arm_matches() {
@@ -336,8 +320,6 @@ fn match_seq_branch_no_match() {
     assert_eq!(match_seq(&ops, 0, &chars("c"), 0, &groups), None);
 }
 
-// ----- Subpattern / AtomicGroup -----
-
 #[test]
 fn match_seq_subpattern() {
     let groups = HashMap::new();
@@ -359,7 +341,6 @@ fn match_seq_subpattern_inline_flags() {
         del_flags: 0,
         p: sub(vec![lit('a')]),
     }];
-    // Inner IGNORECASE folds 'A' to 'a' for the literal compare.
     assert_eq!(match_seq(&ops, 0, &chars("A"), 0, &groups), Some(1));
 }
 
@@ -370,8 +351,6 @@ fn match_seq_atomic_group() {
     assert_eq!(match_seq(&ops, 0, &chars("a"), 0, &groups), Some(1));
     assert_eq!(match_seq(&ops, 0, &chars("b"), 0, &groups), None);
 }
-
-// ----- GroupRef -----
 
 #[test]
 fn match_seq_groupref_match() {
@@ -404,8 +383,6 @@ fn match_seq_groupref_unset() {
     assert_eq!(match_seq(&ops, 0, &chars("ab"), 0, &groups), None);
 }
 
-// ----- GroupRefExists -----
-
 #[test]
 fn match_seq_groupref_exists_yes_arm() {
     let mut groups = HashMap::new();
@@ -431,8 +408,6 @@ fn match_seq_groupref_exists_no_arm() {
 
 #[test]
 fn match_seq_groupref_exists_no_arm_missing() {
-    // When the no-branch is absent and the group is unset, the conditional
-    // expands to nothing — match_seq just continues with `rest`.
     let groups = HashMap::new();
     let ops = vec![OpCode::GroupRefExists {
         cond_group: 1,
@@ -441,8 +416,6 @@ fn match_seq_groupref_exists_no_arm_missing() {
     }];
     assert_eq!(match_seq(&ops, 0, &chars(""), 0, &groups), Some(0));
 }
-
-// ----- Assert / AssertNot / Failure -----
 
 #[test]
 fn match_seq_positive_lookaround_match() {
@@ -499,8 +472,6 @@ fn match_seq_failure_never_matches() {
     );
 }
 
-// ----- MaxRepeat / MinRepeat / PossessiveRepeat -----
-
 #[test]
 fn match_seq_max_repeat_unbounded() {
     let groups = HashMap::new();
@@ -516,7 +487,6 @@ fn match_seq_max_repeat_unbounded() {
 #[test]
 fn match_seq_max_repeat_bounded() {
     let groups = HashMap::new();
-    // a{2,3} on "aaaa": should match up to 3.
     let ops = vec![OpCode::MaxRepeat {
         min: 2,
         max: 3,
@@ -538,7 +508,6 @@ fn match_seq_max_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_max_repeat_with_trailing() {
-    // a{1,3}b — greedy match backs off until the trailing 'b' matches.
     let groups = HashMap::new();
     let ops = vec![
         OpCode::MaxRepeat {
@@ -554,7 +523,6 @@ fn match_seq_max_repeat_with_trailing() {
 #[test]
 fn match_seq_min_repeat_lazy() {
     let groups = HashMap::new();
-    // a*?b on "aaab": lazy match expands as needed.
     let ops = vec![
         OpCode::MinRepeat {
             min: 0,
@@ -604,8 +572,6 @@ fn match_seq_min_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_min_repeat_max_exhausted() {
-    // a{,2}?b on "aaab": lazy expansion stops at max=2, then 'b' must match
-    // but chars[2]='a' so this fails.
     let groups = HashMap::new();
     let ops = vec![
         OpCode::MinRepeat {
@@ -653,8 +619,6 @@ fn match_seq_possessive_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_min_repeat_zero_width_item_at_min() {
-    // An empty repetition body matches zero-width, which the MinRepeat
-    // arm rejects via the `next <= cur` guard so we don't loop forever.
     let groups = HashMap::new();
     let ops = vec![OpCode::MinRepeat {
         min: 1,
@@ -666,8 +630,6 @@ fn match_seq_min_repeat_zero_width_item_at_min() {
 
 #[test]
 fn match_seq_min_repeat_zero_width_item_after_min() {
-    // After satisfying min, the post-min loop bails out on the
-    // zero-width body via the same `next <= cur` guard.
     let groups = HashMap::new();
     let ops = vec![
         OpCode::MinRepeat {
@@ -680,12 +642,8 @@ fn match_seq_min_repeat_zero_width_item_after_min() {
     assert_eq!(match_seq(&ops, 0, &chars(""), 0, &groups), None);
 }
 
-// ----- Direct tests for build_in_set's ASCII-only / alphabet filters -----
-
 #[test]
 fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
-    // Positive class `[aÿ]` with ASCII flag: the non-ASCII literal is
-    // filtered out by the ascii_only check (line 518 `continue`).
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal(0xFF)];
     let out = build_in_set(&items, SRE_FLAG_ASCII, &None);
     assert_eq!(out, vec!['a']);
@@ -693,8 +651,6 @@ fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
 
 #[test]
 fn build_in_set_alphabet_drops_disallowed_positive_literal() {
-    // Positive class `[ab]` with alphabet allowing only 'a': 'b' is
-    // filtered out (line 521 `continue`).
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal('b' as u32)];
     let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]);
     let out = build_in_set(&items, 0, &Some(alphabet));
@@ -703,24 +659,14 @@ fn build_in_set_alphabet_drops_disallowed_positive_literal() {
 
 #[test]
 fn build_in_set_negated_ascii_only_excludes_nonascii() {
-    // Negated class `[^a]` with ASCII flag and alphabet covering some
-    // non-ASCII codepoints: the predicate filters out non-ASCII
-    // candidates (line 546 `return false`).
     let items = vec![SetItem::Negate, SetItem::Literal('a' as u32)];
     let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]);
     let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet));
-    // Every char in the output must be ASCII and not 'a'.
     assert!(out.iter().all(|c| (*c as u32) < 128 && *c != 'a'));
 }
 
-// ----- generate_op: IGNORECASE literal rejected by the alphabet -----
-
 #[test]
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
-    // `(?i)a`: the literal 'a' swapcases to 'A', so `generate_op` draws
-    // `which` to choose between the two cases. With an alphabet that only
-    // allows 'A', forcing `which = 0` picks the lowercase 'a', which the
-    // alphabet rejects, so the test case is marked invalid.
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     let mut state = GenState {
         groups: HashMap::new(),
@@ -734,8 +680,6 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     assert!(result.is_err());
     assert_eq!(ntc.status, Some(Status::Invalid));
 }
-
-// ----- interpret_regex: caller-reachable InvalidArgument paths -----
 
 #[test]
 fn interpret_regex_missing_pattern_is_invalid_argument() {
@@ -751,14 +695,11 @@ fn interpret_regex_missing_pattern_is_invalid_argument() {
 fn interpret_regex_unparseable_pattern_is_invalid_argument() {
     use crate::cbor_utils::cbor_map;
     let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    // An unbalanced group is a parse error in the Python-compatible parser.
     let schema = cbor_map! { "type" => "regex", "pattern" => "(unclosed" };
     let err = interpret_regex(&mut ntc, &schema).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
     assert!(err.to_string().contains("invalid regex pattern"));
 }
-
-// ----- IGNORECASE swapcase safety -----
 
 fn ignorecase_state() -> GenState {
     GenState {
@@ -771,10 +712,6 @@ fn ignorecase_state() -> GenState {
 
 #[test]
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
-    // 'ß'.to_uppercase() is "SS"; truncating it to 'S' generated strings the
-    // pattern does not match (re.match(r"(?i)ß", "S") is None — Hypothesis
-    // guards this with an explicit re.match check). With no usable
-    // single-char swap the literal must always emit 'ß'.
     use crate::native::rng::EngineRng;
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
@@ -801,11 +738,6 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
 
 #[test]
 fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
-    // `(?i)[^İ]`: CPython's matcher treats 'i', U+0307 (combining dot), and
-    // 'I' as case-equal to İ (re.fullmatch(r"[^İ]", "I", re.I) is None), so
-    // none of them may be generated. The fixpoint expansion is Hypothesis's
-    // fix for issue #2657. Restricting the alphabet to the case-chain plus
-    // 'x' forces every draw to land on 'x'.
     use crate::native::rng::EngineRng;
     let alphabet = Some(IntervalSet::new(vec![
         ('I' as u32, 'I' as u32),
@@ -832,9 +764,6 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 
 #[test]
 fn interpret_regex_handles_huge_character_class_ranges() {
-    // `[\x20-\U0010FFFF]` expands to ~1.1M codepoints; per-insert linear
-    // dedup made this O(n²) (an effective hang). Consumers deduplicate with
-    // a HashSet, so expansion must stay linear.
     use crate::cbor_utils::cbor_map;
     use crate::native::rng::EngineRng;
     let schema = cbor_map! {
@@ -843,7 +772,6 @@ fn interpret_regex_handles_huge_character_class_ranges() {
     };
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = interpret_regex(&mut ntc, &schema).unwrap();
-    // Strings come back as tag-91 UTF-8 bytes; one matching char suffices.
     let Value::Tag(91, inner) = v else {
         panic!("expected tag-91 string, got {v:?}")
     };

@@ -1,10 +1,3 @@
-// Native backend DataSource implementation.
-//
-// Wraps a NativeTestCase behind interior mutability so it can implement
-// the DataSource trait (which takes &self).  The handle is shared with
-// the engine so it can read back the recorded nodes / spans and, via
-// `mark_complete`, the test case outcome after the test body returns.
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -170,8 +163,6 @@ impl NativeDataSource {
                 self.aborted.store(true, Ordering::Relaxed);
                 DataSourceError::Assume
             }
-            // Recoverable: the draw failed but the case is not concluded and
-            // not aborted, so the body may handle it and keep going.
             EngineError::AssumeViolation => DataSourceError::Assume,
             EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
         })
@@ -284,9 +275,6 @@ impl DataSource for NativeDataSource {
     fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let idx = checked_id("state machine", state_machine_id, ntc.state_machines.len())?;
-            // Move the machine out of `ntc` so `next_rule` can borrow `ntc`
-            // mutably (same idea as the remove/insert dance in
-            // `collection_more`).
             let mut machine = std::mem::take(&mut ntc.state_machines[idx]);
             let result = machine.next_rule(ntc);
             ntc.state_machines[idx] = machine;
@@ -311,9 +299,6 @@ impl DataSource for NativeDataSource {
                     "primitive_boolean: cannot force false when p = 1.0".to_string(),
                 ));
             }
-            // Full-precision sampler: callers (e.g. the stateful stop signal at
-            // p = 2^-16) rely on probabilities far below the one-byte sampler's
-            // 1/256 floor being honored.
             ntc.weighted_precise(p, forced)
         })
     }
@@ -339,16 +324,9 @@ impl DataSource for NativeDataSource {
             let pool_idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
             let active = ntc.variable_pools[pool_idx].active();
             if active.is_empty() {
-                // Recoverable: drawing from an exhausted pool can't be
-                // satisfied, but it doesn't conclude the test case — the caller
-                // may handle the rejection and still conclude however it likes.
                 return Err(EngineError::AssumeViolation);
             }
-            // The variable ids drawn out of `active` are `i64`.
             let n = active.len();
-            // Draw index from `[0, n-1]`.  Shrink towards `n-1`
-            // (last added = most recent) by drawing `k` from
-            // `[0, n-1]` and using `index = n-1-k`.
             let k = ntc
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
                 .to_i128()
@@ -362,12 +340,6 @@ impl DataSource for NativeDataSource {
     }
 
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError> {
-        // Mirror upstream `hypothesis.control.target`
-        // (`control.py:354-356,372-376`): the observation must be finite and
-        // each label may be observed at most once per test case. These are
-        // caller usage errors, not discovered counterexamples — surface them
-        // as `InvalidArgument` (→ `HEGEL_E_INVALID_ARG`) so libhegel stays
-        // panic-free on bad input (correct under `panic = "abort"`).
         if !score.is_finite() {
             return Err(DataSourceError::InvalidArgument(format!(
                 "tc.target({score}, label={label:?}) requires a finite score; \
@@ -387,15 +359,7 @@ impl DataSource for NativeDataSource {
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {
-        // Record the outcome on the shared handle so the engine can read
-        // it via `take_outcome` after the test body returns.  This is the
-        // channel for per-test-case results: the engine consumes
-        // `mark_complete` through the `DataSource` interface.
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        // Route the body's verdict through the test case's single write-once
-        // status interface. If a draw already concluded the case (overrun,
-        // terminal assume, too-deep nesting) that conclusion stands and this is
-        // a no-op — the body cannot re-conclude a concluded case.
         let (status, origin) = match result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),

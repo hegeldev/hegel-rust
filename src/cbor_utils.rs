@@ -34,9 +34,6 @@ macro_rules! cbor_array {
 pub(crate) use cbor_array;
 pub(crate) use cbor_map;
 
-// Schema *readers*. The frontend only *builds* CBOR schemas (the engine, in
-// hegel-c, reads them), so these are exercised only by the tests that verify
-// the builders — hence `#[cfg(test)]`.
 #[cfg(test)]
 pub fn map_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     let Value::Map(entries) = value else {
@@ -70,8 +67,6 @@ pub fn map_insert(value: &mut Value, key: &str, val: impl Into<Value>) {
     entries.push((Value::Text(String::from(key)), val));
 }
 
-// merge the keys of two maps. If both `target` and `source` contain the same key,
-// prefer `source`.
 pub fn map_extend(target: &mut Value, source: Value) {
     let Value::Map(source_entries) = source else {
         panic!("expected Value::Map, got {source:?}");
@@ -109,11 +104,6 @@ pub fn as_bool(value: &Value) -> Option<bool> {
 }
 
 pub fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
-    // Build the `Value` directly via ciborium's value serializer rather than
-    // round-tripping through an encoded byte buffer. Both produce the same
-    // `Value`, but this skips a `Vec<u8>` allocation plus the encode+decode
-    // work on every call — and this runs on the generation hot path (e.g.
-    // `build_schema` serialises each integer/float bound on every draw).
     Value::serialized(value).expect("CBOR serialization failed")
 }
 

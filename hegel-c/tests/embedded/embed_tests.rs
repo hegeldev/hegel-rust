@@ -39,8 +39,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
         .database(Some(db_path.clone()));
     let key = Some("replay-smoke");
 
-    // First run: any integer >= 1_000_000 is "interesting", so the engine
-    // shrinks down to the boundary and persists it.
     let first_failures = std::sync::Mutex::new(Vec::<i128>::new());
     let result = run_native(&settings, key, |ds| {
         let schema = cbor_map! {
@@ -77,8 +75,6 @@ fn run_native_replays_persisted_failure_on_second_run() {
         "first run never observed n>=1_000_000"
     );
 
-    // Second run: same settings, same key. Reuse phase must replay the
-    // persisted failure as the very first test case.
     let observed_first = std::sync::Mutex::new(None::<i128>);
     let _ = run_native(&settings, key, |ds| {
         let schema = cbor_map! {
@@ -231,7 +227,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         .database(Some(db_path));
     let key = Some("replay-unbounded");
 
-    // Explicit i64 bounds (matches what a Go int64 generator sends).
     let schema_for = || {
         cbor_map! {
             "type" => "integer",
@@ -241,7 +236,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
     };
     let predicate = |n: i128| n >= 1_000_000;
 
-    // Run #1: collect persisted shrink result.
     let last = std::sync::Mutex::new(None::<i128>);
     let result = run_native(&settings, key, |ds| {
         if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
@@ -263,7 +257,6 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         .unwrap()
         .expect("first run never observed the failure");
 
-    // Run #2: same settings, observe the first value.
     let observed_first = std::sync::Mutex::new(None::<i128>);
     let _ = run_native(&settings, key, |ds| {
         if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
@@ -344,8 +337,6 @@ fn discover_reproduce_blob() -> String {
 fn data_source_for_blob_replays_the_counterexample() {
     let blob = discover_reproduce_blob();
 
-    // The data source replays exactly the encoded example: drawing with the
-    // same schema yields the (shrunk) counterexample again.
     let ds = data_source_for_blob(&quiet_settings(1), &blob).unwrap();
     let schema = cbor_map! {
         "type" => "integer",
@@ -365,8 +356,6 @@ fn data_source_for_blob_replays_the_counterexample() {
 
 #[test]
 fn data_source_for_blob_logs_at_debug_verbosity() {
-    // Same construction as above, with `Verbosity::Debug` exercising the
-    // choice-count log line.
     let blob = discover_reproduce_blob();
     let settings = quiet_settings(1).verbosity(crate::settings::Verbosity::Debug);
     assert!(data_source_for_blob(&settings, &blob).is_some());
@@ -379,9 +368,6 @@ fn data_source_for_blob_rejects_an_undecodable_blob() {
 
 #[test]
 fn run_native_single_test_case_reports_the_failure() {
-    // `Mode::SingleTestCase` over the embedding API: the engine runs the one
-    // test case exactly once (no replay) and surfaces its failure — origin
-    // only, no blob — in the result.
     use crate::backend::Failure;
 
     let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);

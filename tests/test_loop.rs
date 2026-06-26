@@ -111,10 +111,6 @@ fn snapshot_loop_accumulates_state_across_iterations() {
 
 #[test]
 fn loop_recovers_from_assumption_failures() {
-    // Every odd-indexed iteration calls assume(false). Even iterations
-    // increment a successful-iteration counter and assert it stays below 3.
-    // The loop must continue past the odd iterations; if it did not, the
-    // successes counter would never reach 3 and the test would not fail.
     let result = catch_unwind(AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let mut iteration = 0;
@@ -144,9 +140,6 @@ fn loop_recovers_from_assumption_failures() {
 
 #[test]
 fn loop_terminates_when_body_never_panics() {
-    // With a body that always succeeds, the loop should still terminate (via
-    // the backend exhausting its budget and raising StopTest). If repeat did
-    // not catch StopTest, this test would fail with an Overrun.
     let iterations = Rc::new(Cell::new(0u64));
     let iterations_inside = iterations.clone();
     Hegel::new(move |tc| {

@@ -190,8 +190,6 @@ fn nfd_bases() -> &'static [(u32, u32)] {
 pub fn general_category(cp: u32) -> Category {
     hegel_internal_assert!(cp <= 0x10FFFF, "codepoint {:#x} out of range", cp);
     let table = ranges();
-    // Binary search for the first range with `end >= cp`. The table is
-    // contiguous and sorted by `end`, so this uniquely identifies the run.
     let idx = table
         .binary_search_by(|&(end, _)| {
             if end < cp {

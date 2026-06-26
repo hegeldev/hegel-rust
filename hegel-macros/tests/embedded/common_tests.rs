@@ -115,7 +115,6 @@ fn extract_reproduce_failure_pulls_out_a_string_literal_and_removes_the_attr() {
 
 #[test]
 fn extract_reproduce_failure_accepts_a_variable_or_const() {
-    // Not just literals — any expression (e.g. a const/variable) is allowed.
     let mut attrs: Vec<syn::Attribute> =
         vec![syn::parse_quote!(#[hegel::reproduce_failure(MY_BLOB)])];
     let blob = extract_reproduce_failure(&mut attrs).unwrap();
@@ -143,8 +142,6 @@ fn extract_reproduce_failure_consumes_stacked_attrs_and_returns_the_first() {
 
 #[test]
 fn extract_reproduce_failure_ignores_malformed_later_attrs() {
-    // A later attribute is bookkeeping: it is consumed without even being
-    // parsed, so a malformed argument there cannot fail the expansion.
     let mut attrs: Vec<syn::Attribute> = vec![
         syn::parse_quote!(#[hegel::reproduce_failure("a")]),
         syn::parse_quote!(#[hegel::reproduce_failure()]),
@@ -156,7 +153,6 @@ fn extract_reproduce_failure_ignores_malformed_later_attrs() {
 
 #[test]
 fn extract_reproduce_failure_rejects_empty_args() {
-    // No expression at all isn't a valid blob argument.
     let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[hegel::reproduce_failure()])];
     assert!(extract_reproduce_failure(&mut attrs).is_err());
 }

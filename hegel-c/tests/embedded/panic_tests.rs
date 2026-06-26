@@ -14,8 +14,6 @@ fn extracts_string_payload() {
 
 #[test]
 fn falls_back_for_an_unknown_payload_type() {
-    // A payload that is neither `&str` nor `String` (the two shapes
-    // `std::panic` produces) yields the generic fallback.
     let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
     assert_eq!(panic_message(&payload), "Unknown panic");
 }

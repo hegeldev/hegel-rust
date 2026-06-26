@@ -32,17 +32,57 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
 pub(crate) fn is_rust_keyword(s: &str) -> bool {
     matches!(
         s,
-        // strict keywords
-        "as" | "break" | "const" | "continue" | "crate" | "else"
-        | "enum" | "extern" | "false" | "fn" | "for" | "if"
-        | "impl" | "in" | "let" | "loop" | "match" | "mod"
-        | "move" | "mut" | "pub" | "ref" | "return" | "self"
-        | "Self" | "static" | "struct" | "super" | "trait" | "true"
-        | "type" | "unsafe" | "use" | "where" | "while" | "async" | "await" | "dyn"
-        // reserved keywords
-        | "abstract" | "become" | "box" | "do" | "final" | "macro"
-        | "override" | "priv" | "typeof" | "unsized" | "virtual"
-        | "yield" | "try" | "gen"
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "macro"
+            | "override"
+            | "priv"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+            | "try"
+            | "gen"
     )
 }
 
@@ -130,27 +170,22 @@ mod tests {
 
     #[test]
     fn test_is_valid_method_name() {
-        // bare keywords are invalid
         assert!(!is_valid_method_name("type"));
         assert!(!is_valid_method_name("super"));
 
-        // bare non-keywords are valid
         assert!(is_valid_method_name("type_"));
         assert!(is_valid_method_name("read_write"));
-        assert!(is_valid_method_name("Type")); // PascalCase, not a keyword
+        assert!(is_valid_method_name("Type"));
 
-        // raw form of raw-able keywords is valid
         assert!(is_valid_method_name("r#type"));
         assert!(is_valid_method_name("r#async"));
         assert!(is_valid_method_name("r#gen"));
 
-        // raw form of non-raw-able keywords is invalid
         assert!(!is_valid_method_name("r#super"));
         assert!(!is_valid_method_name("r#self"));
         assert!(!is_valid_method_name("r#crate"));
         assert!(!is_valid_method_name("r#Self"));
 
-        // raw form of non-keywords is valid (decorative r#)
         assert!(is_valid_method_name("r#Type"));
         assert!(is_valid_method_name("r#read_write"));
         assert!(is_valid_method_name("r#type_"));

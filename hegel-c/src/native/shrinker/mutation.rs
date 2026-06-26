@@ -42,8 +42,6 @@ impl<'a> Shrinker<'a> {
             }
             let current_idx = kind.to_index(&node.value);
 
-            // Small index offsets (±1 through ±5), keeping only indices >= 0
-            // that produce distinct values from `node.value`.
             let mut candidates: Vec<ChoiceValue> = Vec::new();
             for delta in 1u32..=5 {
                 for &sign in &[1i32, -1] {
@@ -67,20 +65,10 @@ impl<'a> Shrinker<'a> {
                     .collect();
                 let max_size = self.current_nodes.len();
 
-                // Re-run the mutated prefix with several random continuations,
-                // each drawn from the engine RNG inside the probe (no per-probe
-                // seed — see [`ShrinkRun::Probe`]). For a mutation that doesn't
-                // change the length (`max_size == prefix.len()`) there is no
-                // continuation to draw and these collapse to one replay, which
-                // the data cache serves after the first.
                 for _ in 0..=RANDOM_ATTEMPTS {
                     self.probe(&prefix, max_size)?;
                 }
 
-                // Also try setting each of the next few positions to the
-                // `unit` value (index 1), with random continuation. Re-check
-                // len each iteration since mutations above may have
-                // shortened current_nodes.
                 let mut j_offset: usize = 1;
                 while j_offset < 3 && i + j_offset < self.current_nodes.len() {
                     let j = i + j_offset;
@@ -90,8 +78,6 @@ impl<'a> Shrinker<'a> {
                     let Some(unit_val) = kind_j.from_index(BigUint::from(1u32)) else {
                         continue;
                     };
-                    // Build prefix: values up to i, new_val at i, then for
-                    // positions i+1..=j, fill with simplest except unit_val at j.
                     let mut two_prefix = prefix.clone();
                     for k in (i + 1)..=j {
                         if k == j {

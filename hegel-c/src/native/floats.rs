@@ -1,5 +1,3 @@
-// Float-specialised helpers used by the native engine.
-
 /// Less-than-or-equal that orders `-0.0` strictly below `0.0`.
 ///
 /// Mirrors Hypothesis's `sign_aware_lte` from `internal/floats.py`.
@@ -32,7 +30,6 @@ pub fn next_up(value: f64) -> f64 {
     if value == 0.0 && value.is_sign_negative() {
         return 0.0;
     }
-    // std `next_up` already treats NaN and +inf as fixed points.
     value.next_up()
 }
 

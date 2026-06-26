@@ -1,15 +1,3 @@
-// Shrinker for the native backend. Reduces failing test cases to minimal
-// counterexamples by systematically simplifying the choice sequence.
-//
-// Split into submodules:
-//   deletion   — delete_chunks, bind_deletion, try_replace_with_deletion
-//   integers   — zero_choices, swap_integer_sign, binary_search_integer_towards_zero,
-//                redistribute_integers, shrink_duplicates
-//   sequence   — sort_values, swap_adjacent_blocks
-//   floats     — shrink_floats, redistribute_numeric_pairs
-//   bytes      — shrink_bytes, redistribute_bytes_pairs
-//   strings    — shrink_strings
-
 mod bytes;
 mod coarse;
 mod deletion;
@@ -173,8 +161,6 @@ impl<'a> Shrinker<'a> {
         if self.timed_out {
             return true;
         }
-        // Spelled out as nested `if let` rather than an `if let … &&` chain,
-        // which isn't stable on the 1.86 MSRV.
         if let Some(deadline) = self.deadline {
             if Instant::now() >= deadline {
                 self.timed_out = true;
@@ -210,8 +196,6 @@ impl<'a> Shrinker<'a> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
-        // If the truncated candidate is already shortlex >= the current target,
-        // no run from it can improve on the target, so reject it
         let cmp: &[ChoiceNode] = if nodes.len() > self.current_nodes.len() {
             &nodes[..self.current_nodes.len()]
         } else {
@@ -220,23 +204,6 @@ impl<'a> Shrinker<'a> {
         if sort_key(&self.current_nodes) < sort_key(cmp) {
             return Ok(false);
         }
-        // Forced-node guard: a candidate may not differ from the
-        // current shrink target at any index marked `was_forced`.
-        // Forced choices stay put through shrinking. `replace` enforces
-        // this on its own single-position path; consider covers callers
-        // that build candidate sequences directly
-        // (try_shortening_via_increment, delete_chunks, span passes, …).
-        //
-        // Only meaningful for SAME-LENGTH candidates: the comparison is
-        // positional, so once a candidate deletes nodes the indices past the
-        // deletion point are shifted and `candidate[i]` no longer corresponds
-        // to `current[i]`. Applying the guard there spuriously rejects every
-        // deletion that precedes a forced node (e.g. the swarm feature-flag
-        // draws re-recorded as forced throughout a stateful run), which is the
-        // single biggest blocker to deleting whole steps. For length-changing
-        // candidates the realised run re-derives forced-ness anyway, and
-        // `accept_improvement` only commits a strictly-smaller result, so
-        // skipping the guard here is safe.
         for (i, candidate) in nodes
             .iter()
             .enumerate()
@@ -249,31 +216,15 @@ impl<'a> Shrinker<'a> {
                 return Ok(false);
             }
         }
-        // The improvement cap is a *global* stop, not a per-candidate reject:
-        // once `MAX_SHRINKS` strict shrinks have been accepted, no further
-        // shrinking can help, so stop the whole shrink (like the deadline)
-        // instead of returning "not interesting" for every remaining candidate.
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
-        // Only enforce the stall guard once we've found at least one
-        // improvement.  Without warmup, predicates that need many calls
-        // to find the first shrink — e.g. searching a large
-        // redistribute space — trip the guard before making any
-        // progress and stall on a sub-minimal target.
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(false);
         }
-        // Repeated candidates are deduped by the engine's data cache and choice
-        // tree behind the closure (`Engine::cached_shrink`), the single source
-        // of truth — there is no separate shrinker-level negative cache, matching
-        // Hypothesis's `Shrinker.cached_test_function`, which delegates straight
-        // to `engine.cached_test_function` after its cheap sort_key pre-checks.
 
-        // The wall-clock guard lives in `run_test_fn`: it errors out before
-        // touching the test function once the deadline has passed.
         let (is_interesting, actual_nodes, actual_spans) =
             self.run_test_fn(ShrinkRun::Full(nodes))?;
         self.calls += 1;
@@ -306,14 +257,12 @@ impl<'a> Shrinker<'a> {
     /// test closure. If the resulting run is interesting and shortlex-smaller
     /// than `current_nodes`, update `current_nodes`.
     pub(super) fn probe(&mut self, prefix: &[ChoiceValue], max_size: usize) -> ShrinkResult<()> {
-        // Global stop once the improvement cap is reached (see `consider`).
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
         if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
             return Ok(());
         }
-        // The wall-clock guard lives in `run_test_fn`.
         let (is_interesting, actual_nodes, actual_spans) =
             self.run_test_fn(ShrinkRun::Probe { prefix, max_size })?;
         self.calls += 1;
@@ -330,8 +279,6 @@ impl<'a> Shrinker<'a> {
         let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
-        // Grow max_stall so a long shrink search doesn't get cut off
-        // prematurely.
         let span = self.calls.saturating_sub(self.calls_at_last_shrink);
         let grown = span.saturating_mul(2);
         if grown > self.max_stall {
@@ -405,18 +352,11 @@ impl<'a> Shrinker<'a> {
                 return Ok(false);
             }
             if attempt[i].was_forced {
-                // Forced choices stay put.
                 return Ok(false);
             }
             if !attempt[i].kind.validate(v) {
                 return Ok(false);
             }
-            // Integer values must be expressed in the target node's width — a
-            // pass may move a value between integer nodes of different widths
-            // (e.g. `sort_values`). Coerce to the node's width so the stored
-            // node stays width-consistent. The `validate` check above already
-            // guarantees the value lies in `[min, max] ⊆ width`, so the
-            // conversion cannot fail.
             let coerced = match (attempt[i].kind.as_ref(), v) {
                 (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
                     ic.value_from_bigint(av)
@@ -493,13 +433,7 @@ impl<'a> Shrinker<'a> {
     /// minimization passes, finishing with the index-generic and
     /// entropy-based passes.
     pub fn shrink(&mut self) {
-        // Build the pass list and hand it to the scheduler.  Each pass
-        // is wrapped in a `ShrinkPass` so `fixate_shrink_passes` can
-        // track per-pass stats and re-order them by recent success
-        // between outer iterations.
         let mut passes: Vec<ShrinkPass> = vec![
-            // Span-aware passes — catch shapes the per-type passes
-            // can't see, run ahead of them.
             ShrinkPass::new(
                 "remove_discarded",
                 Box::new(|sh| sh.remove_discarded().map(|_| ())),
@@ -507,8 +441,6 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new("try_trivial_spans", Box::new(|sh| sh.try_trivial_spans())),
             ShrinkPass::new("pass_to_descendant", Box::new(|sh| sh.pass_to_descendant())),
             ShrinkPass::new("reorder_spans", Box::new(|sh| sh.reorder_spans())),
-            // Node-program adaptive deletion (the `node_program("X" * n)`
-            // family).
             ShrinkPass::new("node_program_5", Box::new(|sh| sh.node_program(5))),
             ShrinkPass::new("node_program_4", Box::new(|sh| sh.node_program(4))),
             ShrinkPass::new("node_program_3", Box::new(|sh| sh.node_program(3))),
@@ -576,9 +508,6 @@ impl<'a> Shrinker<'a> {
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
-        // A `ShrinkStop` just means the wall-clock budget ran out; the best
-        // example so far is already in `current_nodes` and `timed_out` is
-        // latched, so there is nothing more to do here.
         let _ = self.fixate_shrink_passes(&mut passes);
         self.emit_profile_report(&passes, initial_size, initial_calls);
     }
@@ -603,11 +532,6 @@ pub(super) fn bin_search_down_r<E>(
     }
     let mut lo = lo;
     let mut hi = hi;
-    // `lo + 1` overflows when `lo == i128::MAX`. The float shrinker can
-    // reach that bound by saturating-casting `f64::MAX as i128` from a
-    // generator with `min_value(f64::MAX)`. The search range is
-    // degenerate in that case (since `hi >= lo`, both must equal
-    // `i128::MAX`), so bail with `hi`.
     while lo.checked_add(1).is_some_and(|n| n < hi) {
         let mid = lo + (hi - lo) / 2;
         if f(mid)? {

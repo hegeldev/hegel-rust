@@ -30,10 +30,8 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
 
-    // Generate the builder method names (same as field names, no prefix)
     let builder_methods: Vec<_> = field_names.to_vec();
 
-    // Generate field definitions for the generator struct
     let generator_fields = field_names
         .iter()
         .zip(field_types.iter())
@@ -43,7 +41,6 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             }
         });
 
-    // Generate the new() constructor
     let new_field_inits = field_types.iter().map(|ty| {
         quote! {
             <#ty as hegel::generators::DefaultGenerator>::default_generator().boxed()
@@ -54,10 +51,8 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         quote! { #name: #init }
     });
 
-    // Generator Default trait bounds for new()
     let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
-    // Generate builder methods
     let with_method_impls = field_names
         .iter()
         .zip(field_types.iter())
@@ -75,14 +70,12 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             }
         });
 
-    // Generate the do_draw() fallback fields
     let generate_fields = field_names.iter().map(|name| {
         quote! {
             #name: self.#name.do_draw(__tc)
         }
     });
 
-    // Generate per-field basic bindings: let basic_field = self.field.as_basic()?;
     let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
         .iter()
         .map(|name| {
@@ -91,7 +84,6 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         })
         .collect();
 
-    // Generate schema elements from basics (positional, in field order)
     let schema_elements: Vec<_> = field_names
         .iter()
         .map(|name| {
@@ -100,7 +92,6 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         })
         .collect();
 
-    // Generate per-field extraction in parse closure (positional from tuple)
     let field_parse_in_closure: Vec<proc_macro2::TokenStream> = field_names
         .iter()
         .map(|name| {
@@ -115,7 +106,6 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let construct_fields: Vec<&syn::Ident> = field_names.clone();
 
-    // Generator DefaultGenerate bounds (same as new() but with 'static lifetime)
     let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
 
     let schema_ts = tuple_schema(schema_elements);

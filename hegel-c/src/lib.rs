@@ -1,34 +1,3 @@
-// C shared library bindings for Hegel's native property-based testing engine.
-//
-// The public C surface is documented in `include/hegel.h` (generated from
-// this file by cbindgen). Architectural overview:
-//
-// - Each `hegel_run_start` spawns a worker thread that drives
-//   `hegeltest::embed::run_native`. The worker is isolated from the caller
-//   so that any foreign unwinding (longjmp / C++ exception / LuaJIT error)
-//   from the C side only damages the caller's stack — the engine's stack
-//   is untouched.
-//
-// - The worker and caller communicate via a channel. For each test case
-//   the engine wants to run, the worker sends the raw `DataSource` to the
-//   caller and blocks waiting for an ack. The caller reaches in, runs its
-//   test logic on the data source directly, calls `mark_complete`, and
-//   sends the ack. The hot path (`generate`, spans, etc.) calls the
-//   `DataSource` methods directly without channel traffic — `DataSource`
-//   is `Send + Sync` so once handed across it works in place.
-//
-// - Every function takes a `hegel_context_t` as its first argument and returns
-//   a `hegel_result_t` code (`HEGEL_OK` is zero; negatives are errors), with
-//   two exceptions: `hegel_context_new`, which creates a context and returns
-//   it, and `hegel_context_last_error`, which is the error-reporting reader and
-//   returns the message pointer directly. Values other than the code — handles,
-//   strings, counts — are written through trailing `out_*` parameters. The
-//   diagnostic for a failed call is recorded on the `hegel_context_t` the
-//   caller passes in (rather than thread-local state, which is ill-defined
-//   under runtimes that migrate work between OS threads) and read back with
-//   `hegel_context_last_error`. There is no callback into C from Rust on the
-//   hot path; the loop is user-driven.
-
 #![allow(clippy::missing_safety_doc)]
 
 use std::ffi::{CStr, CString, c_char};
@@ -41,11 +10,6 @@ use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
 
-// The engine modules are copied in-crate but expose no C-ABI surface — every
-// `hegel_*` / `HEGEL_*` symbol in the generated header is defined directly in
-// this file. Tell cbindgen not to scan them, so their `pub` engine constants
-// and types don't leak into hegel.h (they live in a separate crate's scope as
-// far as the public C API is concerned).
 /// cbindgen:ignore
 mod antithesis_detect;
 /// cbindgen:ignore
@@ -65,9 +29,6 @@ mod settings;
 /// cbindgen:ignore
 mod unicodedata;
 
-// Internal engine re-exports for hegeltest's `benches/`, which reaches them
-// through `hegel::__bench` (a re-export of this). Gated on the private
-// `__bench` feature so they stay out of normal builds.
 /// cbindgen:ignore
 #[cfg(feature = "__bench")]
 #[doc(hidden)]
@@ -97,8 +58,6 @@ pub mod __bench {
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
 use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
-
-// ─── Result codes ───────────────────────────────────────────────────────────
 
 /// Result of a libhegel call.
 ///
@@ -154,25 +113,7 @@ pub enum hegel_result_t {
     HEGEL_E_INTERNAL = -8,
 }
 
-// The result variants are used unqualified throughout this module (and match
-// the `int` codes the C ABI has always returned); glob-import them so the
-// bodies read as `HEGEL_OK` / `HEGEL_E_*` rather than the fully-qualified form.
 use hegel_result_t::*;
-
-// ─── Enums mirrored to C ────────────────────────────────────────────────────
-
-// The enum types and variants use C naming directly. Rust complains about
-// the conventions (non_camel_case_types for the type, non_snake_case isn't
-// the right lint here — it's that variants aren't camelCase), so we silence
-// the lint. The payoff is that cbindgen produces clean idiomatic C:
-//
-//   typedef enum {
-//       HEGEL_STATUS_VALID = 0,
-//       ...
-//   } hegel_status_t;
-//
-// without the HEGEL_STATUS_T_VALID-style mangling we'd get from cbindgen's
-// `prefix_with_name`.
 
 /// Outcome of a single test case. Passed to `hegel_mark_complete`.
 ///
@@ -274,8 +215,6 @@ pub enum hegel_verbosity_t {
     HEGEL_VERBOSITY_DEBUG = 3,
 }
 
-// ─── Phases ─────────────────────────────────────────────────────────────────
-
 /// A phase of the property-test loop, used as a bit flag for
 /// `hegel_settings_set_phases`.
 ///
@@ -303,8 +242,6 @@ pub enum hegel_phase_t {
     HEGEL_PHASE_ALL = 0x1F,
 }
 
-// ─── Health checks ──────────────────────────────────────────────────────────
-
 /// A health check, used as a bit flag for
 /// `hegel_settings_set_suppress_health_check`.
 ///
@@ -328,8 +265,6 @@ pub enum hegel_health_check_t {
     /// large.
     HEGEL_HC_LARGE_INITIAL_TEST_CASE = 1 << 3,
 }
-
-// ─── Span labels ────────────────────────────────────────────────────────────
 
 /// Identifies what kind of compound structure a span groups, passed to
 /// `hegel_start_span` so the shrinker can choose appropriate shrink moves
@@ -378,8 +313,6 @@ pub enum hegel_label_t {
     /// span themselves.
     HEGEL_LABEL_FEATURE_FLAG = 16,
 }
-
-// ─── Error-reporting context ────────────────────────────────────────────────
 
 /// Opaque error-reporting context.
 ///
@@ -461,8 +394,6 @@ fn clear_last_error(ctx: *mut HegelContext) {
     }
 }
 
-// ─── HegelSettings ──────────────────────────────────────────────────────────
-
 /// Settings handle for a libhegel run.
 ///
 /// Construct with `hegel_settings_new`, configure via the
@@ -476,8 +407,6 @@ pub struct HegelSettings {
     /// argument to `run_native` on `hegel_run_start`.
     database_key: Option<String>,
 }
-
-// ─── HegelRun / HegelTestCase / channel plumbing ────────────────────────────
 
 enum WorkerMessage {
     TestCase {
@@ -566,8 +495,6 @@ impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
             origin: cstring_lossy(&f.origin),
-            // The base64 alphabet has no NUL, so this is an
-            // invariant: error loudly if it's ever broken.
             reproduce_blob: f
                 .reproduce_blob
                 .map(|b| CString::new(b).expect("reproduce blob is base64 and contains no NUL")),
@@ -616,8 +543,6 @@ fn cstring_lossy(s: &str) -> CString {
         .collect();
     CString::new(sanitized).expect("NULs replaced above")
 }
-
-// ─── Settings extern functions ──────────────────────────────────────────────
 
 /// Allocate a new settings handle initialised with libhegel's defaults
 /// (100 test cases, all phases enabled, normal verbosity, no seed,
@@ -848,7 +773,6 @@ pub unsafe extern "C" fn hegel_settings_set_database(
         Err(rc) => return rc,
     };
     if database.is_null() {
-        // "Use default" — same as leaving Settings::new()'s default.
         return HEGEL_OK;
     }
     let cstr = unsafe { CStr::from_ptr(database) };
@@ -968,8 +892,6 @@ pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
     HEGEL_OK
 }
 
-// ─── Run lifecycle ──────────────────────────────────────────────────────────
-
 static WORKER_PANIC_HOOK: Once = Once::new();
 
 /// The name given to the engine worker thread spawned by `hegel_run_start`.
@@ -994,9 +916,6 @@ fn install_worker_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if std::thread::current().name() == Some(WORKER_THREAD_NAME) {
-                // Reached only for a panic raised on the engine worker thread,
-                // i.e. the engine itself panicked (an internal invariant); not
-                // provocable without an engine bug.
                 // nocov start
                 return;
                 // nocov end
@@ -1045,12 +964,6 @@ pub unsafe extern "C" fn hegel_run_start(
     let worker = thread::Builder::new()
         .name(WORKER_THREAD_NAME.to_string())
         .spawn(move || {
-            // Run-level errors (failed health checks, nondeterminism)
-            // come back as `Err` from `run_native`; engine *panics*
-            // (internal invariants) would otherwise unwind the worker,
-            // drop the sender, and surface as a generic "worker
-            // terminated" error, losing the message. Both feed the same
-            // run-level error channel (`hegel_run_result_error`).
             let engine = std::panic::AssertUnwindSafe(|| {
                 run_native(&settings, database_key.as_deref(), |ds| {
                     if abort_worker.load(Ordering::Acquire) {
@@ -1060,30 +973,18 @@ pub unsafe extern "C" fn hegel_run_start(
                     let (ack_tx, ack_rx) = mpsc::channel();
                     let msg = WorkerMessage::TestCase { ds, ack: ack_tx };
                     if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                        // Caller dropped the result channel in the window
-                        // between the worker producing a case and sending it —
-                        // a thread-shutdown race (abort is set first in the
-                        // normal path), so forcing it needs sleeps. Recover the
-                        // data source and mark it complete so the engine can
-                        // wind down to its (now-irrelevant) end.
                         // nocov start
                         if let WorkerMessage::TestCase { ds, .. } = returned {
                             ds.mark_complete(&TestCaseResult::Valid);
                         } // nocov end
                         return; // nocov
                     }
-                    // Caller dropping the ack sender is treated the same as
-                    // a successful ack — we're winding down regardless.
                     let _ = ack_rx.recv();
                 })
             });
             let result = match std::panic::catch_unwind(engine) {
                 Ok(Ok(r)) => Ok(r),
                 Ok(Err(run_error)) => Err(run_error.to_string()),
-                // Reached only when the engine worker thread panics (an
-                // internal invariant): not provocable without an engine bug,
-                // and across the C ABI the panic must surface as a run-level
-                // error string rather than unwind.
                 // nocov start
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
@@ -1095,8 +996,6 @@ pub unsafe extern "C" fn hegel_run_start(
 
     let worker = match worker {
         Ok(h) => h,
-        // thread::spawn fails only on OS resource exhaustion, which can't be
-        // provoked in-process without destabilising the test runner.
         // nocov start
         Err(e) => {
             set_last_error(ctx, &format!("hegel_run_start: spawn failed: {}", e));
@@ -1142,7 +1041,6 @@ pub unsafe extern "C" fn hegel_next_test_case(
         return HEGEL_E_INVALID_HANDLE;
     };
 
-    // The previous test case must have been completed.
     if let Some(tc) = run.current_tc.as_ref() {
         if !tc.completed {
             set_last_error(
@@ -1156,7 +1054,6 @@ pub unsafe extern "C" fn hegel_next_test_case(
     run.current_tc = None;
 
     if run.drained {
-        // Run already completed; calling next again yields a NULL case.
         return HEGEL_OK;
     }
 
@@ -1182,13 +1079,6 @@ pub unsafe extern "C" fn hegel_next_test_case(
             HEGEL_OK
         }
         Err(_) => {
-            // Worker dropped its sender without sending Done — should not
-            // happen in normal use, but treat as a soft EOF rather than
-            // panicking. Caller distinguishes via the error code. The worker
-            // always sends Done after its catch_unwind, so reaching here needs
-            // the worker thread to die without unwinding: not reproducible in
-            // safe Rust, and this extern "C" entry point must return a code,
-            // not panic.
             // nocov start
             run.drained = true;
             set_last_error(ctx, "hegel_next_test_case: worker exited without a result");
@@ -1253,11 +1143,8 @@ pub unsafe extern "C" fn hegel_run_free(
     }
     let mut run = unsafe { Box::from_raw(run) };
 
-    // Signal the worker to short-circuit any further test cases.
     run.abort.store(true, Ordering::Release);
 
-    // If a test case is still in flight (caller exited the loop early),
-    // complete it so the worker's wait-for-ack unblocks.
     if let Some(mut tc) = run.current_tc.take() {
         if !tc.completed {
             tc.ds.mark_complete(&TestCaseResult::Valid);
@@ -1268,12 +1155,6 @@ pub unsafe extern "C" fn hegel_run_free(
         }
     }
 
-    // Drain anything else the worker emits before it finishes winding down.
-    // After the abort flag, the worker's callback short-circuits without
-    // sending, so this typically receives just the final Done message and
-    // then the channel closes.
-    // Draining a case the worker buffered before it observed the abort flag is
-    // a thread-shutdown race; forcing the window deterministically needs sleeps.
     while let Ok(msg) = run.from_worker.recv() {
         if let WorkerMessage::TestCase { ds, ack, .. } = msg {
             // nocov start
@@ -1288,8 +1169,6 @@ pub unsafe extern "C" fn hegel_run_free(
     }
     HEGEL_OK
 }
-
-// ─── Standalone test cases (failure-blob replay) ────────────────────────────
 
 /// Build a standalone test case that replays the example encoded in a
 /// base64 failure blob (obtained from `hegel_failure_reproduction_blob` on a
@@ -1384,8 +1263,6 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
-// ─── Per-test-case primitives ───────────────────────────────────────────────
-
 unsafe fn tc_mut<'a>(tc: *mut HegelTestCase) -> Result<&'a mut HegelTestCase, hegel_result_t> {
     let tc = unsafe { tc.as_mut() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
     if tc.completed {
@@ -1398,16 +1275,10 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
     match e {
         DataSourceError::StopTest => HEGEL_E_STOP_TEST,
         DataSourceError::Assume => HEGEL_E_ASSUME,
-        // A caller-supplied schema was semantically invalid (e.g. an unknown
-        // type string). Surface it as HEGEL_E_INVALID_ARG with the diagnostic
-        // in hegel_context_last_error — never a panic across the FFI boundary.
         DataSourceError::InvalidArgument(msg) => {
             set_last_error(ctx, &msg);
             HEGEL_E_INVALID_ARG
-        } // `DataSourceError` is `#[non_exhaustive]`, but it now lives in this
-          // crate, so an in-crate match is exhaustive without a wildcard. Adding
-          // a variant will fail to compile here, which is the right prompt to
-          // map it deliberately rather than silently funnel it to a backend error.
+        }
     }
 }
 
@@ -1468,10 +1339,6 @@ pub unsafe extern "C" fn hegel_generate(
     };
 
     tc.last_value.clear();
-    // Every value the engine produces re-serializes to CBOR (the writer is a
-    // Vec, which never errors), so this is effectively unreachable; but
-    // hegel_generate is extern "C", so it must return an error code here rather
-    // than panic across the C ABI.
     if let Err(e) = ciborium::ser::into_writer(&value, &mut tc.last_value) {
         // nocov start
         set_last_error(
@@ -2030,8 +1897,6 @@ pub unsafe extern "C" fn hegel_mark_complete(
     HEGEL_OK
 }
 
-// ─── Result inspection ──────────────────────────────────────────────────────
-
 /// Resolve a run-result handle for a getter, recording a diagnostic and
 /// returning `HEGEL_E_INVALID_HANDLE` on a null pointer.
 unsafe fn result_ref<'a>(
@@ -2227,8 +2092,6 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     HEGEL_OK
 }
 
-// ─── Diagnostics ────────────────────────────────────────────────────────────
-
 /// Write libhegel's version — matching the parent `hegeltest` crate's
 /// `CARGO_PKG_VERSION` (e.g. `"0.14.12"`) — into `*out_version`. The written
 /// pointer is static and valid for the program's lifetime. Returns
@@ -2243,7 +2106,6 @@ pub unsafe extern "C" fn hegel_version(
         set_last_error(ctx, "hegel_version: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    // Static CStr in the binary; pointer is valid for the program lifetime.
     static VERSION: &CStr =
         match CStr::from_bytes_with_nul(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes()) {
             Ok(c) => c,

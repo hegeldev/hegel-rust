@@ -2,11 +2,6 @@ mod common;
 
 use common::project::TempRustProject;
 
-// ============================================================
-// Compile-error tests (the standalone #[hegel::reproduce_failure]
-// macro only ever runs in misuse cases — see reproduce_failure.rs).
-// ============================================================
-
 #[test]
 fn test_reproduce_failure_on_bare_function() {
     let code = r#"
@@ -39,10 +34,6 @@ fn main() {}
         .expect_failure("must appear below.*hegel::test.*not above")
         .cargo_run(&[]);
 }
-
-// ============================================================
-// Runtime tests: the engine attaches and replays blobs.
-// ============================================================
 
 /// A correct-usage attribute compiles (exercising the `#[hegel::test]`
 /// wiring that injects `.reproduce_failure(...)`); at runtime an undecodable
@@ -93,9 +84,6 @@ fn my_test(tc: hegel::TestCase) {
 /// same failure.
 #[test]
 fn test_reproduce_failure_replays_real_counterexample() {
-    // The property: every drawn integer is < 5. It fails, and with
-    // `print_blob = true` the engine prints a `#[hegel::reproduce_failure("…")]`
-    // line for the shrunk counterexample.
     let failing = r#"
 #[hegel::test(print_blob = true)]
 fn my_test(tc: hegel::TestCase) {
@@ -112,7 +100,6 @@ fn my_test(tc: hegel::TestCase) {
         .expect_failure("x was")
         .cargo_test(&["--test", "repro"]);
 
-    // Extract the blob from the printed reproducer line.
     let combined = format!("{}\n{}", out.stdout, out.stderr);
     let re = regex::Regex::new(r#"reproduce_failure\("([^"]+)"\)"#).unwrap();
     let blob = re
@@ -121,7 +108,6 @@ fn my_test(tc: hegel::TestCase) {
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| panic!("no reproduce_failure line in output:\n{combined}"));
 
-    // Paste it back: the attribute must reproduce the same failure.
     let reproducing = format!(
         r#"
 #[hegel::test]
@@ -139,10 +125,6 @@ fn my_test(tc: hegel::TestCase) {{
         .expect_failure("x was")
         .cargo_test(&["--test", "repro"]);
 
-    // Stacked attributes are accepted as bookkeeping, but only the first
-    // replays: the second blob here is undecodable, so were it replayed
-    // (or even parsed) the run would die with a decode error instead of
-    // the property failure.
     let stacked = format!(
         r#"
 #[hegel::test]

@@ -1,19 +1,10 @@
-// Hypothesis float lex ordering.
-//
-// Maps non-negative floats to dense lexicographic indices where:
-// - Small non-negative integers (0, 1, 2, ...) have the smallest indices
-// - Non-integer fractions with "simpler" denominators come next
-// - Large or irrational-looking floats come last
-//
-// Port of hypothesis/internal/conjecture/floats.py.
-
 /// Encode a biased exponent to a Hypothesis lex rank.
 /// Exponents closer to 1023 (values near 1.0) rank first.
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 
 pub fn encode_exponent(biased_exp: u64) -> u64 {
     if biased_exp == 2047 {
-        return 2047; // inf/NaN exponent: rank last
+        return 2047;
     }
     if biased_exp >= 1023 {
         biased_exp - 1023
@@ -98,7 +89,6 @@ pub fn index_to_float(i: u64) -> f64 {
     let biased_exp = decode_exponent(exp_enc);
     let mantissa_enc = i & ((1u64 << 52) - 1);
     let unbiased_exp = biased_exp as i64 - 1023;
-    // update_mantissa is its own inverse (bit reversal is self-inverse).
     let mantissa = update_mantissa(unbiased_exp, mantissa_enc);
     f64::from_bits((biased_exp << 52) | mantissa)
 }
@@ -114,9 +104,6 @@ pub fn index_to_float(i: u64) -> f64 {
 pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
     hegel_internal_debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
-    // Smallest "simple" integer in the range, if any: tag-0 indices sit
-    // below every fractional index and equal the integer's value, so the
-    // smallest integer in range is the overall winner.
     let c = lo.ceil();
     if c <= hi && c < (1u64 << 56) as f64 {
         return c;
@@ -127,21 +114,14 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
     let e_hi = hi_bits >> 52;
     let m_lo = lo_bits & MANTISSA_MASK;
     let m_hi = hi_bits & MANTISSA_MASK;
-    // Pick the exponent with the smallest encoding among those intersecting
-    // the range. Encodings ascend with distance from biased 1023, and a
-    // range straddling 1.0 contains the integer 1 (handled above), so the
-    // candidates lie entirely on one side: at or above 1.0 the smallest
-    // exponent wins, below 1.0 the largest.
     let (e, m_min, m_max) = if e_lo >= 1023 {
         (e_lo, m_lo, if e_hi == e_lo { m_hi } else { MANTISSA_MASK })
     } else {
         hegel_internal_debug_assert!(e_hi < 1023);
         (e_hi, if e_lo == e_hi { m_lo } else { 0 }, m_hi)
     };
-    // Minimise `update_mantissa(e - 1023, m)` over `[m_min, m_max]`.
     let unbiased = e as i64 - 1023;
     let m_best = if unbiased >= 52 {
-        // No fractional bits: the encoding is the identity.
         m_min
     } else {
         let n_frac = if unbiased <= 0 {
@@ -149,18 +129,8 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
         } else {
             (52 - unbiased) as u32
         };
-        // The kept high bits are also the encoding's high bits, so fix them
-        // to the lowest attainable value before minimising the reversed
-        // low bits over whatever low range that leaves.
         let low_mask = (1u64 << n_frac) - 1;
         let h = m_min >> n_frac;
-        // `m_min` and `m_max` always share their kept high bits here: the
-        // kept-bit boundaries within a binade sit on integer values (the
-        // binade [2^e, 2^(e+1)) splits into 2^e width-1 parts), so a range
-        // crossing one contains an integer and was handled by the
-        // simple-integer probe; ranges spanning whole binades without a
-        // simple integer only occur at or above 2^56, where the exponent is
-        // >= 52 and the no-fractional-bits arm above applies.
         hegel_internal_debug_assert_eq!(m_max >> n_frac, h);
         let l_lo = m_min & low_mask;
         let l_hi = m_max & low_mask;

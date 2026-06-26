@@ -90,9 +90,6 @@ fn test_minimizes_towards_zero() {
     );
 }
 
-// Tests 10-12 verify the same shrink quality (negative range, binary
-// search, negative-only range) via `minimal()`.
-
 #[test]
 fn test_integer_shrinks_negative() {
     assert_eq!(
@@ -140,9 +137,6 @@ fn test_reduces_additive_pairs() {
     assert_eq!((m, n), (1, 1000));
 }
 
-// For an integer constraint that's reached only when `x >= n` (or
-// `x <= n` for negative n), the shrinker should land exactly on `n` —
-// no slack.
 #[test]
 fn test_perfectly_shrinks_integers_positive() {
     for n in [3i64, 7, 42] {
@@ -159,10 +153,6 @@ fn test_perfectly_shrinks_integers_negative() {
     }
 }
 
-// Two integers linked by `abs(m - n) <= 1` should collapse to `(0, 0)`
-// quickly when both are allowed to be negative. Exercises
-// `lower_integers_together` and `lower_common_node_offset` driving both
-// at once.
 #[test]
 fn test_lowering_together_negative() {
     let (m, n) = Minimal::new(
@@ -174,13 +164,10 @@ fn test_lowering_together_negative() {
     )
     .test_cases(10000)
     .run();
-    // The minimal counterexample has both at the constraint boundary -10
-    // with diff ≤ 1.
     assert_eq!(m, -10);
     assert!(n.abs_diff(m) <= 1);
 }
 
-// Mixed-sign linked integer pair.
 #[test]
 fn test_lowering_together_mixed() {
     let (m, n) = Minimal::new(
@@ -192,16 +179,11 @@ fn test_lowering_together_mixed() {
     )
     .test_cases(10000)
     .run();
-    // Smallest pair satisfying `m > 0`, `n < 0`, `m - n >= 20`.
-    // The shrinker should collapse `(m, n)` toward (≥1, ≤-1) with a
-    // tight gap.
     assert!(m >= 1 && n <= -1);
     assert!(m - n >= 20);
-    // Excess shouldn't be wildly above the bound.
     assert!(m - n <= 25);
 }
 
-// Two non-duplicate integers within gap 3 that must both stay above 10.
 #[test]
 fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
     let (m, n) = Minimal::new(
@@ -215,10 +197,6 @@ fn test_can_simultaneously_lower_non_duplicated_nearby_integers() {
     .run();
     assert_eq!((m, n), (11, 10));
 }
-
-// ----------------------------------------------------------------------------
-// Integration-level shrinker checks against the native runner.
-// ----------------------------------------------------------------------------
 
 /// A pair of nearly-equal positive integers should shrink to the
 /// minimal pair within a tight call budget — exercising
@@ -235,8 +213,6 @@ fn test_zig_zags_quickly() {
     )
     .test_cases(10000)
     .run();
-    // Either (0, 1) or (1, 0) is acceptable; both are minimal under the
-    // predicate.
     assert!((m, n) == (0, 1) || (m, n) == (1, 0));
 }
 

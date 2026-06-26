@@ -14,10 +14,6 @@ static CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn replay_of_a_vanishing_failure_is_reported_as_flaky() {
-    // The body fails only on its very first invocation. With shrinking and
-    // reuse disabled the engine reports that first (failing) example with a
-    // reproduce blob; replaying the blob runs the body again, where it passes,
-    // so the client detects the test as flaky.
     let body = |tc: TestCase| {
         let _ = tc.draw(gs::booleans());
         let i = CALLS.fetch_add(1, Ordering::SeqCst);

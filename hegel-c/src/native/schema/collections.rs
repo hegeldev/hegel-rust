@@ -1,5 +1,3 @@
-// Collection schema interpreters: list, dict, tuple, one_of, sampled_from.
-
 use crate::cbor_utils::{as_bool, as_u64, map_get};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase};
@@ -140,9 +138,6 @@ fn bounded_integer_range(schema: &Value) -> Option<(i128, i128)> {
     if !(BigInt::from(1)..=BigInt::from(10_000)).contains(&span) {
         return None;
     }
-    // The span check above guarantees both bounds fit comfortably in i128
-    // unless they are themselves astronomically large; in that rare case bail
-    // out of the small-range optimisation rather than truncate.
     Some((min_val.to_i128()?, max_val.to_i128()?))
 }
 
