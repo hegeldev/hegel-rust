@@ -29,7 +29,6 @@ impl Ledger {
         *balance -= amount;
     }
 
-    // Something here isn't quite right...
     fn transfer(&mut self, from: String, to: String, amount: i64) {
         let from_balance = *self.balances.get(&from).unwrap_or(&0);
         if from != to && amount - from_balance <= 1 {

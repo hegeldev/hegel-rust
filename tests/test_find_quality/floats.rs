@@ -93,7 +93,6 @@ fn test_can_find_float_outside_exact_int_range() {
 
 #[test]
 fn test_can_find_float_that_does_not_round_trip_through_str() {
-    // Counterexample: NaN, since NaN != NaN regardless of how it round-trips.
     expect_panic(
         || {
             Hegel::new(|tc| {
@@ -110,8 +109,6 @@ fn test_can_find_float_that_does_not_round_trip_through_str() {
 
 #[test]
 fn test_can_find_float_that_does_not_round_trip_through_repr() {
-    // Rust has no separate `repr` formatting; `{:?}` matches `{}` for f64
-    // round-tripping. Kept distinct to mirror the upstream test surface.
     expect_panic(
         || {
             Hegel::new(|tc| {
@@ -138,12 +135,8 @@ fn test_half_bounded_generates_zero() {
     );
 }
 
-// True properties that should NOT be falsified.
-
 #[test]
 fn test_is_float() {
-    // Trivially true under Rust's static typing — drawing `f64` always
-    // returns `f64`. Kept as a smoke test mirroring the upstream surface.
     Hegel::new(|tc| {
         tc.draw(gs::floats::<f64>());
     })

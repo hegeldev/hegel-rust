@@ -10,9 +10,6 @@ fn test_serde_json_values_default() {
 
 #[test]
 fn test_serde_json_values_serialize_to_valid_json() {
-    // Every drawn Value must serialize to text that re-parses as JSON.
-    // Note: serde_json's float parser does not always preserve f64 precision
-    // exactly for very large numbers, so we don't assert structural equality.
     assert_all_examples(json_gs::values(), |v| {
         let s = serde_json::to_string(v).unwrap();
         serde_json::from_str::<Value>(&s).is_ok()

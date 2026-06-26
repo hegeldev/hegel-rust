@@ -89,13 +89,11 @@ fn test_compose_list_with_index(tc: TestCase) {
 
 #[hegel::test]
 fn test_compose_nested(tc: TestCase) {
-    // tc.draw() works inside nested compose blocks
     let (_, inner_val) = tc.draw(hegel::compose!(|tc| {
         tc.draw(hegel::compose!(|tc| {}));
         let v = tc.draw(gs::integers::<i32>());
         ((), v)
     }));
-    // Just verify it doesn't panic and produces a value
     let _ = inner_val;
 }
 

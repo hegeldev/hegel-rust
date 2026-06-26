@@ -1,8 +1,3 @@
-// Bytes shrink passes: `shrink_bytes` reduces individual `BytesChoice`
-// nodes toward shorter / lex-smaller values, and `redistribute_bytes_pairs`
-// rebalances length between adjacent bytes nodes for sum-of-length style
-// predicates.
-
 use std::collections::HashMap;
 
 use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
@@ -24,13 +19,11 @@ impl<'a> Shrinker<'a> {
                 }
             };
 
-            // Try the simplest (min_size zeros) first.
             let simplest = vec![0u8; min_size];
             if simplest != current {
                 self.replace(&HashMap::from([(i, ChoiceValue::Bytes(simplest))]))?;
             }
 
-            // Shorten via binary search.
             let cur_len = self.current_byte_value(i).len();
             if cur_len > min_size {
                 let captured = self.current_byte_value(i);
@@ -41,7 +34,6 @@ impl<'a> Shrinker<'a> {
                 })?;
             }
 
-            // Linear scan small lengths (non-monotonic fallback).
             let cur_len = self.current_byte_value(i).len();
             let scan_end = (min_size + 8).min(cur_len);
             for sz in min_size..scan_end {
@@ -53,7 +45,6 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
             }
 
-            // Delete individual elements, from right to left.
             let mut j = self.current_byte_value(i).len();
             while j > 0 {
                 j -= 1;
@@ -66,7 +57,6 @@ impl<'a> Shrinker<'a> {
                 self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
             }
 
-            // Reduce each byte toward 0, from right to left.
             let mut j = self.current_byte_value(i).len();
             while j > 0 {
                 j -= 1;
@@ -82,7 +72,6 @@ impl<'a> Shrinker<'a> {
                 })?;
             }
 
-            // Insertion-sort pass: swap adjacent out-of-order bytes.
             let mut pos = 1;
             loop {
                 let cur_len = self.current_byte_value(i).len();
@@ -165,13 +154,11 @@ impl<'a> Shrinker<'a> {
             return Ok(());
         }
 
-        // Try moving everything from s to t.
         let combined: Vec<u8> = s.iter().copied().chain(t.iter().copied()).collect();
         if self.try_redistribute_bytes(i, j, Vec::new(), combined, &kind_j)? {
             return Ok(());
         }
 
-        // Try moving the last byte of s to the start of t.
         let (last, s_init) = s.split_last().unwrap();
         let mut t_prepended = Vec::with_capacity(t.len() + 1);
         t_prepended.push(*last);
@@ -180,7 +167,6 @@ impl<'a> Shrinker<'a> {
             return Ok(());
         }
 
-        // Binary search for the longest suffix of s that can be moved.
         let s_len = s.len();
         bin_search_down_r(1, s_len as i128, &mut |n| {
             let n = n as usize;

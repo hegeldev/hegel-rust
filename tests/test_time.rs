@@ -70,11 +70,8 @@ mod datetimes {
         (year, month, day, hour, minute, second, microsecond)
     }
 
-    // --- datetime tests ---
-
     #[test]
     fn test_simplifies_towards_millenium() {
-        // Hypothesis shrinks datetimes toward 2000-01-01T00:00:00.
         let d = minimal(gs::datetimes(), |_: &String| true);
         let (year, month, day, hour, minute, second, microsecond) = datetime_parts(&d);
         assert_eq!(year, 2000);
@@ -95,11 +92,8 @@ mod datetimes {
 
     #[test]
     fn test_allow_imaginary_is_not_an_error_for_naive_datetimes() {
-        // gs::datetimes() always produces naive datetimes; allow_imaginary=False is a no-op
         assert_all_examples(gs::datetimes(), |_: &String| true);
     }
-
-    // --- date tests ---
 
     #[test]
     fn test_can_find_after_the_year_2000() {
@@ -109,7 +103,6 @@ mod datetimes {
 
     #[test]
     fn test_can_find_before_the_year_2000() {
-        // Hypothesis shrinks toward 2000, so the minimal year < 2000 is 1999.
         let d = minimal(gs::dates(), |s: &String| date_year(s) < 2000);
         assert_eq!(date_year(&d), 1999);
     }
@@ -120,8 +113,6 @@ mod datetimes {
             find_any(gs::dates(), move |s: &String| date_month(s) == month);
         }
     }
-
-    // --- time tests ---
 
     #[test]
     fn test_can_find_midnight() {

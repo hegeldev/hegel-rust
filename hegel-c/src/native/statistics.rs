@@ -1,19 +1,3 @@
-// Vendored port of Hypothesis's `internal/statistics.py` (PR
-// HypothesisWorks/hypothesis#4728). Provides the numerical building blocks
-// used by the integer sampler:
-//
-//   * `stdtr` / `stdtrit` — Student's t CDF and quantile for integer df.
-//   * `UniformDistribution`, `LogStudentTDistribution` — primitive
-//     distributions over the reals.
-//   * `PiecewiseDistribution` — two-region splice used to combine a uniform
-//     inner core with heavy-tailed outer behaviour.
-//
-// Tests live in `tests/embedded/native/statistics_tests.rs` and are
-// validated against a scipy-derived oracle (see
-// `scripts/generate_statistics_oracle.py`). The `stdtr` / `stdtrit`
-// implementations were authored against scipy as oracle on the Python side
-// and re-validated against the same oracle here.
-
 use crate::control::hegel_internal_assert;
 use std::f64::consts::PI;
 
@@ -29,7 +13,6 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
     let abs_t = t.abs();
     let z = 1.0 + abs_t * abs_t / df as f64;
     let p = if df % 2 == 1 {
-        // odd df: includes an arctan term
         let u = abs_t / (df as f64).sqrt();
         let mut p = u.atan();
         if df > 1 {
@@ -45,7 +28,6 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
         }
         p * 2.0 / PI
     } else {
-        // even df: simple finite sum, no arctan
         let mut f = 1.0_f64;
         let mut tz = 1.0_f64;
         let mut j = 2i32;
@@ -76,9 +58,6 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
     }
     hegel_internal_assert!(p > 0.0 && p < 1.0, "stdtrit requires 0 < p < 1, got {p}");
     if df == 1 {
-        // Cauchy: F^{-1}(p) = -cot(pi p). Reflect via 1-p when p > 0.5
-        // because sin(pi p) near pi suffers cancellation; sin(pi (1-p))
-        // near 0 is exact.
         return if p > 0.5 {
             (PI * (1.0 - p)).cos() / (PI * (1.0 - p)).sin()
         } else {
@@ -111,10 +90,6 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
         }
         let log_f = log_norm - 0.5 * (df as f64 + 1.0) * (t * t / df as f64).ln_1p();
         let f = log_f.exp();
-        // `f == 0.0` would yield NaN/±inf for `t_newton`, but the
-        // bracket check rejects those (NaN/inf comparisons are false)
-        // and falls through to the bisection step — so an explicit
-        // underflow guard would be redundant.
         let t_newton = t - (f_val - q) / f;
         t = if lo <= t_newton && t_newton <= hi {
             t_newton
@@ -137,7 +112,6 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
 /// the inputs we actually use (`x = (df+1)/2` and `x = df/2` with
 /// `df >= 3`).
 fn ln_gamma(x: f64) -> f64 {
-    // Lanczos g=7, coefficients from Numerical Recipes / Wikipedia.
     const COEFFS: [f64; 9] = [
         0.999_999_999_999_809_9,
         676.520_368_121_885_1,
@@ -225,8 +199,6 @@ pub struct LogStudentTDistribution {
 
 impl LogStudentTDistribution {
     pub fn new(scale_bits: f64, df: i32) -> Self {
-        // Coefficient of the standard Student's t pdf at y=0, cached so
-        // `pdf` is cheap.
         let t_coef =
             gamma((df as f64 + 1.0) / 2.0) / ((df as f64 * PI).sqrt() * gamma(df as f64 / 2.0));
         Self {
@@ -247,8 +219,6 @@ impl Distribution for LogStudentTDistribution {
 
     fn inverse_cdf(&self, u: f64) -> f64 {
         let mut y = self.scale_bits * stdtrit(self.df, u);
-        // 2^1023 is the largest power of 2 below f64::MAX. Clamp so the
-        // subsequent expm1 doesn't return ±inf at the extreme tails.
         y = y.clamp(-1023.0, 1023.0);
         (y.abs() * LN_2).exp_m1().copysign(y)
     }
@@ -293,8 +263,6 @@ impl<I: Distribution, O: Distribution> PiecewiseDistribution<I, O> {
             inner_pdf != 0.0,
             "inner.pdf(switchover={switchover}) == 0; cannot density-match"
         );
-        // Density continuity: beta * inner.pdf(c) = alpha * outer.pdf(c)
-        // plus total mass 1; solve for (alpha, beta).
         let alpha = 1.0 / (outer_pdf * inner_inner_mass / inner_pdf + outer_outer_mass);
         let beta = alpha * outer_pdf / inner_pdf;
         let inner_mass = beta * inner_inner_mass;

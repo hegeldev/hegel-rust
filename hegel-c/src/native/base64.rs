@@ -1,5 +1,3 @@
-// Inline base64 (RFC 4648, standard alphabet, `=` padding).
-
 /// Standard base64 alphabet (RFC 4648).
 const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -56,8 +54,6 @@ pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
         let c1 = base64_value(chunk[1])?;
         let pad2 = chunk[2] == b'=';
         let pad3 = chunk[3] == b'=';
-        // Padding may appear only at the tail of the last quad, and a
-        // padded third position forces a padded fourth ("=X" is invalid).
         if (pad2 || pad3) && !last {
             return None;
         }

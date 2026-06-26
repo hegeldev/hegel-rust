@@ -16,9 +16,6 @@ fn internal_errors_abort_the_run_without_shrinking() {
     let result = catch_unwind(AssertUnwindSafe(|| {
         Hegel::new(|tc: TestCase| {
             runs.fetch_add(1, Ordering::SeqCst);
-            // Misuse `__draw_named`: the same name with inconsistent
-            // `repeatable` flags is an internal-invariant violation (the
-            // rewrite macro can never produce it).
             tc.__draw_named(gs::booleans(), "x", true);
             tc.__draw_named(gs::booleans(), "x", false);
         })
@@ -50,8 +47,6 @@ fn internal_errors_abort_the_run_without_shrinking() {
 
 #[test]
 fn repeated_non_repeatable_draw_name_is_an_internal_error() {
-    // The other `record_named_draw` invariant: a non-repeatable name used
-    // twice. Also must abort rather than shrink.
     let result = catch_unwind(AssertUnwindSafe(|| {
         Hegel::new(|tc: TestCase| {
             tc.__draw_named(gs::booleans(), "y", false);

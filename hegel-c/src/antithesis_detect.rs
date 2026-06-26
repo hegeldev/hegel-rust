@@ -1,11 +1,6 @@
 use std::path::Path;
 
-// Antithesis detection used by the native engine to choose its randomness
-// backend. This is a copy of the detection logic from hegeltest's
-// `antithesis` module — only the runtime check, none of the SDK integration.
-
 pub(crate) fn is_running_in_antithesis() -> bool {
-    // Antithesis only supports Linux; skip the check entirely on Windows.
     #[cfg(not(windows))]
     // nocov start
     if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {

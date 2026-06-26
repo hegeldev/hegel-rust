@@ -411,8 +411,6 @@ fn test_derive_struct_override_field_twice_takes_last() {
     assert_all_examples(g, |p: &Point| p.x == 99);
 }
 
-// FieldName, field_name, and fieldName all convert to "field_name".
-// All should keep their original casing.
 #[derive(DeriveGenerator, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum NameConflict {
@@ -430,16 +428,6 @@ fn test_derive_enum_triple_conflict() {
     check_can_generate_examples(g);
 }
 
-// Variants whose snake-cased form would be a Rust keyword should still
-// produce a derived generator with valid method names. Each variant below
-// exercises one path through the keyword-fixup rule:
-//
-//   Source variant   |  Rule path                              |  Method name
-//   -----------------+-----------------------------------------+--------------
-//   Super            |  bare keyword -> append `_`             |  super_
-//   Type             |  bare keyword -> append `_`             |  type_
-//   r#type           |  raw + raw-able keyword -> keep raw     |  r#type
-//   r#Crate          |  raw + non-raw-able keyword -> append _ |  r#crate_
 #[derive(DeriveGenerator, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum KeywordVariants {

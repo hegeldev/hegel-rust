@@ -1,8 +1,6 @@
 use super::*;
 use crate::native::rng::EngineRng;
 
-// ── Spans::get_mut ────────────────────────────────────────────────────────
-
 #[test]
 fn spans_get_mut_returns_mutable_reference() {
     let mut spans = Spans::new();
@@ -24,8 +22,6 @@ fn spans_get_mut_returns_none_out_of_bounds() {
     let mut spans = Spans::new();
     assert!(spans.get_mut(0).is_none());
 }
-
-// ── Spans::get_signed ────────────────────────────────────────────────────
 
 #[test]
 fn spans_get_signed_positive_index() {
@@ -89,12 +85,9 @@ fn spans_get_signed_out_of_range_returns_none() {
     assert!(spans.get_signed(100).is_none());
 }
 
-// ── Spans::children ───────────────────────────────────────────────────────
-
 #[test]
 fn spans_children_returns_direct_children() {
     let mut spans = Spans::new();
-    // Span 0: root
     spans.push(Span {
         start: 0,
         end: 10,
@@ -103,7 +96,6 @@ fn spans_children_returns_direct_children() {
         parent: None,
         discarded: false,
     });
-    // Span 1: child of 0
     spans.push(Span {
         start: 0,
         end: 5,
@@ -112,7 +104,6 @@ fn spans_children_returns_direct_children() {
         parent: Some(0),
         discarded: false,
     });
-    // Span 2: child of 0
     spans.push(Span {
         start: 5,
         end: 10,
@@ -121,7 +112,6 @@ fn spans_children_returns_direct_children() {
         parent: Some(0),
         discarded: false,
     });
-    // Span 3: grandchild of 1
     spans.push(Span {
         start: 0,
         end: 3,
@@ -135,8 +125,6 @@ fn spans_children_returns_direct_children() {
     let children1 = spans.children(1);
     assert_eq!(children1, vec![3]);
 }
-
-// ── Spans::trivial ────────────────────────────────────────────────────────
 
 #[test]
 fn spans_trivial_handles_simplest_forced_and_oob() {
@@ -156,25 +144,19 @@ fn spans_trivial_handles_simplest_forced_and_oob() {
         discarded: false,
     });
 
-    // Both children simplest → trivial.
     let nodes = vec![simplest.clone(), simplest.clone()];
     assert!(spans.trivial(0, &nodes));
 
-    // A non-forced non-simplest child → not trivial.
     let nodes = vec![simplest.clone(), interesting.clone()];
     assert!(!spans.trivial(0, &nodes));
 
-    // A forced child counts as trivial even if its value isn't simplest.
     let nodes = vec![simplest, forced_interesting];
     assert!(spans.trivial(0, &nodes));
 
-    // Out-of-range span index returns false.
     let other = Spans::new();
     let empty: Vec<ChoiceNode> = Vec::new();
     assert!(!other.trivial(7, &empty));
 }
-
-// ── Spans::into_vec ───────────────────────────────────────────────────────
 
 #[test]
 fn spans_into_vec_consumes_and_returns_inner() {
@@ -192,8 +174,6 @@ fn spans_into_vec_consumes_and_returns_inner() {
     assert_eq!(v[0].label, "one");
 }
 
-// ── From<Vec<Span>> for Spans ──────────────────────────────────────────────
-
 #[test]
 fn spans_from_vec() {
     let v = vec![Span {
@@ -209,8 +189,6 @@ fn spans_from_vec() {
     assert_eq!(spans[0usize].label, "x");
 }
 
-// ── Deref for Spans ───────────────────────────────────────────────────────
-
 #[test]
 fn spans_deref_to_slice() {
     let mut spans = Spans::new();
@@ -222,13 +200,10 @@ fn spans_deref_to_slice() {
         parent: None,
         discarded: false,
     });
-    // Deref: use slice methods
     let slice: &[Span] = &spans;
     assert_eq!(slice.len(), 1);
     assert_eq!(slice[0].label, "deref");
 }
-
-// ── IntoIterator for &Spans ───────────────────────────────────────────────
 
 #[test]
 fn spans_into_iterator() {
@@ -247,8 +222,6 @@ fn spans_into_iterator() {
     assert_eq!(labels, vec!["0", "1", "2"]);
 }
 
-// ── Index<usize> for Spans ────────────────────────────────────────────────
-
 #[test]
 fn spans_index_usize() {
     let mut spans = Spans::new();
@@ -262,8 +235,6 @@ fn spans_index_usize() {
     });
     assert_eq!(spans[0usize].label, "idx");
 }
-
-// ── Index<i64> for Spans ─────────────────────────────────────────────────
 
 #[test]
 fn spans_index_i64_positive() {
@@ -300,14 +271,8 @@ fn spans_index_i64_out_of_range_panics() {
     let _ = spans[0i64];
 }
 
-// ── NativeTestCase::as_result returning Overrun ───────────────────────────
-
-// ── NativeTestCase::draw_integer_forced ───────────────────────────────────
-
 #[test]
 fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
-    // The prefix value at the forced node's position is never consulted:
-    // the recorded node carries the forced value, not the prefix's.
     let prefix = vec![ChoiceValue::Integer(BigInt::from(9))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
@@ -322,9 +287,6 @@ fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
     assert_eq!(tc.nodes.len(), 1);
     assert!(tc.nodes[0].was_forced);
     assert_eq!(tc.nodes[0].value, ChoiceValue::Integer(BigInt::from(7)));
-    // The prefix is positional: the forced node occupied position 0, so the
-    // next unforced draw is past the prefix and resolves via the template
-    // (rather than replaying the unconsumed prefix value 9).
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
@@ -365,8 +327,6 @@ fn draw_integer_forced_rejects_out_of_range_values() {
     let _ = tc.draw_integer_forced(0i64, 5i64, 6i64);
 }
 
-// ── Spans::get (by non-negative usize index) ──────────────────────────────
-
 #[test]
 fn spans_get_returns_span_by_index() {
     let mut spans = Spans::new();
@@ -391,8 +351,6 @@ fn spans_get_returns_span_by_index() {
     assert!(spans.get(2).is_none());
 }
 
-// ── Spans::as_slice ───────────────────────────────────────────────────────
-
 #[test]
 fn spans_as_slice_returns_slice() {
     let mut spans = Spans::new();
@@ -408,8 +366,6 @@ fn spans_as_slice_returns_slice() {
     assert_eq!(sl.len(), 1);
     assert_eq!(sl[0].label, "a");
 }
-
-// ── Spans::as_mut_slice ───────────────────────────────────────────────────
 
 #[test]
 fn spans_as_mut_slice_allows_mutation() {
@@ -429,65 +385,43 @@ fn spans_as_mut_slice_allows_mutation() {
     assert!(spans.get(0).unwrap().discarded);
 }
 
-// ── DataObserver default methods ──────────────────────────────────────────
-//
-// The default implementations are no-ops; we just need to call them to get
-// coverage. A concrete impl that overrides none of the methods suffices.
-
 struct NoopObserver;
 impl DataObserver for NoopObserver {}
 
-// ── NativeTestCase::stop_span with empty stack ────────────────────────────
-
 #[test]
 fn stop_span_on_empty_stack_is_a_no_op() {
-    // If the span_stack is already empty, stop_span must return early
-    // without panicking. Covers the `let Some(idx) = ... else { return; }` arm.
     let mut tc = NativeTestCase::for_choices(&[], None, None);
-    // No start_span called, so span_stack is empty.
-    tc.stop_span(false); // must not panic
+    tc.stop_span(false);
     assert!(tc.spans.is_empty());
 }
-
-// ── DataObserver default method bodies ────────────────────────────────────
-//
-// Each default body is a no-op; calling it on a struct that doesn't override
-// the method exercises the default arm.
 
 #[test]
 fn data_observer_draw_boolean_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_boolean(true, false); // must not panic
+    obs.draw_boolean(true, false);
 }
 
 #[test]
 fn data_observer_draw_integer_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_integer(&BigInt::from(42), false); // must not panic
+    obs.draw_integer(&BigInt::from(42), false);
 }
 
 #[test]
 fn data_observer_draw_float_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_float(1.5, false); // must not panic
+    obs.draw_float(1.5, false);
 }
 
 #[test]
 fn data_observer_conclude_test_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.conclude_test(Status::Valid, None); // must not panic
+    obs.conclude_test(Status::Valid, None);
 }
-
-// ── NativeTestCase::weighted forces `false` when `p <= 0.0` ──────────────
-//
-// `weighted`'s `forced.or(...)` chain promotes `p <= 0.0` and `p >= 1.0`
-// into forced values without recording an RNG draw.  Test cases that go
-// through `many_more` with a closed boundary exercise these.
 
 #[test]
 fn weighted_with_p_zero_returns_false_without_consulting_rng() {
     let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
-    // RNG is present but `p == 0.0` is supposed to short-circuit it.
     let v = tc.weighted(0.0, None).ok().unwrap();
     assert!(!v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -512,25 +446,14 @@ fn weighted_with_explicit_forced_records_forced_node() {
     assert!(tc.nodes.last().unwrap().was_forced);
 }
 
-// ── NativeTestCase::weighted notifies the observer on draw ──────────────
-//
-// The observer hook in `weighted` fires after the boolean is recorded;
-// a custom observer captures the value to verify the call site at
-// `state.rs:obs.draw_boolean(...)` runs.
-
-// ── NativeTestCase::freeze is idempotent ─────────────────────────────────
-
 #[test]
 fn freeze_is_a_no_op_on_already_frozen_test_case() {
-    // freeze sets `frozen = true`; calling it again should hit the
-    // `if self.frozen { return; }` early return rather than
-    // re-running the close-spans / observer-notify path.
     let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
     tc.start_span(7);
     tc.stop_span(false);
     tc.freeze();
     let spans_after_first = tc.spans.clone().into_vec();
-    tc.freeze(); // second freeze must be a no-op
+    tc.freeze();
     assert_eq!(tc.spans.clone().into_vec(), spans_after_first);
 }
 
@@ -556,10 +479,6 @@ fn weighted_notifies_observer_on_boolean_draw() {
     assert_eq!(recorded, (true, false));
 }
 
-// ── NativeTestCase::freeze with observer ──────────────────────────────────
-//
-// When an observer is attached, freeze() must call conclude_test.
-
 #[test]
 fn freeze_notifies_observer_on_conclude_test() {
     use std::sync::{Arc, Mutex};
@@ -577,13 +496,9 @@ fn freeze_notifies_observer_on_conclude_test() {
     });
     let mut tc = NativeTestCase::for_choices(&[], None, Some(obs));
     tc.freeze();
-    // `conclude_test` was called exactly once with the current status —
-    // for a never-marked test case that's `Status::Valid` (the default).
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some(Status::Valid));
 }
-
-// ── NativeTestCase::draw_integer with observer ─────────────────────────────
 
 #[test]
 fn draw_integer_notifies_observer() {
@@ -604,13 +519,9 @@ fn draw_integer_notifies_observer() {
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let v = tc.draw_integer::<i128>(0, 100).ok().unwrap();
     assert_eq!(v, 99);
-    // The observer must have captured the prefix-replayed value with
-    // was_forced=false.
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((BigInt::from(99), false)));
 }
-
-// ── NativeTestCase::draw_float with observer ──────────────────────────────
 
 #[test]
 fn draw_float_notifies_observer() {
@@ -620,7 +531,6 @@ fn draw_float_notifies_observer() {
     }
     impl DataObserver for FloatObserver {
         fn draw_float(&mut self, value: f64, was_forced: bool) {
-            // Capture the bit pattern so `-0.0` and NaN payloads compare exactly.
             *self.captured.lock().unwrap() = Some((value.to_bits(), was_forced));
         }
     }
@@ -639,7 +549,7 @@ fn draw_float_notifies_observer() {
 #[test]
 fn data_observer_draw_bytes_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_bytes(&[1, 2, 3], false); // must not panic
+    obs.draw_bytes(&[1, 2, 3], false);
 }
 
 #[test]
@@ -669,7 +579,7 @@ fn draw_bytes_notifies_observer() {
 #[test]
 fn data_observer_draw_string_default_is_no_op() {
     let mut obs = NoopObserver;
-    obs.draw_string("hello", false); // must not panic
+    obs.draw_string("hello", false);
 }
 
 #[test]
@@ -702,30 +612,17 @@ fn draw_string_notifies_observer() {
     assert_eq!(recorded, Some(("abc".to_string(), false)));
 }
 
-// ── NativeTestCase::stop_span extends parent labels (line 798) ────────────
-//
-// When stop_span is called with discard=false and there is a parent span
-// on labels_for_structure_stack, labels are extended into the parent.
-
 #[test]
 fn stop_span_extends_parent_label_stack() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
-    // Open two nested spans; the inner one's labels get propagated to the outer.
     tc.start_span(1);
     tc.start_span(2);
-    // stop_span(false) on the inner span: extends parent with inner's labels.
     tc.stop_span(false);
-    // stop_span(false) on the outer span: extends tags.
     tc.stop_span(false);
-    // No panic means the label propagation path was executed.
 }
-
-// ── draw_float on a fresh random NTC ─────────────────────────────────────
 
 #[test]
 fn draw_float_unbounded_with_nan_can_produce_nan() {
-    // Fully unbounded with allow_nan=true exercises the random-generation
-    // branch including the NaN-emission arm.
     for seed in 0..200u64 {
         let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let v = tc
@@ -733,7 +630,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
             .ok()
             .unwrap();
         if v.is_nan() {
-            return; // exercised
+            return;
         }
     }
     panic!("never produced NaN in 200 unbounded draws with allow_nan=true");
@@ -749,17 +646,9 @@ fn draw_float_half_bounded_below_explores_finite_range() {
     assert!(v >= 1.0 && !v.is_nan());
 }
 
-// ── NativeTestCase::for_simplest ─────────────────────────────────────────────
-//
-// The all-simplest pre-trial run at the head of the Generate phase. Every
-// draw must return the kind's `simplest()` value — `shrink_towards`
-// clamped to range for integers, 0.0 for floats, false for booleans, the
-// empty / lower-bound size for bytes and strings.
-
 #[test]
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    // shrink_towards=0 is hardcoded; for [0, 23] that's in range → simplest = 0.
     let v = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     assert_eq!(v, 0);
 }
@@ -767,7 +656,6 @@ fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    // shrink_towards=0 below min=5 → simplest clamps to 5.
     let v = tc.draw_integer::<i128>(5, 100).ok().unwrap();
     assert_eq!(v, 5);
 }
@@ -775,16 +663,12 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
-    // shrink_towards=0 above max=-1 → simplest clamps to -1.
     let v = tc.draw_integer::<i128>(-100, -1).ok().unwrap();
     assert_eq!(v, -1);
 }
 
 #[test]
 fn for_simplest_propagates_across_many_draws() {
-    // The mode applies to every draw, not just the first. This is what
-    // makes "midnight = all four time components are zero" findable on
-    // a single pre-trial.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..10 {
         assert_eq!(tc.draw_integer::<i128>(0, 99).ok().unwrap(), 0);
@@ -818,8 +702,6 @@ fn for_simplest_draws_bytes_at_min_size_all_zero() {
 
 #[test]
 fn for_simplest_is_independent_of_seed() {
-    // Two simplest test cases produce identical traces — that's the whole
-    // point: deterministic boundary trial that doesn't depend on RNG luck.
     let mut a = NativeTestCase::for_simplest(BUFFER_SIZE);
     let mut b = NativeTestCase::for_simplest(BUFFER_SIZE);
     for _ in 0..5 {
@@ -832,21 +714,11 @@ fn for_simplest_is_independent_of_seed() {
 
 #[test]
 fn for_simplest_records_choice_nodes() {
-    // Forced-simplest draws still record nodes in the test case so the
-    // engine can inspect what was drawn and feed the trace into the data
-    // tree / shrinker if the test ends up Interesting.
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
     let _ = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     let _ = tc.weighted(0.5, None).ok().unwrap();
     assert_eq!(tc.nodes.len(), 2);
 }
-
-// ── ChoiceTemplate / trailing_template ───────────────────────────────────────
-//
-// Direct tests for the new template mechanism. The for_simplest_* tests above
-// exercise the same paths through the `for_simplest` wrapper; these target
-// the underlying `for_choices_and_template` constructor and the count /
-// mixed-prefix behaviours that wrapper hides.
 
 #[test]
 fn template_simplest_infinite_resolves_every_draw_to_simplest() {
@@ -875,7 +747,6 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
     for _ in 0..3 {
         assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     }
-    // 4th draw is the overrun edge: returns Err and sets EarlyStop.
     assert!(tc.draw_integer::<i128>(0, 100).is_err());
     assert_eq!(tc.status, Some(Status::EarlyStop));
 }
@@ -890,18 +761,13 @@ fn template_concrete_prefix_then_template() {
         10,
         None,
     );
-    // First draw replays the concrete prefix entry.
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 42);
-    // Subsequent draws fall through to the template → simplest().
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
 #[test]
 fn template_concrete_prefix_with_punning_then_template() {
-    // Prefix was originally a Boolean, but the test is drawing an Integer:
-    // punning routes the first draw to unit() (since the original wasn't
-    // "simplest"), and the template kicks in for subsequent draws.
     let prefix = vec![ChoiceValue::Boolean(true)];
     let prefix_nodes = vec![ChoiceNode::new(
         ChoiceKind::Boolean(BooleanChoice),
@@ -915,7 +781,6 @@ fn template_concrete_prefix_with_punning_then_template() {
         10,
         None,
     );
-    // Draw 1: kind mismatch + non-simplest original → unit().
     let v = tc.draw_integer::<i128>(-100, 100).ok().unwrap();
     let expected_unit: i128 = IntegerChoice {
         min_value: BigInt::from(-100),
@@ -926,7 +791,6 @@ fn template_concrete_prefix_with_punning_then_template() {
     .try_into()
     .unwrap();
     assert_eq!(v, expected_unit);
-    // Draw 2: template branch → simplest().
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
@@ -938,7 +802,6 @@ fn template_count_zero_panics_at_construction() {
 
 #[test]
 fn for_simplest_wrapper_matches_template_with_count_none() {
-    // for_simplest is just sugar for the explicit template; identical traces.
     let mut a = NativeTestCase::for_simplest(5);
     let mut b = NativeTestCase::for_choices_and_template(
         &[],
@@ -957,8 +820,6 @@ fn for_simplest_wrapper_matches_template_with_count_none() {
 
 #[test]
 fn template_overrun_status_matches_max_size_overrun() {
-    // Finite-count exhaustion and max_size exhaustion both set Status::EarlyStop —
-    // overrun behaviour is uniform across both paths.
     let mut tc_count = NativeTestCase::for_choices_and_template(
         &[],
         None,
@@ -974,8 +835,6 @@ fn template_overrun_status_matches_max_size_overrun() {
 
 #[test]
 fn template_count_decrements_on_each_draw() {
-    // White-box check: count walks 3 → 2 → 1 → 0 across three draws, then
-    // the fourth draw flips to overrun without further decrement.
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
         None,
@@ -988,11 +847,8 @@ fn template_count_decrements_on_each_draw() {
     }
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
     assert!(tc.draw_integer::<i128>(0, 100).is_err());
-    // After overrun, count stays at 0 (we don't underflow into wraparound).
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
 }
-
-// ── biased_integer_sample / new piecewise distribution ────────────────────
 
 #[test]
 fn biased_integer_sample_stays_in_range_for_small_bounds() {
@@ -1019,8 +875,6 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
 fn biased_integer_sample_stays_in_range_for_full_i128() {
     let mut rng = EngineRng::seeded(3);
     for _ in 0..1000 {
-        // Range is the whole i128 domain, so any returned value is in range;
-        // the assertion is implicit (no panic / overflow).
         let _ = biased_i128_sample(i128::MIN, i128::MAX, &mut rng);
     }
 }
@@ -1035,13 +889,10 @@ fn biased_integer_sample_collapses_when_min_equals_max() {
 
 #[test]
 fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
-    // The piecewise distribution should produce values across many orders of
-    // magnitude when the range is wide.
     let mut rng = EngineRng::seeded(5);
     let mut magnitudes: HashSet<i32> = HashSet::new();
     for _ in 0..2000 {
         let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
-        // bucket by bit-length of |v|
         let mag = if v == 0 {
             0
         } else {
@@ -1076,10 +927,6 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
 
 #[test]
 fn biased_integer_sample_wide_range_still_draws_from_distribution() {
-    // The full i64 range has hundreds of in-range nasty-pool entries; the
-    // pool probability must be capped so that the piecewise distribution
-    // still runs (uncapped, `count * BOUNDARY_PROBABILITY` exceeded 1 and
-    // every draw came from the pool).
     let mut rng = EngineRng::seeded(8);
     let pool = &*SORTED_NASTY_POOL;
     let total = 2000;
@@ -1113,9 +960,6 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
 
 #[test]
 fn biased_string_sample_caps_constant_pool_probability() {
-    // With a permissive full-Unicode alphabet every global string constant
-    // validates, so an uncapped per-candidate threshold would send ~60% of
-    // draws to the constant pool instead of the alphabet-driven sampler.
     let sc = StringChoice {
         intervals: crate::native::intervalsets::IntervalSet::new(vec![
             (0, 0xD7FF),
@@ -1143,10 +987,6 @@ fn biased_string_sample_caps_constant_pool_probability() {
 
 #[test]
 fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
-    // `gs::floats().allow_nan(false).allow_infinity(false)` produces exactly
-    // this choice. The legacy uniform draw computed `min + r * (max - min)`,
-    // where the range width overflows to +inf, collapsing ~90% of draws to
-    // exactly `f64::MAX`.
     let fc = FloatChoice {
         min_value: -f64::MAX,
         max_value: f64::MAX,
@@ -1173,8 +1013,6 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
         max_fraction < 0.2,
         "{max_fraction} of draws were ±f64::MAX; range-width overflow regressed?"
     );
-    // The Hypothesis-style lex draw puts about half its mass on integers
-    // below 2^56; require a healthy share of simple integer-valued floats.
     let integral_fraction = integral as f64 / total as f64;
     assert!(
         integral_fraction > 0.2,
@@ -1201,8 +1039,6 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     }
     assert!(seen_zero && seen_one);
 }
-
-// ── Erased `biased_integer_sample` over `IntegerChoice` ─────────────────
 
 /// The erased entry point uses BigInt; a small range fits the i128
 /// fast path and must produce values in range.
@@ -1240,11 +1076,6 @@ fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
 
 #[test]
 fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bounds() {
-    // At the extreme tail of i128, `min as f64` and `max as f64` lose
-    // precision and round to the same value. The CDF window is then 0,
-    // which is below the 1e-13 threshold and forces the uniform fallback
-    // (the only path that produces a value in [min, max] when the
-    // distribution-based path can't distinguish the endpoints).
     let mut rng = EngineRng::seeded(13);
     let min = i128::MAX - 1000;
     let max = i128::MAX;
@@ -1256,9 +1087,6 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
             all_endpoints = false;
         }
     }
-    // Uniform should produce interior values, not collapse to endpoints —
-    // distinguishes the fallback path from the inverse-CDF path (which
-    // would saturate to one endpoint when the CDF window is degenerate).
     assert!(
         !all_endpoints,
         "uniform fallback should produce values across the range"
@@ -1294,11 +1122,8 @@ fn weighted_boolean_sample_consumes_exactly_one_byte() {
     let result = weighted_boolean_sample(0.5, &mut a);
     let mut byte = [0u8; 1];
     b.fill_bytes(&mut byte);
-    // The decision compares the single drawn byte against the falsey threshold.
-    let falsey = (256.0_f64 * (1.0 - 0.5)).floor().max(1.0) as u32; // 128
+    let falsey = (256.0_f64 * (1.0 - 0.5)).floor().max(1.0) as u32;
     assert_eq!(result, u32::from(byte[0]) >= falsey);
-    // Exactly one byte was consumed: the two RNGs are now in lockstep, which
-    // would not hold had the draw read a u32 (4 bytes) or an f64 (8 bytes).
     assert_eq!(a.next_u64(), b.next_u64());
 }
 
@@ -1319,8 +1144,6 @@ fn weighted_boolean_sample_respects_probability() {
 
 #[test]
 fn float_clamp_reroutes_excluded_magnitude_band() {
-    // A remapped draw landing in (0, smallest_nonzero_magnitude) defaults to
-    // the smallest allowed magnitude (make_float_clamper's re-route).
     let fc = FloatChoice {
         min_value: -1e-307,
         max_value: 1e-307,
@@ -1328,14 +1151,10 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         allow_infinity: false,
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
-    // Mantissa fraction ~0.5 lands the remap just below zero, inside the
-    // excluded band.
     let raw = f64::from_bits(((1u64 << 52) - 1) / 2);
     let clamped = float_clamp(&fc, raw);
     assert_eq!(clamped, f64::MIN_POSITIVE);
 
-    // When the smallest allowed magnitude exceeds max_value, only its
-    // negation is in range.
     let fc_neg = FloatChoice {
         min_value: -1e-307,
         max_value: -1e-308,
@@ -1343,7 +1162,6 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         allow_infinity: false,
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
-    // Mantissa fraction ~0.9: remap lands at ~-1.9e-308, inside the band.
     let raw_neg = f64::from_bits((((1u64 << 52) - 1) / 10) * 9);
     let clamped_neg = float_clamp(&fc_neg, raw_neg);
     assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
@@ -1351,16 +1169,12 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
 
 #[test]
 fn draw_string_with_inverted_sizes_is_an_internal_error() {
-    // Generators validate sizes before reaching the engine; an inverted
-    // range here is a hegel bug, surfaced as an internal-error unwind.
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tc.draw_string(intervals, 5, 4)
     }))
     .unwrap_err();
-    // Outside a test context the internal error panics directly with its
-    // message (inside one it would unwind as an `InternalError` payload).
     let msg = payload.downcast_ref::<String>().unwrap();
     assert!(msg.contains("min_size <= max_size"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
@@ -1368,9 +1182,6 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
 
 #[test]
 fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
-    // An empty alphabet can only produce the empty string, so the schema
-    // layer caps max_size at 0 before reaching the engine; anything else
-    // here is a hegel bug.
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -1,18 +1,3 @@
-// Schema interpreter for the native backend.
-//
-// Translates CBOR schemas (as sent by hegel generators) into concrete
-// values using Hypothesis-style choice recording.
-//
-// Split into submodules:
-//   numeric     — interpret_integer, interpret_boolean, interpret_constant
-//   float       — interpret_float
-//   bytes       — interpret_binary
-//   text        — interpret_string, IntervalSet helpers
-//   regex       — interpret_regex (Python-compatible regex strategy)
-//   collections — interpret_list, interpret_dict, interpret_tuple, interpret_one_of, interpret_sampled_from
-//   special     — date, time, datetime, ip_address, uuid
-//   internet    — domain, email, url
-
 mod bytes;
 mod collections;
 mod float;
@@ -56,11 +41,6 @@ pub(crate) fn interpret_schema(
         EngineError::InvalidArgument("schema is missing a string \"type\" field".to_string())
     })?;
 
-    // Open a dispatch span. We push a Span directly rather than calling
-    // `start_span` because `start_span` takes a u64 label, and schema
-    // types are naturally strings. The structural-coverage stack stays
-    // untouched — coverage tags are a property of the u64 label space
-    // that user-level `start_span` uses.
     let span_idx = ntc.spans.len();
     let span_start = ntc.nodes.len();
     let depth = ntc.span_stack.len() as u32;
@@ -121,7 +101,6 @@ pub(crate) fn many_more(
     state: &mut ManyState,
 ) -> Result<bool, EngineError> {
     let should_continue = if state.min_size as f64 == state.max_size {
-        // Fixed size: draw exactly min_size elements.
         state.count < state.min_size
     } else {
         let forced = if state.force_stop {
@@ -171,7 +150,6 @@ pub(super) fn cbor_to_bigint(value: &Value) -> Result<BigInt, EngineError> {
     match value {
         Value::Integer(i) => Ok(BigInt::from(i128::from(*i))),
         Value::Tag(2, inner) => {
-            // CBOR tag 2: positive bignum (big-endian bytes).
             let Value::Bytes(bytes) = inner.as_ref() else {
                 return Err(EngineError::InvalidArgument(format!(
                     "expected bytes inside bignum tag 2, got {inner:?}"
@@ -180,7 +158,6 @@ pub(super) fn cbor_to_bigint(value: &Value) -> Result<BigInt, EngineError> {
             Ok(BigInt::from_bytes_be(Sign::Plus, bytes))
         }
         Value::Tag(3, inner) => {
-            // CBOR tag 3: negative bignum, value is `-1 - n`.
             let Value::Bytes(bytes) = inner.as_ref() else {
                 return Err(EngineError::InvalidArgument(format!(
                     "expected bytes inside bignum tag 3, got {inner:?}"
@@ -205,7 +182,6 @@ pub(super) fn bigint_to_cbor(v: &BigInt) -> Value {
         return Value::Integer(n.into());
     }
     if v.sign() == Sign::Minus {
-        // Tag 3 stores `n` where the value is `-1 - n`, i.e. `n = |v| - 1`.
         let n = (-v) - BigInt::from(1);
         let (_sign, bytes) = n.to_bytes_be();
         Value::Tag(3, Box::new(Value::Bytes(bytes)))

@@ -9,8 +9,6 @@ struct Wrapper {
     value: i32,
 }
 
-// writing this more nicely requires Eq + Hash on our test structs; but I want to test structs
-// which have minimal traits.
 fn assert_all_unique<T: PartialEq + std::fmt::Debug>(items: &[T]) {
     for (i, a) in items.iter().enumerate() {
         for b in &items[i + 1..] {
@@ -78,7 +76,6 @@ fn composite_integer(tc: TestCase) -> i32 {
     tc.draw(gs::integers())
 }
 
-// explicit regression test for https://github.com/hegeldev/hegel-rust/issues/179
 #[hegel::composite]
 fn composite_u8(tc: TestCase) -> u8 {
     tc.draw(gs::integers())
@@ -105,8 +102,6 @@ fn test_vec_unique_composite(tc: TestCase) {
 
 #[hegel::test]
 fn test_vec_unique_false_after_true(tc: TestCase) {
-    // .unique(false) unsets uniqueness. With unique(true), min_size(5) on booleans
-    // would be impossible (only 2 distinct values), so this proves it was unset.
     let vec: Vec<bool> = tc.draw(
         gs::vecs(gs::booleans())
             .min_size(5)
@@ -270,22 +265,13 @@ fn test_vec_no_partial_eq_compiles_without_unique() {
 
 #[hegel::test]
 fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
-    // filter() removes as_basic(), forcing the non-basic Collection path.
-    // max_size exercises the max_size branch of the engine's new_collection.
     let vec: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>().filter(|_| true)).max_size(5));
     assert!(vec.len() <= 5);
 }
 
-// Regression test: vecs(sampled_from).unique(true) must check value-level uniqueness.
-// Before the fix, as_basic() set "unique":true in the schema, which enforced index-level
-// uniqueness (distinct sampled_from indices), not value-level uniqueness. For a pool of
-// 100 copies of the same value, distinct indices still map to the same value, producing
-// duplicates. The fix makes as_basic() return None when unique_by is set, routing through
-// the non-basic Collection path that checks actual T values.
 #[hegel::test]
 fn test_vec_unique_sampled_from_no_duplicates(tc: TestCase) {
     let vec: Vec<i64> = tc.draw(gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true));
-    // All elements are 0, so a unique vec can have at most 1 element.
     assert!(vec.len() <= 1);
 }
 
@@ -302,8 +288,6 @@ mod simple_collections {
 
     #[test]
     fn test_find_empty_tuple_gives_empty() {
-        // Rust's type system guarantees the returned value is `()`; the
-        // upstream `assert == ()` is vacuous here — this runs as a smoke test.
         minimal(gs::tuples!(), |_: &()| true);
     }
 
@@ -330,10 +314,6 @@ mod simple_collections {
 
     #[test]
     fn test_fixed_dicts_preserve_field_order() {
-        // `OrderedDict` in upstream asserts fixed_dictionaries preserves key
-        // order. hegel-rust's `gs::fixed_dicts()` only takes string keys, but
-        // the underlying `Value::Map` preserves insertion order of `.field()`
-        // calls — port with a non-sorted string ordering.
         let keys: Vec<String> = ["k7", "k2", "k0", "k3", "k9", "k1", "k5", "k8", "k4", "k6"]
             .iter()
             .map(|s| s.to_string())
@@ -389,8 +369,6 @@ mod simple_collections {
 
     #[test]
     fn test_minimizes_list_of_lists() {
-        // Python `any(x) and not all(x)` on a list-of-lists tests non-emptiness
-        // of each inner list (empty lists are falsy in Python).
         let mut xs: Vec<Vec<bool>> =
             minimal(gs::vecs(gs::vecs(gs::booleans())), |x: &Vec<Vec<bool>>| {
                 x.iter().any(|inner| !inner.is_empty()) && !x.iter().all(|inner| !inner.is_empty())
@@ -411,7 +389,6 @@ mod simple_collections {
 
     #[test]
     fn test_small_sized_sets() {
-        // Just needs to be able to run — upstream body is `pass`.
         assert_all_examples(
             gs::vecs(gs::hashsets(gs::unit())).min_size(10),
             |x: &Vec<HashSet<()>>| x.len() >= 10,
@@ -470,8 +447,6 @@ mod simple_collections {
     #[test]
     fn test_lists_of_lower_bounded_length() {
         for n in 0_usize..10 {
-            // Use i128 to match Python's unbounded int semantics — raw i64 sums
-            // overflow on extreme generated values.
             let l: Vec<i64> = minimal(
                 gs::vecs(gs::integers::<i64>()).min_size(n),
                 move |x: &Vec<i64>| {

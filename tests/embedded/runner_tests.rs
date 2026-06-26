@@ -1,11 +1,6 @@
 use super::*;
 use crate::runner::Phase;
 
-// Serialize the three tests below that mutate process-global CI env
-// vars.  Without a lock, `cargo test`'s parallelism can interleave one
-// test's "set TEAMCITY_VERSION" with another test's "remove
-// TEAMCITY_VERSION", and `Settings::new()`'s CI detection sees the
-// wrong state.
 static CI_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
@@ -47,10 +42,6 @@ fn test_settings_backend_setter() {
     assert_eq!(s.backend, Some(Backend::Default));
 }
 
-// The backend's *resolution* (explicit choice vs. auto-urandom-under-
-// Antithesis) is now the engine's job inside hegel-c, reached through the
-// `hegel_settings_set_backend` C setter; the frontend only records the choice.
-
 #[test]
 fn test_settings_has_phase() {
     let s = Settings::new().phases([Phase::Generate, Phase::Shrink]);
@@ -62,9 +53,6 @@ fn test_settings_has_phase() {
 
 #[test]
 fn test_is_in_ci_some_expected_variant() {
-    // Removing "CI" (a None-type entry) forces the iterator to continue and
-    // evaluate the Some("true") entries such as TF_BUILD and GITHUB_ACTIONS,
-    // exercising the `Some(expected)` match arm in is_in_ci().
     let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ci = std::env::var_os("CI");
     unsafe {
@@ -84,11 +72,6 @@ fn test_is_in_ci_some_expected_variant() {
     );
 }
 
-// On CI, every test runs under `is_in_ci() == true`, so the
-// `Database::Unset` arm of `Settings::new` (and of the native engine's
-// `run_main` match in `src/native/test_runner.rs`) is otherwise
-// dead from a coverage perspective.  This test temporarily clears
-// the CI env vars and runs the engine through that arm.
 #[test]
 fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::Hegel;
@@ -119,12 +102,10 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
             std::env::remove_var(name);
         }
     }
-    // Run in a fresh tempdir so we don't pollute cwd.
     let tmp = tempfile::TempDir::new().unwrap();
     let prev_cwd = std::env::current_dir().unwrap();
     std::env::set_current_dir(tmp.path()).unwrap();
 
-    // Settings::new() now defaults to Database::Unset.
     let settings = Settings::new();
     assert_eq!(settings.database, Database::Unset);
     Hegel::new(|tc| {
@@ -145,8 +126,6 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
 
 #[test]
 fn test_settings_new_in_ci_disables_database() {
-    // Temporarily set a CI env var so is_in_ci() returns true.
-    // Using TEAMCITY_VERSION (checked with None, i.e. any value suffices).
     let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let key = "TEAMCITY_VERSION";
     let had_key = std::env::var_os(key).is_some();
@@ -166,10 +145,6 @@ fn test_settings_new_in_ci_disables_database() {
 #[test]
 fn multiple_failures_with_print_blob_emit_per_failure_reproducer_lines() {
     use crate::generators as gs;
-    // Two distinct panic sites → two distinct origins, so the run reports
-    // multiple failures. With print_blob enabled each per-failure block is
-    // followed by its reproducer line (the `eprintln!` in `drive`'s
-    // multi-failure path). The diagnostics go to this test's stderr.
     let result = std::panic::catch_unwind(|| {
         Hegel::new(|tc: TestCase| {
             let n: i32 = tc.draw(gs::integers::<i32>().min_value(-100).max_value(100));
@@ -193,23 +168,13 @@ fn multiple_failures_with_print_blob_emit_per_failure_reproducer_lines() {
     assert!(result.is_err(), "the property should fail");
 }
 
-// ── Hegel::run dispatch (phase gating) ───────────────────────────────────
-
 #[test]
 fn hegel_run_skips_when_generate_phase_disabled() {
-    // Without Phase::Generate (and no replay blob) the engine generates
-    // nothing: a body that always panics must never execute, and the run
-    // passes (no panic).
     Hegel::new(|_tc: TestCase| panic!("must not run"))
         .settings(Settings::new().phases([]))
         .run();
 }
 
-// The `#[hegel::reproduce_failure]` replay path through the public API. The
-// end-to-end attribute wiring is also exercised in tests/test_reproduce_failure.rs,
-// but those run in subprocesses (so they don't contribute coverage); these
-// in-process tests cover `drive_blob_replay` and the `Hegel::run` reproduce
-// dispatch directly.
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
@@ -265,8 +230,6 @@ mod reproduce {
 
     #[test]
     fn hegel_reproduce_failure_replays_regardless_of_phases() {
-        // A blob replay is phase-agnostic: it runs (and surfaces the failure)
-        // even with Phase::Generate disabled.
         let blob = discover_reproduce_blob();
         let msg = run_panic_message(
             Hegel::new(failing_property)
@@ -283,9 +246,6 @@ mod reproduce {
 
     #[test]
     fn hegel_reproduce_failure_first_blob_wins() {
-        // Only the first blob replays; later ones are source-level bookkeeping.
-        // Were the second (undecodable) blob replayed instead, the run would
-        // panic with a decode error rather than the property failure.
         let blob = discover_reproduce_blob();
         let msg = run_panic_message(
             Hegel::new(failing_property)
@@ -298,9 +258,6 @@ mod reproduce {
 
     #[test]
     fn hegel_reproduce_failure_emits_its_diagnostic_when_not_quiet() {
-        // A non-quiet blob replay renders and emits the counterexample's
-        // diagnostic block (the `eprint!` path in `drive_blob_replay`) before
-        // re-raising the failure.
         let blob = discover_reproduce_blob();
         let msg = run_panic_message(
             Hegel::new(failing_property)
@@ -312,8 +269,6 @@ mod reproduce {
 
     #[test]
     fn hegel_reproduce_failure_undecodable_blob_panics() {
-        // An undecodable blob is invalid input: the run panics with the decode
-        // diagnostic rather than running the property.
         let msg = run_panic_message(
             Hegel::new(failing_property)
                 .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
@@ -324,8 +279,6 @@ mod reproduce {
 
     #[test]
     fn hegel_reproduce_failure_stale_blob_panics() {
-        // A blob that decodes but no longer fails (replayed against a body that
-        // doesn't panic) is reported as stale.
         let blob = discover_reproduce_blob();
         let msg = run_panic_message(
             Hegel::new(|tc: TestCase| {

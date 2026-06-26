@@ -21,8 +21,6 @@ fn time_to_total_nanos(t: NaiveTime) -> i64 {
 
 /// Inverse of [`time_to_total_nanos`].
 fn total_nanos_to_time(total: i64) -> NaiveTime {
-    // For leap-second values, chrono keeps secs at 86399 and pushes the extra
-    // second into the nanos field. Detect that range and reconstruct in kind.
     let (secs, nanos) = if total >= 86_400 * 1_000_000_000 {
         (86_399, (total - 86_399 * 1_000_000_000) as u32)
     } else {

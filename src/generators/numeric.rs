@@ -200,26 +200,18 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         let has_max = self.max.is_some();
 
         if let (Some(min), Some(max)) = (self.min, self.max) {
-            // Reject `max < min`, and also a NaN bound (which compares
-            // unordered, i.e. `partial_cmp` is `None`) — matching the original
-            // `!(min <= max)` check.
             if !matches!(
                 min.partial_cmp(&max),
                 Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
             ) {
                 invalid_argument!("Cannot have max_value < min_value");
             }
-            // Reject the sign-aware-empty range min=+0.0, max=-0.0: the
-            // backends treat -0.0 < +0.0, so this range contains no floats.
             if !sign_aware_lte(min, max) {
                 invalid_argument!(
                     "InvalidArgument: There are no {width}-bit floating-point \
                      values between min_value=0.0 and max_value=-0.0"
                 );
             }
-            // After exclude_min/exclude_max, the closed-open / open-closed /
-            // open-open ranges over [min, min] (and the `-0.0`/`0.0` pair
-            // that compares equal under sign-aware ordering) are empty.
             let min_f = min.to_f64();
             let max_f = max.to_f64();
             let zero_pair = min_f == 0.0 && max_f == 0.0;
@@ -231,7 +223,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             }
         }
 
-        // Mirror Hypothesis: an exclusive bound needs a bound to exclude.
         if self.exclude_min && !has_min {
             invalid_argument!("InvalidArgument: Cannot have exclude_min=true without min_value");
         }
@@ -239,9 +230,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             invalid_argument!("InvalidArgument: Cannot have exclude_max=true without max_value");
         }
 
-        // exclude_min=true with min_value=+inf (or exclude_max=true with
-        // max_value=-inf) demands the next representable value beyond an
-        // unbounded endpoint, which doesn't exist.
         if self.exclude_min && self.min.is_some_and(|v| v.to_f64() == f64::INFINITY) {
             invalid_argument!(
                 "InvalidArgument: exclude_min=true with min_value=+inf leaves \
@@ -265,10 +253,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             invalid_argument!("Cannot have allow_infinity=true with both min_value and max_value");
         }
 
-        // Subnormal handling, mirroring Hypothesis's `floats()`: when unset,
-        // subnormals are allowed exactly when the bounds admit any; an
-        // explicit `true` that the bounds contradict is an error; `false`
-        // raises the draw's magnitude floor to the width's smallest normal.
         let smallest_normal = if width == 32 {
             f32::MIN_POSITIVE as f64
         } else {
@@ -297,9 +281,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
                 );
             }
         } else if let (Some(lo), Some(hi)) = (min_f, max_f) {
-            // With subnormals excluded the valid set is
-            // {0} ∪ (-∞, -smallest_normal] ∪ [smallest_normal, ∞) ∩ [lo, hi];
-            // reject ranges that miss it entirely.
             let contains_zero = lo <= 0.0 && hi >= 0.0;
             if !contains_zero && hi < smallest_normal && lo > -smallest_normal {
                 invalid_argument!(
@@ -324,9 +305,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
         if let Some(ref max) = self.max {
             map_insert(&mut schema, "max_value", cbor_serialize(max));
         }
-        // The engine's default (the width's smallest subnormal) means "no
-        // restriction", so the field is only sent when subnormals are
-        // excluded — keeping schemas from older builds byte-identical.
         if !allow_subnormal {
             map_insert(
                 &mut schema,
@@ -335,9 +313,6 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             );
         }
 
-        // When generating finite values without explicit bounds, add type
-        // bounds to prevent overflow during deserialization (the protocol
-        // uses f64, so f32 values near MAX can overflow when round-tripped)
         if !allow_nan && !allow_infinity {
             if self.min.is_none() {
                 map_insert(&mut schema, "min_value", cbor_serialize(&T::MIN));

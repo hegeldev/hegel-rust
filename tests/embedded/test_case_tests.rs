@@ -31,11 +31,7 @@ fn debug_is_non_exhaustive() {
 #[test]
 fn repeatable_display_name_skips_a_taken_name() {
     let (_run, tc) = emitting_test_case();
-    // A non-repeatable draw named "x_1" claims the display name "x_1".
     tc.record_named_draw(&false, "x_1", false);
-    // Two repeatable draws named "x" want "x_1" then "x_2"; the first collides
-    // with the explicit "x_1" above and must advance the counter, so they end
-    // up as "x_2" and "x_3".
     tc.record_named_draw(&false, "x", true);
     tc.record_named_draw(&false, "x", true);
 
@@ -73,14 +69,6 @@ fn invalid_argument_error_is_raised_as_a_usage_error() {
     assert!(msg.contains("bad generator configuration"), "{msg}");
     assert!(!msg.contains("__HEGEL"), "marker leaked: {msg}");
 }
-
-// ── error-code translation ───────────────────────────────────────────────
-//
-// `raise_for_rc` maps libhegel's `hegel_result_t` codes to control-flow
-// unwinds. The per-primitive `TestCase` methods (start_span, stop_span,
-// generate, the pool/collection calls) are thin wrappers that call it on any
-// non-OK code, so a span call after the engine runs out of data concludes the
-// case as `Overrun` rather than corrupting the span structure.
 
 #[test]
 fn stop_test_code_unwinds_as_stop_test() {
@@ -127,21 +115,15 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
-    // Open a span up front (succeeds while the budget is intact), then
-    // exhaust the budget.
     tc.start_span(crate::generators::labels::LIST);
     drive_to_overrun(&tc);
 
-    // stop_span on the aborted case: it still rolls back the span-depth
-    // bookkeeping (asserting depth > 0 first), then unwinds as StopTest.
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "stop_span after overrun should unwind as StopTest"
     );
 
-    // start_span on the aborted case: the depth bump is rolled back before the
-    // StopTest unwind, so the bookkeeping stays balanced.
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tc.start_span(crate::generators::labels::LIST)
     }))
@@ -154,11 +136,6 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
 
 #[test]
 fn unexpected_code_unwinds_as_an_internal_error() {
-    // Any libhegel result code the frontend doesn't model as control flow is a
-    // framework invariant violation, surfaced as an internal error (not a
-    // shrinkable failure). `HEGEL_E_BACKEND` (-3) is such a code: the
-    // per-test-case path only ever expects OK / STOP_TEST / ASSUME /
-    // INVALID_ARG, so a backend error reaching `raise_for_rc` is unexpected.
     let payload =
         std::panic::catch_unwind(|| raise_for_rc(hegel_c::hegel_result_t::HEGEL_E_BACKEND))
             .unwrap_err();

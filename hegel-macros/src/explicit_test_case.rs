@@ -25,8 +25,6 @@ pub fn expand_explicit_test_case(_attr: TokenStream, item: TokenStream) -> Token
     };
 
     if has_hegel_test_attr(&func) {
-        // #[hegel::test] is below us, meaning we're in the wrong order.
-        // (If it were above us, it would have consumed our attribute before we ran.)
         syn::Error::new_spanned(
             &func.sig,
             "#[hegel::explicit_test_case] must appear below #[hegel::test], not above it.\n\
@@ -37,7 +35,6 @@ pub fn expand_explicit_test_case(_attr: TokenStream, item: TokenStream) -> Token
         )
         .to_compile_error()
     } else {
-        // No #[hegel::test] at all.
         syn::Error::new_spanned(
             &func.sig,
             "#[hegel::explicit_test_case] can only be used together with #[hegel::test].\n\

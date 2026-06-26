@@ -230,16 +230,6 @@ fn test_target_rewrite_compiles_in_hegel_test(tc: hegel::TestCase) {
 /// `nodes_examined` from the pre-resize pass stays populated).
 #[test]
 fn test_targeting_walks_through_choice_count_change() {
-    // Score depends on both `n` and the downstream booleans: each `true`
-    // boolean contributes +1. Random sampling rarely produces "all
-    // booleans true", so hill_climb actually makes progress flipping
-    // them, then eventually reaches the integer at the head of the
-    // sequence — where `find_integer` grows `n`, the trial pulls extra
-    // booleans from the random fallback (some `true`, raising the
-    // score), and `current_nodes.len()` changes mid-walk. The next
-    // outer iteration trips the resize-restart, and the
-    // `nodes_examined` set from the pre-resize pass forces the
-    // already-examined skip on the way back down.
     Hegel::new(|tc| {
         let _filler1: bool = tc.draw(gs::booleans());
         let _filler2: bool = tc.draw(gs::booleans());
@@ -273,9 +263,6 @@ fn test_targeting_rejects_perturbation_that_fails_assume() {
     Hegel::new(|tc| {
         let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(20));
         tc.assume(n != 7);
-        // Peak at n=7, but n=7 is filtered out, so the best Valid sample
-        // is n=6 or n=8 (score = -1). Hill-climb walks toward n=7,
-        // hits the assume(), and `try_replace` rejects the Invalid trial.
         tc.target(-((n - 7).saturating_abs() as f64));
     })
     .settings(

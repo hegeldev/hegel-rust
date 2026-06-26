@@ -1,17 +1,9 @@
-// End-to-end test of libhegel via dlopen.
-//
-// We load the built libhegel.so as if we were a non-Rust caller. This
-// catches FFI-layer issues (symbol visibility, layout, channel deadlocks)
-// that a Rust-side unit test would miss.
-
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::path::PathBuf;
 use std::ptr;
 
 use ciborium::Value;
 use libloading::{Library, Symbol};
-
-// ─── Result codes (from hegel.h) ──────────────────────────────────────────────
 
 /// HEGEL_OK from hegel.h.
 const HEGEL_OK: c_int = 0;
@@ -26,8 +18,6 @@ const HEGEL_E_INVALID_ARG: c_int = -5;
 /// HEGEL_E_NOT_COMPLETE from hegel.h.
 const HEGEL_E_NOT_COMPLETE: c_int = -7;
 
-// ─── Library loading ────────────────────────────────────────────────────────
-
 fn lib_path() -> PathBuf {
     let filename = if cfg!(target_os = "macos") {
         "libhegel_c.dylib"
@@ -36,9 +26,6 @@ fn lib_path() -> PathBuf {
     } else {
         "libhegel_c.so"
     };
-    // `HEGEL_C_LIB_DIR` lets the harness load a library built into a separate
-    // target dir — e.g. the `panic = "abort"` build produced by
-    // `just c-test-abort`, which proves no panic crosses the FFI boundary.
     if let Ok(dir) = std::env::var("HEGEL_C_LIB_DIR") {
         let candidate = PathBuf::from(dir).join(filename);
         assert!(
@@ -48,14 +35,7 @@ fn lib_path() -> PathBuf {
         );
         return candidate;
     }
-    // The cdylib is built into the same profile directory as this test
-    // binary, which lives at `<target>/<profile>/deps/<exe>`. Deriving the
-    // location from the running executable (rather than a hard-coded
-    // `<workspace>/target/<profile>`) finds it under whatever target dir is in
-    // use — including `cargo llvm-cov`'s `target/llvm-cov-target/` and the
-    // `panic = "abort"` build's separate tree.
     if let Ok(exe) = std::env::current_exe() {
-        // <target>/<profile>/deps/<exe> -> <target>/<profile>/<filename>
         if let Some(profile_dir) = exe.parent().and_then(|deps| deps.parent()) {
             let candidate = profile_dir.join(filename);
             if candidate.exists() {
@@ -63,8 +43,6 @@ fn lib_path() -> PathBuf {
             }
         }
     }
-    // Fall back to the workspace's default target dir, where a plain
-    // `cargo build -p hegeltest-c` places the cdylib.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target_dir = manifest_dir.parent().unwrap().join("target");
     for profile in ["debug", "release"] {
@@ -88,8 +66,6 @@ fn lib_path() -> PathBuf {
 unsafe fn load() -> Library {
     unsafe { Library::new(lib_path()).expect("dlopen libhegel") }
 }
-
-// ─── Symbol typedefs ────────────────────────────────────────────────────────
 
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -166,7 +142,6 @@ type FnTestCaseFromBlob =
     unsafe extern "C" fn(*mut u8, *const u8, *const c_char, *mut *mut u8) -> c_int;
 type FnTestCaseFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 
-// Bundle of the symbols we use, so the test bodies stay readable.
 struct Api<'a> {
     context_new: Symbol<'a, FnContextNew>,
     context_free: Symbol<'a, FnContextFree>,
@@ -243,17 +218,6 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
     }
 }
 
-// Ergonomic wrappers over the raw symbols, absorbing the uniform calling
-// convention (a leading context, a `hegel_result_t` return, trailing `out_*`
-// parameters) so the test bodies read like the old value-returning API. Each
-// shares its name with the corresponding field: `a.foo(..)` calls the wrapper,
-// `(a.foo)(..)` still calls the raw symbol.
-//
-// Every wrapper for a call that must succeed in correct usage routes its return
-// code through `expect_ok`, which panics with the context's diagnostic on any
-// non-`HEGEL_OK` code — so a misbehaving bookkeeping call aborts the test
-// loudly instead of being silently ignored. The two exceptions
-// (`context_last_error`, `test_case_from_blob`) are documented at their site.
 impl Api<'_> {
     /// Panic with the context's diagnostic if `rc` is not `HEGEL_OK`.
     unsafe fn expect_ok(&self, ctx: *const u8, rc: c_int, what: &str) {
@@ -382,8 +346,6 @@ impl Api<'_> {
     }
 }
 
-// ─── CBOR schema helpers ────────────────────────────────────────────────────
-
 fn encode(value: &Value) -> Vec<u8> {
     let mut buf = Vec::new();
     ciborium::ser::into_writer(value, &mut buf).unwrap();
@@ -418,8 +380,6 @@ fn integer_schema_with_order(min: i64, max: i64, order: &[&str]) -> Vec<u8> {
     }
     encode(&Value::Map(entries))
 }
-
-// ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn libhegel_runs_passing_property() {
@@ -464,7 +424,6 @@ fn libhegel_runs_passing_property() {
 
             let val_bytes = std::slice::from_raw_parts(val_ptr, val_len);
             let v = decode(val_bytes);
-            // Sanity: value is in [0, 100].
             if let Value::Integer(i) = v {
                 let n: i128 = i.into();
                 assert!((0..=100).contains(&n), "got out-of-range value {}", n);
@@ -563,13 +522,6 @@ fn libhegel_runs_with_urandom_backend() {
 
 #[test]
 fn invalid_schema_returns_error_not_abort() {
-    // Reproduces the hegel-java report: a plausible-but-wrong schema type
-    // (`{"type":"ipv4"}`) used to `panic!("Unknown schema type")` inside the
-    // engine, which — crossing the `extern "C"` boundary — aborted the host
-    // process (SIGABRT). It must now return HEGEL_E_INVALID_ARG with a
-    // diagnostic in hegel_context_last_error and leave the process running.
-    // Under the `panic = "abort"` build (`just c-test-abort`) this test only
-    // passes if no panic is reachable on the schema-interpretation path.
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -588,8 +540,6 @@ fn invalid_schema_returns_error_not_abort() {
         let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null(), "expected a test case");
 
-        // Several distinct malformed schemas, each of which previously
-        // panicked at a different site in the interpreter.
         let unknown_type = encode(&Value::Map(vec![(
             Value::Text("type".into()),
             Value::Text("ipv4".into()),
@@ -622,12 +572,6 @@ fn invalid_schema_returns_error_not_abort() {
 
 #[test]
 fn caller_usage_errors_return_error_not_abort() {
-    // Every caller usage error on a live test case — a non-finite or repeated
-    // target score, an opaque handle id libhegel never issued — must return
-    // HEGEL_E_INVALID_ARG, never a panic across the `extern "C"` boundary.
-    // Under the `panic = "abort"` build (`just c-test-abort`) a panic on any
-    // of these paths would SIGABRT the process, so this test only passes if
-    // libhegel stays panic-free on them.
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -648,7 +592,6 @@ fn caller_usage_errors_return_error_not_abort() {
         let label = CString::new("x").unwrap();
         let dup = CString::new("dup").unwrap();
 
-        // Non-finite score, and a label observed twice, are usage errors.
         assert_eq!(
             (a.target)(ctx, tc, f64::NAN, label.as_ptr()),
             HEGEL_E_INVALID_ARG
@@ -661,8 +604,6 @@ fn caller_usage_errors_return_error_not_abort() {
         assert_eq!((a.target)(ctx, tc, 1.0, dup.as_ptr()), HEGEL_OK);
         assert_eq!((a.target)(ctx, tc, 2.0, dup.as_ptr()), HEGEL_E_INVALID_ARG);
 
-        // Opaque handle ids that were never issued: unknown collection (map
-        // lookup), unknown pool / state machine (Vec bounds check).
         let mut more = false;
         assert_eq!(
             (a.collection_more)(ctx, tc, 9999, &mut more),
@@ -723,7 +664,6 @@ fn libhegel_reports_shrunk_failure() {
                 &mut val_len,
             );
             if rc == HEGEL_E_STOP_TEST {
-                // HEGEL_E_STOP_TEST — engine exhausted during a shrink probe.
                 a.mark_complete(ctx, tc, CStatus::Overrun, ptr::null());
                 continue;
             }
@@ -758,7 +698,6 @@ fn libhegel_reports_shrunk_failure() {
         let n_failures = a.run_result_failure_count(ctx, result);
         assert!(n_failures >= 1, "expected at least one failure");
 
-        // The first failure's origin should carry the string we passed in.
         let f = a.run_result_failure(ctx, result, 0);
         assert!(!f.is_null());
         let origin_back = CStr::from_ptr(a.failure_origin(ctx, f)).to_string_lossy();
@@ -841,7 +780,6 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
             !blob_ptr.is_null(),
             "expected a reproduce blob on the failure"
         );
-        // Copy out of the run-owned buffer before freeing the run.
         let blob = CStr::from_ptr(blob_ptr).to_owned();
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -877,8 +815,6 @@ unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> 
             panic!("expected int")
         };
         let n: i128 = i.into();
-        // The caller plays the property's role: it alone decides whether
-        // the replayed example still fails.
         if n < 5 {
             a.mark_complete(ctx, tc, CStatus::Valid, ptr::null());
         } else {
@@ -899,9 +835,6 @@ fn libhegel_blob_test_case_replays_the_counterexample() {
         let ctx = (a.context_new)();
         let blob = discover_failure_blob(&a, ctx);
 
-        // Replay the blob as standalone test cases — no run handle, no
-        // worker. Replaying twice exercises the multiple-reproduce_failures
-        // usage: one call per blob, each its own test case.
         let s = a.settings_new(ctx);
         let first = replay_blob_once(&a, ctx, s, &blob);
         assert!(
@@ -924,7 +857,6 @@ fn libhegel_test_case_from_blob_rejects_bad_input() {
         let ctx = (a.context_new)();
         let s = a.settings_new(ctx);
 
-        // An undecodable blob: NULL with a diagnostic.
         let garbage = CString::new("!!! not a blob !!!").unwrap();
         let tc = a.test_case_from_blob(ctx, s, garbage.as_ptr());
         assert!(tc.is_null());
@@ -934,7 +866,6 @@ fn libhegel_test_case_from_blob_rejects_bad_input() {
             "unexpected error: {err}"
         );
 
-        // NULL blob and NULL settings: NULL with a diagnostic.
         let tc = a.test_case_from_blob(ctx, s, ptr::null());
         assert!(tc.is_null());
         assert!(!CStr::from_ptr(a.context_last_error(ctx)).is_empty());
@@ -955,7 +886,6 @@ fn libhegel_test_case_free_refuses_run_owned_test_cases() {
 
     unsafe {
         let ctx = (a.context_new)();
-        // Freeing NULL is a no-op.
         (a.test_case_free)(ctx, ptr::null_mut());
 
         let s = a.settings_new(ctx);
@@ -964,8 +894,6 @@ fn libhegel_test_case_free_refuses_run_owned_test_cases() {
         (a.settings_database)(ctx, s, empty.as_ptr());
         let run = a.run_start(ctx, s);
 
-        // A test case pumped from a run is owned by the run: freeing it
-        // must be refused, leaving the handle usable.
         let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null());
         (a.test_case_free)(ctx, tc);
@@ -974,7 +902,6 @@ fn libhegel_test_case_free_refuses_run_owned_test_cases() {
             err.contains("owned by its hegel_run_t"),
             "unexpected error: {err}"
         );
-        // Still usable after the refused free.
         a.mark_complete(ctx, tc, CStatus::Valid, ptr::null());
 
         a.run_free(ctx, run);
@@ -1010,7 +937,6 @@ fn libhegel_pool_primitives_draw_added_variables() {
                 break;
             }
 
-            // Build a pool and register three variables.
             let mut pool_id: i64 = -1;
             let rc = (a.new_pool)(ctx, tc, &mut pool_id);
             assert_eq!(rc, HEGEL_OK, "new_pool failed: rc={}", rc);
@@ -1022,13 +948,8 @@ fn libhegel_pool_primitives_draw_added_variables() {
                 assert_eq!(rc, HEGEL_OK, "pool_add failed: rc={}", rc);
                 added.push(var_id);
             }
-            // pool_add hands out a fresh, strictly increasing id each time.
             assert_eq!(added, vec![1, 2, 3]);
 
-            // Non-consuming draw: returns one of the added ids and leaves
-            // the pool unchanged. `pool_generate` can report STOP_TEST if
-            // the engine's choice budget is exhausted mid-shrink, so treat
-            // that the same way the other primitives do.
             let mut drawn: i64 = -1;
             let rc = (a.pool_generate)(ctx, tc, pool_id, false, &mut drawn);
             if rc == HEGEL_E_STOP_TEST {
@@ -1039,11 +960,6 @@ fn libhegel_pool_primitives_draw_added_variables() {
             assert!(added.contains(&drawn), "drew unknown variable {}", drawn);
             saw_pool_draw = true;
 
-            // Consume every variable, then confirm the now-empty pool
-            // rejects the next draw as an invalid test case
-            // (HEGEL_E_ASSUME = -2): a variable drawn from an exhausted pool
-            // can't satisfy the test, so the engine marks the case invalid
-            // rather than out-of-data.
             let mut consumed = 0;
             for _ in 0..3 {
                 let mut v: i64 = -1;
@@ -1124,8 +1040,6 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 break;
             }
 
-            // Registering with zero rules is a usage error, not a crash,
-            // and must leave the test case usable.
             let mut machine_id: i64 = -1;
             let rc = (a.new_state_machine)(
                 ctx,
@@ -1154,9 +1068,6 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             assert_eq!(rc, HEGEL_OK, "new_state_machine failed: rc={}", rc);
             assert_eq!(machine_id, 0);
 
-            // Drive 25 steps, recording the engine's rule choices. The
-            // engine owns selection (including the per-test-case swarm
-            // subset); the caller would apply rules[index] at each step.
             let mut overran = false;
             let mut current_run = 0usize;
             let mut previous: Option<u64> = None;
@@ -1164,8 +1075,6 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 let mut index: u64 = u64::MAX;
                 let rc = (a.state_machine_next_rule)(ctx, tc, machine_id, &mut index);
                 if rc == HEGEL_E_STOP_TEST {
-                    // HEGEL_E_STOP_TEST — engine exhausted during a shrink
-                    // probe.
                     overran = true;
                     break;
                 }
@@ -1189,11 +1098,6 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
         }
 
         assert!(saw_rule_draw, "expected at least one rule selection");
-        // Swarm testing: some test case leaves a single rule enabled, so
-        // every step picks that survivor. Under uniform selection a run of
-        // 15 identical choices among 3 rules is essentially impossible
-        // ((1/3)^14 per starting point); under swarm it shows up within a
-        // 50-case derandomized run.
         assert!(
             longest_single_rule_run >= 15,
             "expected a long single-rule run under swarm selection, longest was {}",
@@ -1241,7 +1145,6 @@ fn libhegel_primitive_boolean_draws_and_forces() {
                 break;
             }
 
-            // Forced draws are deterministic regardless of p.
             let mut v = false;
             let rc = (a.primitive_boolean)(ctx, tc, 0.5, true, true, &mut v);
             assert_eq!(rc, HEGEL_OK, "forced-true draw failed: rc={}", rc);
@@ -1250,7 +1153,6 @@ fn libhegel_primitive_boolean_draws_and_forces() {
             assert_eq!(rc, HEGEL_OK, "forced-false draw failed: rc={}", rc);
             assert!(!v);
 
-            // Boundary probabilities auto-force without consuming entropy.
             let rc = (a.primitive_boolean)(ctx, tc, 0.0, false, false, &mut v);
             assert_eq!(rc, HEGEL_OK, "p=0 draw failed: rc={}", rc);
             assert!(!v);
@@ -1258,10 +1160,6 @@ fn libhegel_primitive_boolean_draws_and_forces() {
             assert_eq!(rc, HEGEL_OK, "p=1 draw failed: rc={}", rc);
             assert!(v);
 
-            // An unforced fair draw; both outcomes must show up across the
-            // run. The draw can report STOP_TEST if the engine's choice
-            // budget is exhausted mid-shrink, so treat that the same way the
-            // other primitives do.
             let rc = (a.primitive_boolean)(ctx, tc, 0.5, false, false, &mut v);
             if rc == HEGEL_E_STOP_TEST {
                 a.mark_complete(ctx, tc, CStatus::Overrun, ptr::null());
@@ -1317,7 +1215,6 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
             }
             saw_test_case = true;
 
-            // NULL test-case handle is reported as HEGEL_E_INVALID_HANDLE.
             let mut v = false;
             let rc = (a.primitive_boolean)(ctx, ptr::null_mut(), 0.5, false, false, &mut v);
             assert_eq!(
@@ -1326,14 +1223,12 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
                 rc
             );
 
-            // Each rejected argument returns HEGEL_E_INVALID_ARG with a
-            // diagnostic in context_last_error.
             let invalid: [(f64, bool, bool); 5] = [
-                (f64::NAN, false, false), // p must not be NaN
-                (-0.5, false, false),     // p below range
-                (1.5, false, false),      // p above range
-                (0.0, true, true),        // cannot force true when p = 0
-                (1.0, false, true),       // cannot force false when p = 1
+                (f64::NAN, false, false),
+                (-0.5, false, false),
+                (1.5, false, false),
+                (0.0, true, true),
+                (1.0, false, true),
             ];
             for (p, forced, has_forced) in invalid {
                 let rc = (a.primitive_boolean)(ctx, tc, p, forced, has_forced, &mut v);
@@ -1346,15 +1241,12 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
                 assert!(!err.is_empty(), "expected a diagnostic message");
             }
 
-            // NULL out pointer.
             let rc = (a.primitive_boolean)(ctx, tc, 0.5, false, false, ptr::null_mut());
             assert_eq!(
                 rc, HEGEL_E_INVALID_ARG,
                 "expected HEGEL_E_INVALID_ARG for null out"
             );
 
-            // Argument errors do not poison the test case: a valid draw
-            // afterwards still succeeds.
             let rc = (a.primitive_boolean)(ctx, tc, 0.5, false, false, &mut v);
             assert_eq!(
                 rc, HEGEL_OK,
@@ -1397,8 +1289,6 @@ fn next_test_case_without_mark_complete_errors() {
         let run = a.run_start(ctx, s);
         let tc1 = a.next_test_case(ctx, run);
         assert!(!tc1.is_null());
-        // Deliberately skip mark_complete; the next pull is rejected. Call the
-        // raw symbol (the wrapper would panic on the non-OK code).
         let mut tc2: *mut u8 = ptr::null_mut();
         let rc = (a.next_test_case)(ctx, run, &mut tc2);
         assert_eq!(rc, HEGEL_E_NOT_COMPLETE, "expected NOT_COMPLETE");
@@ -1408,7 +1298,6 @@ fn next_test_case_without_mark_complete_errors() {
             .into_owned();
         assert!(err.contains("not marked complete"), "got: {}", err);
 
-        // Now mark first complete and let the loop drain so run_free is clean.
         a.mark_complete(ctx, tc1, CStatus::Valid, ptr::null());
         loop {
             let tc = a.next_test_case(ctx, run);
@@ -1439,12 +1328,10 @@ fn run_free_after_early_exit_does_not_hang() {
         a.settings_seed(ctx, s, 99, true);
 
         let run = a.run_start(ctx, s);
-        // Grab one test case, don't complete it, jump straight to free.
         let _ = a.next_test_case(ctx, run);
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
         (a.context_free)(ctx);
-        // Reaching here without deadlocking is the assertion.
     }
 }
 
@@ -1466,7 +1353,6 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
 
     let predicate = |n: i128| n >= 1_000_000;
 
-    // ---- run 1 ----
     let mut last_failure: Option<i128> = None;
     unsafe {
         let ctx = (a.context_new)();
@@ -1517,7 +1403,6 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
     }
     assert!(last_failure.is_some(), "run 1 never observed the failure");
 
-    // ---- run 2: same key + same db, expect replay first ----
     let mut first_seen: Option<i128> = None;
     unsafe {
         let ctx = (a.context_new)();
@@ -1579,12 +1464,6 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
 
 #[test]
 fn health_check_surfaces_as_run_error() {
-    // Reproduces hegel-go report #1's setup: a property whose draws are
-    // all rejected via `assume` trips `FilterTooMuch` inside `run_main`.
-    // A failed health check is a failure of the run, not a counterexample
-    // to the property, so it must surface through the run-level error
-    // channel (`hegel_run_result_error`) with no failures listed — not as
-    // a `HegelFailure`, and not as a dead worker.
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -1600,8 +1479,6 @@ fn health_check_surfaces_as_run_error() {
         let run = a.run_start(ctx, s);
         let schema = integer_schema(0, 1_000_000);
 
-        // Reject everything we draw. The engine eventually trips
-        // FilterTooMuch and errors the run.
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
@@ -1642,8 +1519,6 @@ fn health_check_surfaces_as_run_error() {
             CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy()
         );
 
-        // The run errored, lists no failures, and carries the
-        // FilterTooMuch text on the run-level error channel.
         assert_eq!(
             a.run_result_status(ctx, result),
             CRunStatus::Error,
@@ -1729,11 +1604,6 @@ fn shrinker_partitions_budget_across_unique_origins() {
         1..=100,
     );
     eprintln!("[unique-origins] boundary hit rate: {hits}/100");
-    // The exact rate varies with shrinker tuning; just assert it's
-    // markedly worse than the stable-origin case (100/100). A
-    // regression that pushed this above 70/100 would mean either the
-    // shrinker stopped partitioning by origin (unlikely; documented
-    // contract) or the test stopped exercising the partitioning path.
     assert!(
         hits < 70,
         "expected partitioned-budget hit rate to be well below stable-origin's 100/100, got {hits}/100"

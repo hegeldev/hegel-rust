@@ -30,8 +30,6 @@ fn sib(start: usize, end: usize, label: &str, parent: Option<usize>) -> Span {
 
 #[test]
 fn reorder_spans_sorts_same_label_siblings() {
-    // Two single-int sibling spans under no parent.  After sorting, the
-    // smaller integer should come first.
     let initial = vec![int_node(3), int_node(1)];
     let mut spans = Spans::new();
     spans.push(sib(0, 1, "item", None));
@@ -59,9 +57,6 @@ fn reorder_spans_sorts_same_label_siblings() {
 
 #[test]
 fn reorder_spans_stops_when_deadline_passed() {
-    // With same-label siblings to reorder and an already-expired deadline,
-    // the first `consider` inside `shrink_ordering` errors out and the stop
-    // propagates back through `reorder_spans`.
     use std::time::{Duration, Instant};
     let initial = vec![int_node(3), int_node(1)];
     let mut spans = Spans::new();
@@ -83,7 +78,6 @@ fn reorder_spans_stops_when_deadline_passed() {
 
 #[test]
 fn reorder_spans_skips_singleton_groups() {
-    // A single sibling under each label — nothing to permute.
     let initial = vec![int_node(7), int_node(3)];
     let mut spans = Spans::new();
     spans.push(sib(0, 1, "a", None));
@@ -98,7 +92,6 @@ fn reorder_spans_skips_singleton_groups() {
         spans,
     );
     shrinker.reorder_spans().unwrap();
-    // Order unchanged.
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -112,9 +105,6 @@ fn reorder_spans_skips_singleton_groups() {
 
 #[test]
 fn reorder_spans_handles_multi_node_siblings() {
-    // Three same-label siblings, each spanning two nodes.  After
-    // reordering, the lex-smallest (1,9) comes first, then (3,5), then
-    // (7,2).
     let initial = vec![
         int_node(7),
         int_node(2),
@@ -150,8 +140,6 @@ fn reorder_spans_handles_multi_node_siblings() {
 
 #[test]
 fn reorder_spans_safe_with_stale_endpoints() {
-    // The closure returns shorter actual_nodes than the candidate; the
-    // recorded span endpoints point past the end of current_nodes.
     let initial = vec![int_node(5), int_node(3)];
     let mut spans = Spans::new();
     spans.push(sib(0, 5, "wide", None));
@@ -166,6 +154,5 @@ fn reorder_spans_safe_with_stale_endpoints() {
         spans,
     );
     shrinker.reorder_spans().unwrap();
-    // No panic; nothing changed.
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

@@ -25,13 +25,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         .filter(|v| !matches!(v.fields, Fields::Unit))
         .collect();
 
-    // Compute method names for each data variant.
-    //
-    // 1. Snake-case the variant's identifier (preserving any `r#` raw prefix
-    //    that syn carries through in `to_string()`).
-    // 2. If the result would not be a valid Rust method-name token, append `_`.
-    // 3. If two variants now share a method name, fall back to the original
-    //    identifier for all colliding members.
     let field_names: Vec<syn::Ident> = {
         let method_strs: Vec<String> = data_variants
             .iter()
@@ -61,13 +54,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             .collect()
     };
 
-    // Generate variant generator structs for data variants
     let variant_generators: Vec<_> = data_variants
         .iter()
         .map(|variant| generate_variant_generator(enum_name, variant))
         .collect();
 
-    // Generate field definitions for the main generator struct
     let generator_fields: Vec<_> = field_names
         .iter()
         .map(|field_name| {
@@ -77,7 +68,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         })
         .collect();
 
-    // Generate new() field initializations (call variant generator directly)
     let new_field_inits: Vec<_> = data_variants
         .iter()
         .zip(field_names.iter())
@@ -91,13 +81,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         })
         .collect();
 
-    // Generator DefaultGenerate bounds for new()
     let default_bounds: Vec<_> = data_variants
         .iter()
         .flat_map(|variant| default_gen_bounds(&variant_field_types(variant), quote! { 'a }))
         .collect();
 
-    // builder methods
     let with_methods: Vec<_> = data_variants
         .iter()
         .zip(field_names.iter())
@@ -145,9 +133,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         })
                         .collect();
 
-                    // Emit a `<name>_with` method for tuple variants.
-                    // Takes a closure receiving the default variant generator
-                    // and returning any generator for #enum_name.
                     let with_method_name = format_ident!("{}_with", field_name);
                     let with_bounds = default_gen_bounds(&field_types, quote! { 'a });
                     let with_method = quote! {
@@ -188,8 +173,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         })
         .collect();
 
-    // Build a `0..=N-1` integer schema for variant selection. This mirrors how
-    // `gs::sampled_from` lowers to an integer-index schema.
     let max_variant_idx = variants.len() - 1;
     let variant_index_schema = cbor_map(vec![
         (cbor_text("type"), cbor_text("integer")),
@@ -203,15 +186,12 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         ),
     ]);
 
-    // Map from data variant name to its field ident
     let variant_to_field: HashMap<String, &syn::Ident> = data_variants
         .iter()
         .zip(field_names.iter())
         .map(|(v, f)| (v.ident.to_string(), f))
         .collect();
 
-    // Generate match arms for generate() compositional fallback, keyed by
-    // declaration index.
     let generate_match_arms: Vec<_> = variants
         .iter()
         .enumerate()
@@ -259,9 +239,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         }
     };
 
-    // Unit variant match arms keyed by declaration index for the all-unit
-    // `as_basic` parse closure. Equivalent to `generate_match_arms` here
-    // (every variant is unit) but kept separate for clarity.
     let unit_variant_match_arms: Vec<proc_macro2::TokenStream> = variants
         .iter()
         .enumerate()
@@ -272,7 +249,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         .collect();
 
     let generate_trait_impl = if data_variants.is_empty() {
-        // All-unit enum: pick a variant by integer index.
         quote! {
             impl<'a> hegel::generators::Generator<#enum_name> for #generator_name<'a> {
                 fn do_draw(&self, __tc: &hegel::TestCase) -> #enum_name {
@@ -293,16 +269,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             }
         }
     } else {
-        // Mixed enum: try schema-based, fall back to compositional.
-        //
-        // Schema is `{"type": "one_of", "generators": [s_0, s_1, ...]}` with one
-        // child per variant in declaration order. The server's response is
-        // `[index, value]` where `index` selects the variant; for unit variants
-        // the corresponding child schema is `{"type": "constant", "value": null}`
-        // and the value is discarded, for data variants it's the variant
-        // generator's schema.
-
-        // Bind data variant basic generators (must succeed for all data variants).
         let data_variant_basic_bindings: Vec<proc_macro2::TokenStream> = field_names
             .iter()
             .map(|field_name| {
@@ -313,8 +279,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             })
             .collect();
 
-        // Build schema entries and parse arms in declaration order so the wire
-        // index matches the variant order.
         let null_schema = cbor_map(vec![
             (cbor_text("type"), cbor_text("constant")),
             (cbor_text("value"), quote! { hegel::ciborium::Value::Null }),
@@ -386,7 +350,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     ]);
 
                     Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                        // The server returns `[index, value]` for one_of schemas.
                         let [idx, value]: [hegel::ciborium::Value; 2] =
                             raw.into_array().unwrap().try_into().unwrap();
                         let index = i128::from(idx.into_integer().unwrap()) as usize;
@@ -418,10 +381,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
     };
 
     let expanded = quote! {
-        // if a user has non-camel-case types that conflict, we will generate warning-emitting variable and type
-        // names here. We want to suppress these warnings, because the user already had to suppress these same warnings
-        // when they constructed their type, and they have no way to reach down into this block to locally-suppress them
-        // and would have to suppress on their entire module, which is onerous.
         #[allow(non_camel_case_types, non_snake_case)]
         const _: () = {
             use hegel::generators::Generator as _;
@@ -449,7 +408,6 @@ fn generate_variant_generator(
 
     match &variant.fields {
         Fields::Unit => {
-            // Unit variants don't get their own generator
             quote! {}
         }
         Fields::Named(fields) => {
@@ -459,7 +417,6 @@ fn generate_variant_generator(
                 .map(|f| f.ident.as_ref().unwrap())
                 .collect();
             let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
-            // Generate field builder methods (same name as field, no prefix)
             let builder_methods: Vec<_> = field_names
                 .iter()
                 .zip(field_types.iter())
@@ -477,7 +434,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Generate field definitions
             let generator_fields: Vec<_> = field_names
                 .iter()
                 .zip(field_types.iter())
@@ -486,7 +442,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Generate new() initializers
             let new_inits: Vec<_> = field_names
                 .iter()
                 .zip(field_types.iter())
@@ -497,10 +452,8 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Generator Default bounds
             let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
-            // Generate field construction in generate()
             let field_constructions: Vec<_> = field_names
                 .iter()
                 .map(|field_name| {
@@ -508,7 +461,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Basic bindings
             let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
                 .iter()
                 .map(|name| {
@@ -517,7 +469,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Schema elements (positional, in field order)
             let schema_elements: Vec<_> = field_names
                 .iter()
                 .map(|name| {
@@ -530,7 +481,6 @@ fn generate_variant_generator(
             let parse_iter_ts =
                 cbor_to_iter("iter", quote! { raw }, "Expected tuple for variant fields");
 
-            // parse closure field extractions (positional from tuple)
             let field_parse_in_closure: Vec<proc_macro2::TokenStream> = field_names
                 .iter()
                 .map(|name| {
@@ -604,7 +554,6 @@ fn generate_variant_generator(
         }
         Fields::Unnamed(fields) => {
             let field_types: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
-            // Generate field names _0, _1, _2, etc.
             let field_indices: Vec<_> = (0..field_types.len())
                 .map(|i| format_ident!("_{}", i))
                 .collect();
@@ -629,9 +578,6 @@ fn generate_variant_generator(
 
             let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
-            // Per-field builder methods on the variant generator (`g._0(gen)`,
-            // `g._1(gen)`, etc.). Reachable via the `<name>_with` closure:
-            // `.read_write_with(|g| g._0(gen0))`.
             let builder_methods: Vec<_> = field_indices
                 .iter()
                 .zip(field_types.iter())
@@ -656,7 +602,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // Basic bindings for tuple fields
             let basic_bindings: Vec<proc_macro2::TokenStream> = field_indices
                 .iter()
                 .map(|idx| {
@@ -673,7 +618,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            // parse closure extractions
             let parse_raw_extractions: Vec<proc_macro2::TokenStream> = field_indices
                 .iter()
                 .map(|idx| {

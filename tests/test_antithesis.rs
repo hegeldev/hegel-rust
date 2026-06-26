@@ -1,4 +1,3 @@
-// Antithesis only supports Linux.
 #![cfg(not(windows))]
 
 mod common;
@@ -121,8 +120,6 @@ fn main() {
 }
 "#;
 
-    // No `.feature("antithesis")`: the binary is built without the feature,
-    // while the env says we are inside Antithesis.
     let output = TempRustProject::new()
         .main_file(code)
         .invoke()

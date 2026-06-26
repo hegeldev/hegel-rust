@@ -109,7 +109,6 @@ fn test_default_supports_primitive_builder() {
     assert_all_examples(g, |n: &u32| *n >= 10 && *n <= 20);
 }
 
-// see https://github.com/hegeldev/hegel-rust/issues/246 for context
 #[test]
 fn test_default_cant_infer_through_draw() {
     TempRustProject::new()

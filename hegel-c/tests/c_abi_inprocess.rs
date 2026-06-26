@@ -40,10 +40,6 @@ fn last_error(ctx: *const HegelContext) -> String {
     }
 }
 
-// Happy-path helpers: each asserts the call succeeded and returns its out
-// value, keeping the lifecycle drains readable. Error/edge paths are checked
-// inline at their call sites.
-
 unsafe fn make_settings(ctx: *mut HegelContext) -> *mut HegelSettings {
     let mut s: *mut HegelSettings = ptr::null_mut();
     assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
@@ -130,7 +126,6 @@ unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *con
 fn null_handles_are_rejected_without_crashing() {
     let ctx = hegel_context_new();
     unsafe {
-        // Settings setters reject a null handle with HEGEL_E_INVALID_HANDLE.
         assert_eq!(
             hegel_settings_set_mode(ctx, ptr::null_mut(), hegel_mode_t::HEGEL_MODE_TEST_RUN),
             HEGEL_E_INVALID_HANDLE
@@ -180,8 +175,6 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        // Constructors with a null input handle report it and leave the out
-        // pointer null.
         let mut run: *mut HegelRun = ptr::null_mut();
         assert_eq!(
             hegel_run_start(ctx, ptr::null(), &mut run),
@@ -204,8 +197,6 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        // Result inspection on a null result / null failure reports an invalid
-        // handle rather than dereferencing.
         let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         assert_eq!(
             hegel_run_result_status(ctx, ptr::null(), &mut status),
@@ -235,12 +226,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        // Free is null-safe and returns HEGEL_OK.
         assert_eq!(hegel_settings_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_run_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_test_case_free(ctx, ptr::null_mut()), HEGEL_OK);
 
-        // Per-test-case primitives on a null handle report an invalid handle.
         let tc: *mut HegelTestCase = ptr::null_mut();
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len = 0usize;
@@ -287,16 +276,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_OK
         );
 
-        // A null context is tolerated wherever a context is accepted: the call
-        // still returns its error code, the diagnostic is just discarded (there is
-        // nowhere to record it). This drives the null-context arms of libhegel's
-        // internal set/clear-error helpers and of hegel_context_last_error.
         assert_eq!(
             hegel_run_start(ptr::null_mut(), ptr::null(), &mut run),
             HEGEL_E_INVALID_HANDLE
         );
-        // hegel_context_last_error is the error reader: it returns the message
-        // pointer directly (NULL for a NULL context), not a result code.
         assert!(hegel_context_last_error(ptr::null()).is_null());
     }
     unsafe {
@@ -308,8 +291,6 @@ fn null_handles_are_rejected_without_crashing() {
 fn out_parameters_are_rejected_when_null() {
     let ctx = hegel_context_new();
     unsafe {
-        // Constructors and getters reject a null out pointer with
-        // HEGEL_E_INVALID_ARG, before touching their input handle.
         assert_eq!(
             hegel_settings_new(ctx, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -335,11 +316,8 @@ fn out_parameters_are_rejected_when_null() {
             HEGEL_E_INVALID_ARG
         );
 
-        // hegel_version rejects a null out pointer too.
         assert_eq!(hegel_version(ctx, ptr::null_mut()), HEGEL_E_INVALID_ARG);
 
-        // The result getters reject a null out pointer once their handle is
-        // valid. Drive the run to completion to get a real result handle.
         let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
@@ -380,14 +358,12 @@ fn settings_string_setters_handle_bad_input() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
-        // database(null) leaves the default in place; key(null) clears it.
         assert_eq!(hegel_settings_set_database(ctx, s, ptr::null()), HEGEL_OK);
         assert_eq!(
             hegel_settings_set_database_key(ctx, s, ptr::null()),
             HEGEL_OK
         );
 
-        // Non-UTF-8 bytes are rejected.
         let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
         assert_eq!(
             hegel_settings_set_database(ctx, s, bad.as_ptr()),
@@ -450,7 +426,6 @@ fn explicit_backend_run_and_lifecycle_misuse() {
 
         let run = start(ctx, s);
 
-        // Reading the result before the run is drained is an error.
         let mut res: *const HegelRunResult = ptr::null();
         assert_eq!(hegel_run_result(ctx, run, &mut res), HEGEL_E_NOT_COMPLETE);
         assert!(res.is_null());
@@ -459,7 +434,6 @@ fn explicit_backend_run_and_lifecycle_misuse() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        // Requesting the next case before completing this one is rejected.
         let mut tc2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
             hegel_next_test_case(ctx, run, &mut tc2),
@@ -486,7 +460,6 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             HEGEL_OK
         );
 
-        // Drain the rest normally.
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -520,7 +493,6 @@ fn run_free_with_undrained_case_does_not_deadlock() {
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
-        // Drop everything without marking the case complete.
         hegel_run_free(ctx, run);
         hegel_settings_free(ctx, s);
         hegel_context_free(ctx);
@@ -538,7 +510,6 @@ fn version_is_reported() {
         .unwrap()
         .to_string();
     assert!(!v.is_empty(), "version string is non-empty");
-    // Matches the crate version (e.g. "0.18.0").
     assert!(v.chars().next().unwrap().is_ascii_digit(), "got {v:?}");
     unsafe { hegel_context_free(ctx) };
 }
@@ -566,7 +537,6 @@ fn next_after_drain_returns_null() {
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
         }
-        // Already drained: a further call is a no-op NULL with no error set.
         assert!(next_case(ctx, run).is_null());
         assert!(last_error(ctx).is_empty());
         hegel_run_free(ctx, run);
@@ -600,13 +570,11 @@ fn live_test_case_argument_validation() {
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len = 0usize;
 
-        // generate: null schema pointer with a non-zero length.
         assert_eq!(
             hegel_generate(ctx, tc, ptr::null(), 4, &mut out_ptr, &mut out_len),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("schema pointer is null"));
-        // generate: null out-parameter.
         assert_eq!(
             hegel_generate(
                 ctx,
@@ -619,8 +587,7 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
-        // generate: well-formed pointer but truncated/garbage CBOR.
-        let garbage = [0x82u8, 0x01]; // array(2) with only one element → decode error
+        let garbage = [0x82u8, 0x01];
         assert_eq!(
             hegel_generate(
                 ctx,
@@ -634,7 +601,6 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("malformed CBOR"));
 
-        // Null out-parameters on the collection / pool constructors.
         let mut id = 0i64;
         assert_eq!(
             hegel_new_collection(ctx, tc, 0, u64::MAX, ptr::null_mut()),
@@ -645,15 +611,11 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
-        // A real collection, to reach collection_more's null out-param check,
-        // the NULL-`why` reject branch, and the non-UTF-8 `why` rejection.
         assert_eq!(hegel_new_collection(ctx, tc, 0, 3, &mut id), HEGEL_OK);
         assert_eq!(
             hegel_collection_more(ctx, tc, id, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
-        // The `why` string is decoded before the collection is consulted, so a
-        // non-UTF-8 reason is rejected regardless of collection state.
         assert_eq!(
             hegel_collection_reject(ctx, tc, id, bad_utf8.as_ptr()),
             HEGEL_E_INVALID_ARG
@@ -668,11 +630,9 @@ fn live_test_case_argument_validation() {
                 &mut out_ptr,
                 &mut out_len,
             );
-            // NULL why is the accepted "no reason given" branch.
             assert_eq!(hegel_collection_reject(ctx, tc, id, ptr::null()), HEGEL_OK);
         }
 
-        // A real pool, to reach pool_add / pool_generate null out-param checks.
         let mut pool = 0i64;
         assert_eq!(hegel_new_pool(ctx, tc, &mut pool), HEGEL_OK);
         assert_eq!(
@@ -684,7 +644,6 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
-        // target: null label, then non-UTF-8 label.
         assert_eq!(hegel_target(ctx, tc, 0.0, ptr::null()), HEGEL_E_INVALID_ARG);
         assert!(last_error(ctx).contains("label is null"));
         assert_eq!(
@@ -692,9 +651,6 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
-        // target: a non-finite score and a repeated label are caller usage
-        // errors — HEGEL_E_INVALID_ARG with a diagnostic, never a panic across
-        // the C ABI (libhegel must stay correct under panic=abort).
         assert_eq!(
             hegel_target(ctx, tc, f64::NAN, c"x".as_ptr()),
             HEGEL_E_INVALID_ARG
@@ -707,9 +663,6 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("would overwrite previous"));
 
-        // mark_complete with a non-UTF-8 origin (only consulted for
-        // INTERESTING). This is rejected *before* the case is marked complete,
-        // so the handle is still live afterwards.
         assert_eq!(
             hegel_mark_complete(
                 ctx,
@@ -720,13 +673,11 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
-        // Now actually complete it.
         assert_eq!(
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_OK
         );
 
-        // A completed case rejects further draws and a second completion.
         assert_eq!(
             hegel_generate(
                 ctx,
@@ -742,11 +693,9 @@ fn live_test_case_argument_validation() {
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_E_ALREADY_COMPLETE
         );
-        // It is owned by the run, so freeing it directly is refused.
         assert_eq!(hegel_test_case_free(ctx, tc), HEGEL_E_INVALID_HANDLE);
         assert!(last_error(ctx).contains("owned by its hegel_run_t"));
 
-        // Drain the remainder as VALID.
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -788,7 +737,6 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             }
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            // Every case fails, so the failure reproduces and is recorded.
             match hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n) {
                 HEGEL_OK => {
                     hegel_mark_complete(
@@ -812,11 +760,9 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             count >= 1,
             "the always-interesting property records a failure"
         );
-        // Out-of-range failure index yields a NULL failure (the call succeeds).
         assert!(failure_at(ctx, res, count).is_null());
         let f = failure_at(ctx, res, 0);
         assert!(!f.is_null());
-        // The failure getters reject a null out pointer on a valid failure.
         assert_eq!(
             hegel_failure_origin(ctx, f, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -854,7 +800,6 @@ fn single_test_case_failure_has_origin_but_no_blob() {
         let schema = integer_schema();
         let origin = CString::new("single-case bug").unwrap();
 
-        // Exactly one case is pumped; mark it INTERESTING.
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
         let mut p: *const u8 = ptr::null();
@@ -882,7 +827,6 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             origin_back.contains("single-case bug"),
             "got {origin_back:?}"
         );
-        // A single-test-case failure has no shrunk blob.
         assert!(repro_blob_of(ctx, f).is_null());
 
         hegel_run_free(ctx, run);
@@ -911,7 +855,6 @@ fn primitives_after_overrun_all_report_stop_test() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        // Exhaust the choice budget by drawing until generate reports overrun.
         let mut out_ptr: *const u8 = ptr::null();
         let mut out_len = 0usize;
         let mut overran = false;
@@ -931,7 +874,6 @@ fn primitives_after_overrun_all_report_stop_test() {
         }
         assert!(overran, "drawing should eventually overrun the budget");
 
-        // With the case aborted, each primitive now reports STOP_TEST.
         assert_eq!(
             hegel_start_span(ctx, tc, hegel_label_t::HEGEL_LABEL_LIST as u64),
             HEGEL_E_STOP_TEST
@@ -942,8 +884,6 @@ fn primitives_after_overrun_all_report_stop_test() {
             hegel_new_collection(ctx, tc, 0, 3, &mut id),
             HEGEL_E_STOP_TEST
         );
-        // collection_reject short-circuits on the aborted flag before it would
-        // look up the (here nonexistent) collection id, so id 0 is safe.
         assert_eq!(
             hegel_collection_reject(ctx, tc, 0, ptr::null()),
             HEGEL_E_STOP_TEST
@@ -952,7 +892,6 @@ fn primitives_after_overrun_all_report_stop_test() {
         assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_STOP_TEST);
 
         hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
-        // Drain the rest.
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -981,7 +920,6 @@ fn state_machine_and_primitive_boolean_paths() {
     let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
     let ctx = hegel_context_new();
     unsafe {
-        // Invalid (null) handle on all three entry points.
         let null_tc: *mut HegelTestCase = ptr::null_mut();
         let rule_a = CString::new("a").unwrap();
         let rules: [*const c_char; 1] = [rule_a.as_ptr()];
@@ -1000,7 +938,6 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        // A live test case for the argument-validation and happy paths.
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
         hegel_settings_set_database(ctx, s, empty.as_ptr());
@@ -1009,32 +946,27 @@ fn state_machine_and_primitive_boolean_paths() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        // new_state_machine: null out parameter.
         assert_eq!(
             hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
-        // null rule-name array with a non-zero count.
         assert_eq!(
             hegel_new_state_machine(ctx, tc, ptr::null(), 1, ptr::null(), 0, &mut out_id),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names pointer is null"));
-        // a null entry in the rule-name array.
         let null_entry: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
             hegel_new_state_machine(ctx, tc, null_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names[0] is null"));
-        // a non-UTF-8 entry in the rule-name array.
         let bad_entry: [*const c_char; 1] = [bad_utf8.as_ptr()];
         assert_eq!(
             hegel_new_state_machine(ctx, tc, bad_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
-        // valid rules but a bad invariant array (drives the second name decode).
         let bad_inv: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
             hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, bad_inv.as_ptr(), 1, &mut out_id),
@@ -1042,8 +974,6 @@ fn state_machine_and_primitive_boolean_paths() {
         );
         assert!(last_error(ctx).contains("invariant_names[0] is null"));
 
-        // A valid single-rule machine: registration, next_rule's null-out
-        // guard, then a real rule draw (always rule 0).
         assert_eq!(
             hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
             HEGEL_OK
@@ -1059,7 +989,6 @@ fn state_machine_and_primitive_boolean_paths() {
         );
         assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
 
-        // primitive_boolean: happy path, null out, and an out-of-range p.
         assert_eq!(
             hegel_primitive_boolean(ctx, tc, 0.5, false, false, &mut bv),
             HEGEL_OK

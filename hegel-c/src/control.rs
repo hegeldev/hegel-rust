@@ -1,16 +1,3 @@
-// Engine-internal invariant checks.
-//
-// libhegel panics only on a genuine bug — a violated internal invariant
-// caught by `hegel_internal_assert!` and friends. It must stay correct when
-// compiled with `panic = "abort"`, so a *caller* error (a bad argument, an
-// unknown handle id, a non-finite target score) is never a panic: those are
-// returned as `EngineError::InvalidArgument` and surfaced across the C ABI as
-// `HEGEL_E_INVALID_ARG`. The only panics here are bug reports.
-//
-// (hegeltest's frontend has its own richer control-flow layer that unwinds
-// typed payloads out of a test body through the lifecycle's `catch_unwind`;
-// the engine doesn't run test bodies, so it needs none of that.)
-
 /// Raise an internal-error panic (a bug in Hegel) carrying `message`, with
 /// the caller's location and bug-report framing attached.
 #[track_caller]
@@ -27,10 +14,6 @@ pub(crate) fn raise_internal_error(message: std::fmt::Arguments<'_>) -> ! {
 /// a plain `assert!` reads as an ordinary test assertion, while a violated
 /// internal invariant carries the bug-report framing above.
 macro_rules! hegel_internal_assert {
-    // `if $cond {} else` rather than `if !$cond`: identical semantics
-    // (NaN-involving comparisons fail the assertion, as with `assert!`),
-    // without tripping clippy's negated-partial-ord lint at expansion
-    // sites that compare floats.
     ($cond:expr $(,)?) => {
         if $cond {
         } else {

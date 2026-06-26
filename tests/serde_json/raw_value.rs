@@ -11,7 +11,6 @@ fn test_serde_json_raw_values_default() {
 
 #[test]
 fn test_serde_json_raw_values_are_valid_json() {
-    // The text inside a generated RawValue must always parse as valid JSON.
     assert_all_examples(json_gs::raw_values(), |r| {
         serde_json::from_str::<Value>(r.get()).is_ok()
     });

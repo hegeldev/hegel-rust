@@ -86,7 +86,6 @@ impl<'a> Shrinker<'a> {
         let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
             any_ran = false;
-            // Try the cleanup pass once at the start of each loop.
             let mut can_discard = self.remove_discarded()?;
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;
@@ -100,19 +99,7 @@ impl<'a> Shrinker<'a> {
                 let epoch_before_pass = self.improvements;
                 let mut failures: usize = 0;
 
-                // Each pass is deterministic — running it again with the
-                // shrink target unchanged would simply repeat the same
-                // work. We keep calling the pass while it strictly
-                // improves and stop as soon as it produces no change.
-                // MAX_FAILURES is retained as an upper bound for safety.
-                //
-                // `improvements` increments only when `accept_improvement`
-                // commits a strictly-smaller candidate, so its delta
-                // across a pass invocation is exactly "did the pass shrink
-                // anything?" — no per-iteration `sort_key` snapshot needed.
                 while failures < MAX_FAILURES {
-                    // Grow max_stall to leave breathing room for the
-                    // remainder of this outer iteration.
                     let span = self.calls.saturating_sub(calls_at_loop_start);
                     let target = max_calls_per_failing_step
                         .saturating_mul(2)
@@ -144,8 +131,6 @@ impl<'a> Shrinker<'a> {
                             .max(self.calls.saturating_sub(initial_calls));
                         failures += 1;
                     } else {
-                        // Pass made no calls and no change: nothing more
-                        // to try; treat as exhausted for this iteration.
                         break;
                     }
                 }
@@ -159,8 +144,6 @@ impl<'a> Shrinker<'a> {
                 };
             }
 
-            // Stable-sort passes by their reorder key — passes that
-            // deleted (key -1) float to the front.
             let mut indexed: Vec<(i32, usize, usize)> = reorder_keys
                 .iter()
                 .enumerate()
@@ -175,15 +158,12 @@ impl<'a> Shrinker<'a> {
                 })
                 .collect();
             indexed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            // Apply the permutation in place.  Each pass moves once; we
-            // use a temporary swap so the borrow checker stays happy.
             let permutation: Vec<usize> = indexed.iter().map(|t| t.2).collect();
             let mut new_order: Vec<Option<ShrinkPass<'a>>> =
                 (0..passes.len()).map(|_| None).collect();
             for (dest, &src) in permutation.iter().enumerate() {
                 new_order[dest] = Some(std::mem::replace(
                     &mut passes[src],
-                    // Temporarily fill with a noop placeholder.
                     ShrinkPass::new("__placeholder__", Box::new(|_| Ok(()))),
                 ));
             }

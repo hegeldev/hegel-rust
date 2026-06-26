@@ -236,7 +236,6 @@ pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
 pub use test_case::TestCase;
 
-// re-export for macro use
 #[doc(hidden)]
 pub use ciborium;
 #[doc(hidden)]
@@ -246,14 +245,9 @@ pub use test_case::{
     __IsTestCase, __assert_is_test_case, generate_from_schema, generate_raw, with_output_override,
 };
 
-// re-export public api
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
-// Internal re-exports for benches/. The engine lives in the `hegel-c` crate
-// now, so the bench harness reaches its internals through that crate's own
-// `__bench` module; both are gated on the private `__bench` feature (hegeltest's
-// forwards to hegel-c's) so they stay out of normal builds.
 #[doc(hidden)]
 #[cfg(feature = "__bench")]
 pub use hegel_c::__bench;

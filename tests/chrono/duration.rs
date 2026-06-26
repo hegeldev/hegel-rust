@@ -3,27 +3,15 @@ use chrono::TimeDelta;
 use hegel::extras::chrono as chrono_gs;
 use hegel::generators::{self as gs, Generator};
 
-// ---------------------------------------------------------------------------
-// Days
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_days_default_generator() {
     check_can_generate_examples(gs::default::<chrono::Days>());
 }
 
-// ---------------------------------------------------------------------------
-// Months (count)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_months_count_default_generator() {
     check_can_generate_examples(gs::default::<chrono::Months>());
 }
-
-// ---------------------------------------------------------------------------
-// TimeDelta
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_time_deltas_default() {
@@ -81,8 +69,6 @@ fn test_time_deltas_min_greater_than_max() {
 
 #[test]
 fn test_time_deltas_full_range_bounds() {
-    // The full TimeDelta range exceeds i64 nanoseconds; the generator must
-    // still accept TimeDelta::MIN and TimeDelta::MAX as bounds.
     check_can_generate_examples(
         chrono_gs::time_deltas()
             .min_value(TimeDelta::MIN)
@@ -92,8 +78,6 @@ fn test_time_deltas_full_range_bounds() {
 
 #[test]
 fn test_time_deltas_beyond_i64_nanos() {
-    // 1000 years is well past i64-nanosecond range (~292 years) but well
-    // within TimeDelta::MAX. Both bound and drawn values must round-trip.
     let one_kyear = TimeDelta::seconds(1_000 * 365 * 86_400);
     assert_all_examples(
         chrono_gs::time_deltas()

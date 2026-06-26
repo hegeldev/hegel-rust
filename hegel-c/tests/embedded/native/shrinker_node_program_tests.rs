@@ -19,8 +19,6 @@ fn int_node(value: i128) -> ChoiceNode {
 
 #[test]
 fn node_program_one_deletes_single_node_at_a_time() {
-    // Accepting predicate: every prefix is interesting, so deletion at
-    // every position should succeed.
     let initial = vec![int_node(1), int_node(2), int_node(3), int_node(4)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -31,14 +29,11 @@ fn node_program_one_deletes_single_node_at_a_time() {
         Spans::new(),
     );
     shrinker.node_program(1).unwrap();
-    // All nodes deletable → result is empty.
     assert!(shrinker.current_nodes.is_empty());
 }
 
 #[test]
 fn node_program_two_deletes_pairs_adaptively() {
-    // Accepting predicate; node_program(2) deletes 2 nodes at a time.
-    // Starting with 6 nodes, the adaptive repeats land at 3 ⇒ all gone.
     let initial = vec![
         int_node(1),
         int_node(2),
@@ -61,10 +56,6 @@ fn node_program_two_deletes_pairs_adaptively() {
 
 #[test]
 fn node_program_respects_predicate_rejecting_partial_deletes() {
-    // Predicate accepts only sequences whose length is a multiple of 2.
-    // node_program(2) keeps shape parity, so we can delete *any* number
-    // of pairs.  node_program(1) can't apply because each odd-length
-    // candidate is rejected.
     let initial = vec![
         int_node(1),
         int_node(2),
@@ -74,7 +65,6 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
         int_node(6),
     ];
 
-    // Test 1: node_program(1) — each candidate has odd length → rejected.
     {
         let mut shrinker = Shrinker::with_probe(
             Box::new(|run| match run {
@@ -88,7 +78,6 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
         assert_eq!(shrinker.current_nodes.len(), 6);
     }
 
-    // Test 2: node_program(2) — each candidate has even length → accepted.
     {
         let mut shrinker = Shrinker::with_probe(
             Box::new(|run| match run {
@@ -105,7 +94,6 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
 
 #[test]
 fn node_program_no_op_on_empty_or_too_long() {
-    // Empty initial → nothing to do.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
@@ -117,7 +105,6 @@ fn node_program_no_op_on_empty_or_too_long() {
     shrinker.node_program(3).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 0);
 
-    // n == 0 should also be a no-op.
     let initial = vec![int_node(1)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -148,10 +135,6 @@ fn node_program_deletes_short_ranges() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Walk run-length-encoded blocks.  A block consists of
-                // a leading integer `n` followed by `n` more copies of
-                // `n`.  Interesting iff a block has n == 4 and all
-                // values in the block validate.
                 let mut idx = 0;
                 let mut interesting = false;
                 while idx < nodes.len() {
@@ -161,8 +144,6 @@ fn node_program_deletes_short_ranges() {
                     };
                     let block_end = idx + 1 + n.max(0) as usize;
                     if block_end > nodes.len() {
-                        // Truncated block: not interesting and not invalid;
-                        // just bail.
                         break;
                     }
                     for k in idx + 1..block_end {
@@ -186,9 +167,6 @@ fn node_program_deletes_short_ranges() {
     for k in 1..=4 {
         shrinker.node_program(k).unwrap();
     }
-    // The minimum is the single 4-block: 5 nodes total ([4, 4, 4, 4, 4]).
-    // The shrinker may converge faster or slower than that, but the
-    // overall length should drop substantially from 20.
     assert!(
         shrinker.current_nodes.len() < initial_node_count(),
         "node_program failed to shrink: still {} nodes",
@@ -197,8 +175,6 @@ fn node_program_deletes_short_ranges() {
 }
 
 fn initial_node_count() -> usize {
-    // 1+2+3+4+5+5 = 20 (since the loop's inclusive end produces n+1
-    // copies of n for n >= 1).
     20
 }
 
@@ -226,9 +202,6 @@ fn node_program_adaptively_deletes_long_false_run() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
-                // Predicate: at least one true present. The realised
-                // sequence stops at the first true (draw-until-true
-                // semantics).
                 let mut realised: Vec<ChoiceNode> = Vec::new();
                 let mut interesting = false;
                 for n in nodes {
@@ -246,6 +219,5 @@ fn node_program_adaptively_deletes_long_false_run() {
         Spans::new(),
     );
     shrinker.node_program(1).unwrap();
-    // The shrink target collapses to a single [true].
     assert_eq!(shrinker.current_nodes.len(), 1);
 }

@@ -6,10 +6,6 @@ mod oracle {
 
 #[test]
 fn stdtr_matches_scipy_oracle() {
-    // Hypothesis's `test_stdtr_explicit` asserts agreement to rel=1e-12,
-    // abs=1e-15 against scipy. Our port should match because the Python and
-    // Rust implementations evaluate the identical Abramowitz & Stegun finite
-    // sum in IEEE-754 doubles.
     for &(df, t, expected) in oracle::STDTR_CASES {
         let got = stdtr(df, t);
         assert_close(
@@ -24,8 +20,6 @@ fn stdtr_matches_scipy_oracle() {
 
 #[test]
 fn stdtrit_strict_matches_scipy_oracle_for_df_le_2() {
-    // df ∈ {1, 2} use the closed-form Shaw quantiles. Hypothesis asserts
-    // rel=1e-15 against newer scipy; we use the same tolerance.
     for &(df, p, expected) in oracle::STDTRIT_STRICT_CASES {
         let got = stdtrit(df, p);
         assert_close(
@@ -40,7 +34,6 @@ fn stdtrit_strict_matches_scipy_oracle_for_df_le_2() {
 
 #[test]
 fn stdtrit_lax_matches_scipy_oracle_for_df_ge_3() {
-    // df >= 3 uses Newton-on-stdtr; Hypothesis asserts rel=1e-7, abs=1e-9.
     for &(df, p, expected) in oracle::STDTRIT_LAX_CASES {
         let got = stdtrit(df, p);
         assert_close(
@@ -80,7 +73,6 @@ fn stdtrit_at_one_half_is_zero() {
 
 #[test]
 fn stdtrit_inverts_stdtr() {
-    // Strict on df∈{1, 2} (closed form); lax on df>=3 (Newton).
     for &(df, tol) in &[(1, 1e-12), (2, 1e-12), (3, 1e-7), (10, 1e-7)] {
         for t in [-5.0, -1.0, -0.1, 0.1, 1.0, 5.0] {
             let p = stdtr(df, t);
@@ -140,11 +132,6 @@ fn uniform_pdf_is_reciprocal_of_total_width() {
 
 #[test]
 fn uniform_cdf_clamps_outside_support() {
-    // Below -half_width the CDF is identically 0; above +half_width it is 1.
-    // These branches matter when the piecewise CDF queries the inner uniform
-    // far outside [-256, 256] (e.g. for `cdf(256) - cdf(0)`, the outer branch
-    // does the lookup, but the inner CDF still gets called for the splice's
-    // density-continuity calculation in `new()`).
     let d = UniformDistribution::new(10.0);
     assert_eq!(d.cdf(-100.0), 0.0);
     assert_eq!(d.cdf(100.0), 1.0);
@@ -159,24 +146,15 @@ fn uniform_pdf_is_zero_outside_support() {
 
 #[test]
 fn piecewise_pdf_splits_at_switchover_and_matches_continuity() {
-    // The splice is built so `beta * inner.pdf(c) = alpha * outer.pdf(c)`
-    // at the switchover c. Inside the core we use the rescaled uniform
-    // density; outside we use the rescaled log-Student-t. Just inside (255)
-    // and just outside (257) the densities should be close (continuity)
-    // and at zero we hit the inner branch.
     let inner = UniformDistribution::new(256.0);
     let outer = LogStudentTDistribution::new(13.0, 2);
     let d = PiecewiseDistribution::new(inner, outer, 256.0);
     let p_zero = d.pdf(0.0);
     let p_inside = d.pdf(255.0);
     let p_outside = d.pdf(257.0);
-    // Inside-uniform branch — constant across the core, so equal at 0 and 255.
     assert_eq!(p_zero, p_inside);
-    // Continuity at the switchover: inside and outside densities should be
-    // within a few percent at neighbouring points.
     let rel = (p_inside - p_outside).abs() / p_inside;
     assert!(rel < 0.05, "p_inside={p_inside}, p_outside={p_outside}");
-    // Symmetry across zero.
     assert_eq!(d.pdf(-257.0), p_outside);
 }
 
@@ -208,8 +186,6 @@ fn log_student_t_round_trip() {
     for x in [1.0, 10.0, 100.0, 1_000.0, 1_000_000.0] {
         let p = d.cdf(x);
         let back = d.inverse_cdf(p);
-        // Small relative tolerance — Newton is lax but we're inside the
-        // bulk where it converges well.
         let rel = (back - x).abs() / x.abs().max(1.0);
         assert!(rel < 1e-6, "round-trip failed for x={x}: back={back}");
     }
@@ -217,9 +193,6 @@ fn log_student_t_round_trip() {
 
 #[test]
 fn log_student_t_clamps_extreme_inverse_cdf_inputs() {
-    // The Python port clamps internal y to ±1023 before expm1 to avoid
-    // OverflowError. Verify we return a finite float rather than panicking
-    // or returning ±inf at the extreme tails.
     let d = LogStudentTDistribution::new(13.0, 2);
     let lo = d.inverse_cdf(1e-300);
     let hi = d.inverse_cdf(1.0 - 1e-15);
@@ -255,7 +228,6 @@ fn piecewise_cdf_inverse_round_trip() {
 
 #[test]
 fn piecewise_cdf_at_zero_is_one_half() {
-    // Both branches symmetric around 0, so the splice should be too.
     let inner = UniformDistribution::new(256.0);
     let outer = LogStudentTDistribution::new(13.0, 2);
     let d = PiecewiseDistribution::new(inner, outer, 256.0);
@@ -274,11 +246,9 @@ fn piecewise_inverse_cdf_at_half_is_zero() {
 
 #[test]
 fn piecewise_density_is_continuous_at_switchover() {
-    // Density continuity is the whole point of the alpha/beta normalisation.
     let inner = UniformDistribution::new(256.0);
     let outer = LogStudentTDistribution::new(13.0, 2);
     let d = PiecewiseDistribution::new(inner, outer, 256.0);
-    // Forward-difference approximations to the density from either side.
     let left_density = d.cdf(256.0) - d.cdf(255.0);
     let right_density = d.cdf(257.0) - d.cdf(256.0);
     let rel = (left_density - right_density).abs() / left_density;
@@ -290,10 +260,6 @@ fn piecewise_cdf_is_monotone_and_bounded() {
     let inner = UniformDistribution::new(256.0);
     let outer = LogStudentTDistribution::new(13.0, 2);
     let d = PiecewiseDistribution::new(inner, outer, 256.0);
-    // CDF must lie in [0, 1] and be monotone non-decreasing across the
-    // splice boundary. The log-student-t tails decay slowly so absolute
-    // mass at ±1e3 is not yet near the endpoints, but monotonicity has to
-    // hold everywhere.
     let xs = [
         -1e10, -1e6, -1000.0, -256.0, -100.0, -1.0, 0.0, 1.0, 100.0, 256.0, 1000.0, 1e6, 1e10,
     ];

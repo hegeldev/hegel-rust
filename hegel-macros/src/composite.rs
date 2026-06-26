@@ -4,21 +4,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{FnArg, ItemFn, ReturnType, parse_quote, parse2};
 
-// Our goal is to expand this
-//
-// #[hegel::composite]
-// fn composite_generator(tc: TestCase, a: A, b: B) -> C {
-//     body
-// }
-//
-// into this
-//
-// fn composite_generator(a: A, b: B) -> ComposedGenerator<C, impl Fn(TestCase) -> C> {
-//     compose!(|tc| { body })
-// }
-
 pub fn expand_composite(mut f: ItemFn) -> TokenStream {
-    // Clone the input parameters into a vector, so we can pull the first one out.
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
     let Some((FnArg::Typed(tc_arg), passthrough)) = input_parameters.split_first() else {

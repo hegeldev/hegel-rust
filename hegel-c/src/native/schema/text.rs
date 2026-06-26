@@ -1,8 +1,3 @@
-// String schema interpreter. Mirrors Hypothesis's
-// `strategies/_internal/strings.py` + `internal/charmap.py`: turn the schema's
-// codec / codepoint range / category / include-exclude character constraints
-// into a single [`IntervalSet`], then hand it to `draw_string`.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -29,11 +24,6 @@ pub(super) fn interpret_string(
 
     let intervals = build_intervals(schema)?;
     if intervals.is_empty() && max_size > 0 {
-        // Empty alphabets are a schema-level error — Hypothesis raises
-        // `InvalidArgument` at strategy-construction time. The Hegel protocol
-        // can't catch it that early, so surface it as an error at draw time.
-        // The "InvalidArgument" token matches the cross-backend (server)
-        // wording so backend-agnostic tests recognise the same failure.
         return Err(EngineError::InvalidArgument(
             "InvalidArgument: No valid characters in the specified range. \
              The schema's codec/codepoint/category/include/exclude constraints \
@@ -54,15 +44,10 @@ pub(super) fn build_intervals(schema: &Value) -> Result<IntervalSet, EngineError
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut key = Vec::new();
-    // CBOR serialization into a `Vec<u8>` is infallible: ciborium only fails
-    // on the writer (which doesn't fault for in-memory buffers) or on
-    // un-encodable values (which `Value` rules out by construction).
     ciborium::into_writer(schema, &mut key).expect("CBOR encoding of schema cannot fail");
     if let Some(cached) = cache.lock().unwrap().get(&key) {
         return Ok((**cached).clone());
     }
-    // Only successful results are cached; an invalid schema returns the error
-    // and leaves the cache untouched.
     let computed = Arc::new(build_intervals_uncached(schema)?);
     cache.lock().unwrap().insert(key, Arc::clone(&computed));
     Ok((*computed).clone())
@@ -111,9 +96,6 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
         }
     }
 
-    // `include_characters` deliberately bypass the min/max codepoint bounds,
-    // but not the codec: Hypothesis raises InvalidArgument for include
-    // characters the codec cannot encode.
     if codec.is_some() {
         if let Some(ref incl) = include_chars {
             let bad: Vec<char> = incl
@@ -145,12 +127,8 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
         }
     }
 
-    // Start with the codec/codepoint range minus surrogates.
     let base = range_minus_surrogates(cp_min, cp_max);
 
-    // Apply category filters. `categories=[]` together with
-    // `include_characters` is the alphabet-from-include-only case: start
-    // from an empty interval set rather than `base`.
     let needs_category_filter = categories.is_some()
         || exclude_categories
             .as_ref()
@@ -159,21 +137,13 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
 
     let mut intervals = if let Some(ref cats) = categories {
         if cats.is_empty() {
-            // categories=[] + include_characters: alphabet is whatever
-            // include_characters provides (validated against the codec
-            // above, minus exclude_characters), with no codec-driven base.
             IntervalSet::new(Vec::new())
         } else {
-            // categories=[...]: intersect base with the union of these
-            // categories.
             let cat_union = categories_union(cats);
             base.intersection(&cat_union)
         }
     } else if let Some(ref excl_cats) = exclude_categories {
         if needs_category_filter {
-            // exclude_categories with at least one non-`Cs` entry: subtract
-            // the union of the excluded categories (ignoring `Cs`, which
-            // is already absent from `base`).
             let cat_union = categories_union(
                 &excl_cats
                     .iter()
@@ -189,7 +159,6 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
         base
     };
 
-    // Subtract exclude_characters.
     if let Some(ref excl) = exclude_chars {
         if !excl.is_empty() {
             let excl_set = chars_to_intervals(excl);
@@ -197,7 +166,6 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
         }
     }
 
-    // Union in include_characters (filtered to non-surrogates).
     if let Some(ref incl) = include_chars {
         if !incl.is_empty() {
             let incl_filtered: Vec<char> = incl

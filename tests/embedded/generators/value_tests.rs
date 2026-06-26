@@ -95,7 +95,6 @@ fn test_from_ciborium_neg_infinity() {
 
 #[test]
 fn test_from_ciborium_big_integer() {
-    // Value larger than 2^53
     let cbor = ciborium::Value::Integer(9223372036854776833u64.into());
     let hegel = HegelValue::from(cbor);
     let result: u64 = from_hegel_value(hegel).unwrap();

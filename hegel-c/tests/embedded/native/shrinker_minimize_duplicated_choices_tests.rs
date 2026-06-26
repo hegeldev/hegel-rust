@@ -131,9 +131,6 @@ fn shrink_duplicates_collapses_paired_strings_to_empty() {
 
 #[test]
 fn shrink_duplicates_leaves_solo_nodes_alone() {
-    // Single non-duplicate of each kind — the generalised pass shouldn't
-    // change them.  Predicate accepts everything; only the simplest-step
-    // could fire, but each group has only one member.
     let mut shrinker =
         accepting_shrinker(vec![bool_node(true), float_node(3.0), bytes_node(vec![5])]);
     shrinker.shrink_duplicates().unwrap();
@@ -153,12 +150,8 @@ fn shrink_duplicates_leaves_solo_nodes_alone() {
 
 #[test]
 fn shrink_duplicates_keeps_distinct_values_separate() {
-    // Three booleans, only two of them duplicates.  The duplicates
-    // should be lowered together; the third value should be left alone.
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(false), bool_node(true)]);
     shrinker.shrink_duplicates().unwrap();
-    // After shrink: the two trues went to false, the original false
-    // stayed.  Result: [false, false, false].
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Boolean(b) => assert!(!b),
@@ -197,10 +190,6 @@ fn group_accepts_uniform_at_least(initial: Vec<ChoiceNode>, threshold: i128) -> 
 
 #[test]
 fn shrink_duplicates_positive_descent_is_log_log() {
-    // Five copies of a very large integer (10^15) constrained to
-    // remain equal and >= 100.  With shift_right descent this should
-    // converge in ~7 accept_improvements (log log of 10^15);
-    // bin_search_down would take ~50.
     let initial: Vec<ChoiceNode> = (0..5)
         .map(|_| integer_node(1_000_000_000_000_000, 0, i128::MAX))
         .collect();
@@ -222,12 +211,9 @@ fn shrink_duplicates_positive_descent_is_log_log() {
 
 #[test]
 fn shrink_duplicates_negative_descent_is_log_log() {
-    // Mirror of the positive case: predicate accepts uniform-negative
-    // groups <= -threshold.  Tests the L602 bin_search_down branch.
     let initial: Vec<ChoiceNode> = (0..5)
         .map(|_| integer_node(-1_000_000_000_000_000, i128::MIN + 1, 0))
         .collect();
-    // Predicate accepts uniform integer groups <= -100.
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run| match run {
             ShrinkRun::Full(nodes) => {
@@ -280,9 +266,6 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
-            // Truncate to length 1.  After the first replace lands
-            // this, indices 2 and 3 (from the OTHER group) fall out
-            // of the `i < current_nodes.len()` filter range.
             ShrinkRun::Full(_) => (true, vec![integer_node(0, 0, i128::MAX)], Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -315,9 +298,6 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
                 if n <= 0 {
                     return (false, nodes.to_vec(), Spans::new());
                 }
-                // Accept and truncate the realised sequence to one
-                // node so the next group_replace probe finds < 2
-                // valid members.
                 (true, vec![nodes[0].clone()], Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -351,23 +331,13 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
                 };
                 if nodes.len() == 4 {
                     if head > 7 {
-                        // Initial `[9, 9, 5, 5]` and the first-half
-                        // `[9, 9, 0, 0]` step both land here.
                         return (true, nodes.to_vec(), Spans::new());
                     }
                     if head > 0 {
-                        // Second-half's first descent probe arrives
-                        // with head in (0, 7]; accept it but truncate
-                        // the realised sequence so the OTHER integer
-                        // group's indices fall out of range.
                         return (true, vec![nodes[0].clone()], Spans::new());
                     }
-                    // Replace-with-simplest step (head=0) is rejected
-                    // so the first half's simplest step doesn't
-                    // disturb the second half's setup.
                     return (false, nodes.to_vec(), Spans::new());
                 }
-                // Length-1 follow-ups stay interesting.
                 (true, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),

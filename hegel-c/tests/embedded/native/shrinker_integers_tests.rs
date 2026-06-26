@@ -43,8 +43,6 @@ fn accept_all(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 
 #[test]
 fn integer_shrink_walks_up_to_shrink_towards_from_below() {
-    // v = 3, target = 100: the simplest valid value is 100 itself, which
-    // lies *above* the current value.
     let mut shrinker = accept_all(vec![int_node_st(3, 0, 1000, 100)]);
     shrinker.binary_search_integer_towards_zero().unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 100);
@@ -59,9 +57,6 @@ fn integer_shrink_descends_to_shrink_towards_from_above() {
 
 #[test]
 fn integer_shrink_probes_both_sides_of_target_for_nonmonotonic_predicates() {
-    // Only odd values are interesting; from 3 with target 100 the best
-    // values are 101 (distance 1, above) and 99 (distance 1, below). The
-    // pass must reach distance 1 even though the target itself fails.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
@@ -84,9 +79,6 @@ fn integer_shrink_probes_both_sides_of_target_for_nonmonotonic_predicates() {
 
 #[test]
 fn integer_shrink_masks_high_bits_of_distance() {
-    // Predicate: v & 0xff == 0x77. From 0x1000077 the minimal value is
-    // 0x77: Hypothesis's mask_high_bits reaches it in a couple of probes,
-    // while plain descent stalls on the non-monotonic predicate.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
@@ -104,10 +96,6 @@ fn integer_shrink_masks_high_bits_of_distance() {
 
 #[test]
 fn redistribute_integers_moves_values_toward_shrink_towards() {
-    // Sum-pinned pair (3, 197) with target 100 each: Hypothesis
-    // redistributes toward the target, reaching (100, 100); a zero-anchored
-    // redistribution can only move the first value further *away* from its
-    // target and stalls.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
@@ -126,9 +114,6 @@ fn redistribute_integers_moves_values_toward_shrink_towards() {
 
 #[test]
 fn lower_and_bump_accepts_relative_bump() {
-    // (5, 0) -> (4, 1): lowering node 0 by one index while bumping node 1 by
-    // a small relative offset is exactly the linked-pair move lower_and_bump
-    // exists for.
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {

@@ -273,7 +273,6 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
         let rule = &rules[rule_index];
         tc.note(&format!("Step {}: {}", step, rule.name));
 
-        // We only need this because AssertUnwindSafe expects a closure.
         let rule_tc = tc.child(2);
         let thunk = || (rule.apply)(&mut m, rule_tc);
         let result = catch_unwind(AssertUnwindSafe(thunk));
@@ -284,13 +283,10 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
                 steps_run_successfully += 1;
                 check_invariants(&mut m, &tc);
             }
-            // Backend ran out of data — this test case is done.
             Err(e) if e.downcast_ref::<StopTest>().is_some() => break,
-            // Rule was skipped by assume(false); try a different rule.
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
                 tc.note("Rule stopped early due to violated assumption.");
             }
-            // Genuine rule failure: propagate it.
             Err(e) => resume_unwind(e),
         };
     }

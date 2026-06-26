@@ -20,10 +20,6 @@ impl DefaultGenerator for Value {
     }
 }
 
-// `serde_json::Map<K, V>` is generic in its type signature, but every public
-// constructor and trait impl is hardcoded to `Map<String, Value>`. There's no
-// way to construct any other instantiation through the crate's public API,
-// so this impl covers the full usable space.
 impl DefaultGenerator for Map<String, Value> {
     type Generator = BoxedGenerator<'static, Map<String, Value>>;
     fn default_generator() -> Self::Generator {

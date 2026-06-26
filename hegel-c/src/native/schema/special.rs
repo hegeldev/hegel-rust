@@ -1,9 +1,3 @@
-// Interpreters for special string schemas: date, time, datetime, ip_address,
-// uuid. All produce ciborium::Value strings matching the output of
-// Hypothesis's `st.dates() / st.times() / st.datetimes() / st.ip_addresses() /
-// st.uuids()` strategies (with `.isoformat()` / `str(...)` mapping applied
-// server-side, per `hegel.schema._from_schema`).
-
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
@@ -141,7 +135,6 @@ pub(super) fn interpret_uuid(
     use crate::cbor_utils::as_u64;
     let version = map_get(schema, "version").and_then(as_u64).map(|v| v as u8);
 
-    // Two 64-bit halves: u64::MAX fits comfortably in i128 so the draw is in range.
     let hi = ntc
         .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
         .to_u64()
@@ -153,13 +146,8 @@ pub(super) fn interpret_uuid(
     let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
 
     if let Some(v) = version {
-        // Clear and set the RFC 4122 variant (top 2 bits of the 9th byte = bits 62..63 of a
-        // big-endian u128 = bits 48..63 within the second-from-low 16-bit group).
-        // Hypothesis's `UUID(version=v, int=n)`: `n &= ~(0xc000 << 48); n |= 0x8000 << 48`.
         n &= !(0xc000u128 << 48);
         n |= 0x8000u128 << 48;
-        // Clear and set the version nibble (high nibble of the 7th byte = bits 76..79).
-        // `n &= ~(0xf000 << 64); n |= version << 76`.
         n &= !(0xf000u128 << 64);
         n |= u128::from(v) << 76;
     } else if n == 0 {
@@ -188,21 +176,6 @@ pub(super) fn interpret_uuid(
     )))
 }
 
-// ── IP addresses ─────────────────────────────────────────────────────────────
-//
-// Hypothesis biases toward reserved / private / loopback / documentation
-// ranges so bugs around special-address handling get exercised. Per
-// `hypothesis.strategies._internal.ipaddress`:
-//
-//     four = binary(4).map(IPv4Address) | sampled_from(SPECIAL_IPv4_RANGES).flatmap(ip_in_network)
-//     six  = binary(16).map(IPv6Address) | sampled_from(SPECIAL_IPv6_RANGES).flatmap(ip_in_network)
-//
-// `a | b` is `one_of([a, b])`, which draws an index in {0, 1} uniformly.
-// `ip_in_network` draws an integer in `[int(network[0]), int(network[-1])]`
-// uniformly.
-
-// IANA's IPv4 special-purpose registry. Sourced from
-// `hypothesis.strategies._internal.ipaddress::SPECIAL_IPv4_RANGES`.
 const SPECIAL_IPV4_CIDRS: &[&str] = &[
     "0.0.0.0/8",
     "10.0.0.0/8",
@@ -230,8 +203,6 @@ const SPECIAL_IPV4_CIDRS: &[&str] = &[
     "255.255.255.255/32",
 ];
 
-// IANA's IPv6 special-purpose registry. Sourced from
-// `hypothesis.strategies._internal.ipaddress::SPECIAL_IPv6_RANGES`.
 const SPECIAL_IPV6_CIDRS: &[&str] = &[
     "::1/128",
     "::/128",
@@ -288,8 +259,6 @@ fn parse_v4_cidr(s: &str) -> V4Network {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv4Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
-    // Every range we ship has prefix in 1..=32. /0 would shift by 32 and
-    // overflow `u32`; reject it explicitly rather than silently masking it.
     hegel_internal_assert!(
         (1..=32).contains(&prefix),
         "IPv4 prefix must be in 1..=32, got /{prefix}"
@@ -304,9 +273,6 @@ fn parse_v6_cidr(s: &str) -> V6Network {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv6Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
-    // Every range we ship has prefix in 7..=128, comfortably under
-    // i128::MAX (≤ 2^121 host bits). /0 would shift by 128 and overflow
-    // `u128`; reject it explicitly.
     hegel_internal_assert!(
         (1..=128).contains(&prefix),
         "IPv6 prefix must be in 1..=128, got /{prefix}"
@@ -343,14 +309,12 @@ pub(super) fn interpret_ip_address(
 }
 
 fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
-    // one_of([random_bytes, sampled_from(SPECIAL).flatmap(in_network)]).
     let addr_int: u32 = if ntc
         .draw_integer(BigInt::from(0), BigInt::from(1))?
         .to_i128()
         .unwrap()
         == 0
     {
-        // Four uniform bytes — `binary(min_size=4, max_size=4).map(IPv4Address)`.
         let a = ntc
             .draw_integer(BigInt::from(0), BigInt::from(255))?
             .to_u32()
@@ -375,8 +339,6 @@ fn interpret_ipv4(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
             .to_i128()
             .unwrap() as usize;
         let net = &nets[idx];
-        // integers(int(network[0]), int(network[-1])) — drawn as
-        // base + offset so the i128 cast never sees a value above i128::MAX.
         let offset = ntc
             .draw_integer(BigInt::from(0), BigInt::from(net.size_minus_1))?
             .to_u32()
@@ -393,7 +355,6 @@ fn interpret_ipv6(ntc: &mut NativeTestCase) -> Result<Value, EngineError> {
         .unwrap()
         == 0
     {
-        // 16 uniform bytes via two 64-bit halves.
         let hi = ntc
             .draw_integer(BigInt::from(0), BigInt::from(u64::MAX))?
             .to_u64()

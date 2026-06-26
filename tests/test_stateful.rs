@@ -61,7 +61,6 @@ fn main() {}
         .cargo_test(&[]);
 }
 
-// Consuming an element from a set should mean subsequent draws never yield the element.
 struct TestConsumeMachine {
     numbers: Pool<i32>,
     consumed: i32,
@@ -92,11 +91,6 @@ fn test_consume(tc: TestCase) {
     };
     hegel::stateful::run(m, tc);
 }
-
-// That `#[hegel::state_machine]` correctly propagates `#[cfg(...)]` attributes
-// to the items it synthesises (so an inactive cfg strips them before
-// compile_error! can fire) is asserted by
-// tests/compile/pass/stateful_cfg_attributes_are_copied_to_rules.rs.
 
 struct TestLifetimeMachine<'a> {
     data: &'a [i32],
@@ -137,7 +131,6 @@ fn test_state_machine_with_type_parameter(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
-// Drawing an element from a bundle should always yield an element that was previously added.
 struct TestDrawDomainMachine {
     domain: Vec<i32>,
     pool: Pool<i32>,
@@ -231,10 +224,6 @@ mod stateful {
         }
     }
 
-    // A rule that fails for a real reason must NOT be reported as having
-    // stopped due to a violated assumption: that note describes the
-    // assume(false) skip path, not a genuine failure. Regression test for the
-    // inverted note that printed "violated assumption" on every rule failure.
     #[test]
     fn test_genuine_failure_is_not_reported_as_violated_assumption() {
         let output = capture_output(false, |tc: TestCase| {
@@ -263,9 +252,6 @@ mod stateful {
         }
     }
 
-    // The complement of the above: a rule that genuinely skips via assume(false)
-    // is the case the "violated assumption" note actually describes, so the note
-    // must appear there.
     #[test]
     fn test_assume_skip_is_reported_as_violated_assumption() {
         let output = capture_output(true, |tc: TestCase| {
@@ -480,11 +466,6 @@ mod stateful {
         );
     }
 
-    // TrickyInitMachine: a machine whose invariant accesses `self.a`, which
-    // must be initialised before any rule runs. In hegel-rust, initialisation
-    // happens by constructing the struct with a=0 before `run()`, so the
-    // invariant is always satisfied (a starts at 0 and only gets incremented).
-
     struct TrickyInitMachine {
         a: i64,
     }
@@ -510,21 +491,6 @@ mod stateful {
         .settings(Settings::new().test_cases(100).database(None))
         .run();
     }
-
-    // Skipped: the conjecture-runner internal-label `DataTooLarge`
-    // fires when a stateful rule draws 512 bytes per step. Python
-    // Hypothesis silently handles this for stateful tests as part of the
-    // fix for GH-3618, but hegel-rust has not implemented the
-    // equivalent data-budget exemption for stateful rule draws. The public
-    // `HealthCheck` enum no longer exposes `data_too_large` at all (per
-    // audit item A14); the internal label still exists in the
-    // conjecture-runner port-test fixture.
-    // TODO: implement GH-3618-equivalent fix and re-enable this test.
-
-    // Exercises flaky-test detection. The machine uses a global AtomicBool that
-    // causes the rule to fail only on the very first invocation, so exploration
-    // finds a "failure" but the replay passes → the runner detects the
-    // inconsistency and reports "Flaky test detected".
 
     const FLAKY_MACHINE_CODE: &str = r#"
 use std::sync::atomic::{AtomicBool, Ordering};

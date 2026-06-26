@@ -12,11 +12,6 @@ fn sign_aware_lte_is_reflexive_on_zero_pair() {
     assert!(sign_aware_lte(-0.0, -0.0));
 }
 
-// next_up/next_down mirror Hypothesis's `internal/floats.py` versions, whose
-// semantics differ from `std`'s at signed zero: Hypothesis treats `-0.0` and
-// `0.0` as adjacent distinct values, so `next_up(-0.0)` is `0.0` (std skips
-// straight to the smallest subnormal).
-
 #[test]
 fn next_up_of_negative_zero_is_positive_zero() {
     let v = next_up(-0.0);

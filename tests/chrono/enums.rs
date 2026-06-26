@@ -3,10 +3,6 @@ use chrono::{Month, Weekday};
 use hegel::extras::chrono as chrono_gs;
 use hegel::generators as gs;
 
-// ---------------------------------------------------------------------------
-// Weekday
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_weekdays_default() {
     check_can_generate_examples(gs::default::<Weekday>());
@@ -20,10 +16,6 @@ fn test_weekdays_in_vec() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Month
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_months_default() {
     check_can_generate_examples(gs::default::<Month>());
@@ -35,10 +27,6 @@ fn test_months_in_vec() {
         v.iter().all(|m| (1..=12).contains(&m.number_from_month()))
     });
 }
-
-// ---------------------------------------------------------------------------
-// WeekdaySet
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_weekday_sets_default() {

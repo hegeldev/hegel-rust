@@ -1,6 +1,3 @@
-// clippy is rightfully complaining about a < n < b when that range is actually
-// guaranteed by the types. Nevertheless I want these tests here as a foundational
-// guardrail and for my sanity.
 #![allow(clippy::absurd_extreme_comparisons)]
 #![allow(clippy::manual_range_contains)]
 
@@ -135,8 +132,6 @@ mod numerics {
                     std::mem::swap(&mut low, &mut high);
                 }
             }
-            // See module docstring: hegel-rust's float generator can't express
-            // `floats(min_value=inf, ...)` the way Hypothesis can.
             tc.assume(!low.is_some_and(|l| l.is_infinite()));
             tc.assume(!high.is_some_and(|h| h.is_infinite()));
 
@@ -161,7 +156,7 @@ mod numerics {
             }
             s = s.exclude_min(exmin).exclude_max(exmax);
             let val: f64 = tc.draw(s);
-            tc.assume(val != 0.0); // positive/negative zero is an issue
+            tc.assume(val != 0.0);
 
             if let Some(l) = low {
                 assert!(l <= val);
@@ -524,9 +519,6 @@ mod nocover_simple_numbers {
         .settings(Settings::new().test_cases(100).database(None))
         .run();
     }
-
-    // TestFloatsAreFloats: upstream asserts isinstance(arg, float). f64 is
-    // statically typed in Rust, so these reduce to smoke tests.
 
     #[test]
     fn test_floats_are_floats_unbounded() {

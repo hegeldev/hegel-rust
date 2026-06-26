@@ -20,8 +20,6 @@ pub fn expand_reproduce_failure(_attr: TokenStream, item: TokenStream) -> TokenS
     };
 
     if has_hegel_test_attr(&func) {
-        // #[hegel::test] is below us, meaning we're in the wrong order.
-        // (If it were above us, it would have consumed our attribute before we ran.)
         syn::Error::new_spanned(
             &func.sig,
             "#[hegel::reproduce_failure(...)] must appear below #[hegel::test], not above it.\n\
@@ -32,7 +30,6 @@ pub fn expand_reproduce_failure(_attr: TokenStream, item: TokenStream) -> TokenS
         )
         .to_compile_error()
     } else {
-        // No #[hegel::test] at all.
         syn::Error::new_spanned(
             &func.sig,
             "#[hegel::reproduce_failure(...)] can only be used together with #[hegel::test].\n\

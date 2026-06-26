@@ -4,10 +4,6 @@ use crate::common::utils::{Minimal, expect_panic, minimal};
 use hegel::generators::{self as gs, Generator};
 use hegel::{Hegel, Settings};
 
-// ----------------------------------------------------------------------------
-// Composite helper used by several containment tests.
-// ----------------------------------------------------------------------------
-
 fn list_and_int() -> impl Generator<(Vec<i64>, i64)> {
     hegel::compose!(|tc| {
         let v: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(100)));
@@ -15,8 +11,6 @@ fn list_and_int() -> impl Generator<(Vec<i64>, i64)> {
         (v, i)
     })
 }
-
-// --- Sets (using unique lists as proxy) -------------------------------------
 
 #[test]
 fn test_minimize_3_set() {
@@ -36,8 +30,6 @@ fn test_minimize_sets_sampled_from() {
     );
     assert_eq!(result, vec![0, 1, 2]);
 }
-
-// --- Containment tests ------------------------------------------------------
 
 #[test]
 fn test_containment() {
@@ -59,8 +51,6 @@ fn test_duplicate_containment() {
     assert_eq!(v, vec![0, 0]);
     assert_eq!(i, 0);
 }
-
-// --- List ordering and structure -------------------------------------------
 
 #[test]
 fn test_reordering_bytes() {
@@ -129,10 +119,6 @@ fn test_list_with_wide_gap() {
         }
         let mn = *x.iter().min().unwrap();
         let mx = *x.iter().max().unwrap();
-        // `mn + 10` would overflow for inputs near `i64::MAX`; previously
-        // those overflows were swallowed by the runner's single-failure
-        // collapsing.  Use `checked_add` so a draw at the extreme returns
-        // a clean `false` rather than panicking.
         let Some(threshold) = mn.checked_add(10) else {
             return false;
         };
@@ -143,8 +129,6 @@ fn test_list_with_wide_gap() {
     s.sort();
     assert_eq!(s[1], 11 + s[0]);
 }
-
-// --- Lists of collections ---------------------------------------------------
 
 #[test]
 fn test_minimize_list_of_lists() {
@@ -164,8 +148,6 @@ fn test_minimize_list_of_tuples() {
     assert_eq!(result, vec![(0i64, 0i64); 2]);
 }
 
-// --- Lists forced near top -------------------------------------------------
-
 #[test]
 fn test_lists_forced_near_top() {
     for n in [0usize, 1, 5, 10] {
@@ -176,8 +158,6 @@ fn test_lists_forced_near_top() {
         assert_eq!(result, vec![0i64; n + 2]);
     }
 }
-
-// --- Dictionaries ----------------------------------------------------------
 
 #[test]
 fn test_dictionary_minimizes_to_empty() {
@@ -210,8 +190,6 @@ fn test_dictionary_minimizes_values() {
 
 #[test]
 fn test_minimize_multi_key_dicts() {
-    // `bool::to_string` produces "true"/"false". The shrink should reach a
-    // single entry with the bool=false key.
     let result = minimal(
         gs::hashmaps(gs::booleans().map(|b| b.to_string()), gs::booleans()),
         |x: &HashMap<String, bool>| !x.is_empty(),
@@ -219,8 +197,6 @@ fn test_minimize_multi_key_dicts() {
     assert_eq!(result.len(), 1);
     assert_eq!(result.get("false"), Some(&false));
 }
-
-// --- Find tests ------------------------------------------------------------
 
 #[test]
 fn test_find_dictionary() {
@@ -238,8 +214,6 @@ fn test_can_find_list() {
     });
     assert_eq!(x.iter().sum::<i64>(), 10);
 }
-
-// --- Collectively minimize -------------------------------------------------
 
 #[test]
 fn test_can_collectively_minimize_integers() {
@@ -282,14 +256,8 @@ fn test_can_collectively_minimize_text() {
     assert!((2..=3).contains(&distinct));
 }
 
-// --- Sorting pass regressions ----------------------------------------------
-
 #[test]
 fn test_sorting_pass_survives_type_changes_from_lists() {
-    // Sorting must not crash when a successful swap changes choice types
-    // at pre-computed indices. The shrinker must reach a counterexample
-    // (so `assert_eq!(v0.len(), v1.len())` fires) without panicking on a
-    // stale-index assertion mid-shrink.
     expect_panic(
         || {
             Hegel::new(|tc| {
@@ -307,9 +275,6 @@ fn test_sorting_pass_survives_type_changes_from_lists() {
 
 #[test]
 fn test_sorting_full_sort_survives_stale_indices() {
-    // The full-sort path must not crash when a prior group's sort shortens
-    // the result, making indices for the next group invalid. Whether the
-    // assertion fires is not the point; just that nothing crashes.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let v0: Vec<i64> =
@@ -329,9 +294,6 @@ fn test_sorting_full_sort_survives_stale_indices() {
 
 #[test]
 fn test_sorting_stale_filter_with_punning() {
-    // Should not crash. Multiple seeded runs exercise the sorting
-    // stale-index filter for the case where punning changes node types so
-    // a group has fewer than 2 members.
     let pair = || {
         hegel::compose!(|tc| {
             let a: bool = tc.draw(gs::booleans());
@@ -363,10 +325,6 @@ fn test_sorting_stale_filter_with_punning() {
 
 #[test]
 fn test_unique_list_shrinks_using_negative_values() {
-    // Unique signed integer lists should shrink using negative values when
-    // that gives smaller absolute values. With max_size=5 and a length>=5
-    // condition, the minimal representative interleaves around zero rather
-    // than walking 0,1,2,3,4 (choice-sequence values [0,1,-1,2,-2]).
     let v = Minimal::new(
         gs::vecs(gs::integers::<i64>().min_value(-10).max_value(10))
             .max_size(5)
@@ -382,8 +340,6 @@ fn test_unique_list_shrinks_using_negative_values() {
 
 #[test]
 fn test_redistribute_stale_indices_after_type_change() {
-    // `redistribute_integers` must handle stale indices when previous passes
-    // change the result structure. Should not crash.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let v0: bool = tc.draw(gs::booleans());
@@ -410,8 +366,6 @@ fn test_redistribute_stale_indices_after_type_change() {
 
 #[test]
 fn test_sort_insertion_stale_indices() {
-    // Insertion sort must handle stale indices when a swap shortens the
-    // result via value punning. Should not crash across multiple seeds.
     for _seed in 0..5 {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(|tc| {
@@ -445,8 +399,6 @@ fn test_sort_insertion_stale_indices() {
 
 #[test]
 fn test_sort_stale_indices_after_punning() {
-    // Sorting handles indices becoming stale when a swap changes types via
-    // value punning (one_of branch switch). Should not crash.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let v0: i64 = tc.draw(gs::one_of(vec![
@@ -465,10 +417,6 @@ fn test_sort_stale_indices_after_punning() {
         .run();
     }));
 }
-
-// ----------------------------------------------------------------------------
-// Collection shrink-quality tests.
-// ----------------------------------------------------------------------------
 
 /// The shrinker should reduce to two distinct empty inner lists.
 #[test]
@@ -501,7 +449,6 @@ fn test_dictionary_at_least_three_entries() {
     );
     assert!(x.len() >= 3);
     let values: HashSet<&String> = x.values().collect();
-    // All values shrink to the empty string.
     assert_eq!(values.len(), 1);
     assert_eq!(*values.iter().next().unwrap(), "");
     for k in x.keys() {

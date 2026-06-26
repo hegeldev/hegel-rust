@@ -85,7 +85,6 @@ fn test_array_of_arrays(tc: TestCase) {
 
 #[test]
 fn test_array_generates_varying_values() {
-    // An array of 5 integers from a wide range should not always be all the same
     find_any(gs::arrays::<_, i32, 5>(gs::integers()), |arr| {
         arr.iter().collect::<std::collections::HashSet<_>>().len() > 1
     });

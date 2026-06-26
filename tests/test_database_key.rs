@@ -16,7 +16,6 @@ fn test_database_key_replays_failure() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let db_path = temp_dir.path().join("database");
     std::fs::create_dir_all(&db_path).unwrap();
-    // Use forward slashes to avoid invalid escape sequences in generated Rust string literals
     let db_str = db_path.to_str().unwrap().replace('\\', "/");
 
     let test_code = format!(
@@ -55,19 +54,15 @@ fn test_2(tc: hegel::TestCase) {{
     let project = TempRustProject::new()
         .test_file("integration.rs", &test_code)
         .env("VALUES_DIR", values_path.to_str().unwrap())
-        // "FAILED" appears in the cargo test output of the failing inner test.
         .expect_failure("FAILED");
 
-    // run test_1. Database now has a failing entry for test_1
     project.cargo_test(&["test_1"]);
 
     let shrunk_value = *read_values(&values_path, "test_1").last().unwrap();
     assert_eq!(shrunk_value, 1_000_000);
 
-    // clear the log file
     std::fs::remove_file(values_path.join("test_1")).unwrap();
 
-    // run test_1 again. It should replay the shrunk test case immediately
     project.cargo_test(&["test_1"]);
 
     let values = read_values(&values_path, "test_1");
@@ -77,7 +72,6 @@ fn test_2(tc: hegel::TestCase) {{
         values[0]
     );
 
-    // run test_2. It should not replay the test_1 shrunk test case.
     project.cargo_test(&["test_2"]);
 
     let values = read_values(&values_path, "test_2");
@@ -264,9 +258,6 @@ mod replay_logic {
         let db_path = temp_dir.path().to_str().unwrap().to_string();
         let db_path_for_check = db_path.clone();
 
-        // Earliest call number (1-indexed) on which the test body
-        // observed at least one entry in the database. `None` means the
-        // body never saw a populated database during the run.
         let observed_at: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
         let observed_cl = Arc::clone(&observed_at);
         let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -295,19 +286,12 @@ mod replay_logic {
             .run();
         }));
 
-        // Sanity check: the run actually performed more than one test case.
-        // (A failing test with shrinking will run many more.)
         let total_calls = *calls.lock().unwrap();
         assert!(
             total_calls > 1,
             "expected the run to make more than one test-case call, got {total_calls}"
         );
 
-        // The database must have entries STRICTLY BEFORE the final test
-        // body call. If `observed_at` is `None` (db never populated) or
-        // equals `total_calls` (db only populated for the final replay),
-        // persistence happens too late and killing mid-shrink loses the
-        // failure.
         let observed = *observed_at.lock().unwrap();
         assert!(
             observed.is_some_and(|o| o < total_calls),
@@ -332,26 +316,12 @@ mod replay_logic {
         let db_root = std::path::PathBuf::from(&db_path);
         let db_root_cl = db_root.clone();
 
-        // Distinct (file-count, total-bytes) snapshots observed by the
-        // body across all of its calls. A working incremental persister
-        // shows at least two distinct snapshots (the DB grows / shrinks
-        // as the shrinker makes progress); a broken one shows just
-        // `{(0, 0)}` (DB empty during the run) or a single non-empty
-        // snapshot reached only at the very end.
         let snapshots: Arc<Mutex<std::collections::HashSet<(usize, usize)>>> =
             Arc::new(Mutex::new(std::collections::HashSet::new()));
         let snapshots_cl = Arc::clone(&snapshots);
         let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let calls_cl = Arc::clone(&calls);
 
-        // Boundary chosen so the minimal counterexample (n =
-        // BOUNDARY, v = []) cannot be drawn directly by random
-        // generation. The native integer sampler heavily biases toward
-        // "nasty" constants (powers of two/ten, factorials, etc. plus
-        // ±1 neighbours); 1_234_567 is in none of those sets, so the
-        // shrinker is guaranteed to have multi-step work to do
-        // converging on it — and therefore guaranteed to emit
-        // intermediate persister saves.
         const BOUNDARY: i64 = 1_234_567;
 
         run_expecting_failure(std::panic::AssertUnwindSafe(move || {
@@ -377,16 +347,9 @@ mod replay_logic {
         }));
 
         let snaps = snapshots.lock().unwrap().clone();
-        // Reached the body at least a few times.
         let total = *calls.lock().unwrap();
         assert!(total > 1, "expected multiple test-body calls, got {total}");
 
-        // The DB went through multiple distinct *non-empty* states during
-        // the run — i.e. the shrinker's improvements were persisted as
-        // they happened, not collapsed into a single end-of-run write.
-        // Without incremental persistence, the body sees only `(0, 0)`
-        // throughout shrinking and a single end-state on the final
-        // replay → at most one non-empty snapshot.
         let distinct_non_empty = snaps.iter().filter(|&&(_, b)| b > 0).count();
         assert!(
             distinct_non_empty >= 2,

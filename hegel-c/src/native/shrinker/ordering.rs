@@ -45,22 +45,15 @@ where
     }
     let mut current: Vec<usize> = (0..n).collect();
 
-    // Short-circuit: try a full sort.  If that works there's nothing
-    // more to do.
     let sorted_candidate = {
         let mut p = current.clone();
         p.sort_by_key(|&i| keys(i));
         p
     };
     if sorted_candidate != current && accept(&sorted_candidate)? {
-        // A full sort is the global optimum under shortlex key
-        // ordering, so there's nothing more to do.  No need to update
-        // `current` because we return.
         return Ok(());
     }
 
-    // sort_regions: walk from i=0, finding the largest k where sorting
-    // current[i..i+k] is accepted; advance by k.
     let mut i = 0;
     while i + 1 < current.len() {
         let snapshot = current.clone();
@@ -77,8 +70,6 @@ where
             attempt.extend_from_slice(&region);
             attempt.extend_from_slice(&snapshot[i + k..]);
             if attempt == snapshot {
-                // No actual reordering; treat as a no-op success so the
-                // exponential probe keeps growing.
                 return Ok(true);
             }
             if accept(&attempt)? {
@@ -94,20 +85,14 @@ where
         i += k.max(1);
     }
 
-    // sort_regions_with_gaps: holding current[i] fixed, expand the
-    // window on each side until sorting the union of the two halves
-    // (centre excluded) is no longer accepted.
     let len = current.len();
     if len < 3 {
         return Ok(());
     }
     for i in 1..len - 1 {
-        // Skip already-locally-sorted positions
-        // (`current[i-1] <= current[i] <= current[i+1]` short-circuit).
         if keys(current[i - 1]) <= keys(current[i]) && keys(current[i]) <= keys(current[i + 1]) {
             continue;
         }
-        // Expand right.
         let left = i;
         let mut right = i + 1;
         let snapshot_r = current.clone();
@@ -126,8 +111,6 @@ where
             )
         })?;
         right += k_r;
-        // Expand left.  The return value is discarded because `left`
-        // is re-initialised at the start of the next iteration.
         let snapshot_l = current.clone();
         find_integer_r(|k| {
             if k > left {
@@ -159,9 +142,6 @@ where
     K: FnMut(usize) -> T,
     F: FnMut(&[usize]) -> ShrinkResult<bool>,
 {
-    // `a <= centre < b` allows the boundary case `a == centre`
-    // (sort only the right side, with `split = 0`). Callers guarantee
-    // these conditions; a debug_assert documents the invariant.
     hegel_internal_debug_assert!(a <= centre && centre < b && b <= snapshot.len());
     let split = centre - a;
     let mut sides: Vec<usize> = snapshot[a..centre].to_vec();

@@ -73,7 +73,6 @@ fn test_spawn_thread_with_clone_does_generation(tc: TestCase) {
     });
     let thread_value = handle.join().expect("thread panicked");
 
-    // After the thread has joined, the main thread resumes generation.
     let main_value: bool = tc.draw(gs::booleans());
     let _ = (thread_value, main_value);
 }
@@ -95,8 +94,6 @@ fn test_main_then_thread_then_main(tc: TestCase) {
 
 #[hegel::test(test_cases = 10)]
 fn test_sequential_threads_each_do_one_draw(tc: TestCase) {
-    // Spawn threads one at a time, fully joining each before the next.
-    // This is deterministic: no concurrent generation ever happens.
     for _ in 0..3 {
         let tc_clone = tc.clone();
         let handle = std::thread::spawn(move || {
@@ -111,8 +108,6 @@ fn test_sequential_threads_each_do_one_draw(tc: TestCase) {
 
 #[hegel::test(test_cases = 5)]
 fn test_nested_generators_work_across_thread_boundary(tc: TestCase) {
-    // Composed generators (map, flat_map, vecs) must still work when
-    // drawn from another thread.
     let tc_clone = tc.clone();
     let captured: Arc<Mutex<Option<Vec<i32>>>> = Arc::new(Mutex::new(None));
     let captured_clone = Arc::clone(&captured);

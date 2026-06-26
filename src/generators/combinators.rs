@@ -99,7 +99,6 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            // The engine returns `[index, value]` for one_of schemas.
             let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
             let index = i128::from(idx.into_integer().unwrap()) as usize;
             basics[index].parse_raw(value)
@@ -187,8 +186,6 @@ where
             cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
 
         Some(BasicGenerator::new(schema, move |raw| {
-            // The engine returns `[index, value]` for one_of schemas; index 0
-            // selects the null branch (None), 1 selects the inner generator (Some).
             let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
             if i128::from(idx.into_integer().unwrap()) == 0 {
                 None

@@ -88,8 +88,6 @@ impl ExplicitTestCase {
         let source = &entry.source_expr;
         let debug = &entry.debug_repr;
 
-        // Only show the "// = debug" comment if the source and debug differ
-        // (ignoring whitespace).
         let source_normalized: String = source.chars().filter(|c| !c.is_whitespace()).collect();
         let debug_normalized: String = debug.chars().filter(|c| !c.is_whitespace()).collect();
 
@@ -125,21 +123,12 @@ impl ExplicitTestCase {
     }
 
     pub fn reject(&self) -> ! {
-        // There is no engine to reject to: an explicit test case runs its
-        // one example directly, so a violated assumption is a failure of
-        // that example, reported with a human-readable message rather than
-        // a control-flow unwind.
         panic!("Explicit test case: assumption violated (tc.assume / tc.reject)");
     }
 
-    pub fn target(&self, _score: f64) {
-        // No-op for explicit test cases: targeting is only meaningful
-        // when the engine can act on the score during generation.
-    }
+    pub fn target(&self, _score: f64) {}
 
-    pub fn target_labelled(&self, _score: f64, _label: impl Into<String>) {
-        // No-op for explicit test cases: see `target`.
-    }
+    pub fn target_labelled(&self, _score: f64, _label: impl Into<String>) {}
 
     #[doc(hidden)]
     pub fn start_span(&self, _label: u64) {

@@ -18,11 +18,6 @@ fn cbor_to_f64_non_numeric_is_invalid_argument() {
     assert!(err.to_string().contains("CBOR float or integer"));
 }
 
-// interpret_float must reject widths outside `{32, 64}`: Hypothesis only
-// supports `{16, 32, 64}` and we have no Rust `f16` to back width 16, so
-// the schema interpreter fails loud at the boundary rather than silently
-// treating unknown widths as f64.
-
 #[test]
 fn interpret_float_rejects_width_16() {
     use crate::cbor_utils::cbor_map;
@@ -55,11 +50,6 @@ fn interpret_float_non_numeric_bound_is_invalid_argument() {
     assert!(matches!(err, EngineError::InvalidArgument(_)));
     assert!(err.to_string().contains("CBOR float or integer"));
 }
-
-// `min_value=-inf, exclude_min=true` is the documented Hypothesis idiom for
-// "any float except -inf": `next_up(-inf)` is `-f64::MAX`. The interpreter
-// used to skip the adjustment for non-finite bounds, silently keeping -inf
-// generable.
 
 #[test]
 fn interpret_float_exclude_min_excludes_negative_infinity() {

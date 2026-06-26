@@ -5,10 +5,6 @@ use common::utils::{assert_matches_regex, expect_panic};
 use hegel::TestCase;
 use hegel::generators;
 
-// ============================================================
-// Compile error tests (via TempRustProject)
-// ============================================================
-
 #[test]
 fn test_explicit_test_case_on_bare_function() {
     let code = r#"
@@ -44,7 +40,6 @@ fn main() {}
 
 #[test]
 fn test_explicit_test_case_bad_syntax() {
-    // Semicolon instead of comma should produce a compile error, not a silent empty case.
     let code = r#"
 #[hegel::test]
 #[hegel::explicit_test_case(x = 42;)]
@@ -97,12 +92,6 @@ fn main() {}
 
 #[test]
 fn test_explicit_test_case_rejects_threading_body() {
-    // #[hegel::test] expands the body twice: once with `tc: TestCase` (Send)
-    // and once with `tc: &ExplicitTestCase` (not Send). Spawning a thread that
-    // moves `tc` compiles in the property-test version but must fail to
-    // compile in the explicit version, because `&ExplicitTestCase` is not
-    // Send. This test pins that behavior — if someone accidentally makes
-    // ExplicitTestCase Send/Sync, the compile-fail check will stop firing.
     let code = r#"
 use hegel::generators as gs;
 
@@ -122,10 +111,6 @@ fn my_test(tc: hegel::TestCase) {
         .expect_failure("cannot be shared between threads safely")
         .cargo_test(&["--test", "test_explicit_threading"]);
 }
-
-// ============================================================
-// Success cases (inline #[hegel::test])
-// ============================================================
 
 #[hegel::test]
 #[hegel::explicit_test_case(x = true)]
@@ -152,9 +137,6 @@ fn test_explicit_case_with_property_test(tc: TestCase) {
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42u32)]
 fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
-    // This verifies the draw is rewritten to __draw_named("x", ...) even with
-    // a type annotation. If it fell back to "unnamed", the explicit test case
-    // would panic with "no value provided for unnamed".
     let x: u32 = tc.draw(generators::integers());
     let _ = x;
 }
@@ -193,10 +175,6 @@ fn test_explicit_case_with_method_chain(tc: TestCase) {
     let s: String = tc.draw(generators::text());
     let _ = s;
 }
-
-// ============================================================
-// Runtime panic tests
-// ============================================================
 
 #[test]
 fn test_explicit_draw_unnamed() {
@@ -308,7 +286,6 @@ fn test_explicit_type_mismatch_panics() {
         || {
             let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
             etc.run(|tc: &hegel::ExplicitTestCase| {
-                // Try to draw as String instead of i32
                 let _: String = tc.__draw_named(generators::text(), "x", false);
             });
         },
@@ -325,7 +302,6 @@ fn test_explicit_unused_values_panics() {
                 .with_value("y", "false", false);
             etc.run(|tc: &hegel::ExplicitTestCase| {
                 let _: bool = tc.__draw_named(generators::booleans(), "x", false);
-                // y is never drawn
             });
         },
         "never drawn",
@@ -359,10 +335,6 @@ fn test_explicit_double_consume_panics() {
     );
 }
 
-// ============================================================
-// Output format tests (via TempRustProject)
-// ============================================================
-
 #[test]
 fn test_explicit_output_format_with_comment() {
     let code = r#"
@@ -380,7 +352,6 @@ fn main() {
         .expect_failure("intentional")
         .cargo_run(&[]);
 
-    // Source and debug differ, so comment should appear
     assert_matches_regex(&output.stderr, r"let x = compute\(\); // = 42");
 }
 
@@ -401,7 +372,6 @@ fn main() {
         .expect_failure("intentional")
         .cargo_run(&[]);
 
-    // Source "42" and debug "42" are the same, so no comment
     assert_matches_regex(&output.stderr, r"let x = 42;");
     assert!(
         !output.stderr.contains("// ="),
@@ -430,10 +400,6 @@ fn main() {
 
     assert_matches_regex(&output.stderr, "important debug info");
 }
-
-// ============================================================
-// Macro integration: output from #[hegel::explicit_test_case]
-// ============================================================
 
 #[test]
 fn test_macro_explicit_case_output() {

@@ -71,11 +71,6 @@ pub(crate) fn init_panic_hook() {
 
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("<unnamed>").to_string();
-            // `ThreadId` only exposes its integer via the unstable
-            // `as_u64`, so scrape the `Debug` form ("ThreadId(N)"). That
-            // format is not guaranteed; if it changes, the diagnostic
-            // header degrades cosmetically and the report-layout tests'
-            // `(\d+)` patterns will flag it on the toolchain bump.
             let thread_id = format!("{:?}", thread.id())
                 .trim_start_matches("ThreadId(")
                 .trim_end_matches(')')
@@ -84,8 +79,6 @@ pub(crate) fn init_panic_hook() {
                 .location()
                 .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
-            // Only capture (and symbolize) a backtrace when the diagnostic
-            // will actually be shown.
             let backtrace = if CAPTURE_BACKTRACE.get() {
                 Backtrace::capture()
             } else {
@@ -242,9 +235,6 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    // Surface draw/note output — and pay for a backtrace — only when the
-    // diagnostic will be shown: a non-quiet final replay, or every test
-    // case in verbose mode.
     let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
@@ -259,17 +249,10 @@ pub(crate) fn run_test_case(
         Err(e) if e.downcast_ref::<StopTest>().is_some() => (TestCaseResult::Overrun, None, None),
         Err(e) if e.downcast_ref::<LoopDone>().is_some() => (TestCaseResult::Valid, None, None),
         Err(e) => {
-            // An invalid-argument (usage) error is a mistake in how the
-            // test is configured, not a discovered counterexample: abort
-            // the run with the message instead of recording it as
-            // `Interesting` and shrinking it.
             let e = match e.downcast::<InvalidArgument>() {
                 Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
                 Err(e) => e,
             };
-            // A violated internal invariant is a bug in Hegel: abort the
-            // run with the bug-report message rather than spending the
-            // shrink budget "minimizing" a framework bug.
             let e = match e.downcast::<InternalError>() {
                 Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
                 Err(e) => e,
@@ -280,19 +263,10 @@ pub(crate) fn run_test_case(
 
             let diagnostic =
                 render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
-            // A final replay's diagnostic is *returned* to the caller (`drive`)
-            // rather than emitted here: drive buffers it into the per-failure
-            // block so the multi-failure headline can precede it, and keeping
-            // it out of the output sink preserves the snapshot invariant that
-            // sinks capture only draws/notes (no nondeterministic panic
-            // location). A verbose *non-final* case has no such buffering, so
-            // its diagnostic flows live through the sink (or stderr) here.
             let captured = if is_final && !quiet {
                 Some(diagnostic)
             } else {
                 if verbose {
-                    // The sink is line-oriented and `diagnostic` ends in a
-                    // newline, so drop the trailing empty piece.
                     for line in diagnostic.trim_end_matches('\n').split('\n') {
                         crate::test_case::emit_verbose_line(line);
                     }
@@ -302,7 +276,6 @@ pub(crate) fn run_test_case(
             let failure = TestCaseResult::Interesting(Failure {
                 panic_message: msg,
                 origin: format!("Panic at {}", location),
-                // The blob is attached from the run result on a failing run.
                 reproduce_blob: None,
             });
             (failure, Some(e), captured)
@@ -434,22 +407,14 @@ pub(crate) fn drive<F>(
     let c_settings = SettingsHandle::build(settings, database_key);
     let run = match RunHandle::start(&c_settings) {
         Ok(run) => run,
-        // The engine could not even start. With a builder-produced settings
-        // handle this only happens on OS worker-thread spawn failure (see
-        // ffi::RunHandle::start), an unprovokable resource-exhaustion path;
-        // surfaced as the run's own panic message.
         Err(message) => panic!("{message}"), // nocov
     };
 
-    // A single test case is the whole run: run it and, if it fails, propagate
-    // its own panic immediately.
     if mode == Mode::SingleTestCase {
         drive_single_case(&run, &mut test_fn, verbosity, test_location);
         return;
     }
 
-    // A full run pumps only non-final exploration cases; the failures (and
-    // their blobs) are read from the result afterward.
     while let Some(c_tc) = run.next_test_case() {
         run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
     }
@@ -462,8 +427,6 @@ pub(crate) fn drive<F>(
     match status {
         RunStatus::HEGEL_RUN_STATUS_PASSED => {}
         RunStatus::HEGEL_RUN_STATUS_ERROR => {
-            // A failure of the run itself (health check, nondeterminism, engine
-            // panic) — not a test failure, so it gets the engine's own message.
             let message = result
                 .error()
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
@@ -472,8 +435,6 @@ pub(crate) fn drive<F>(
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
             let multiple = count > 1;
-            // The headline precedes the per-failure blocks (the closing
-            // `panic!`'s message is only rendered later, by the panic hook).
             if multiple && !quiet {
                 eprintln!("Property-based test failed with {count} distinct failures.");
             }
@@ -482,25 +443,17 @@ pub(crate) fn drive<F>(
                 if multiple && !quiet {
                     eprintln!();
                 }
-                // Replay this counterexample's blob as the final, client-owned
-                // replay. Its draws/notes flow live to the active sink/stderr
-                // (the per-failure "block"); the diagnostic is returned and
-                // eprinted, then the reproducer line, matching the prior order.
                 let blob = result
                     .failure(index)
                     .and_then(|f| f.reproduce_blob)
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob) {
                     Ok(c_tc) => c_tc,
-                    // The engine just produced this blob; it cannot fail to
-                    // decode here.
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
                     run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
-                    // The shrunk counterexample did not fail when replayed, so
-                    // the test is non-deterministic.
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
                 if let Some(diagnostic) = diagnostic {
@@ -512,19 +465,11 @@ pub(crate) fn drive<F>(
                 last_payload = payload;
             }
 
-            // End the run by re-raising. `resume_unwind` skips the panic hook,
-            // so nothing prints twice — the unwind is purely the run's result.
             if multiple {
-                // Multi-failure path: no single panic to re-raise, so fail with
-                // the count (already eprinted as the headline).
                 std::panic::resume_unwind(Box::new(format!(
                     "Property-based test failed with {count} distinct failures."
                 )));
             } else {
-                // Single-failure path: re-raise the test's *own* panic, payload
-                // intact, so `should_panic(expected = ...)` and `catch_unwind`
-                // consumers see exactly what the test raised. The replay above
-                // re-failed (else we panicked as flaky), so it carries a payload.
                 std::panic::resume_unwind(
                     last_payload.expect("a re-failing replay carries a panic payload"),
                 );
@@ -552,8 +497,6 @@ fn drive_single_case(
         run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity);
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
-        // Rendered (not sinked) so the failure detail still shows — the
-        // `resume_unwind` below skips the panic hook.
         if let Some(diagnostic) = diagnostic {
             eprint!("{diagnostic}");
         }
@@ -586,28 +529,22 @@ pub(crate) fn drive_blob_replay<F>(
     let c_settings = SettingsHandle::build(settings, database_key);
     let c_tc = match CTestCase::from_blob(&c_settings, blob) {
         Ok(c_tc) => c_tc,
-        // Undecodable / incompatible blob — there is nothing to replay.
         Err(message) => panic!("{message}"),
     };
-    // The replayed example *is* the counterexample, so it is final.
     let (result, payload, diagnostic) =
         run_test_case(c_tc, &mut test_fn, true, settings.mode, settings.verbosity);
-    // run_test_case returns a final replay's diagnostic rather than emitting
-    // it; a single replay has no headline to print first, so emit it now.
     if let Some(diagnostic) = diagnostic {
         eprint!("{diagnostic}");
     }
     match result {
         TestCaseResult::Interesting(_) => {
             emit_antithesis_assertion(true, test_location);
-            // No reproducer line: a replay has no fresh blob to print.
             match payload {
                 Some(payload) => std::panic::resume_unwind(payload),
                 None => unreachable!(), // nocov
             }
         }
         _ => {
-            // The blob decoded but no longer fails: a stale reproducer.
             emit_antithesis_assertion(false, test_location);
             panic!(
                 "reproduce_failure: the supplied failure blob no longer reproduces a \

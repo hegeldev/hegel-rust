@@ -1,10 +1,3 @@
-/* Here's a nice example of using Hegel to catch a tricky bug hidden in a relatively simple data
- * structure. See if you can spot the problem.
- *
- * A "min stack" is a stack extended with the ability to query the minimum element in constant
- * time. We implement one here by using an extra stack to keep track of minimums.
- */
-
 #![allow(dead_code)]
 
 use hegel::TestCase;
@@ -49,7 +42,6 @@ impl<T: Copy + Ord> MinStack<T> {
         }
     }
 
-    // The linear time minimum implementation, used for reference.
     fn reference(&self) -> Option<T> {
         let mut minimum = None;
         for element in &self.stack {

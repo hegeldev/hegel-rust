@@ -18,10 +18,6 @@ fn test_containment() {
 
 #[test]
 fn test_duplicate_containment() {
-    // Pinned seed: a three-way collision (two list elements equal to the
-    // separately-drawn integer) is rare enough over the full i64 range that
-    // a random seed misses it within 5000 attempts a fair fraction of the
-    // time, now that draws aren't dominated by the constant pool.
     let (ls, i) = FindAny::new(list_and_int(), |(ls, i): &(Vec<i64>, i64)| {
         ls.iter().filter(|&&x| x == *i).count() > 1
     })

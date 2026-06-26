@@ -1,8 +1,3 @@
-// Tests for the `dashu`-backed `BigInt` / `BigUint` wrappers: the
-// num-bigint-shaped surface (sign handling, two's-complement (de)serialisation,
-// conversions, and arithmetic operators) the rest of the native engine relies
-// on.
-
 use super::*;
 
 fn i(v: i128) -> BigInt {
@@ -29,18 +24,15 @@ fn magnitude_drops_sign() {
 
 #[test]
 fn bytes_be_roundtrip() {
-    // Positive value large enough to use real bytes.
     let v = BigInt::from(u128::MAX) * BigInt::from(u128::MAX);
     let (sign, bytes) = v.to_bytes_be();
     assert_eq!(sign, Sign::Plus);
     assert_eq!(BigInt::from_bytes_be(Sign::Plus, &bytes), v);
 
-    // Negative carries the magnitude bytes plus a Minus sign.
     let (sign, bytes) = (-&v).to_bytes_be();
     assert_eq!(sign, Sign::Minus);
     assert_eq!(BigInt::from_bytes_be(Sign::Minus, &bytes), -&v);
 
-    // Zero reports NoSign and an empty magnitude.
     let (sign, bytes) = i(0).to_bytes_be();
     assert_eq!(sign, Sign::NoSign);
     assert!(bytes.is_empty());
@@ -48,14 +40,11 @@ fn bytes_be_roundtrip() {
 
 #[test]
 fn from_bytes_be_no_sign_is_zero() {
-    // NoSign with a zero magnitude reconstructs zero.
     assert_eq!(BigInt::from_bytes_be(Sign::NoSign, &[]), i(0));
 }
 
 #[test]
 fn signed_bytes_le_roundtrip() {
-    // A spread of values, including the boundary cases where the minimal
-    // magnitude's top bit forces an extra sign byte (±128, ±256-1, ...).
     let cases = [
         i(0),
         i(1),
@@ -77,9 +66,7 @@ fn signed_bytes_le_roundtrip() {
         let bytes = v.to_signed_bytes_le();
         assert_eq!(BigInt::from_signed_bytes_le(&bytes), v, "roundtrip {v}");
     }
-    // Zero serialises to a single zero byte.
     assert_eq!(i(0).to_signed_bytes_le(), vec![0]);
-    // An empty slice decodes to zero (the all-bytes-consumed edge case).
     assert_eq!(BigInt::from_signed_bytes_le(&[]), i(0));
 }
 
@@ -192,32 +179,26 @@ fn try_from_biguint_into_native() {
 fn bigint_arithmetic_all_combos() {
     let a = i(10);
     let b = i(3);
-    // Add
     assert_eq!(a.clone() + b.clone(), i(13));
     assert_eq!(a.clone() + &b, i(13));
     assert_eq!(&a + b.clone(), i(13));
     assert_eq!(&a + &b, i(13));
-    // Sub
     assert_eq!(a.clone() - b.clone(), i(7));
     assert_eq!(a.clone() - &b, i(7));
     assert_eq!(&a - b.clone(), i(7));
     assert_eq!(&a - &b, i(7));
-    // Mul
     assert_eq!(a.clone() * b.clone(), i(30));
     assert_eq!(a.clone() * &b, i(30));
     assert_eq!(&a * b.clone(), i(30));
     assert_eq!(&a * &b, i(30));
-    // i32 rhs
     assert_eq!(a.clone() + 1, i(11));
     assert_eq!(&a + 1, i(11));
     assert_eq!(a.clone() - 1, i(9));
     assert_eq!(&a - 1, i(9));
     assert_eq!(a.clone() / 2, i(5));
     assert_eq!(&a / 2, i(5));
-    // Neg
     assert_eq!(-a.clone(), i(-10));
     assert_eq!(-&a, i(-10));
-    // Shr
     assert_eq!(i(16) >> 2usize, i(4));
     assert_eq!(&i(16) >> 2usize, i(4));
 }
@@ -246,7 +227,6 @@ fn biguint_arithmetic_all_combos() {
     assert_eq!(a.clone() % &b, u(1));
     assert_eq!(&a % b.clone(), u(1));
     assert_eq!(&a % &b, u(1));
-    // Shifts
     assert_eq!(u(8) >> 1u32, u(4));
     assert_eq!(&u(8) >> 1u32, u(4));
     assert_eq!(u(1) << 3usize, u(8));

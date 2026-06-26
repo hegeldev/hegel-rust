@@ -22,8 +22,6 @@ fn my_test(tc: hegel::TestCase) {
     assert!(x < 5, "x was {x}");
 }
 "#;
-    // `expect_failure` asserts the run failed *and* the output matches — so a
-    // match on the reproducer marker proves the line was printed.
     TempRustProject::new()
         .main_file("fn main() {}")
         .test_file("repro.rs", code)
@@ -41,8 +39,6 @@ fn my_test(tc: hegel::TestCase) {
     assert!(x < 5, "x was {x}");
 }
 "#;
-    // The run still fails (matches "x was"), but with `print_blob` unset the
-    // reproducer line must NOT appear.
     let out = TempRustProject::new()
         .main_file("fn main() {}")
         .test_file("repro.rs", code)

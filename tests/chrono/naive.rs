@@ -3,10 +3,6 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use hegel::extras::chrono as chrono_gs;
 use hegel::generators::{self as gs, Generator};
 
-// ---------------------------------------------------------------------------
-// NaiveDate
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_naive_dates_default() {
     check_can_generate_examples(chrono_gs::naive_dates());
@@ -57,10 +53,6 @@ fn test_naive_dates_min_greater_than_max() {
         .max_value(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
     g.as_basic();
 }
-
-// ---------------------------------------------------------------------------
-// NaiveTime
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_naive_times_default() {
@@ -114,9 +106,6 @@ fn test_naive_times_min_greater_than_max() {
 
 #[test]
 fn test_naive_times_preserves_leap_second_bound() {
-    // chrono encodes leap seconds by letting nanosecond() reach into [1e9, 2e9).
-    // Bounds passed to naive_times() must round-trip losslessly through the
-    // internal i64 representation rather than silently clamping.
     let leap = NaiveTime::from_hms_nano_opt(23, 59, 59, 1_500_000_000).unwrap();
     assert_eq!(leap.nanosecond(), 1_500_000_000);
     assert_all_examples(
@@ -124,10 +113,6 @@ fn test_naive_times_preserves_leap_second_bound() {
         move |t| *t == leap,
     );
 }
-
-// ---------------------------------------------------------------------------
-// NaiveDateTime
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_naive_datetimes_default() {
@@ -177,10 +162,6 @@ fn test_naive_datetime_default_generator() {
     check_can_generate_examples(gs::default::<NaiveDateTime>());
 }
 
-// ---------------------------------------------------------------------------
-// IsoWeek
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_iso_weeks_default() {
     assert_all_examples(gs::default::<chrono::IsoWeek>(), |w| {
@@ -201,10 +182,6 @@ fn test_iso_week_default_generator() {
     check_can_generate_examples(gs::default::<chrono::IsoWeek>());
 }
 
-// ---------------------------------------------------------------------------
-// NaiveWeek
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_naive_weeks_default() {
     check_can_generate_examples(chrono_gs::naive_weeks());
@@ -212,7 +189,6 @@ fn test_naive_weeks_default() {
 
 #[test]
 fn test_naive_weeks_start() {
-    // Override the start-day strategy to a constant Sunday.
     assert_all_examples(
         chrono_gs::naive_weeks().weekday_starts(gs::just(Weekday::Sun)),
         |w| match w.checked_first_day() {

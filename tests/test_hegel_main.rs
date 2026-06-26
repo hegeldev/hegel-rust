@@ -17,8 +17,6 @@ fn main(tc: TestCase) {
 #[test]
 fn test_basic_main_runs() {
     let output = TempRustProject::new().main_file(BASIC_MAIN).cargo_run(&[]);
-    // The #[hegel::main] wraps the body in an FnMut closure invoked test_cases times.
-    // So `ran` should appear 7 times.
     let count = output.stderr.matches("ran").count();
     assert_eq!(count, 7, "stderr:\n{}", output.stderr);
 }
@@ -35,7 +33,6 @@ fn test_main_cli_overrides_test_cases() {
 
 #[test]
 fn test_main_default_matches_attribute() {
-    // No CLI args => defaults are whatever the attribute said (7).
     let output = TempRustProject::new().main_file(BASIC_MAIN).cargo_run(&[]);
     let count = output.stderr.matches("ran").count();
     assert_eq!(count, 7, "stderr:\n{}", output.stderr);
@@ -140,8 +137,6 @@ fn main(tc: TestCase) {
     let _: bool = tc.draw(gs::booleans());
 }
 "#;
-    // Debug verbosity makes the native engine print per-test-case status
-    // lines and a closing `Test done.` line.
     let output = TempRustProject::new().main_file(code).cargo_run(&[
         "--",
         "--verbosity",
@@ -167,7 +162,6 @@ fn main(tc: TestCase) {
     let _: bool = tc.draw(gs::booleans());
 }
 "#;
-    // With a fixed seed, the run should complete successfully.
     let output = TempRustProject::new()
         .main_file(code)
         .cargo_run(&["--", "--seed", "42"]);

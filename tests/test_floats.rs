@@ -111,8 +111,6 @@ macro_rules! float_tests {
                 let effective_lo = if exmin { lo.next_up() } else { lo };
                 let effective_hi = if exmax { hi.next_down() } else { hi };
                 tc.assume(effective_lo <= effective_hi);
-                // Sign-aware reject of the min=+0.0, max=-0.0 range, which the
-                // generator treats as empty (matches hypothesis's bad_zero_bounds).
                 if effective_lo == 0 as $t && effective_hi == 0 as $t {
                     tc.assume(
                         !(effective_lo.is_sign_positive() && effective_hi.is_sign_negative()),
@@ -186,9 +184,6 @@ mod pbtkit_floats {
 
     #[test]
     fn test_floats_unbounded() {
-        // The upstream `monkeypatch.setattr(..., "NAN_DRAW_PROBABILITY", 0.5)` was
-        // purely a pbtkit-coverage boost for `_draw_nan`; drop it here. The
-        // portable part is that unbounded float draws complete without panicking.
         Hegel::new(|tc| {
             tc.draw(gs::floats::<f64>());
         })
@@ -198,14 +193,6 @@ mod pbtkit_floats {
 
     #[test]
     fn test_draw_unbounded_float_rejects_nan() {
-        // Upstream calls pbtkit's private `_draw_unbounded_float(rnd)` 10000
-        // times to reliably hit its NaN-rejection-sampling branch. hegel-rust
-        // has no standalone equivalent (the logic is inlined in the
-        // float-choice path), so port at the public-API layer: drawing 1000
-        // unbounded floats with `allow_nan(false)` exercises the same property
-        // (no NaN ever returned) through whichever rejection / re-sampling
-        // strategy Hypothesis applies. Redundant with `test_floats_no_nan` —
-        // kept distinct to mirror the upstream test surface.
         Hegel::new(|tc| {
             let f: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));
             assert!(!f.is_nan());
@@ -439,11 +426,6 @@ mod pbtkit_floats {
 
     #[test]
     fn test_float_shrinks_across_exponent_boundary() {
-        // The shrinker must cross exponent boundaries to reach values just below
-        // -2.0 — pbtkit shrinks to `-2.0 - 1 ULP`; hegel-rust's shrinker stops at
-        // the simpler `-3.0` (exponent 1024, mantissa 2^51). Both satisfy
-        // `-3.0 <= v < -2.0`; the test guards against the pre-regression shrinker
-        // getting stuck at larger magnitudes like `-4.0`.
         let f = minimal(
             gs::floats::<f64>().allow_nan(false).allow_infinity(false),
             |v: &f64| *v < -2.0,
@@ -494,8 +476,6 @@ mod float_nastiness {
 
     #[test]
     fn test_allow_subnormal_true_with_excluding_bounds_is_invalid() {
-        // Mirrors Hypothesis: allow_subnormal=True is contradictory when the
-        // bounds exclude every subnormal value.
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -510,8 +490,6 @@ mod float_nastiness {
 
     #[test]
     fn test_allow_subnormal_true_with_excluding_max_is_invalid() {
-        // The mirror of the min_value check: a maximum at or below the
-        // smallest negative normal leaves no subnormals either.
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -526,8 +504,6 @@ mod float_nastiness {
 
     #[test]
     fn test_subnormal_only_range_with_allow_subnormal_false_is_invalid() {
-        // [5e-324, 1e-310] contains only subnormals; excluding them leaves
-        // nothing to generate.
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -547,10 +523,6 @@ mod float_nastiness {
 
     #[test]
     fn test_fraction_only_range_shrinks_to_simplest_fraction() {
-        // Regression: shrinking any failure in a fraction-only range used to
-        // panic with a BigUint underflow ("UBig result must not be negative")
-        // because FloatChoice::simplest() was not the true rank minimum of
-        // the range, and to_index subtracts its rank.
         let v = minimal(gs::floats::<f64>().min_value(0.1).max_value(0.9), |_| true);
         assert_eq!(v, 0.5);
     }
@@ -792,9 +764,6 @@ mod float_nastiness {
         check_can_generate_examples(gs::floats::<f64>().min_value(-0.0).max_value(-0.0));
     }
 
-    // Validation-only tests: Hypothesis rejects these invalid argument
-    // combinations with an InvalidArgument error.
-
     #[test]
     fn test_exclude_infinite_endpoint_is_invalid_min() {
         expect_panic(
@@ -833,10 +802,6 @@ mod float_nastiness {
 
     #[test]
     fn test_exclude_only_neg_infinite_endpoint() {
-        // `min_value=-inf, exclude_min=true` with no max bound is the
-        // Hypothesis idiom for "any float except -inf": +inf stays allowed
-        // (allow_infinity defaults to true with one unbounded end) but -inf
-        // must never be generated.
         assert_all_examples(
             gs::floats::<f64>()
                 .min_value(f64::NEG_INFINITY)
@@ -941,15 +906,11 @@ mod nocover_floating {
 
     #[test]
     fn test_is_float() {
-        // Rust's f64 generator is statically typed, so every drawn value is a
-        // float by construction; we still assert the generator runs.
         assert_all_examples(gs::floats::<f64>(), |_: &f64| true);
     }
 
     #[test]
     fn test_inversion_is_imperfect() {
-        // @fails: find x != 0 such that x * (1/x) != 1.0. A NaN draw satisfies
-        // the condition (1/NaN = NaN, NaN * NaN = NaN, NaN != 1.0).
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             *x != 0.0 && *x * (1.0 / *x) != 1.0
         })
@@ -968,8 +929,6 @@ mod nocover_floating {
 
     #[test]
     fn test_negation_is_self_inverse() {
-        // Not a @fails test, so Hegel::new directly. TRY_HARDER → test_cases(1000)
-        // + FilterTooMuch suppression, mirroring the upstream.
         Hegel::new(|tc| {
             let x: f64 = tc.draw(gs::floats::<f64>());
             tc.assume(!x.is_nan());
@@ -987,7 +946,6 @@ mod nocover_floating {
 
     #[test]
     fn test_is_not_nan() {
-        // @fails: find a list containing a NaN.
         FindAny::new(gs::vecs(gs::floats::<f64>()), |xs: &Vec<f64>| {
             xs.iter().any(|x| x.is_nan())
         })
@@ -1014,7 +972,6 @@ mod nocover_floating {
 
     #[test]
     fn test_is_int() {
-        // @fails: find a finite float that is not integer-valued (e.g. 0.5).
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             x.is_finite() && *x != x.trunc()
         })
@@ -1025,7 +982,6 @@ mod nocover_floating {
 
     #[test]
     fn test_is_not_int() {
-        // @fails: find a finite integer-valued float (e.g. 0.0).
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             x.is_finite() && *x == x.trunc()
         })
@@ -1036,7 +992,6 @@ mod nocover_floating {
 
     #[test]
     fn test_is_in_exact_int_range() {
-        // @fails: find a finite float so large that x + 1 == x (magnitude ≥ 2^53).
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             x.is_finite() && *x + 1.0 == *x
         })
@@ -1047,8 +1002,6 @@ mod nocover_floating {
 
     #[test]
     fn test_can_find_floats_that_do_not_round_trip_through_strings() {
-        // @fails: find x where its string form doesn't parse back to an equal
-        // value. NaN satisfies this because NaN != NaN.
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             x.to_string().parse::<f64>().unwrap() != *x
         })
@@ -1059,9 +1012,6 @@ mod nocover_floating {
 
     #[test]
     fn test_can_find_floats_that_do_not_round_trip_through_reprs() {
-        // Rust has no `repr()`; the Debug format plays the same role and produces
-        // a round-trippable representation for all finite/infinite floats. NaN
-        // still breaks it because NaN != NaN.
         FindAny::new(gs::floats::<f64>(), |x: &f64| {
             format!("{x:?}").parse::<f64>().unwrap() != *x
         })
@@ -1069,13 +1019,6 @@ mod nocover_floating {
         .suppress_health_check(HealthCheck::FilterTooMuch)
         .run();
     }
-
-    // Upstream parametrises this over (snan, neg) ∈ {False, True}²; port the
-    // four cases as separate tests so each runs under its own TRY_HARDER budget.
-    // `snan` is true when `abs(x)`'s bit pattern differs from `f64::NAN`'s (i.e.
-    // the mantissa has any non-high bit set); `neg` is true when the sign bit
-    // is set. Matches `float_to_int(abs(x)) != float_to_int(float("nan"))` and
-    // `math.copysign(1, x) == -1` from the upstream.
 
     fn variant_matches(x: f64, snan: bool, neg: bool) -> bool {
         let abs_bits = x.abs().to_bits();
@@ -1085,22 +1028,10 @@ mod nocover_floating {
         snan == is_snan && neg == is_neg
     }
 
-    // The two `quiet` variants require mantissa_bits == 0 exactly. The
-    // `FilteredFloat` NaN fallback draws a random mantissa from [0, 2^52-1];
-    // mantissa=0 occurs with only ~0.5% combined probability per NaN draw
-    // (≈1% for mantissa=0 via the nasty-boundary path × 50% for the sign bit).
-    // At the upstream's TRY_HARDER budget of 1000 the residual failure rate is
-    // empirically ~7% — high enough to break CI. The signaling variants need
-    // mantissa != 0 (essentially always true), so they're fine at 1000.
-    // Bumping the two quiet tests to 10_000 drops the failure odds to well
-    // below 1e-6 while still completing in <1s.
     const QUIET_NAN_ATTEMPTS: u64 = 10_000;
 
     #[test]
     fn test_can_find_negative_and_signaling_nans_quiet_positive() {
-        // Fixed seed so coverage runs never hit the ~1e-3 residual flake
-        // when the NaN mantissa-bit lottery happens to miss across all
-        // 10_000 attempts.
         FindAny::new(
             gs::floats::<f64>().filter(|x| variant_matches(*x, false, false)),
             |_: &f64| true,

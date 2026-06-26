@@ -232,8 +232,6 @@ mod direct_strategies {
     use hegel::{Hegel, Settings};
     use std::collections::HashMap;
 
-    // --- test_validates_keyword_arguments: invalid bounds panic at draw time ---
-
     fn expect_generator_panic<T, G>(generator: G, pattern: &str)
     where
         G: Generator<T> + 'static + std::panic::UnwindSafe,
@@ -350,15 +348,11 @@ mod direct_strategies {
 
     #[test]
     fn test_text_alphabet_empty_with_min_size_panics() {
-        // text(alphabet="", min_size=1): no characters to pick from and we require
-        // at least one character — generation rejects this.
         expect_generator_panic(
             gs::text().alphabet("").min_size(1),
             "(?i)(alphabet|characters|empty|unsatisfiable|invalid|too.much)",
         );
     }
-
-    // --- test_produces_valid_examples_from_keyword: valid kwargs generate fine ---
 
     #[test]
     fn test_integers_min_value() {
@@ -427,10 +421,6 @@ mod direct_strategies {
     #[test]
     fn test_text_alphabet_kwargs() {
         check_can_generate_examples(gs::text().alphabet("abc"));
-        // Upstream also tests `alphabet=""` with default `min_size=0`, relying on
-        // Hypothesis's rule that an empty alphabet yields only empty strings.
-        // hegel-rust rejects an empty character set outright, so we only
-        // exercise the non-empty-alphabet case here.
     }
 
     #[test]
@@ -459,8 +449,6 @@ mod direct_strategies {
         check_can_generate_examples(gs::ip_addresses().v6());
     }
 
-    // --- test_produces_valid_examples_from_args ---
-
     #[derive(Debug, Clone)]
     #[allow(dead_code)]
     enum BoolOrBoolTuple {
@@ -470,7 +458,6 @@ mod direct_strategies {
 
     #[test]
     fn test_one_of_mixed_types_generates() {
-        // st.one_of(st.booleans(), st.tuples(st.booleans()))
         check_can_generate_examples(gs::one_of(vec![
             gs::booleans().map(BoolOrBoolTuple::Bool).boxed(),
             hegel::tuples!(gs::booleans())
@@ -492,14 +479,11 @@ mod direct_strategies {
 
     #[test]
     fn test_builds_equivalent_via_tuples_map() {
-        // st.builds(lambda x, y: x + y, st.integers(), st.integers())
         check_can_generate_examples(
             hegel::tuples!(gs::integers::<i64>(), gs::integers::<i64>())
                 .map(|(x, y): (i64, i64)| x.wrapping_add(y)),
         );
     }
-
-    // --- direct @given-style tests ---
 
     #[test]
     fn test_has_specified_length() {
@@ -541,26 +525,18 @@ mod direct_strategies {
 
     #[test]
     fn test_float_can_find_min_value_inf() {
-        // Unbounded: finds some negative infinity.
         let v = minimal(gs::floats::<f64>(), |x: &f64| *x < 0.0 && x.is_infinite());
         assert!(v.is_infinite() && v < 0.0);
-        // The second upstream assertion (min_value=-inf, max_value=0.0) is not
-        // portable: hegel-rust defaults `allow_infinity` to false when both
-        // bounds are set, and overriding panics when both bounds are set.
     }
 
     #[test]
     fn test_can_find_none_list() {
-        // Python `st.lists(st.none())` with `len(x) >= 3`: minimal is [None]*3.
         let v = minimal(gs::vecs(gs::unit()), |x: &Vec<()>| x.len() >= 3);
         assert_eq!(v, vec![(), (), ()]);
     }
 
     #[test]
     fn test_produces_dictionaries_of_at_least_minimum_size() {
-        // Python test draws until it finds a 2-entry {False:0, True:0}.
-        // Rust equivalent: any dict with min_size=2 and bool keys must contain
-        // both False and True (the only two keys), and the minimal integer is 0.
         let v = minimal(
             gs::hashmaps(gs::booleans(), gs::integers::<i64>()).min_size(2),
             |_| true,
@@ -644,8 +620,6 @@ mod direct_strategies {
 
     #[test]
     fn test_chained_filter() {
-        // Python `st.integers().filter(bool).filter(lambda x: x % 3)`:
-        // `bool(x)` is `x != 0`; `x % 3` truthy is `x % 3 != 0`.
         assert_all_examples(
             gs::integers::<i64>()
                 .filter(|x: &i64| *x != 0)
@@ -789,8 +763,6 @@ mod pbtkit_generators {
 
     #[test]
     fn test_cannot_witness_empty_one_of() {
-        // Python raises Unsatisfiable when drawing from one_of() with no
-        // alternatives; hegel-rust panics at construction instead.
         expect_panic(
             || {
                 let empty: Vec<gs::BoxedGenerator<i32>> = vec![];
@@ -841,8 +813,6 @@ mod pbtkit_generators {
 
     #[test]
     fn test_many_with_small_max() {
-        // Exercises the geometric-distribution path for collections with a
-        // small max_size.
         Hegel::new(|tc| {
             let ls: Vec<i64> =
                 tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(2));
@@ -861,9 +831,6 @@ mod pbtkit_generators {
 
     #[test]
     fn test_sampled_from_shrinks_to_first() {
-        // Python test asserts "'a'" appears in the failure output. Using
-        // `minimal`, the minimum generated value that triggers the condition
-        // should be the first element of the sample list.
         let v = minimal(
             gs::sampled_from(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
             |v: &String| v == "a",
@@ -919,8 +886,6 @@ mod pbtkit_generators {
 
     #[test]
     fn test_composite_shrinks() {
-        // Python test asserts the shrunk counterexample is "100, 0" or "0, 100".
-        // We check the same property: shrinking lands exactly on the boundary.
         let (x, y) = minimal(
             hegel::compose!(|tc| {
                 let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));

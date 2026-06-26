@@ -1,5 +1,3 @@
-// Numeric schema interpreters: integer, boolean, constant.
-
 use crate::native::core::{EngineError, NativeTestCase};
 use ciborium::Value;
 

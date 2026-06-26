@@ -316,9 +316,6 @@ mod shrink_quality {
                 executions (well above this budget), so the pass/fail here is a \
                 seed lottery rather than a real signal."]
     fn test_duplicate_containment() {
-        // With unbounded integers a collision is essentially only reachable via
-        // a span mutation that copies one integer's span over another, and that
-        // happens far too rarely to find reliably within any sane budget (#350).
         let (xs, x): (Vec<i64>, i64) = Minimal::new(
             gs::tuples!(gs::vecs(gs::integers::<i64>()), gs::integers::<i64>()),
             |(xs, x): &(Vec<i64>, i64)| xs.iter().filter(|&&v| v == *x).count() > 1,
@@ -395,10 +392,6 @@ mod shrink_quality {
             }
             let mx = *x.iter().max().unwrap();
             let mn = *x.iter().min().unwrap();
-            // `mn + 10` would overflow for inputs near `i64::MAX`; previously
-            // those overflows were swallowed by the runner's single-failure
-            // collapsing.  Use `checked_add` so a draw at the extreme returns
-            // a clean `false` rather than panicking.
             let Some(threshold) = mn.checked_add(10) else {
                 return false;
             };
@@ -411,9 +404,6 @@ mod shrink_quality {
 
     #[test]
     fn test_minimize_namedtuple() {
-        // Python `namedtuple` is a tuple subclass; the Rust-equivalent
-        // shape is a plain tuple `(i64, i64)` with the same semantics for
-        // `lambda x: x.a < x.b`.
         let (a, b) = minimal(
             gs::tuples!(gs::integers::<i64>(), gs::integers::<i64>()),
             |(a, b): &(i64, i64)| a < b,
@@ -620,9 +610,6 @@ mod shrink_quality {
         Div(Box<Expr>, Box<Expr>),
     }
 
-    // `div_subterms` and `evaluate` walk the (potentially very deep) `Expr`
-    // tree iteratively, because a recursive `match` self + recurse on children
-    // can blow the stack on debug builds before the shrinker converges.
     fn div_subterms(root: &Expr) -> bool {
         let mut stack: Vec<&Expr> = vec![root];
         while let Some(node) = stack.pop() {
@@ -686,10 +673,6 @@ mod shrink_quality {
         values.pop()
     }
 
-    // Iteratively dismantle deeply-nested `Box<Expr>` chains so default
-    // `Box::drop` recursion can't overflow the stack. We replace each
-    // child Expr with `Int(0)` in place so the post-Drop auto-drop only
-    // walks Int(0)s.
     impl Drop for Expr {
         fn drop(&mut self) {
             let mut stack: Vec<Expr> = Vec::new();
@@ -828,10 +811,6 @@ mod shrink_quality {
         }
     }
 
-    // Hypothesis's shrinker has a per-codepoint canonicalisation pass that
-    // lowers values toward the simplification target ('0'); the same gap that
-    // blocks `test_minimize_duplicated_characters_within_a_choice` could stop
-    // shrinking on lex-smaller codepoints from elsewhere in the `IntervalSet`.
     #[test]
     fn test_run_length_encoding() {
         fn decode(table: &[(u32, char)]) -> String {
@@ -857,7 +836,6 @@ mod shrink_quality {
                     if let Some(p) = prev {
                         out.push((count, p));
                     }
-                    // BUG: missing `count = 1`
                     prev = Some(c);
                 } else {
                     count += 1;
@@ -885,9 +863,6 @@ mod shrink_quality {
         assert_eq!(s, "0001");
     }
 
-    // Without Hypothesis's `NASTY_STRINGS` constant pool
-    // (mathematical-fraktur etc.), 10 000 attempts can't reliably
-    // surface the witness.
     #[test]
     fn test_nasty_string_shrinks() {
         let s = Minimal::new(gs::text(), |s: &String| {

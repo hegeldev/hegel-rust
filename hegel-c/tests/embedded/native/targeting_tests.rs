@@ -37,8 +37,6 @@ fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
     )
 }
 
-// ── TargetingState ────────────────────────────────────────────────────────
-
 #[test]
 fn targeting_state_starts_empty() {
     let state = TargetingState::new();
@@ -65,19 +63,16 @@ fn targeting_state_overwrites_only_on_strict_improvement() {
         &choices_a,
         &std::collections::HashMap::from([("s".to_string(), 1.0)]),
     );
-    // Equal score: no overwrite.
     state.record(
         &choices_b,
         &std::collections::HashMap::from([("s".to_string(), 1.0)]),
     );
     assert_eq!(state.best_score("s"), Some(1.0));
-    // Worse score: no overwrite.
     state.record(
         &choices_b,
         &std::collections::HashMap::from([("s".to_string(), 0.5)]),
     );
     assert_eq!(state.best_score("s"), Some(1.0));
-    // Strictly better: overwrite.
     state.record(
         &choices_b,
         &std::collections::HashMap::from([("s".to_string(), 2.0)]),
@@ -98,15 +93,11 @@ fn targeting_state_tracks_multiple_labels_independently() {
     assert_eq!(state.best_score("c"), None);
 }
 
-// ── TargetingSchedule ─────────────────────────────────────────────────────
-
 #[test]
 fn schedule_fires_at_first_threshold() {
-    // max_examples=100 → step = max(50, 11, 10) = 50.
     let mut s = TargetingSchedule::new(100);
     assert!(!s.should_fire(49));
     assert!(s.should_fire(50));
-    // Second call at the same count does not re-fire.
     assert!(!s.should_fire(50));
 }
 
@@ -114,20 +105,15 @@ fn schedule_fires_at_first_threshold() {
 fn schedule_re_fires_at_subsequent_thresholds() {
     let mut s = TargetingSchedule::new(100);
     assert!(s.should_fire(50));
-    // Next fire at 50 + step (50) = 100.
     assert!(!s.should_fire(99));
     assert!(s.should_fire(100));
 }
 
 #[test]
 fn schedule_for_small_max_examples_never_fires_in_range() {
-    // max_examples=1 → step = max(0, 1, 10) = 10.
     let mut s = TargetingSchedule::new(1);
-    // Generation tops out at valid_test_cases=1; schedule never fires.
     assert!(!s.should_fire(1));
 }
-
-// ── is_climbable ──────────────────────────────────────────────────────────
 
 #[test]
 fn is_climbable_accepts_integer_float_boolean_bytes() {
@@ -169,12 +155,8 @@ fn is_climbable_returns_false_for_value_and_kind_mismatch() {
         max_value: BigInt::from(10),
         shrink_towards: BigInt::from(0),
     });
-    // Wrong-shape pairing: a bytes value with an integer kind is never
-    // produced by the engine, but `is_climbable` defensively rejects it.
     assert!(!is_climbable(&ChoiceValue::Bytes(vec![0]), &int_kind));
 }
-
-// ── step_choice ───────────────────────────────────────────────────────────
 
 #[test]
 fn step_choice_integer_adds_delta_within_range() {
@@ -192,8 +174,8 @@ fn step_choice_integer_adds_delta_within_range() {
 #[test]
 fn step_choice_integer_returns_none_when_out_of_range() {
     let node = integer_node(5, 0, 10);
-    assert_eq!(step_choice(&node, 100), None); // 5 + 100 > 10
-    assert_eq!(step_choice(&node, -10), None); // 5 - 10 < 0
+    assert_eq!(step_choice(&node, 100), None);
+    assert_eq!(step_choice(&node, -10), None);
 }
 
 #[test]
@@ -216,7 +198,6 @@ fn step_choice_boolean_only_steps_by_one() {
     assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Boolean(true)));
     assert_eq!(step_choice(&node, -1), Some(ChoiceValue::Boolean(false)));
     assert_eq!(step_choice(&node, 0), Some(ChoiceValue::Boolean(false)));
-    // |delta| > 1 rejected.
     assert_eq!(step_choice(&node, 2), None);
     assert_eq!(step_choice(&node, -3), None);
 }
@@ -224,12 +205,10 @@ fn step_choice_boolean_only_steps_by_one() {
 #[test]
 fn step_choice_bytes_adds_big_endian_and_pads() {
     let node = bytes_node(vec![0x00, 0x01], 0, 8);
-    // Step by 1 → 0x0002, padded to length 2.
     assert_eq!(
         step_choice(&node, 1),
         Some(ChoiceValue::Bytes(vec![0x00, 0x02]))
     );
-    // Step by 256 → 0x0101.
     assert_eq!(
         step_choice(&node, 256),
         Some(ChoiceValue::Bytes(vec![0x01, 0x01]))
@@ -250,9 +229,6 @@ fn step_choice_bytes_handles_zero_after_step() {
 
 #[test]
 fn step_choice_bytes_returns_none_when_overflows_max_size() {
-    // BytesChoice with max_size=1, value=0xFF. Stepping by 1 produces a
-    // big-endian 0x0100, which needs 2 bytes — beyond max_size — so the
-    // post-step `kind.validate` rejects.
     let node = bytes_node(vec![0xFF], 0, 1);
     assert_eq!(step_choice(&node, 1), None);
 }
@@ -267,23 +243,6 @@ fn step_choice_rejects_mismatched_value_and_kind() {
     );
     assert_eq!(step_choice(&node, 1), None);
 }
-
-// ── hill_climb integration paths (resize-restart, lateral-grow, etc.) ──
-//
-// These tests drive `optimise_targets` directly with a controlled
-// `Engine` so each interior branch of `hill_climb` and `try_replace`
-// gets a deterministic path through it. The end-to-end integration
-// tests in `tests/test_targeting.rs` cover the *behaviour* (targeting
-// finds optima, doesn't exceed budget, etc.) but they sample randomly
-// against the RNG and don't reliably exercise every defensive branch.
-//
-// Each test body draws directly from the engine's `DataSource` (the same
-// interface the C ABI exposes) rather than the `hegeltest` frontend's
-// `TestCase`/generators, which live in the other crate. A `boolean` draw is
-// one weighted-0.5 boolean choice and an `integer` draw is one
-// `draw_integer` choice, so the realised choice sequences are identical to
-// the equivalent `gs::booleans()` / `gs::integers().min_value().max_value()`
-// draws — the structure the hill-climber reasons about is the same.
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::test_runner::Engine;
@@ -360,10 +319,6 @@ where
 /// `nodes_examined` from before the resize.
 #[test]
 fn hill_climb_resize_restart_and_already_examined_skip() {
-    // Start: [bool, int=2, int=2, bool, bool] (score = m + n = 4).
-    // The trailing int at idx=2 (a downstream `n`) can be climbed up,
-    // and each successful step pulls extra booleans from the random
-    // fallback so `current_nodes.len()` grows mid-walk.
     let start = vec![
         ChoiceValue::Boolean(false),
         ChoiceValue::Integer(BigInt::from(2)),
@@ -373,7 +328,7 @@ fn hill_climb_resize_restart_and_already_examined_skip() {
     ];
     run_optimise(start, 4.0, |ds| {
         let body = || -> Result<TestCaseResult, ()> {
-            draw_bool(ds)?; // seed
+            draw_bool(ds)?;
             let m = draw_int(ds, 0, 20)?;
             let n = draw_int(ds, 0, 20)?;
             for _ in 0..n {
@@ -396,7 +351,7 @@ fn hill_climb_rejects_lateral_grow() {
     let start = vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)];
     run_optimise(start, 1.0, |ds| {
         let body = || -> Result<TestCaseResult, ()> {
-            draw_bool(ds)?; // seed
+            draw_bool(ds)?;
             let big = draw_bool(ds)?;
             if big {
                 for _ in 0..3 {
@@ -422,9 +377,6 @@ fn hill_climb_rejects_invalid_trial_status() {
             Ok(n) => n,
             Err(()) => return TestCaseResult::Overrun,
         };
-        // Peak score at n=7, but n=7 is filtered; the climber walks toward 7,
-        // lands on 7 via `find_integer`'s linear probe, and the assumption
-        // fails — `trial.status == Invalid`, rejected.
         if n == 7 {
             return TestCaseResult::Invalid;
         }

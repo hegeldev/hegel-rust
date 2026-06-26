@@ -47,10 +47,6 @@ fn span(start: usize, end: usize, label: &str) -> Span {
 
 #[test]
 fn consider_replaces_current_spans_on_improvement() {
-    // Closure returns one fixed span for the very first accepted candidate
-    // and a different one for any subsequent one, so we can assert that
-    // `current_spans` tracks the most recent accepted run, not the initial
-    // construction.
     let initial = vec![int_node(5), int_node(5)];
     let mut initial_spans = Spans::new();
     initial_spans.push(span(0, 2, "initial"));
@@ -69,8 +65,6 @@ fn consider_replaces_current_spans_on_improvement() {
     );
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "initial");
 
-    // A smaller candidate triggers `accept_improvement`, which swaps in the
-    // closure-provided spans.
     let smaller = vec![int_node(0), int_node(0)];
     assert!(shrinker.consider(&smaller).unwrap());
     assert_eq!(shrinker.current_spans.len(), 1);
@@ -79,9 +73,6 @@ fn consider_replaces_current_spans_on_improvement() {
 
 #[test]
 fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
-    // A candidate whose sort_key equals the current one returns true (lateral)
-    // but doesn't go through `accept_improvement`.  `current_spans` must
-    // stay at the initial state.
     let initial = vec![int_node(0)];
     let mut initial_spans = Spans::new();
     initial_spans.push(span(0, 1, "kept"));
@@ -99,14 +90,9 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
         initial_spans,
     );
 
-    // Same as current_nodes → fast-path returns true without calling test_fn.
     assert!(shrinker.consider(&initial).unwrap());
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
 
-    // Non-improving (same sort_key, different values would have to be
-    // returned by closure — but since same sort_key, no change tracked).
-    // We instead pass a strictly larger candidate to verify the not-smaller
-    // path leaves spans untouched.
     let larger = vec![int_node(7)];
     shrinker.consider(&larger).unwrap();
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
@@ -114,8 +100,6 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
 
 #[test]
 fn changed_nodes_accumulates_diff_against_checkpoint() {
-    // Each improvement diffs against `last_checkpoint_nodes` (the initial
-    // value), so the set accumulates every index that has ever differed.
     let initial = vec![int_node(10), int_node(10), int_node(10)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -127,14 +111,12 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
     );
     assert!(shrinker.changed_nodes().is_empty());
 
-    // Shrink node 0 → set should contain {0}.
     shrinker
         .consider(&[int_node(0), int_node(10), int_node(10)])
         .unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 1);
     assert!(shrinker.changed_nodes().contains(&0));
 
-    // Shrink node 2 → set should contain {0, 2}.
     shrinker
         .consider(&[int_node(0), int_node(10), int_node(0)])
         .unwrap();
@@ -146,9 +128,6 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
 
 #[test]
 fn changed_nodes_clears_on_shape_change() {
-    // When a shrink changes the sequence's length, there's no stable index
-    // identity between old and new, so `update_change_tracking` clears the
-    // set.
     let initial = vec![int_node(5), int_node(5), int_node(5)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
@@ -164,22 +143,16 @@ fn changed_nodes_clears_on_shape_change() {
         .unwrap();
     assert!(!shrinker.changed_nodes().is_empty());
 
-    // A two-element candidate is strictly smaller and changes the shape.
     shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
 #[test]
 fn changed_nodes_clears_on_kind_change_in_place() {
-    // Same-length but different kinds at some position is also a shape
-    // change.  We mock this by returning actual nodes whose kind discriminant
-    // differs from the candidate at index 1.
     let initial = vec![int_node(5), int_node(5)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(_) => {
-                // Always rewrite index 1 to a Boolean kind so the shape
-                // changes.
                 let actual = vec![int_node(0), bool_node(false)];
                 (true, actual, Spans::new())
             }
@@ -189,7 +162,6 @@ fn changed_nodes_clears_on_kind_change_in_place() {
         Spans::new(),
     );
     shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
-    // Kind change → set cleared.
     assert!(shrinker.changed_nodes().is_empty());
 }
 
@@ -252,8 +224,6 @@ fn clear_change_tracking_rebaselines_and_empties_set() {
     shrinker.clear_change_tracking();
     assert!(shrinker.changed_nodes().is_empty());
 
-    // After clearing, the new baseline is the post-shrink state, so the
-    // next diff is against `[0, 10]` rather than the original `[10, 10]`.
     shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&1));

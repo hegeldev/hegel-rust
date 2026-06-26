@@ -1,8 +1,6 @@
 use crate::antithesis::TestLocation;
 use crate::test_case::TestCase;
 
-// ─── Public types ───────────────────────────────────────────────────────────
-
 /// Health checks that can be suppressed during test execution.
 ///
 /// Health checks detect common issues with test configuration that would
@@ -302,9 +300,6 @@ pub(crate) enum Database {
     Path(String),
 }
 
-// ─── Hegel test builder ─────────────────────────────────────────────────────
-
-// internal use only
 #[doc(hidden)]
 pub fn hegel<F>(test_fn: F)
 where
@@ -334,7 +329,6 @@ fn is_in_ci() -> bool {
     })
 }
 
-// internal use only
 #[doc(hidden)]
 pub struct Hegel<F> {
     test_fn: F,
@@ -401,9 +395,6 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        // A blob replay is a single deterministic case — no generation,
-        // targeting, or shrinking — so it is phase-agnostic and takes
-        // precedence over the normal run.
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
@@ -415,11 +406,6 @@ where
             return;
         }
 
-        // Everything else — including `Mode::SingleTestCase`, which the engine
-        // handles from the settings — drives the engine through the C ABI.
-        // There is no early-out when `Phase::Generate` is absent: the phases
-        // are independent (e.g. `phases = [Phase::Reuse]` must still replay
-        // stored counterexamples), and the engine skips whatever is disabled.
         crate::run_lifecycle::drive(
             self.test_fn,
             &self.settings,

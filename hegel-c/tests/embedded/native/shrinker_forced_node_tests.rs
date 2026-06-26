@@ -147,10 +147,6 @@ fn mutate_and_shrink_skips_forced_node() {
 
 #[test]
 fn redistribute_numeric_pairs_skips_forced_integer() {
-    // Starting from (15, 10) with the second node forced and predicate
-    // `n1 + n2 > 20`, the redistribute_numeric_pairs pass should not
-    // modify the forced node — so the shrink target stays at (15, 10)
-    // and doesn't collapse to (11, 10).
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
             ShrinkRun::Full(nodes) => {
@@ -194,7 +190,6 @@ fn normalize_unicode_chars_skips_forced_node() {
             min_size: 0,
             max_size: 16,
         }),
-        // an accented character that would normally be normalised
         ChoiceValue::String(vec![0xE9]),
         true,
     );
@@ -214,8 +209,6 @@ fn normalize_unicode_chars_skips_forced_node() {
         _ => unreachable!(),
     }
 }
-
-// --- Regression tests for the `consider` changes ---------
 
 /// Forced-guard fix: the forced-value guard in `consider` must apply ONLY to
 /// same-length candidates. A deletion shifts every node after the cut, so
@@ -269,7 +262,6 @@ fn consider_free_rejects_shortlex_larger_candidate_without_running() {
         vec![int_node(5, false)],
         Spans::new(),
     );
-    // 7 > 5: shortlex-larger, so it cannot be an improvement.
     let interesting = shrinker.consider(&[int_node(7, false)]).unwrap();
     assert!(!interesting, "shortlex-larger candidate must be rejected");
     assert!(

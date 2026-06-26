@@ -4,10 +4,6 @@ use hegel::generators::{self as gs, Generator};
 use jiff::tz::{AmbiguousOffset, Offset, TimeZone};
 use jiff::{Timestamp, Zoned};
 
-// ---------------------------------------------------------------------------
-// tz::Offset
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_offsets_default() {
     assert_all_examples(jiff_gs::offsets(), |o| {
@@ -60,10 +56,6 @@ fn test_jiff_offsets_min_greater_than_max() {
     g.as_basic();
 }
 
-// ---------------------------------------------------------------------------
-// tz::TimeZone
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_jiff_timezone_default_generator() {
     check_can_generate_examples(gs::default::<TimeZone>());
@@ -71,17 +63,11 @@ fn test_jiff_timezone_default_generator() {
 
 #[test]
 fn test_jiff_timezones_in_vec() {
-    // every generated TimeZone should be queryable; it's hard to assert much
-    // beyond non-panic since the values are heterogeneous.
     assert_all_examples(gs::vecs(gs::default::<TimeZone>()).max_size(5), |v| {
         v.iter()
             .all(|tz: &TimeZone| !tz.iana_name().unwrap_or("").contains('\0'))
     });
 }
-
-// ---------------------------------------------------------------------------
-// Zoned
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_jiff_zoneds_default() {
@@ -102,7 +88,6 @@ fn test_jiff_zoned_default_generator() {
 
 #[test]
 fn test_jiff_zoneds_with_custom_timezones() {
-    // Replace the timezone generator and verify every produced Zoned uses UTC.
     assert_all_examples(jiff_gs::zoneds().timezones(gs::just(TimeZone::UTC)), |z| {
         z.time_zone() == &TimeZone::UTC
     });
@@ -110,16 +95,11 @@ fn test_jiff_zoneds_with_custom_timezones() {
 
 #[test]
 fn test_jiff_zoneds_with_custom_timestamps() {
-    // Replace the timestamp generator with a fixed value.
     let fixed = Timestamp::from_second(0).unwrap();
     assert_all_examples(jiff_gs::zoneds().timestamps(gs::just(fixed)), move |z| {
         z.timestamp() == fixed
     });
 }
-
-// ---------------------------------------------------------------------------
-// tz::AmbiguousOffset
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_jiff_ambiguous_offset_default_generator() {

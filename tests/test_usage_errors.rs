@@ -51,8 +51,6 @@ fn assert_clean_usage_error(msg: &str, expected: &str) {
     );
 }
 
-// --- tc.target() misuse ---
-
 #[test]
 fn target_non_finite_score_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| tc.target(f64::NAN));
@@ -71,8 +69,6 @@ fn target_duplicate_label_is_a_clean_usage_error() {
     assert_clean_usage_error(&msg, "at most once");
 }
 
-// --- generator argument validation: the `InvalidArgument`-named family ---
-
 #[test]
 fn float_range_with_no_values_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
@@ -87,15 +83,11 @@ fn float_range_with_no_values_is_a_clean_usage_error() {
 
 #[test]
 fn text_with_inverted_codepoint_range_is_a_clean_usage_error() {
-    // The Rust builder does not pre-validate this; the native engine rejects
-    // it as InvalidArgument while interpreting the schema.
     let msg = capture_run_panic(|tc| {
         let _: String = tc.draw(gs::text().min_codepoint(200).max_codepoint(100));
     });
     assert_clean_usage_error(&msg, "InvalidArgument");
 }
-
-// --- generator argument validation: the bare-assert family ---
 
 #[test]
 fn integer_max_below_min_is_a_clean_usage_error() {
@@ -150,8 +142,6 @@ fn unsatisfiable_filter_is_a_clean_usage_error() {
     });
     assert_clean_usage_error(&msg, "Unsatisfiable filter");
 }
-
-// --- usage errors raised from inside `tc.repeat()` ---
 
 #[test]
 fn usage_error_inside_repeat_is_a_clean_usage_error() {

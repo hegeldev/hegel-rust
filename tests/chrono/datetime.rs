@@ -3,10 +3,6 @@ use chrono::{DateTime, FixedOffset, Utc};
 use hegel::extras::chrono as chrono_gs;
 use hegel::generators as gs;
 
-// ---------------------------------------------------------------------------
-// Default: DateTime<FixedOffset> with varying offsets
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_datetimes_default() {
     check_can_generate_examples(chrono_gs::datetimes());
@@ -69,10 +65,6 @@ fn test_datetimes_min_greater_than_max() {
         .max_value(DateTime::<Utc>::from_timestamp(0, 0).unwrap().naive_utc());
     check_can_generate_examples(g);
 }
-
-// ---------------------------------------------------------------------------
-// DateTime<Utc> via .timezones(gs::just(Utc))
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_datetimes_utc_default() {
@@ -149,14 +141,8 @@ fn test_datetimes_utc_min_greater_than_max() {
     check_can_generate_examples(g);
 }
 
-// ---------------------------------------------------------------------------
-// Full chrono range: datetimes outside the i64-nanosecond timestamp window.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn test_datetimes_full_range_bounds() {
-    // MIN_UTC and MAX_UTC are far outside i64 nanoseconds since the Unix epoch.
-    // Both bounds must serialize and round-trip without loss.
     check_can_generate_examples(
         chrono_gs::datetimes()
             .timezones(gs::just(Utc))
@@ -167,7 +153,6 @@ fn test_datetimes_full_range_bounds() {
 
 #[test]
 fn test_datetimes_year_3000() {
-    // Year 3000 is past chrono's old i64-nanos cap (~year 2262).
     let min = "3000-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
     let max = "3001-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
     assert_all_examples(

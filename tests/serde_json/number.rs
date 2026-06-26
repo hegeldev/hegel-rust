@@ -10,8 +10,6 @@ fn test_serde_json_numbers_default() {
 
 #[test]
 fn test_serde_json_numbers_are_finite() {
-    // Every drawn Number must be representable: it has a valid i64, u64,
-    // or finite f64 view.
     assert_all_examples(json_gs::numbers(), |n| {
         n.as_i64().is_some() || n.as_u64().is_some() || n.as_f64().is_some_and(|f| f.is_finite())
     });
