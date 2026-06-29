@@ -1,8 +1,10 @@
 pub mod project;
 pub mod utils;
 
+#[cfg(not(miri))]
 static TEST_CWD: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
 
+#[cfg(not(miri))]
 #[ctor::ctor]
 fn chdir_to_isolated_tempdir() {
     let tempdir = tempfile::Builder::new()

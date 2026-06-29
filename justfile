@@ -124,11 +124,29 @@ c-test-abort:
 c-header:
     HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c
 
+# Run a fast core of the suite under Miri to catch undefined behaviour in the
+# native engine and the in-process C-ABI boundary hegeltest drives it through.
+# The `test_miri` target exercises the main generator, combinator, derive,
+# targeting, assume, and shrinking features end-to-end: every draw flows through
+# the same `hegel_generate` / span / collection / target FFI primitives the
+# other language bindings use, so this covers the unsafe boundary while staying
+# tractable under Miri's interpreter (small example counts, no 100-example
+# property loops or budget-exhaustion draws).
+#
+# Requires the nightly toolchain with the miri component:
+# `rustup +nightly component add miri`.
+#
+# CI=1 disables the on-disk failure database (we don't want Miri writing files);
+# isolation is disabled because the engine seeds its PRNG from OS entropy.
+check-miri:
+    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test test_miri
+
 # these aliases are provided as ux improvements for local developers. CI should use the longer
 # forms.
 test: check-tests
 coverage: check-coverage
 lint: check-lint
+miri: check-miri
 check: check-lint check-tests check-tests-all-features
 
 # Run cargo-insta, installing it first if it's missing. Pinned to the same
