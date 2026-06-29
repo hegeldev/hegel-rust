@@ -42,7 +42,12 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
 
             let info = || MethodInfo {
                 name: method.sig.ident.clone(),
-                attrs: method.attrs.clone(),
+                attrs: method
+                    .attrs
+                    .iter()
+                    .filter(|a| a.path().is_ident("cfg"))
+                    .cloned()
+                    .collect(),
             };
             if has_rule {
                 rules.push(info());
