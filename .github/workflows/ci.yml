@@ -333,10 +333,37 @@ jobs:
       - name: lint
         run: just check-format-nix
 
+  # Run a fast core of the suite under Miri to catch undefined behaviour in the
+  # native engine and the in-process C-ABI boundary hegeltest drives it through.
+  # The expensive quality/compile suites and subprocess-driven tests are
+  # excluded (see `just check-miri`); the `test_miri` target drives every main
+  # feature through the FFI primitives at small example counts, which is what
+  # keeps the run tractable under Miri's interpreter.
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust nightly + miri
+        run: rustup toolchain install nightly --profile minimal -c miri
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Run miri
+        run: just check-miri
+
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, nix]
+    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, nix, miri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
