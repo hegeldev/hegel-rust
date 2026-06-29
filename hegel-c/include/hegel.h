@@ -32,13 +32,17 @@
  *
  * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
  * it, you must not free it, and it is valid only until a point that the
- * function documents. Two cases are easy to trip over:
+ * function documents. Three cases are easy to trip over:
  *
  *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
  *     run and freed by hegel_run_free. Do NOT pass it to hegel_test_case_free
  *     (that is only for a test case you made with hegel_test_case_from_blob).
  *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
  *     run live until hegel_run_free.
+ *   - A hegel_test_case_t* from hegel_test_case_clone is a *clone*, owned by
+ *     the family root. Do NOT free it (hegel_test_case_free returns
+ *     HEGEL_E_NOT_ROOT); freeing the root — the from_blob handle, or the run
+ *     for a run-owned case — releases every clone with it.
  *   - Strings and byte buffers (e.g. from hegel_generate,
  *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
  *     getters) are transient — hegel_generate's bytes, for instance, are
@@ -113,6 +117,21 @@ typedef enum {
      bug. See `hegel_context_last_error()` for the diagnostic.
      */
     HEGEL_E_INTERNAL = -8,
+    /*
+     A single test-case handle was used from two threads at once. Each
+     handle may be driven by at most one thread at a time; to generate from
+     several threads, `hegel_test_case_clone` the handle and give each
+     thread its own clone. (Clones share the underlying test case but have
+     independent per-handle locks, so they may be driven concurrently.)
+     */
+    HEGEL_E_CONCURRENT_USE = -9,
+    /*
+     `hegel_test_case_free` was called on a clone (a handle produced by
+     `hegel_test_case_clone`). Only the root test case may be freed; doing
+     so releases the root and every clone descended from it. Freeing a clone
+     frees nothing and returns this code.
+     */
+    HEGEL_E_NOT_ROOT = -10,
 } hegel_result_t;
 
 /*
@@ -427,16 +446,24 @@ typedef struct hegel_run_result_t hegel_run_result_t;
 typedef struct hegel_settings_t hegel_settings_t;
 
 /*
- One in-flight test case handed to the caller by
- `hegel_next_test_case` (borrowed from the run) or constructed
- standalone by `hegel_test_case_from_blob` (owned by the caller). The
- caller drives it with the per-test-case primitives (`hegel_generate`,
- `hegel_start_span` / `hegel_stop_span`, `hegel_target`, the collection
- primitives) and concludes it with `hegel_mark_complete`. A run-owned
- handle becomes invalid once marked complete; calling
- `hegel_next_test_case` again returns the next test case (or NULL when
- the run is finished). A standalone handle must be released with
- `hegel_test_case_free`.
+ One in-flight test-case handle handed to the caller by
+ `hegel_next_test_case` (borrowed from the run), constructed standalone by
+ `hegel_test_case_from_blob` (owned by the caller), or cloned from another
+ handle by `hegel_test_case_clone`. The caller drives it with the
+ per-test-case primitives (`hegel_generate`, `hegel_start_span` /
+ `hegel_stop_span`, `hegel_target`, the collection primitives) and concludes
+ it with `hegel_mark_complete`.
+
+ A single handle must be driven by at most one thread at a time: each
+ primitive `try_lock`s the handle's own `local`, returning
+ `HEGEL_E_CONCURRENT_USE` on contention. To draw from several threads, clone
+ the handle with `hegel_test_case_clone` and give each thread its own clone;
+ clones share the family but have independent locks.
+
+ A run-owned root becomes invalid once the family is marked complete;
+ calling `hegel_next_test_case` again returns the next test case (or NULL
+ when the run is finished). A standalone root must be released with
+ `hegel_test_case_free`, which also frees every clone in the family.
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
 
@@ -687,17 +714,51 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
                                          hegel_test_case_t **out_test_case);
 
 /*
- Free a standalone test case previously returned by
- `hegel_test_case_from_blob`. Safe to call with NULL (a no-op that returns
- `HEGEL_OK`), and safe whether or not the test case was marked complete.
+ Free a standalone root test case previously returned by
+ `hegel_test_case_from_blob`, along with every clone descended from it. Safe
+ to call with NULL (a no-op that returns `HEGEL_OK`), and safe whether or not
+ the test case was marked complete.
 
- Must NOT be called on a test case obtained from
- `hegel_next_test_case` — those are borrowed from the parent
- `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
- detected (while the run is still alive) and refused with
- `HEGEL_E_INVALID_HANDLE` and a diagnostic in `hegel_context_last_error`.
+ Must NOT be called on:
+ - a *clone* (a handle from `hegel_test_case_clone`): only the root may be
+   freed, and doing so frees all of its clones. Passing a clone is refused
+   with `HEGEL_E_NOT_ROOT` and nothing is freed.
+ - a test case obtained from `hegel_next_test_case`: those are owned by the
+   parent `hegel_run_t` and released by `hegel_run_free`. Passing one is
+   refused with `HEGEL_E_INVALID_HANDLE`.
+
+ Either refusal records a diagnostic in `hegel_context_last_error`.
  */
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
+
+/*
+ Clone a test-case handle, writing a new handle that shares the same
+ underlying test case into `*out_test_case`.
+
+ The clone is a *view onto the same test case*, not an independent one: it
+ draws from the same data source, and `hegel_mark_complete` on any handle in
+ the family marks them all complete. Clones exist so a test case can be
+ driven from several threads — each handle has its own lock, so two clones
+ may draw concurrently, whereas using a *single* handle from two threads
+ returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
+ currently non-deterministic; making them robust is future work.)
+
+ Cloning is allowed on a clone (the result shares the same root family) and
+ after the family has completed (the clone simply reports
+ `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
+ lock, so a handle may be cloned while another thread is mid-draw on it.
+
+ The new handle is owned by the family **root** and must NOT be passed to
+ `hegel_test_case_free` (that returns `HEGEL_E_NOT_ROOT`); it is released
+ when the root is freed (`hegel_test_case_free` for a `from_blob` root, or
+ `hegel_run_free` / the next `hegel_next_test_case` for a run-owned one).
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, or `HEGEL_E_INVALID_ARG`
+ for a NULL `out_test_case`.
+ */
+hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
+                                     const hegel_test_case_t *tc,
+                                     hegel_test_case_t **out_test_case);
 
 /*
  Draw a value from the test case's data source, using the

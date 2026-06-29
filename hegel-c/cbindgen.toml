@@ -34,13 +34,17 @@ header = """
  *
  * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
  * it, you must not free it, and it is valid only until a point that the
- * function documents. Two cases are easy to trip over:
+ * function documents. Three cases are easy to trip over:
  *
  *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
  *     run and freed by hegel_run_free. Do NOT pass it to hegel_test_case_free
  *     (that is only for a test case you made with hegel_test_case_from_blob).
  *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
  *     run live until hegel_run_free.
+ *   - A hegel_test_case_t* from hegel_test_case_clone is a *clone*, owned by
+ *     the family root. Do NOT free it (hegel_test_case_free returns
+ *     HEGEL_E_NOT_ROOT); freeing the root — the from_blob handle, or the run
+ *     for a run-owned case — releases every clone with it.
  *   - Strings and byte buffers (e.g. from hegel_generate,
  *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
  *     getters) are transient — hegel_generate's bytes, for instance, are

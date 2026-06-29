@@ -208,9 +208,14 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// Run the user's test body once against the supplied libhegel test case,
 /// catching any panic and translating it to a [`TestCaseResult`].
 ///
-/// Reports the outcome back to the engine via [`TestCase::mark_complete`]
-/// (which calls `hegel_mark_complete`): that is the channel for per-test-case
-/// results, and the engine reads it back over the C ABI.
+/// The body draws on a borrowed view of `c_tc` (moved in by value), and the
+/// outcome is reported on the retained `c_tc` afterward — so a real libhegel
+/// clone is created only when the body itself calls `tc.clone()`, not once per
+/// case.
+///
+/// Reports the outcome back to the engine via [`report_outcome`] (which calls
+/// `hegel_mark_complete`): that is the channel for per-test-case results, and
+/// the engine reads it back over the C ABI.
 /// On the `Interesting` path the panic site is captured as a
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
 /// shrinking can key on it, and the rendered diagnostic block (panic
@@ -238,8 +243,8 @@ pub(crate) fn run_test_case(
     let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
-    let tc = TestCase::new(c_tc, should_emit, mode);
-    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
+    let tc = TestCase::new(c_tc.borrow(), should_emit, mode);
+    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
     let (tc_result, payload, diagnostic) = match result {
         Ok(()) => (TestCaseResult::Valid, None, None),
@@ -286,9 +291,38 @@ pub(crate) fn run_test_case(
         emit_verbose_stop_reason(&tc_result);
     }
 
-    tc.mark_complete(&tc_result);
+    report_outcome(&c_tc, &tc_result);
 
     (tc_result, payload, diagnostic)
+}
+
+/// Report a test case's outcome to the engine over the C ABI.
+///
+/// Only the status — and, for an interesting (failing) case, the bug origin —
+/// crosses the boundary; the panic message and reproduce blob are recovered
+/// from the run result afterward, not pushed through here. Marking any handle
+/// in a family complete marks the whole family, so this reports on the retained
+/// *root* handle after the body (which drew on a borrowed view of it) finishes.
+fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
+    use hegel_c::hegel_status_t as Status;
+    let (status, origin) = match result {
+        TestCaseResult::Valid => (Status::HEGEL_STATUS_VALID, None),
+        TestCaseResult::Invalid => (Status::HEGEL_STATUS_INVALID, None),
+        TestCaseResult::Overrun => (Status::HEGEL_STATUS_OVERRUN, None),
+        TestCaseResult::Interesting(failure) => (
+            Status::HEGEL_STATUS_INTERESTING,
+            Some(failure.origin.as_str()),
+        ),
+    };
+    if let Err(rc) = handle.mark_complete(status, origin) {
+        // nocov start
+        hegel_internal_error!(
+            "hegel_mark_complete failed: rc={} {}",
+            rc as i32,
+            crate::ffi::last_error_string()
+        );
+        // nocov end
+    }
 }
 
 /// Print a per-test-case line describing why this test case stopped.

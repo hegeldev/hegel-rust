@@ -22,8 +22,8 @@ use hegel_c::{
     hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
     hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
     hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
-    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_version,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -229,6 +229,17 @@ fn null_handles_are_rejected_without_crashing() {
         assert_eq!(hegel_settings_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_run_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_test_case_free(ctx, ptr::null_mut()), HEGEL_OK);
+
+        assert_eq!(
+            hegel_test_case_clone(ctx, ptr::null(), ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut clone_out: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(
+            hegel_test_case_clone(ctx, ptr::null(), &mut clone_out),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(clone_out.is_null());
 
         let tc: *mut HegelTestCase = ptr::null_mut();
         let mut out_ptr: *const u8 = ptr::null();
@@ -1026,4 +1037,231 @@ fn integer_schema() -> Vec<u8> {
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&v, &mut buf).unwrap();
     buf
+}
+
+/// Run a small always-interesting property to completion and return an owned
+/// copy of its single shrunk failure's base64 reproduce blob.
+unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        let run = start(ctx, s);
+        let schema = integer_schema();
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut p: *const u8 = ptr::null();
+            let mut n = 0usize;
+            let status = if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
+                == HEGEL_OK
+            {
+                hegel_status_t::HEGEL_STATUS_INTERESTING
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN
+            };
+            hegel_mark_complete(ctx, tc, status, ptr::null());
+        }
+        let res = result(ctx, run);
+        let f = failure_at(ctx, res, 0);
+        assert!(!f.is_null());
+        let blob_ptr = repro_blob_of(ctx, f);
+        assert!(!blob_ptr.is_null(), "a shrunk failure carries a blob");
+        let blob = std::ffi::CStr::from_ptr(blob_ptr).to_owned();
+        hegel_run_free(ctx, run);
+        hegel_settings_free(ctx, s);
+        blob
+    }
+}
+
+/// A clone shares the underlying test case with its root: it draws from the
+/// same source, marking any handle complete marks the whole family, a clone
+/// can be made after completion (and is immediately complete), and a clone can
+/// never be freed directly. Advancing the run then frees the root and every
+/// clone (the run-owned free cascade).
+#[test]
+fn clones_share_a_run_owned_family() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        let run = start(ctx, s);
+        let root = next_case(ctx, run);
+        assert!(!root.is_null());
+
+        let mut c1: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
+        assert!(!c1.is_null());
+
+        let schema = integer_schema();
+        let mut p: *const u8 = ptr::null();
+        let mut n = 0usize;
+        assert_eq!(
+            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+        assert_eq!(
+            hegel_generate(ctx, c1, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+
+        assert_eq!(
+            hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            HEGEL_OK
+        );
+        assert_eq!(
+            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_E_ALREADY_COMPLETE
+        );
+        assert_eq!(
+            hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            HEGEL_E_ALREADY_COMPLETE
+        );
+
+        let mut c2: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
+        assert_eq!(
+            hegel_generate(ctx, c2, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_E_ALREADY_COMPLETE
+        );
+
+        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_E_NOT_ROOT);
+        assert!(last_error(ctx).contains("clone"));
+
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        }
+        let _ = result(ctx, run);
+        hegel_run_free(ctx, run);
+        hegel_settings_free(ctx, s);
+        hegel_context_free(ctx);
+    }
+}
+
+/// Freeing a standalone (`from_blob`) root frees it and every clone descended
+/// from it (including clones of clones), while freeing a clone is refused and
+/// frees nothing. Run under Miri this also proves there is no leak or
+/// double-free in the cascade.
+#[test]
+fn freeing_a_standalone_root_frees_its_clones() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let blob = shrunk_failure_blob(ctx);
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+
+        let mut root: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(
+            hegel_test_case_from_blob(ctx, s, blob.as_ptr(), &mut root),
+            HEGEL_OK
+        );
+        assert!(!root.is_null());
+
+        let mut c1: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
+        let mut c2: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, c1, &mut c2), HEGEL_OK);
+
+        let schema = integer_schema();
+        let mut p: *const u8 = ptr::null();
+        let mut n = 0usize;
+        assert_eq!(
+            hegel_generate(ctx, c1, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+
+        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_E_NOT_ROOT);
+        assert!(last_error(ctx).contains("clone"));
+
+        assert_eq!(hegel_test_case_free(ctx, root), HEGEL_OK);
+
+        hegel_settings_free(ctx, s);
+        hegel_context_free(ctx);
+    }
+}
+
+/// Two clones drive the same test case from two threads at once. Because each
+/// handle has its own lock, neither draw is rejected with
+/// `HEGEL_E_CONCURRENT_USE` — that is reserved for using a *single* handle from
+/// two threads. (The shared engine state stays internally consistent; the
+/// outcomes are just non-deterministic, which is fine here.)
+#[test]
+fn two_clones_draw_concurrently_without_concurrent_use_errors() {
+    use std::sync::{Arc, Barrier};
+
+    struct SendPtr(*mut HegelTestCase);
+    // SAFETY: each clone is a distinct handle with its own lock; the threads
+    // are joined before the handles are freed.
+    unsafe impl Send for SendPtr {}
+
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        let run = start(ctx, s);
+        let root = next_case(ctx, run);
+        assert!(!root.is_null());
+
+        let mut c1: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
+        let mut c2: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = [SendPtr(c1), SendPtr(c2)]
+            .into_iter()
+            .map(|cp| {
+                let b = Arc::clone(&barrier);
+                let schema = integer_schema();
+                std::thread::spawn(move || {
+                    // Capture the whole `SendPtr` (disjoint closure capture
+                    // would otherwise grab the non-`Send` raw pointer field).
+                    let cp = cp;
+                    let tctx = hegel_context_new();
+                    let mut p: *const u8 = ptr::null();
+                    let mut n = 0usize;
+                    b.wait();
+                    let rc =
+                        hegel_generate(tctx, cp.0, schema.as_ptr(), schema.len(), &mut p, &mut n);
+                    hegel_context_free(tctx);
+                    rc
+                })
+            })
+            .collect();
+        for h in handles {
+            let rc = h.join().unwrap();
+            assert_ne!(
+                rc, HEGEL_E_CONCURRENT_USE,
+                "two distinct clones must not block each other"
+            );
+        }
+
+        hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        }
+        let _ = result(ctx, run);
+        hegel_run_free(ctx, run);
+        hegel_settings_free(ctx, s);
+        hegel_context_free(ctx);
+    }
 }

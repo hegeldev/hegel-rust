@@ -171,6 +171,30 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     replay.mark_complete(INTERESTING, Some(origin)).unwrap();
 }
 
+/// `clone_handle` yields an independent handle onto the same test case: both
+/// the root and the clone draw from one shared source, and dropping the clone
+/// frees nothing (the root cascade owns it), so the root stays usable.
+#[test]
+fn ffi_clone_handle_shares_the_test_case() {
+    let settings = test_settings(1);
+    let sh = SettingsHandle::build(&settings, None);
+    let run = RunHandle::start(&sh).unwrap();
+    let schema = int_schema(0, 100);
+
+    let tc = run.next_test_case().expect("a case");
+    let clone = tc.clone_handle();
+    clone.generate(&schema).unwrap();
+    tc.generate(&schema).unwrap();
+    drop(clone);
+    tc.generate(&schema).unwrap();
+    tc.mark_complete(VALID, None).unwrap();
+
+    while let Some(t) = run.next_test_case() {
+        let _ = t.generate(&schema);
+        t.mark_complete(VALID, None).unwrap();
+    }
+}
+
 #[test]
 fn ffi_from_blob_rejects_undecodable_input() {
     let settings = test_settings(1);
