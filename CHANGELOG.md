@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.23.2 - 2026-06-29
+
+This release fixes a couple of Tree Borrows violations detected by Miri.
+
 ## 0.23.1 - 2026-06-25
 
 This fixes caching of test-cases during shrinking, which was happening only for some
