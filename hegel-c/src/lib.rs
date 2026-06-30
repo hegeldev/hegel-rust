@@ -72,6 +72,7 @@ use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[allow(non_camel_case_types)]
+#[must_use]
 pub enum hegel_result_t {
     /// Success.
     HEGEL_OK = 0,

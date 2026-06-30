@@ -54,7 +54,7 @@ impl Context {
 impl Drop for Context {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_context_new and is freed exactly once.
-        unsafe { hegel_c::hegel_context_free(self.raw) };
+        require_ok(unsafe { hegel_c::hegel_context_free(self.raw) });
     }
 }
 
@@ -111,42 +111,74 @@ impl SettingsHandle {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
             // SAFETY: ctx is this thread's live context; &mut raw is a valid
             unsafe {
-                hegel_c::hegel_settings_new(ctx, &mut raw);
-                hegel_c::hegel_settings_set_mode(ctx, raw, map_mode(settings.mode));
-                hegel_c::hegel_settings_set_test_cases(ctx, raw, settings.test_cases);
-                hegel_c::hegel_settings_set_verbosity(ctx, raw, map_verbosity(settings.verbosity));
-                match settings.seed {
+                require_ok(hegel_c::hegel_settings_new(ctx, &mut raw));
+                require_ok(hegel_c::hegel_settings_set_mode(
+                    ctx,
+                    raw,
+                    map_mode(settings.mode),
+                ));
+                require_ok(hegel_c::hegel_settings_set_test_cases(
+                    ctx,
+                    raw,
+                    settings.test_cases,
+                ));
+                require_ok(hegel_c::hegel_settings_set_verbosity(
+                    ctx,
+                    raw,
+                    map_verbosity(settings.verbosity),
+                ));
+                require_ok(match settings.seed {
                     Some(seed) => hegel_c::hegel_settings_set_seed(ctx, raw, seed, true),
                     None => hegel_c::hegel_settings_set_seed(ctx, raw, 0, false),
-                };
-                hegel_c::hegel_settings_set_derandomize(ctx, raw, settings.derandomize);
-                hegel_c::hegel_settings_set_report_multiple_failures(
+                });
+                require_ok(hegel_c::hegel_settings_set_derandomize(
+                    ctx,
+                    raw,
+                    settings.derandomize,
+                ));
+                require_ok(hegel_c::hegel_settings_set_report_multiple_failures(
                     ctx,
                     raw,
                     settings.report_multiple_failures,
-                );
+                ));
                 match &settings.database {
                     Database::Disabled => {
                         let empty = CString::new("").unwrap();
-                        hegel_c::hegel_settings_set_database(ctx, raw, empty.as_ptr());
+                        require_ok(hegel_c::hegel_settings_set_database(
+                            ctx,
+                            raw,
+                            empty.as_ptr(),
+                        ));
                     }
                     Database::Path(path) => {
                         let c = cstring_lossy(path);
-                        hegel_c::hegel_settings_set_database(ctx, raw, c.as_ptr());
+                        require_ok(hegel_c::hegel_settings_set_database(ctx, raw, c.as_ptr()));
                     }
                     Database::Unset => {}
                 }
                 if let Some(key) = database_key {
                     let c = cstring_lossy(key);
-                    hegel_c::hegel_settings_set_database_key(ctx, raw, c.as_ptr());
+                    require_ok(hegel_c::hegel_settings_set_database_key(
+                        ctx,
+                        raw,
+                        c.as_ptr(),
+                    ));
                 }
-                hegel_c::hegel_settings_set_phases(ctx, raw, phases_bitmask(&settings.phases));
-                hegel_c::hegel_settings_set_suppress_health_check(
+                require_ok(hegel_c::hegel_settings_set_phases(
+                    ctx,
+                    raw,
+                    phases_bitmask(&settings.phases),
+                ));
+                require_ok(hegel_c::hegel_settings_set_suppress_health_check(
                     ctx,
                     raw,
                     health_check_bitmask(&settings.suppress_health_check),
-                );
-                hegel_c::hegel_settings_set_backend(ctx, raw, map_backend(settings.backend));
+                ));
+                require_ok(hegel_c::hegel_settings_set_backend(
+                    ctx,
+                    raw,
+                    map_backend(settings.backend),
+                ));
             }
             SettingsHandle { raw }
         })
@@ -160,7 +192,9 @@ impl SettingsHandle {
 impl Drop for SettingsHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_settings_new and is freed exactly once.
-        with_context(|ctx| unsafe { hegel_c::hegel_settings_free(ctx, self.raw) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_settings_free(ctx, self.raw)
+        }));
     }
 }
 
@@ -206,7 +240,9 @@ impl RunHandle {
     pub(crate) fn result(&self) -> RunResult<'_> {
         let mut raw: *const hegel_c::HegelRunResult = ptr::null();
         // SAFETY: called after the pull loop drained; libhegel writes a borrowed
-        with_context(|ctx| unsafe { hegel_c::hegel_run_result(ctx, self.raw, &mut raw) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_result(ctx, self.raw, &mut raw)
+        }));
         RunResult {
             raw,
             _run: std::marker::PhantomData,
@@ -217,7 +253,9 @@ impl RunHandle {
 impl Drop for RunHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_start and is freed exactly once;
-        with_context(|ctx| unsafe { hegel_c::hegel_run_free(ctx, self.raw) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_free(ctx, self.raw)
+        }));
     }
 }
 
@@ -450,7 +488,9 @@ impl Drop for CTestCase {
             // SAFETY: an `owned` handle is an independent libhegel handle this
             // frontend created (from_blob, next_test_case, or clone_handle) and
             // is freed exactly once here, dropping its reference to the test case.
-            with_context(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
+            require_ok(with_context(|ctx| unsafe {
+                hegel_c::hegel_test_case_free(ctx, self.raw)
+            }));
         }
     }
 }
@@ -466,7 +506,9 @@ impl RunResult<'_> {
     pub(crate) fn status(&self) -> hegel_c::hegel_run_status_t {
         let mut status = hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR;
         // SAFETY: self.raw is borrowed from the run; &mut status is valid.
-        with_context(|ctx| unsafe { hegel_c::hegel_run_result_status(ctx, self.raw, &mut status) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_result_status(ctx, self.raw, &mut status)
+        }));
         status
     }
 
@@ -475,16 +517,18 @@ impl RunResult<'_> {
     pub(crate) fn error(&self) -> Option<String> {
         let mut p: *const c_char = ptr::null();
         // SAFETY: self.raw is borrowed from the run; &mut p is valid.
-        with_context(|ctx| unsafe { hegel_c::hegel_run_result_error(ctx, self.raw, &mut p) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_result_error(ctx, self.raw, &mut p)
+        }));
         cstr_opt(p)
     }
 
     pub(crate) fn failure_count(&self) -> usize {
         let mut count = 0;
         // SAFETY: self.raw is borrowed from the run; &mut count is valid.
-        with_context(|ctx| unsafe {
+        require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure_count(ctx, self.raw, &mut count)
-        });
+        }));
         count
     }
 
@@ -492,15 +536,17 @@ impl RunResult<'_> {
     pub(crate) fn failure(&self, index: usize) -> Option<Failure> {
         let mut f: *const hegel_c::HegelFailure = ptr::null();
         // SAFETY: self.raw is borrowed from the run; &mut f is valid.
-        with_context(|ctx| unsafe {
+        require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
-        });
+        }));
         if f.is_null() {
             return None;
         }
         let mut blob: *const c_char = ptr::null();
         // SAFETY: f is borrowed from the run result; &mut blob is valid.
-        with_context(|ctx| unsafe { hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob) });
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob)
+        }));
         Some(Failure {
             reproduce_blob: cstr_opt(blob),
         })
@@ -521,6 +567,18 @@ fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {
     } else {
         Err(rc)
     }
+}
+
+/// Require that a libhegel call the frontend makes with controlled inputs
+/// returned `HEGEL_OK`. These calls — the `hegel_settings_set_*` configuration
+/// setters, the result/failure getters, and the `hegel_*_free` teardown calls —
+/// cannot legitimately fail given the arguments the frontend passes, so an
+/// unexpected non-OK code is an internal error. It is raised via
+/// [`raise_for_rc`](crate::test_case::raise_for_rc); reached from a `Drop` impl
+/// that would abort the process, which is acceptable for an invariant that
+/// should never trip.
+fn require_ok(rc: hegel_result_t) {
+    rc_to_unit(rc).unwrap_or_else(|rc| crate::test_case::raise_for_rc(rc));
 }
 
 fn rc_to_value<T>(rc: hegel_result_t, value: T) -> Result<T, hegel_result_t> {

@@ -36,7 +36,7 @@ check-format-nix:
     nix run nixpkgs#nixfmt -- --check nix/flake.nix
 
 check-clippy:
-    cargo clippy --all-features --all-targets -- -D warnings
+    cargo clippy --workspace --all-features --all-targets -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs

@@ -29,6 +29,11 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
 
+/// Assert a call that should always succeed in this test returned `HEGEL_OK`.
+fn ok(rc: hegel_c::hegel_result_t) {
+    assert_eq!(rc, HEGEL_OK);
+}
+
 fn last_error(ctx: *const HegelContext) -> String {
     let p = unsafe { hegel_context_last_error(ctx) };
     if p.is_null() {
@@ -308,7 +313,7 @@ fn out_parameters_are_rejected_when_null() {
         );
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         assert_eq!(
             hegel_run_start(ctx, s, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -337,9 +342,14 @@ fn out_parameters_are_rejected_when_null() {
             }
             let mut p: *const u8 = ptr::null();
             let mut nlen = 0usize;
-            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut nlen);
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut nlen);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
         let res = result(ctx, run);
         assert_eq!(
@@ -359,9 +369,9 @@ fn out_parameters_are_rejected_when_null() {
             HEGEL_E_INVALID_ARG
         );
 
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -388,8 +398,8 @@ fn settings_string_setters_handle_bad_input() {
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
 
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -416,8 +426,8 @@ fn from_blob_rejects_bad_input() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("could not be decoded"));
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -430,11 +440,15 @@ fn explicit_backend_run_and_lifecycle_misuse() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
-        hegel_settings_set_backend(ctx, s, hegel_backend_t::HEGEL_BACKEND_DEFAULT);
+        ok(hegel_settings_set_backend(
+            ctx,
+            s,
+            hegel_backend_t::HEGEL_BACKEND_DEFAULT,
+        ));
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
 
         let run = start(ctx, s);
 
@@ -471,7 +485,7 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_OK
         );
-        hegel_test_case_free(ctx, tc);
+        ok(hegel_test_case_free(ctx, tc));
 
         loop {
             let tc = next_case(ctx, run);
@@ -484,14 +498,19 @@ fn explicit_backend_run_and_lifecycle_misuse() {
                 hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
                 HEGEL_OK
             );
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
 
         let _ = result(ctx, run);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -503,16 +522,16 @@ fn run_free_with_undrained_case_does_not_deadlock() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
-        hegel_run_free(ctx, run);
+        ok(hegel_run_free(ctx, run));
         // The run is gone, but the caller still owns its handle; freeing it now
         // (as a GC finaliser would) drops the family's last reference.
-        hegel_test_case_free(ctx, tc);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -528,7 +547,7 @@ fn version_is_reported() {
         .to_string();
     assert!(!v.is_empty(), "version string is non-empty");
     assert!(v.chars().next().unwrap().is_ascii_digit(), "got {v:?}");
-    unsafe { hegel_context_free(ctx) };
+    ok(unsafe { hegel_context_free(ctx) });
 }
 
 /// Calling `hegel_next_test_case` again after the run has already drained
@@ -540,8 +559,8 @@ fn next_after_drain_returns_null() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 3);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 3));
         let run = start(ctx, s);
         let schema = integer_schema();
         loop {
@@ -551,15 +570,20 @@ fn next_after_drain_returns_null() {
             }
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
         assert!(next_case(ctx, run).is_null());
         assert!(last_error(ctx).is_empty());
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -578,9 +602,9 @@ fn live_test_case_argument_validation() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
@@ -641,7 +665,7 @@ fn live_test_case_argument_validation() {
         );
         let mut more = false;
         if hegel_collection_more(ctx, tc, id, &mut more) == HEGEL_OK && more {
-            hegel_generate(
+            let _ = hegel_generate(
                 ctx,
                 tc,
                 schema.as_ptr(),
@@ -721,15 +745,20 @@ fn live_test_case_argument_validation() {
             }
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
 
         let _ = result(ctx, run);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -744,9 +773,9 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
         let schema = integer_schema();
         loop {
@@ -758,18 +787,23 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             let mut n = 0usize;
             match hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n) {
                 HEGEL_OK => {
-                    hegel_mark_complete(
+                    ok(hegel_mark_complete(
                         ctx,
                         tc,
                         hegel_status_t::HEGEL_STATUS_INTERESTING,
                         ptr::null(),
-                    );
+                    ));
                 }
                 _ => {
-                    hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
+                    ok(hegel_mark_complete(
+                        ctx,
+                        tc,
+                        hegel_status_t::HEGEL_STATUS_OVERRUN,
+                        ptr::null(),
+                    ));
                 }
             }
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_test_case_free(ctx, tc));
         }
 
         let res = result(ctx, run);
@@ -797,9 +831,9 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         assert!(origin.contains("Panic at <unknown>"), "got {origin:?}");
         let _ = repro_blob_of(ctx, f);
 
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -814,8 +848,12 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_settings_set_mode(ctx, s, hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_settings_set_mode(
+            ctx,
+            s,
+            hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE,
+        ));
         let run = start(ctx, s);
         let schema = integer_schema();
         let origin = CString::new("single-case bug").unwrap();
@@ -828,13 +866,13 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
             HEGEL_OK
         );
-        hegel_mark_complete(
+        ok(hegel_mark_complete(
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_INTERESTING,
             origin.as_ptr(),
-        );
-        hegel_test_case_free(ctx, tc);
+        ));
+        ok(hegel_test_case_free(ctx, tc));
         assert!(next_case(ctx, run).is_null());
 
         let res = result(ctx, run);
@@ -850,9 +888,9 @@ fn single_test_case_failure_has_origin_but_no_blob() {
         );
         assert!(repro_blob_of(ctx, f).is_null());
 
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -868,8 +906,8 @@ fn primitives_after_overrun_all_report_stop_test() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
         let schema = integer_schema();
 
@@ -912,8 +950,13 @@ fn primitives_after_overrun_all_report_stop_test() {
         assert_eq!(hegel_new_pool(ctx, tc, &mut id), HEGEL_E_STOP_TEST);
         assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_STOP_TEST);
 
-        hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
-        hegel_test_case_free(ctx, tc);
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -921,13 +964,18 @@ fn primitives_after_overrun_all_report_stop_test() {
             }
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -963,8 +1011,8 @@ fn state_machine_and_primitive_boolean_paths() {
 
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
@@ -1025,19 +1073,29 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
 
-        hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-        hegel_test_case_free(ctx, tc);
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -1059,9 +1117,9 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
         let schema = integer_schema();
         loop {
@@ -1078,8 +1136,8 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
             } else {
                 hegel_status_t::HEGEL_STATUS_OVERRUN
             };
-            hegel_mark_complete(ctx, tc, status, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
         }
         let res = result(ctx, run);
         let f = failure_at(ctx, res, 0);
@@ -1087,8 +1145,8 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
         let blob_ptr = repro_blob_of(ctx, f);
         assert!(!blob_ptr.is_null(), "a shrunk failure carries a blob");
         let blob = std::ffi::CStr::from_ptr(blob_ptr).to_owned();
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
         blob
     }
 }
@@ -1104,9 +1162,9 @@ fn clones_share_a_run_owned_family() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
         let root = next_case(ctx, run);
         assert!(!root.is_null());
@@ -1156,13 +1214,18 @@ fn clones_share_a_run_owned_family() {
             if tc.is_null() {
                 break;
             }
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
         let _ = result(ctx, run);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -1179,7 +1242,7 @@ fn standalone_handles_are_freed_independently() {
         let blob = shrunk_failure_blob(ctx);
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
 
         let mut root: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
@@ -1215,8 +1278,8 @@ fn standalone_handles_are_freed_independently() {
         // The last handle releases the data source.
         assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);
 
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -1238,9 +1301,9 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
-        hegel_settings_set_database(ctx, s, empty.as_ptr());
-        hegel_c::hegel_settings_set_test_cases(ctx, s, 5);
-        hegel_c::hegel_settings_set_seed(ctx, s, 1, true);
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
         let root = next_case(ctx, run);
         assert!(!root.is_null());
@@ -1266,7 +1329,7 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
                     b.wait();
                     let rc =
                         hegel_generate(tctx, cp.0, schema.as_ptr(), schema.len(), &mut p, &mut n);
-                    hegel_context_free(tctx);
+                    ok(hegel_context_free(tctx));
                     rc
                 })
             })
@@ -1279,21 +1342,31 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
             );
         }
 
-        hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-        hegel_test_case_free(ctx, c1);
-        hegel_test_case_free(ctx, c2);
-        hegel_test_case_free(ctx, root);
+        ok(hegel_mark_complete(
+            ctx,
+            root,
+            hegel_status_t::HEGEL_STATUS_VALID,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, c1));
+        ok(hegel_test_case_free(ctx, c2));
+        ok(hegel_test_case_free(ctx, root));
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-            hegel_test_case_free(ctx, tc);
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
         let _ = result(ctx, run);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }

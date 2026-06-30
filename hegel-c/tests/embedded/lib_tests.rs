@@ -6,6 +6,11 @@ use super::*;
 use std::ffi::CString;
 use std::ptr;
 
+/// Assert a call that should always succeed for these tests returned `HEGEL_OK`.
+fn ok(rc: hegel_result_t) {
+    assert_eq!(rc, HEGEL_OK);
+}
+
 /// Start a database-free, single-seed run and hand back its first live test
 /// case (a run-owned root), keeping the owning context/settings/run alive.
 unsafe fn start_run_and_first_case() -> (
@@ -18,8 +23,8 @@ unsafe fn start_run_and_first_case() -> (
     let mut s: *mut HegelSettings = ptr::null_mut();
     assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
     let empty = CString::new("").unwrap();
-    unsafe { hegel_settings_set_database(ctx, s, empty.as_ptr()) };
-    unsafe { hegel_settings_set_seed(ctx, s, 1, true) };
+    ok(unsafe { hegel_settings_set_database(ctx, s, empty.as_ptr()) });
+    ok(unsafe { hegel_settings_set_seed(ctx, s, 1, true) });
     let mut run: *mut HegelRun = ptr::null_mut();
     assert_eq!(unsafe { hegel_run_start(ctx, s, &mut run) }, HEGEL_OK);
     let mut tc: *mut HegelTestCase = ptr::null_mut();
@@ -37,11 +42,16 @@ unsafe fn finish(
     tc: *mut HegelTestCase,
 ) {
     unsafe {
-        hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
-        hegel_test_case_free(ctx, tc);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -88,9 +98,9 @@ fn completion_is_reported_before_concurrent_use() {
         assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_ALREADY_COMPLETE);
         drop(held);
 
-        hegel_test_case_free(ctx, tc);
-        hegel_run_free(ctx, run);
-        hegel_settings_free(ctx, s);
-        hegel_context_free(ctx);
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
