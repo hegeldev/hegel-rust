@@ -160,7 +160,9 @@ fn optional_and_one_of_and_sampled() {
 
 #[test]
 fn map_filter_flatmap() {
-    check(gs::integers::<i32>().map(|x| x * 2), |x| x % 2 == 0);
+    check(gs::integers::<i32>().map(|x| x.wrapping_mul(2)), |x| {
+        x % 2 == 0
+    });
     check(
         gs::integers::<i32>()
             .min_value(0)
