@@ -105,5 +105,64 @@ class ApplyVersionBumpTest(unittest.TestCase):
         self.assertIn('__bench = ["hegeltest-c/__bench"]', root_text)
 
 
+class MostSignificantTest(unittest.TestCase):
+    def test_picks_the_largest_bump(self) -> None:
+        self.assertEqual(release.most_significant(["patch"]), "patch")
+        self.assertEqual(release.most_significant(["patch", "minor"]), "minor")
+        self.assertEqual(release.most_significant(["minor", "major"]), "major")
+        self.assertEqual(release.most_significant(["major", "patch"]), "major")
+
+
+class PlanReleaseTest(unittest.TestCase):
+    def test_root_only_uses_its_content_and_type(self) -> None:
+        version, root, c = release.plan_release(
+            "0.1.0", ("patch", "This patch does a thing."), None
+        )
+        self.assertEqual(version, "0.1.1")
+        self.assertEqual(root, "This patch does a thing.")
+        self.assertIsNone(c)
+
+    def test_c_only_patch_auto_generates_root_entry(self) -> None:
+        version, root, c = release.plan_release(
+            "0.1.0", None, ("patch", "This patch tweaks the C ABI.")
+        )
+        self.assertEqual(version, "0.1.1")
+        self.assertEqual(
+            root, "This release updates the `hegeltest-c` dependency to 0.1.1."
+        )
+        self.assertEqual(c, "This patch tweaks the C ABI.")
+
+    def test_c_only_minor_bumps_the_shared_version(self) -> None:
+        version, root, c = release.plan_release(
+            "0.1.0", None, ("minor", "This release breaks the C ABI.")
+        )
+        self.assertEqual(version, "0.2.0")
+        self.assertEqual(
+            root, "This release updates the `hegeltest-c` dependency to 0.2.0."
+        )
+        self.assertEqual(c, "This release breaks the C ABI.")
+
+    def test_both_present_uses_each_content_and_max_bump(self) -> None:
+        version, root, c = release.plan_release(
+            "0.1.0",
+            ("patch", "This patch does a thing."),
+            ("minor", "This release breaks the C ABI."),
+        )
+        self.assertEqual(version, "0.2.0")
+        self.assertEqual(root, "This patch does a thing.")
+        self.assertEqual(c, "This release breaks the C ABI.")
+
+
+class BuildReleaseNotesTest(unittest.TestCase):
+    def test_root_only_is_passed_through(self) -> None:
+        self.assertEqual(release.build_release_notes("root body", None), "root body")
+
+    def test_both_are_combined_under_a_heading(self) -> None:
+        notes = release.build_release_notes("root body", "c body")
+        self.assertIn("root body", notes)
+        self.assertIn("## libhegel C ABI", notes)
+        self.assertIn("c body", notes)
+
+
 if __name__ == "__main__":
     unittest.main()

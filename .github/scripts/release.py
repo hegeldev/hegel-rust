@@ -5,8 +5,19 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SOURCE_DIRS = ["src/", "hegel-macros/", "hegel-c/src/"]
+# Changes under these dirs require a hegel-rust RELEASE.md (the root one,
+# feeding CHANGELOG.md). Changes under C_SOURCE_DIRS require hegel-c/RELEASE.md
+# (feeding hegel-c/CHANGELOG.md) instead.
+RUST_SOURCE_DIRS = ["src/", "hegel-macros/"]
+C_SOURCE_DIRS = ["hegel-c/src/"]
 ROOT = Path(__file__).resolve().parent.parent.parent
+
+ROOT_RELEASE = "RELEASE.md"
+C_RELEASE = "hegel-c/RELEASE.md"
+ROOT_CHANGELOG = "CHANGELOG.md"
+C_CHANGELOG = "hegel-c/CHANGELOG.md"
+
+_SEVERITY = {"patch": 0, "minor": 1, "major": 2}
 
 # Files the release commit reads, rewrites, and stages. These are validated by
 # `check` on every PR so removing one (as the conformance-test removal did with
@@ -18,6 +29,7 @@ RELEASE_PATHS = [
     "hegel-macros/Cargo.toml",
     "hegel-c/Cargo.toml",
     "CHANGELOG.md",
+    "hegel-c/CHANGELOG.md",
 ]
 
 
@@ -120,6 +132,53 @@ def add_changelog(path: Path, *, version: str, content: str) -> None:
     path.write_text(f"# Changelog\n\n{entry}{rest}")
 
 
+def most_significant(release_types: list[str]) -> str:
+    """The largest bump among the release files driving a single version."""
+    return max(release_types, key=_SEVERITY.__getitem__)
+
+
+def plan_release(
+    current_version: str,
+    root_release: tuple[str, str] | None,
+    c_release: tuple[str, str] | None,
+) -> tuple[str, str, str | None]:
+    """Decide the new version and the two changelog bodies for a release.
+
+    `root_release`/`c_release` are `(release_type, content)` pairs parsed from
+    RELEASE.md / hegel-c/RELEASE.md, or None when that file is absent. At least
+    one must be present (the release only runs when one exists).
+
+    The workspace shares a single version, so the bump is the most significant
+    type across whichever files are present. When only hegel-c has a release
+    file, the root changelog gets an auto-generated dependency-bump entry rather
+    than requiring a hand-written one — this is only correct when there are no
+    functional hegel-rust changes (see the changelog skill).
+
+    Returns `(new_version, root_content, c_content)`; `c_content` is None when
+    there is no hegel-c/RELEASE.md.
+    """
+    types = [r[0] for r in (root_release, c_release) if r is not None]
+    assert types
+    new_version = bump_version(current_version, most_significant(types))
+
+    if root_release is not None:
+        root_content = root_release[1]
+    else:
+        root_content = (
+            f"This release updates the `hegeltest-c` dependency to {new_version}."
+        )
+
+    c_content = c_release[1] if c_release is not None else None
+    return new_version, root_content, c_content
+
+
+def build_release_notes(root_content: str, c_content: str | None) -> str:
+    """Combine the changelog bodies into the GitHub release notes."""
+    if c_content is None:
+        return root_content
+    return f"{root_content}\n\n## libhegel C ABI\n\n{c_content}"
+
+
 def check(base_ref: str) -> None:
     missing = [rel for rel in RELEASE_PATHS if not (ROOT / rel).exists()]
     if missing:
@@ -135,58 +194,81 @@ def check(base_ref: str) -> None:
     )
     changed_files = [line for line in output.splitlines() if line.strip()]
 
-    if not any(f.startswith(d) for f in changed_files for d in SOURCE_DIRS):
-        return
+    if any(f.startswith(d) for f in changed_files for d in RUST_SOURCE_DIRS):
+        require_release_file(
+            base_ref,
+            ROOT_RELEASE,
+            changed_files,
+            [
+                "Every pull request to hegel-rust requires a RELEASE.md file.",
+                "You can find an example and instructions in RELEASE-sample.md.",
+            ],
+        )
 
-    release_file = ROOT / "RELEASE.md"
+    if any(f.startswith(d) for f in changed_files for d in C_SOURCE_DIRS):
+        require_release_file(
+            base_ref,
+            C_RELEASE,
+            changed_files,
+            [
+                "Every pull request changing the libhegel C ABI requires a "
+                "hegel-c/RELEASE.md file.",
+                "You can find an example and instructions in RELEASE-sample.md.",
+            ],
+        )
 
+
+def require_release_file(
+    base_ref: str, rel_path: str, changed_files: list[str], missing_lines: list[str]
+) -> None:
     process = subprocess.run(
-        ["git", "cat-file", "-e", f"origin/{base_ref}:RELEASE.md"],
+        ["git", "cat-file", "-e", f"origin/{base_ref}:{rel_path}"],
         capture_output=True,
         cwd=ROOT,
     )
-    if process.returncode == 0 and "RELEASE.md" not in changed_files:
+    if process.returncode == 0 and rel_path not in changed_files:
         raise ValueError(
-            f"RELEASE.md already exists on {base_ref}. It's possible the CI job "
+            f"{rel_path} already exists on {base_ref}. It's possible the CI job "
             "responsible for cutting a new release is in progress, or has failed."
         )
 
+    release_file = ROOT / rel_path
     if not release_file.exists():
-        lines = [
-            "Every pull request to hegel-rust requires a RELEASE.md file.",
-            "You can find an example and instructions in RELEASE-sample.md.",
-        ]
-        width = max(len(l) for l in lines) + 6
+        width = max(len(l) for l in missing_lines) + 6
         border = " ".join("*" * ((width + 1) // 2))
         empty = "*" + " " * (width - 2) + "*"
-        inner = "\n".join("*" + l.center(width - 2) + "*" for l in lines)
+        inner = "\n".join("*" + l.center(width - 2) + "*" for l in missing_lines)
         pad = "\t"
         box = f"\n{pad}{border}\n{pad}{empty}\n{pad}{empty}\n"
         box += "\n".join(f"{pad}" + l for l in inner.split("\n"))
         box += f"\n{pad}{empty}\n{pad}{empty}\n{pad}{border}\n"
         raise ValueError(box)
 
-    # perform validation of RELEASE.md
     parse_release_file(release_file)
 
 
 def release() -> None:
-    release_file = ROOT / "RELEASE.md"
-    assert release_file.exists()
-
-    release_type, content = parse_release_file(release_file)
+    root_path = ROOT / ROOT_RELEASE
+    c_path = ROOT / C_RELEASE
+    root_release = parse_release_file(root_path) if root_path.exists() else None
+    c_release = parse_release_file(c_path) if c_path.exists() else None
+    assert root_release is not None or c_release is not None
 
     m = re.search(
         r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.MULTILINE
     )
-    new_version = bump_version(m.group(1), release_type)
+    new_version, root_content, c_content = plan_release(
+        m.group(1), root_release, c_release
+    )
 
     apply_version_bump(ROOT, new_version)
 
     # regenerate the lockfile after version bump
     subprocess.run(["cargo", "update", "--workspace"], check=True, cwd=ROOT)
 
-    add_changelog(ROOT / "CHANGELOG.md", version=new_version, content=content)
+    add_changelog(ROOT / ROOT_CHANGELOG, version=new_version, content=root_content)
+    if c_content is not None:
+        add_changelog(ROOT / C_CHANGELOG, version=new_version, content=c_content)
 
     app_slug = os.environ["HEGEL_RELEASE_APP_SLUG"]
     bot_user_id = subprocess.check_output(
@@ -200,7 +282,10 @@ def release() -> None:
         cwd=ROOT,
     )
     git("add", *RELEASE_PATHS, cwd=ROOT)
-    git("rm", "RELEASE.md", cwd=ROOT)
+    if root_release is not None:
+        git("rm", ROOT_RELEASE, cwd=ROOT)
+    if c_release is not None:
+        git("rm", C_RELEASE, cwd=ROOT)
     git(
         "commit",
         "-m",
@@ -220,7 +305,7 @@ def release() -> None:
             "--title",
             f"v{new_version}",
             "--notes",
-            content,
+            build_release_notes(root_content, c_content),
         ],
         check=True,
         cwd=ROOT,

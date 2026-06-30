@@ -384,7 +384,7 @@ jobs:
       - name: Check for RELEASE.md
         id: check
         run: |
-          if [ ! -f RELEASE.md ]; then
+          if [ ! -f RELEASE.md ] && [ ! -f hegel-c/RELEASE.md ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 

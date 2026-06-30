@@ -7,6 +7,17 @@ description: "Changelog style guide for writing RELEASE.md files. Use when creat
 
 This guide describes the style for writing `RELEASE.md` files for hegel-rust. The style is modeled on the [Hypothesis changelog](https://hypothesis.readthedocs.io/en/latest/changes.html).
 
+## Which `RELEASE.md` to write
+
+There are two changelogs, and which `RELEASE.md` your PR needs depends on what it changes:
+
+- **`RELEASE.md`** (in the repo root) feeds the top-level `CHANGELOG.md` and documents changes to the hegel-rust crate. A PR that touches `src/` or `hegel-macros/` requires it.
+- **`hegel-c/RELEASE.md`** feeds `hegel-c/CHANGELOG.md` and documents changes to the libhegel C ABI. A PR that touches `hegel-c/src/` requires it.
+
+A PR that changes both needs both files. Both use the same format described below, and the whole workspace shares one version, so a release bumps every crate to the same number (using the most significant `RELEASE_TYPE` across the files present).
+
+When a PR changes only the C ABI (`hegel-c/RELEASE.md` only, no root `RELEASE.md`), the release process auto-generates a root changelog entry that just reads "This release updates the `hegeltest-c` dependency to (the new version)." **This is only correct when the PR has no functional changes to hegel-rust.** If hegel-rust's behavior changes at all, write a real root `RELEASE.md` describing the user-facing effect instead of relying on the auto-generated dependency-bump line.
+
 ## Choosing `RELEASE_TYPE`
 
 hegel-rust is currently zerover (`0.x.y`), so the usual semver mapping does **not** apply. While we are pre-1.0:
