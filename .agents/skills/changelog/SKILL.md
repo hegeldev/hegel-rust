@@ -9,14 +9,18 @@ This guide describes the style for writing `RELEASE.md` files for hegel-rust. Th
 
 ## Which `RELEASE.md` to write
 
-There are two changelogs, and which `RELEASE.md` your PR needs depends on what it changes:
+**The rule is: you need a release file for user-visible changes.** This is a judgment call, not a mechanical one — look at what the change actually does, not just which files it touches. An internal refactor or a dependency-version bump is *not* user-visible and does not need its own release file.
 
-- **`RELEASE.md`** (in the repo root) feeds the top-level `CHANGELOG.md` and documents changes to the hegel-rust crate. A PR that touches `src/` or `hegel-macros/` requires it.
-- **`hegel-c/RELEASE.md`** feeds `hegel-c/CHANGELOG.md` and documents changes to the libhegel C ABI. A PR that touches `hegel-c/src/` requires it.
+There are two changelogs, one per published crate:
 
-A PR that changes both needs both files. Both use the same format described below, and the whole workspace shares one version, so a release bumps every crate to the same number (using the most significant `RELEASE_TYPE` across the files present).
+- **`RELEASE.md`** (in the repo root) feeds the top-level `CHANGELOG.md` and documents user-visible changes to the hegel-rust crate (`hegeltest`).
+- **`hegel-c/RELEASE.md`** feeds `hegel-c/CHANGELOG.md` and documents user-visible changes to the libhegel C ABI (`hegeltest-c`).
 
-When a PR changes only the C ABI (`hegel-c/RELEASE.md` only, no root `RELEASE.md`), the release process auto-generates a root changelog entry that just reads "This release updates the `hegeltest-c` dependency to (the new version)." **This is only correct when the PR has no functional changes to hegel-rust.** If hegel-rust's behavior changes at all, write a real root `RELEASE.md` describing the user-facing effect instead of relying on the auto-generated dependency-bump line.
+Write whichever files correspond to the user-visible changes in your PR; a PR with both writes both, in the same format. The two crates carry **independent version numbers**: a change can be breaking for one without being breaking for the other (a breaking C ABI change is a `minor` bump for hegel-c but, for hegel-rust, only a `patch` to re-pin and republish against the new engine). Each `RELEASE.md` picks its own `RELEASE_TYPE` for its own crate's version.
+
+Because the root crate pins `hegeltest-c` exactly, a hegel-c release always drags hegel-rust along with at least a patch bump to re-pin and republish. That patch is just a dependency bump — *not* a user-visible hegel-rust change — so it needs no root `RELEASE.md`: when a PR ships a `hegel-c/RELEASE.md` but no root one, the release process auto-generates a root changelog entry reading "This release updates the `hegeltest-c` dependency to (the new hegel-c version)." Only write a root `RELEASE.md` alongside a hegel-c one when the PR *also* makes a user-visible change to hegel-rust itself.
+
+The CI check (`release.py check`) is a conservative backstop, not the arbiter of user-visibility: it requires a `hegel-c/RELEASE.md` when `hegel-c/src/` changes, and a root `RELEASE.md` when `src/`/`hegel-macros/` change *without* an accompanying hegel-c release. A source change that genuinely isn't user-visible (a pure internal refactor) is exempted with the `skip release` PR label.
 
 ## Choosing `RELEASE_TYPE`
 
