@@ -21,3 +21,5 @@ hegel_test_case_free(ctx, tc);
 ```
 
 `hegel_test_case_free` accepts every test-case handle, so the same teardown works whether the handle came from a blob, a clone, or the run.
+
+The downstream language bindings (hegel-go, hegel-ocaml, hegel-typescript) need updating for this. Each should free **every** handle from `hegel_test_case_from_blob`, `hegel_next_test_case`, or `hegel_test_case_clone` exactly once (typically from the wrapping object's destructor / finaliser), stop treating run-owned handles as borrowed (not freeing one now leaks), and drop any handling of `HEGEL_E_INVALID_HANDLE` from `hegel_test_case_free` on a run-owned handle as an expected result (it now returns `HEGEL_OK`). A clone is a distinct handle, freed separately from the handle it was cloned from; freeing the same handle twice is still undefined behaviour.
