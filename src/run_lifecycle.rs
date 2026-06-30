@@ -314,15 +314,9 @@ fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
             Some(failure.origin.as_str()),
         ),
     };
-    if let Err(rc) = handle.mark_complete(status, origin) {
-        // nocov start
-        hegel_internal_error!(
-            "hegel_mark_complete failed: rc={} {}",
-            rc as i32,
-            crate::ffi::last_error_string()
-        );
-        // nocov end
-    }
+    handle
+        .mark_complete(status, origin)
+        .unwrap_or_else(|rc| crate::test_case::raise_for_rc(rc));
 }
 
 /// Print a per-test-case line describing why this test case stopped.
