@@ -133,6 +133,16 @@ c-header:
 # tractable under Miri's interpreter (small example counts, no 100-example
 # property loops or budget-exhaustion draws).
 #
+# The hegeltest-c `handles_miri` test target is run too: it drives the C-ABI
+# handle lifecycle directly — clone, free-in-any-order, the reference-counted
+# release of a shared test case, and two clones used concurrently from two
+# threads — which is exactly the pointer/aliasing logic Miri checks for
+# use-after-free, double-free, and leaks. It is a dedicated *fast* suite (a
+# single passing case, span ops, no shrinking or large draw loops) so it stays
+# tractable under Miri; the exhaustive `c_abi_inprocess` suite is too slow to
+# interpret and runs only under normal `cargo test`, and the dlopen `smoke` test
+# cannot run under Miri at all (valgrind covers that boundary instead).
+#
 # Requires the nightly toolchain with the miri component:
 # `rustup +nightly component add miri`.
 #
@@ -140,6 +150,7 @@ c-header:
 # isolation is disabled because the engine seeds its PRNG from OS entropy.
 check-miri:
     CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test test_miri
+    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p hegeltest-c --test handles_miri
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer
 # forms.

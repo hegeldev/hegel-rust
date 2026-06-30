@@ -106,17 +106,21 @@ int main(void) {
         int n = draw_bool_list(ctx, tc, MIN_SIZE, MAX_SIZE);
         if (n < 0) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if ((uint64_t)n < MIN_SIZE || (uint64_t)n > MAX_SIZE) {
             char origin[64];
             snprintf(origin, sizeof origin, "size %d out of range", n);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, origin);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         total++;
         if ((size_t)n > max_seen) max_seen = (size_t)n;
         HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+        /* The caller owns every handle from hegel_next_test_case and must free it. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
     const hegel_run_result_t *result;

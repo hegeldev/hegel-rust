@@ -70,10 +70,9 @@ pub(crate) use invalid_argument;
 ///   synchronously from this thread's libhegel error context.
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
-///   This includes `HEGEL_E_CONCURRENT_USE` and `HEGEL_E_NOT_ROOT`: the
-///   frontend never drives one handle from two threads (`clone` forks a fresh
-///   handle and `TestCase` is `!Sync`) and never frees a clone (clone handles
-///   are `owned = false`), so neither can arise here in correct use.
+///   This includes `HEGEL_E_CONCURRENT_USE`: the frontend never drives one
+///   handle from two threads (`clone` forks a fresh handle and `TestCase` is
+///   `!Sync`), so it cannot arise here in correct use.
 #[track_caller]
 pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     use hegel_c::hegel_result_t::*;
@@ -208,8 +207,11 @@ pub struct TestCase {
     local: RefCell<TestCaseLocalData>,
     /// This instance's own libhegel handle. [`clone`](TestCase::clone) gives a
     /// fresh handle (`hegel_test_case_clone`) so two clones can be driven from
-    /// different threads concurrently; [`child`](TestCase::child) shares this
-    /// one, since it is only ever used synchronously on the same thread.
+    /// different threads concurrently; each clone holds its own reference to
+    /// the shared test case and frees it when the clone is dropped, so a clone
+    /// moved to another thread stays valid for as long as that thread holds it.
+    /// [`child`](TestCase::child) instead borrows this handle (no new reference),
+    /// since it is only ever used synchronously on the same thread.
     handle: CTestCase,
 }
 

@@ -186,8 +186,9 @@ impl RunHandle {
     }
 
     /// Pull the next test case the engine wants to run, or `None` when the run
-    /// is finished. The returned handle is owned by the run (freed when the
-    /// run is freed), so it is wrapped with `owned = false`.
+    /// is finished. The returned handle holds its own reference to the test
+    /// case (the run keeps a separate reference internally), so the frontend
+    /// owns it and frees it on drop (`owned = true`).
     pub(crate) fn next_test_case(&self) -> Option<CTestCase> {
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
@@ -196,7 +197,7 @@ impl RunHandle {
         if rc != hegel_result_t::HEGEL_OK || raw.is_null() {
             None
         } else {
-            Some(CTestCase { raw, owned: false })
+            Some(CTestCase { raw, owned: true })
         }
     }
 
@@ -223,13 +224,14 @@ impl Drop for RunHandle {
 /// A libhegel test-case handle plus the per-primitive operations the frontend
 /// drives it with.
 ///
-/// `owned` controls what `Drop` does. It is `true` only for a *standalone root*
-/// produced by [`from_blob`](CTestCase::from_blob): dropping it calls
-/// `hegel_test_case_free`, which frees the root and cascades to every clone in
-/// its family. It is `false` for every other handle — a run-owned root borrowed
-/// from a run (freed by `hegel_run_free`), a non-owning [`borrow`](CTestCase::borrow)
-/// view, and a [`clone_handle`](CTestCase::clone_handle) clone (freed by the
-/// root cascade) — whose `Drop` is a no-op.
+/// `owned` controls what `Drop` does. It is `true` for every handle this
+/// frontend is responsible for releasing — a [`from_blob`](CTestCase::from_blob)
+/// handle, a run-owned handle from [`next_test_case`](RunHandle::next_test_case),
+/// and a [`clone_handle`](CTestCase::clone_handle) clone — each of which drops
+/// its reference via `hegel_test_case_free` (the shared test case is released
+/// once its last reference is gone). It is `false` only for a non-owning
+/// [`borrow`](CTestCase::borrow) view that aliases another handle's pointer and
+/// must not free it.
 pub(crate) struct CTestCase {
     raw: *mut hegel_c::HegelTestCase,
     owned: bool,
@@ -261,8 +263,10 @@ impl CTestCase {
 
     /// A non-owning view of this handle: the same underlying libhegel handle,
     /// but with `Drop` disabled (`owned = false`). Used to hand the test body a
-    /// handle to draw on while the owning root handle is retained elsewhere
-    /// (see `run_lifecycle::run_test_case`).
+    /// handle to draw on while the owning handle is retained elsewhere (see
+    /// `run_lifecycle::run_test_case`), and by [`child`](crate::TestCase::child)
+    /// for synchronous nested generation on the same thread. The borrow must
+    /// not outlive the owning handle it aliases.
     pub(crate) fn borrow(&self) -> CTestCase {
         CTestCase {
             raw: self.raw,
@@ -273,16 +277,16 @@ impl CTestCase {
     /// Clone this handle via `hegel_test_case_clone`, yielding a new libhegel
     /// handle onto the same underlying test case. Clones have independent
     /// per-handle locks, so two of them may draw concurrently; this is how a
-    /// `TestCase` clone is moved to another thread. The clone is owned by the
-    /// family root and freed by the root's cascade, so its `Drop` here is a
-    /// no-op (`owned = false`).
+    /// `TestCase` clone is moved to another thread. The clone holds its own
+    /// reference to the shared test case and is freed independently on drop
+    /// (`owned = true`); the test case is released once its last handle is freed.
     pub(crate) fn clone_handle(&self) -> CTestCase {
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
         // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_test_case_clone(ctx, self.raw, &mut raw) });
         crate::control::hegel_internal_assert!(rc == hegel_result_t::HEGEL_OK);
-        CTestCase { raw, owned: false }
+        CTestCase { raw, owned: true }
     }
 
     /// Generate a CBOR value for `schema_cbor`, returning a fresh copy of the
@@ -443,7 +447,9 @@ impl CTestCase {
 impl Drop for CTestCase {
     fn drop(&mut self) {
         if self.owned {
-            // SAFETY: a `owned` handle came from from_blob and is ours to free
+            // SAFETY: an `owned` handle is an independent libhegel handle this
+            // frontend created (from_blob, next_test_case, or clone_handle) and
+            // is freed exactly once here, dropping its reference to the test case.
             with_context(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
         }
     }

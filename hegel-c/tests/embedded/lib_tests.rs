@@ -38,6 +38,7 @@ unsafe fn finish(
 ) {
     unsafe {
         hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        hegel_test_case_free(ctx, tc);
         hegel_run_free(ctx, run);
         hegel_settings_free(ctx, s);
         hegel_context_free(ctx);
@@ -87,6 +88,7 @@ fn completion_is_reported_before_concurrent_use() {
         assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_ALREADY_COMPLETE);
         drop(held);
 
+        hegel_test_case_free(ctx, tc);
         hegel_run_free(ctx, run);
         hegel_settings_free(ctx, s);
         hegel_context_free(ctx);

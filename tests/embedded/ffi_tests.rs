@@ -172,8 +172,10 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
 }
 
 /// `clone_handle` yields an independent handle onto the same test case: both
-/// the root and the clone draw from one shared source, and dropping the clone
-/// frees nothing (the root cascade owns it), so the root stays usable.
+/// the root and the clone draw from one shared source, each holding its own
+/// reference. Dropping the clone frees only its own handle (dropping its
+/// reference); the shared test case stays alive for the root, which is still
+/// usable.
 #[test]
 fn ffi_clone_handle_shares_the_test_case() {
     let settings = test_settings(1);

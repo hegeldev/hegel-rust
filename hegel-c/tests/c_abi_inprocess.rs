@@ -339,6 +339,7 @@ fn out_parameters_are_rejected_when_null() {
             let mut nlen = 0usize;
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut nlen);
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         let res = result(ctx, run);
         assert_eq!(
@@ -470,6 +471,7 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_OK
         );
+        hegel_test_case_free(ctx, tc);
 
         loop {
             let tc = next_case(ctx, run);
@@ -483,6 +485,7 @@ fn explicit_backend_run_and_lifecycle_misuse() {
                 HEGEL_OK
             );
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
 
         let _ = result(ctx, run);
@@ -505,6 +508,9 @@ fn run_free_with_undrained_case_does_not_deadlock() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
         hegel_run_free(ctx, run);
+        // The run is gone, but the caller still owns its handle; freeing it now
+        // (as a GC finaliser would) drops the family's last reference.
+        hegel_test_case_free(ctx, tc);
         hegel_settings_free(ctx, s);
         hegel_context_free(ctx);
     }
@@ -547,6 +553,7 @@ fn next_after_drain_returns_null() {
             let mut n = 0usize;
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         assert!(next_case(ctx, run).is_null());
         assert!(last_error(ctx).is_empty());
@@ -558,8 +565,9 @@ fn next_after_drain_returns_null() {
 
 /// Exercise the per-primitive argument-validation paths on a *live*,
 /// run-owned test case: null/malformed schema, null out-parameters, non-UTF-8
-/// string arguments, completing twice, drawing after completion, and refusing
-/// `hegel_test_case_free` on a borrowed handle. The case is marked
+/// string arguments, completing twice, drawing after completion, and releasing
+/// a run-owned handle with `hegel_test_case_free` (the caller owns its handle
+/// even though the run keeps its own reference). The case is marked
 /// INTERESTING with a NULL origin so the run surfaces a failure whose
 /// panic message is the synthesized "Panic at <unknown>" placeholder, which
 /// we then read back through the result getters.
@@ -704,8 +712,7 @@ fn live_test_case_argument_validation() {
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_E_ALREADY_COMPLETE
         );
-        assert_eq!(hegel_test_case_free(ctx, tc), HEGEL_E_INVALID_HANDLE);
-        assert!(last_error(ctx).contains("owned by its hegel_run_t"));
+        assert_eq!(hegel_test_case_free(ctx, tc), HEGEL_OK);
 
         loop {
             let tc = next_case(ctx, run);
@@ -716,6 +723,7 @@ fn live_test_case_argument_validation() {
             let mut n = 0usize;
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
 
         let _ = result(ctx, run);
@@ -761,6 +769,7 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
                     hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
                 }
             }
+            hegel_test_case_free(ctx, tc);
         }
 
         let res = result(ctx, run);
@@ -825,6 +834,7 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             hegel_status_t::HEGEL_STATUS_INTERESTING,
             origin.as_ptr(),
         );
+        hegel_test_case_free(ctx, tc);
         assert!(next_case(ctx, run).is_null());
 
         let res = result(ctx, run);
@@ -903,6 +913,7 @@ fn primitives_after_overrun_all_report_stop_test() {
         assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_STOP_TEST);
 
         hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null());
+        hegel_test_case_free(ctx, tc);
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -912,6 +923,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             let mut n = 0usize;
             hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         hegel_run_free(ctx, run);
         hegel_settings_free(ctx, s);
@@ -1014,12 +1026,14 @@ fn state_machine_and_primitive_boolean_paths() {
         );
 
         hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        hegel_test_case_free(ctx, tc);
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         hegel_run_free(ctx, run);
         hegel_settings_free(ctx, s);
@@ -1065,6 +1079,7 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
                 hegel_status_t::HEGEL_STATUS_OVERRUN
             };
             hegel_mark_complete(ctx, tc, status, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         let res = result(ctx, run);
         let f = failure_at(ctx, res, 0);
@@ -1079,10 +1094,10 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
 }
 
 /// A clone shares the underlying test case with its root: it draws from the
-/// same source, marking any handle complete marks the whole family, a clone
-/// can be made after completion (and is immediately complete), and a clone can
-/// never be freed directly. Advancing the run then frees the root and every
-/// clone (the run-owned free cascade).
+/// same source, marking any handle complete marks the whole family, and a clone
+/// can be made after completion (and is immediately complete). Every handle —
+/// root or clone, run-owned or not — is released independently with
+/// `hegel_test_case_free`.
 #[test]
 fn clones_share_a_run_owned_family() {
     let ctx = hegel_context_new();
@@ -1132,8 +1147,9 @@ fn clones_share_a_run_owned_family() {
             HEGEL_E_ALREADY_COMPLETE
         );
 
-        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_E_NOT_ROOT);
-        assert!(last_error(ctx).contains("clone"));
+        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_OK);
+        assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);
+        assert_eq!(hegel_test_case_free(ctx, root), HEGEL_OK);
 
         loop {
             let tc = next_case(ctx, run);
@@ -1141,6 +1157,7 @@ fn clones_share_a_run_owned_family() {
                 break;
             }
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         let _ = result(ctx, run);
         hegel_run_free(ctx, run);
@@ -1149,12 +1166,14 @@ fn clones_share_a_run_owned_family() {
     }
 }
 
-/// Freeing a standalone (`from_blob`) root frees it and every clone descended
-/// from it (including clones of clones), while freeing a clone is refused and
-/// frees nothing. Run under Miri this also proves there is no leak or
-/// double-free in the cascade.
+/// Every handle in a standalone (`from_blob`) family — the root, a clone, and a
+/// clone of that clone — is freed independently, in any order. The underlying
+/// test case stays alive until its last handle is freed: a clone keeps drawing
+/// after the handle it was cloned from (and even the root) has been freed. Run
+/// under Miri this proves there is no leak, double-free, or use-after-free
+/// across the drop orders.
 #[test]
-fn freeing_a_standalone_root_frees_its_clones() {
+fn standalone_handles_are_freed_independently() {
     let ctx = hegel_context_new();
     unsafe {
         let blob = shrunk_failure_blob(ctx);
@@ -1174,18 +1193,27 @@ fn freeing_a_standalone_root_frees_its_clones() {
         let mut c2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, c1, &mut c2), HEGEL_OK);
 
-        let schema = integer_schema();
-        let mut p: *const u8 = ptr::null();
-        let mut n = 0usize;
-        assert_eq!(
-            hegel_generate(ctx, c1, schema.as_ptr(), schema.len(), &mut p, &mut n),
-            HEGEL_OK
-        );
+        // A non-consuming span op proves a handle is live and reaches the
+        // (shared) data source; the blob's finite choice sequence means we
+        // can't keep drawing, so we don't draw here.
+        let alive = |tc: *mut HegelTestCase| {
+            assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_OK);
+            assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_OK);
+        };
 
-        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_E_NOT_ROOT);
-        assert!(last_error(ctx).contains("clone"));
+        // Freeing a clone drops only its own reference; the root and the other
+        // clone stay live.
+        assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_OK);
+        alive(root);
+        alive(c2);
 
+        // Freeing the root no longer frees its clones: c2 keeps its reference
+        // (and the data source) alive and is still usable.
         assert_eq!(hegel_test_case_free(ctx, root), HEGEL_OK);
+        alive(c2);
+
+        // The last handle releases the data source.
+        assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);
 
         hegel_settings_free(ctx, s);
         hegel_context_free(ctx);
@@ -1252,12 +1280,16 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
         }
 
         hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+        hegel_test_case_free(ctx, c1);
+        hegel_test_case_free(ctx, c2);
+        hegel_test_case_free(ctx, root);
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
             hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null());
+            hegel_test_case_free(ctx, tc);
         }
         let _ = result(ctx, run);
         hegel_run_free(ctx, run);

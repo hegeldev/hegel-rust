@@ -112,6 +112,7 @@ int main(void) {
         int64_t pool;
         if (hegel_new_pool(ctx, tc, &pool) != HEGEL_OK) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -156,15 +157,19 @@ int main(void) {
         if (bad) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING,
                         "drew a non-live variable");
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             ok = false;
             continue;
         }
         if (overran) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         total++;
         HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+        /* The caller owns every handle from hegel_next_test_case and must free it. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
     const hegel_run_result_t *result;

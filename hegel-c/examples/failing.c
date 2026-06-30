@@ -69,12 +69,14 @@ int main(void) {
         hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if (rc != HEGEL_OK) {
             const char *err = hegel_context_last_error(ctx);
             fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, err);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -82,6 +84,7 @@ int main(void) {
         if (n < 0) {
             fprintf(stderr, "decode failed\n");
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -90,6 +93,8 @@ int main(void) {
         } else {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
         }
+        /* The caller owns every handle from hegel_next_test_case and must free it. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
     const hegel_run_result_t *result;

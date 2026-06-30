@@ -337,8 +337,11 @@ jobs:
   # native engine and the in-process C-ABI boundary hegeltest drives it through.
   # The expensive quality/compile suites and subprocess-driven tests are
   # excluded (see `just check-miri`); the `test_miri` target drives every main
-  # feature through the FFI primitives at small example counts, which is what
-  # keeps the run tractable under Miri's interpreter.
+  # feature through the FFI primitives at small example counts, and the
+  # `handles_miri` test target drives the C-ABI handle lifecycle (clone /
+  # free / reference-counted release / concurrent use) directly in a dedicated
+  # fast suite, which is what keeps the run tractable under Miri's interpreter
+  # while covering the unsafe boundary.
   miri:
     name: miri
     runs-on: ubuntu-latest
