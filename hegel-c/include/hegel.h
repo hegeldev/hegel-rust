@@ -998,6 +998,16 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
  origin from the *location* of the failing assertion, not the
  assertion's message. hegel-rust's own panic-to-failure path does
  exactly this (see `src/run_lifecycle.rs`).
+
+ Completing a test case is **first-caller-wins and family-wide**: the first
+ `hegel_mark_complete` anywhere in the family (any clone or the root) records
+ the outcome and unblocks the run. A later call on a *different* handle in the
+ family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
+ complete the same test case do not error — whichever wins sets the result.
+ Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
+ returns `HEGEL_E_ALREADY_COMPLETE`. Driving one handle from two threads at
+ once returns `HEGEL_E_CONCURRENT_USE`; a NULL `tc` returns
+ `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns `HEGEL_E_INVALID_ARG`.
  */
 hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,

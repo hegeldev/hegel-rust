@@ -466,6 +466,12 @@ struct LocalState {
     /// (not family-wide) so two clones drawing at once don't stomp each
     /// other's returned buffers.
     last_value: Vec<u8>,
+    /// Whether `hegel_mark_complete` has already been called on *this* handle.
+    /// Completing the family is first-caller-wins and family-wide (see
+    /// `FamilyShared::completed`), so a second handle completing is a safe
+    /// no-op; but completing the *same* handle twice is a usage error, which
+    /// this per-handle flag detects.
+    completed: bool,
 }
 
 /// One in-flight test-case handle handed to the caller by
@@ -1403,6 +1409,7 @@ fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
         family,
         local: Mutex::new(LocalState {
             last_value: Vec::new(),
+            completed: false,
         }),
     })
 }
@@ -1429,10 +1436,11 @@ unsafe fn tc_guard<'a>(
     Ok((tc, guard))
 }
 
-/// Like [`tc_guard`] but without the completion check: resolve the handle and
-/// lock it, returning `HEGEL_E_INVALID_HANDLE` for a null pointer or
-/// `HEGEL_E_CONCURRENT_USE` on contention. Used by `hegel_mark_complete`, where
-/// completion is the `compare_exchange` itself, not a prior load.
+/// Like [`tc_guard`] but without the family-completion check: resolve the
+/// handle and lock it, returning `HEGEL_E_INVALID_HANDLE` for a null pointer or
+/// `HEGEL_E_CONCURRENT_USE` on contention. Used by `hegel_mark_complete`, which
+/// must run on an already-complete family (a second clone completing it is a
+/// no-op) — it does its own per-handle and `compare_exchange` checks instead.
 unsafe fn tc_lock<'a>(
     tc: *const HegelTestCase,
 ) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
@@ -2024,6 +2032,16 @@ pub unsafe extern "C" fn hegel_target(
 /// origin from the *location* of the failing assertion, not the
 /// assertion's message. hegel-rust's own panic-to-failure path does
 /// exactly this (see `src/run_lifecycle.rs`).
+///
+/// Completing a test case is **first-caller-wins and family-wide**: the first
+/// `hegel_mark_complete` anywhere in the family (any clone or the root) records
+/// the outcome and unblocks the run. A later call on a *different* handle in the
+/// family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
+/// complete the same test case do not error — whichever wins sets the result.
+/// Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
+/// returns `HEGEL_E_ALREADY_COMPLETE`. Driving one handle from two threads at
+/// once returns `HEGEL_E_CONCURRENT_USE`; a NULL `tc` returns
+/// `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns `HEGEL_E_INVALID_ARG`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_mark_complete(
     ctx: *mut HegelContext,
@@ -2032,10 +2050,17 @@ pub unsafe extern "C" fn hegel_mark_complete(
     origin: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_lock(tc) } {
+    let (tc, mut guard) = match unsafe { tc_lock(tc) } {
         Ok(pair) => pair,
         Err(rc) => return rc,
     };
+
+    // Completing the *same* handle twice is a usage error. (A different handle
+    // in the family completing after this one is handled below: it is a no-op,
+    // not an error.)
+    if guard.completed {
+        return HEGEL_E_ALREADY_COMPLETE;
+    }
 
     let outcome = match status {
         hegel_status_t::HEGEL_STATUS_VALID => TestCaseResult::Valid,
@@ -2060,17 +2085,21 @@ pub unsafe extern "C" fn hegel_mark_complete(
         }
     };
 
+    guard.completed = true;
+
+    // First handle in the family to complete wins: it records the outcome and
+    // unblocks the run. A later clone completing the (already-complete) family
+    // is a safe no-op, so concurrent clones don't race to an error.
     if tc
         .family
         .completed
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
+        .is_ok()
     {
-        return HEGEL_E_ALREADY_COMPLETE;
-    }
-    tc.family.ds.mark_complete(&outcome);
-    if let Some(ack) = &*tc.family.ack.lock() {
-        let _ = ack.send(());
+        tc.family.ds.mark_complete(&outcome);
+        if let Some(ack) = &*tc.family.ack.lock() {
+            let _ = ack.send(());
+        }
     }
     HEGEL_OK
 }

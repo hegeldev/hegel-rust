@@ -1152,7 +1152,10 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
 }
 
 /// A clone shares the underlying test case with its root: it draws from the
-/// same source, marking any handle complete marks the whole family, and a clone
+/// same source, and completion is first-caller-wins and family-wide. The first
+/// `hegel_mark_complete` anywhere in the family records the outcome; completing
+/// a *different* handle afterward is a safe no-op (so racing clones don't
+/// error), while completing the *same* handle twice is a usage error. A clone
 /// can be made after completion (and is immediately complete). Every handle —
 /// root or clone, run-owned or not — is released independently with
 /// `hegel_test_case_free`.
@@ -1185,16 +1188,25 @@ fn clones_share_a_run_owned_family() {
             HEGEL_OK
         );
 
+        // The first handle to complete the family wins and records the outcome.
         assert_eq!(
             hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
             HEGEL_OK
         );
-        assert_eq!(
-            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
-            HEGEL_E_ALREADY_COMPLETE
-        );
+        // Completing a *different* handle in the now-complete family is a safe
+        // no-op (first-caller-wins), so racing clones don't error.
         assert_eq!(
             hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            HEGEL_OK
+        );
+        // But completing the *same* handle twice is a usage error.
+        assert_eq!(
+            hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            HEGEL_E_ALREADY_COMPLETE
+        );
+        // Primitives on any family handle still report the family complete.
+        assert_eq!(
+            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
             HEGEL_E_ALREADY_COMPLETE
         );
 
@@ -1203,6 +1215,11 @@ fn clones_share_a_run_owned_family() {
         assert_eq!(
             hegel_generate(ctx, c2, schema.as_ptr(), schema.len(), &mut p, &mut n),
             HEGEL_E_ALREADY_COMPLETE
+        );
+        // A fresh clone completing the already-complete family is also a no-op.
+        assert_eq!(
+            hegel_mark_complete(ctx, c2, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            HEGEL_OK
         );
 
         assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_OK);

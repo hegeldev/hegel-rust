@@ -175,6 +175,62 @@ fn two_clones_used_concurrently_then_freed() {
     }
 }
 
+/// Two clones race to complete the same test case from two threads. Completion
+/// is first-caller-wins and family-wide, so *neither* call errors — the winner
+/// records the outcome and the loser is a safe no-op (both return `HEGEL_OK`).
+/// Run under Miri this checks the concurrent `compare_exchange` / `ds`
+/// completion / ack path is race- and UB-free.
+#[test]
+fn concurrent_mark_complete_from_two_clones_is_safe() {
+    use std::sync::{Arc, Barrier};
+
+    struct SendPtr(*mut HegelTestCase);
+    // SAFETY: each clone is a distinct handle; the threads are joined before any
+    // handle is freed.
+    unsafe impl Send for SendPtr {}
+
+    unsafe {
+        let (ctx, s, run, root) = one_case_run();
+
+        let mut c1: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
+        let mut c2: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = [SendPtr(c1), SendPtr(c2)]
+            .into_iter()
+            .map(|cp| {
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let cp = cp;
+                    let tctx = hegel_context_new();
+                    b.wait();
+                    let rc = hegel_mark_complete(
+                        tctx,
+                        cp.0,
+                        hegel_status_t::HEGEL_STATUS_VALID,
+                        ptr::null(),
+                    );
+                    ok(hegel_context_free(tctx));
+                    rc
+                })
+            })
+            .collect();
+        for h in handles {
+            // Neither racing clone errors: winner sets the result, loser no-ops.
+            assert_eq!(h.join().unwrap(), HEGEL_OK);
+        }
+
+        ok(hegel_test_case_free(ctx, c1));
+        ok(hegel_test_case_free(ctx, c2));
+        ok(hegel_test_case_free(ctx, root));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 /// Drive one complete run that always fails and therefore shrinks, through the
 /// raw C ABI: each case draws an integer and is marked INTERESTING, so the
 /// engine reports a failure and runs its full shrink. Reading the result back —
