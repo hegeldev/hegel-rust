@@ -535,6 +535,41 @@ fn run_free_with_undrained_case_does_not_deadlock() {
     }
 }
 
+/// Freeing the last handle to an *uncompleted* run-owned case does not
+/// complete it: the run stays parked on the case, every subsequent
+/// `hegel_next_test_case` reports `HEGEL_E_NOT_COMPLETE`, and the only way
+/// out is `hegel_run_free` (which must still tear down cleanly). This is the
+/// documented cost of `hegel_test_case_free` never touching run state — a
+/// binding must report each case's outcome from its driving loop rather than
+/// leaning on a finaliser.
+#[test]
+fn freeing_an_uncompleted_run_owned_handle_wedges_but_run_free_recovers() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+        ok(hegel_test_case_free(ctx, tc));
+
+        for _ in 0..2 {
+            let mut next: *mut HegelTestCase = ptr::null_mut();
+            assert_eq!(
+                hegel_next_test_case(ctx, run, &mut next),
+                HEGEL_E_NOT_COMPLETE
+            );
+            assert!(next.is_null());
+            assert!(last_error(ctx).contains("not marked complete"));
+        }
+
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 #[test]
 fn version_is_reported() {
     let ctx = hegel_context_new();

@@ -39,8 +39,12 @@
  * case itself is released once its last handle is freed, so a clone keeps
  * working after the handle it was cloned from is freed. For a run-owned handle
  * the run keeps its own internal reference, so freeing your handle is always
- * safe and never disturbs the run (this makes it easy to wrap a handle in a
- * garbage-collected language and free it from a finaliser).
+ * memory-safe and never disturbs the run's state (this makes it easy to wrap a
+ * handle in a garbage-collected language and free it from a finaliser). Note
+ * that freeing is not completing, though: a run-owned test case still needs
+ * hegel_mark_complete from some handle in its family before the run can
+ * advance, so conclude every case before dropping your last handle to it —
+ * see hegel_test_case_free.
  *
  * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
  * it, you must not free it, and it is valid only until a point that the
@@ -728,6 +732,14 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
  reference is gone (every handle freed, and — for a run-owned family — the
  run has released its own reference). Each handle must be freed exactly once;
  freeing the same handle twice is undefined behaviour.
+
+ Freeing is not completing: a run-owned test case still needs
+ `hegel_mark_complete` from some handle in its family before the run can
+ advance. Freeing the last handle of an uncompleted run-owned family leaves
+ `hegel_next_test_case` returning `HEGEL_E_NOT_COMPLETE` with no way to
+ complete the case, and the run can then only be torn down with
+ `hegel_run_free` — so conclude every case before dropping your last handle
+ to it.
  */
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 

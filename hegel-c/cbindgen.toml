@@ -41,8 +41,12 @@ header = """
  * case itself is released once its last handle is freed, so a clone keeps
  * working after the handle it was cloned from is freed. For a run-owned handle
  * the run keeps its own internal reference, so freeing your handle is always
- * safe and never disturbs the run (this makes it easy to wrap a handle in a
- * garbage-collected language and free it from a finaliser).
+ * memory-safe and never disturbs the run's state (this makes it easy to wrap a
+ * handle in a garbage-collected language and free it from a finaliser). Note
+ * that freeing is not completing, though: a run-owned test case still needs
+ * hegel_mark_complete from some handle in its family before the run can
+ * advance, so conclude every case before dropping your last handle to it —
+ * see hegel_test_case_free.
  *
  * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
  * it, you must not free it, and it is valid only until a point that the
