@@ -321,9 +321,9 @@ impl CTestCase {
     pub(crate) fn clone_handle(&self) -> CTestCase {
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
         // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_test_case_clone(ctx, self.raw, &mut raw) });
-        crate::control::hegel_internal_assert!(rc == hegel_result_t::HEGEL_OK);
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_clone(ctx, self.raw, &mut raw)
+        }));
         CTestCase { raw, owned: true }
     }
 

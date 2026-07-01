@@ -42,6 +42,12 @@ fn ok(rc: hegel_c::hegel_result_t) {
     assert_eq!(rc, HEGEL_OK);
 }
 
+/// Carries a test-case handle into a spawned thread.
+struct SendPtr(*mut HegelTestCase);
+// SAFETY: every use wraps a distinct clone handle with its own lock, and the
+// spawning test joins its threads before any handle is freed.
+unsafe impl Send for SendPtr {}
+
 /// Start a database-free single-case run and hand back its first run-owned
 /// handle, keeping the owning context/settings/run alive.
 unsafe fn one_case_run() -> (
@@ -125,11 +131,6 @@ fn clones_and_root_free_independently_in_any_order() {
 fn two_clones_used_concurrently_then_freed() {
     use std::sync::{Arc, Barrier};
 
-    struct SendPtr(*mut HegelTestCase);
-    // SAFETY: each clone is a distinct handle with its own lock; the threads are
-    // joined before any handle is freed.
-    unsafe impl Send for SendPtr {}
-
     unsafe {
         let (ctx, s, run, root) = one_case_run();
 
@@ -183,11 +184,6 @@ fn two_clones_used_concurrently_then_freed() {
 #[test]
 fn concurrent_mark_complete_from_two_clones_is_safe() {
     use std::sync::{Arc, Barrier};
-
-    struct SendPtr(*mut HegelTestCase);
-    // SAFETY: each clone is a distinct handle; the threads are joined before any
-    // handle is freed.
-    unsafe impl Send for SendPtr {}
 
     unsafe {
         let (ctx, s, run, root) = one_case_run();

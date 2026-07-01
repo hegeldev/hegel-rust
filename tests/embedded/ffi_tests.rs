@@ -183,7 +183,7 @@ fn ffi_clone_handle_shares_the_test_case() {
     let run = RunHandle::start(&sh).unwrap();
     let schema = int_schema(0, 100);
 
-    let tc = run.next_test_case().expect("a case");
+    let tc = run.next_test_case().unwrap();
     let clone = tc.clone_handle();
     clone.generate(&schema).unwrap();
     tc.generate(&schema).unwrap();

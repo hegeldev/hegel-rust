@@ -36,11 +36,10 @@ fn debug_is_non_exhaustive() {
 fn a_clone_can_draw_from_another_thread() {
     let (_run, tc) = emitting_test_case();
     let worker = tc.clone();
-    let n = std::thread::spawn(move || worker.draw(crate::generators::integers::<i64>()))
+    std::thread::spawn(move || worker.draw(crate::generators::integers::<i64>()))
         .join()
         .unwrap();
-    let _b: bool = tc.draw(crate::generators::booleans());
-    let _ = n;
+    tc.draw(crate::generators::booleans());
 }
 
 #[test]
