@@ -68,11 +68,16 @@ pub(crate) use invalid_argument;
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
 ///   generator's schema) was semantically invalid; the diagnostic is read
 ///   synchronously from this thread's libhegel error context.
+/// - `HEGEL_E_ALREADY_COMPLETE` — the test case has finished. Unreachable
+///   from a test body (the outcome is reported only after the body returns),
+///   so it means a `TestCase` outlived its test — typically moved to a thread
+///   that was never joined — and the panic message says so.
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
 ///   This includes `HEGEL_E_CONCURRENT_USE`: the frontend never drives one
-///   handle from two threads (`clone` forks a fresh handle and `TestCase` is
-///   `!Sync`), so it cannot arise here in correct use.
+///   handle from two threads (`clone` forks a fresh handle, `TestCase` is
+///   `!Sync`, and `hegel_mark_complete` waits instead of erroring), so it
+///   cannot arise here in correct use.
 #[track_caller]
 pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     use hegel_c::hegel_result_t::*;
@@ -80,6 +85,11 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
         HEGEL_E_STOP_TEST => raise_control(StopTest),
         HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
         HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
+        HEGEL_E_ALREADY_COMPLETE => panic!(
+            "this test case has already finished; was the TestCase moved to a \
+             thread that outlived the test? Join any thread that draws before \
+             the test returns."
+        ),
         other => hegel_internal_error!(
             "libhegel returned unexpected code {}: {}",
             other as i32,
@@ -205,14 +215,15 @@ pub(crate) struct TestCaseLocalData {
 pub struct TestCase {
     global: Arc<TestCaseGlobalData>,
     local: RefCell<TestCaseLocalData>,
-    /// This instance's own libhegel handle. [`clone`](TestCase::clone) gives a
-    /// fresh handle (`hegel_test_case_clone`) so two clones can be driven from
-    /// different threads concurrently; each clone holds its own reference to
-    /// the shared test case and frees it when the clone is dropped, so a clone
-    /// moved to another thread stays valid for as long as that thread holds it.
-    /// [`child`](TestCase::child) instead borrows this handle (no new reference),
-    /// since it is only ever used synchronously on the same thread.
-    handle: CTestCase,
+    /// This instance's libhegel handle, shared through the `Arc` with the
+    /// lifecycle that created it and with any [`child`](TestCase::child)
+    /// instances, so a `TestCase` that escapes its test (moved to a thread
+    /// that is never joined) keeps the handle alive rather than dangling —
+    /// its later draws fail cleanly because the case has finished.
+    /// [`clone`](TestCase::clone) instead gets a fresh handle
+    /// (`hegel_test_case_clone`) with its own lock, so two clones can be
+    /// driven from different threads concurrently.
+    handle: Arc<CTestCase>,
 }
 
 impl Clone for TestCase {
@@ -220,7 +231,7 @@ impl Clone for TestCase {
         TestCase {
             global: self.global.clone(),
             local: RefCell::new(self.local.borrow().clone()),
-            handle: self.handle.clone_handle(),
+            handle: Arc::new(self.handle.clone_handle()),
         }
     }
 }
@@ -274,7 +285,7 @@ impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
     /// true on a non-quiet final replay or in verbose mode, where drawn
     /// values and notes should be surfaced.
-    pub(crate) fn new(handle: CTestCase, emit: bool, mode: Mode) -> Self {
+    pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, mode: Mode) -> Self {
         let override_sink = current_output_sink();
         let on_draw: OutputSink = match override_sink {
             Some(sink) if emit => sink,
@@ -568,7 +579,7 @@ impl TestCase {
                 indent: local.indent + extra_indent,
                 on_draw: local.on_draw.clone(),
             }),
-            handle: self.handle.borrow(),
+            handle: Arc::clone(&self.handle),
         }
     }
 
