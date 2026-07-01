@@ -441,21 +441,38 @@ enum WorkerMessage {
 /// the data source is dropped only once every handle has been freed and the
 /// run has released its reference.
 struct FamilyShared {
-    /// The single underlying data source. `Arc` (not `Box`) so every clone
-    /// shares one connection.
-    ds: Arc<dyn DataSource + Send + Sync>,
-    /// Family-wide completion status. Set once via `compare_exchange` so
-    /// `mark_complete` runs `ds.mark_complete` and sends the ack exactly once,
-    /// no matter which handle reports it.
+    /// The single underlying data source, shared by every handle through the
+    /// family's own `Arc`.
+    ds: Box<dyn DataSource + Send + Sync>,
+    /// Family-wide completion status. Set once via `compare_exchange` in
+    /// [`Self::complete`] so `ds.mark_complete` runs and the ack is sent
+    /// exactly once, no matter which handle reports it.
     completed: AtomicBool,
     /// `Some` for a family rooted in a run's worker thread (the worker blocks
     /// on this ack until completion); `None` for a standalone family from
-    /// `hegel_test_case_from_blob`. Sent on (not taken from) by the handle
-    /// that wins the completion `compare_exchange`. The `Mutex` is only here
-    /// because `mpsc::Sender` is not `Sync`; sending under it is sound, and
-    /// send-once is guaranteed by the completion `compare_exchange`, not the
-    /// lock.
-    ack: Mutex<Option<mpsc::Sender<()>>>,
+    /// `hegel_test_case_from_blob`. Sent on by the caller that wins the
+    /// completion `compare_exchange` in [`Self::complete`], which is what
+    /// guarantees send-once.
+    ack: Option<mpsc::Sender<()>>,
+}
+
+impl FamilyShared {
+    /// Claim family-wide completion. First caller wins: it records `outcome`
+    /// on the data source and sends the worker ack; every later call — a
+    /// racing clone, or the run tearing down an in-flight case — is a no-op.
+    /// This is the single home of the exactly-once completion protocol.
+    fn complete(&self, outcome: &TestCaseResult) {
+        if self
+            .completed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.ds.mark_complete(outcome);
+            if let Some(ack) = &self.ack {
+                let _ = ack.send(());
+            }
+        }
+    }
 }
 
 /// Per-handle state guarded by the handle's own lock.
@@ -1226,20 +1243,11 @@ pub unsafe extern "C" fn hegel_run_free(
 
     if let Some(family) = run.current_family.take() {
         // If the caller bailed out of its loop with this case still in flight,
-        // claim completion for the family once (releasing the worker's ack so
-        // it can wind down). Dropping the run's reference here releases the
+        // claim completion for the family (releasing the worker's ack so it
+        // can wind down). Dropping the run's reference here releases the
         // data source unless the caller still holds a handle to it, in which
         // case it lives until the caller frees that handle.
-        if family
-            .completed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            family.ds.mark_complete(&TestCaseResult::Valid);
-            if let Some(ack) = &*family.ack.lock() {
-                let _ = ack.send(());
-            }
-        }
+        family.complete(&TestCaseResult::Valid);
         drop(family);
     }
 
@@ -1327,6 +1335,14 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
 /// reference is gone (every handle freed, and — for a run-owned family — the
 /// run has released its own reference). Each handle must be freed exactly once;
 /// freeing the same handle twice is undefined behaviour.
+///
+/// Freeing is not completing: a run-owned test case still needs
+/// `hegel_mark_complete` from some handle in its family before the run can
+/// advance. Freeing the last handle of an uncompleted run-owned family leaves
+/// `hegel_next_test_case` returning `HEGEL_E_NOT_COMPLETE` with no way to
+/// complete the case, and the run can then only be torn down with
+/// `hegel_run_free` — so conclude every case before dropping your last handle
+/// to it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_free(
     ctx: *mut HegelContext,
@@ -1395,9 +1411,9 @@ fn new_family(
     ack: Option<mpsc::Sender<()>>,
 ) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
-        ds: Arc::from(ds),
+        ds,
         completed: AtomicBool::new(false),
-        ack: Mutex::new(ack),
+        ack,
     })
 }
 
@@ -2090,17 +2106,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
     // First handle in the family to complete wins: it records the outcome and
     // unblocks the run. A later clone completing the (already-complete) family
     // is a safe no-op, so concurrent clones don't race to an error.
-    if tc
-        .family
-        .completed
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
-        tc.family.ds.mark_complete(&outcome);
-        if let Some(ack) = &*tc.family.ack.lock() {
-            let _ = ack.send(());
-        }
-    }
+    tc.family.complete(&outcome);
     HEGEL_OK
 }
 
