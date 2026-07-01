@@ -55,11 +55,11 @@ unsafe fn finish(
     }
 }
 
-/// A single handle held by one thread rejects use from another. We stand in for
-/// "another thread is mid-draw" by holding the handle's own `local` lock on
-/// this thread: `parking_lot::Mutex` is not reentrant, so `try_lock` observes
-/// contention identically to a real second thread — but deterministically, with
-/// no race to lose.
+/// A single handle held by one thread rejects draw primitives from another.
+/// We stand in for "another thread is mid-draw" by holding the handle's own
+/// `local` lock on this thread: `parking_lot::Mutex` is not reentrant, so
+/// `try_lock` observes contention identically to a real second thread — but
+/// deterministically, with no race to lose.
 #[test]
 fn concurrent_use_of_one_handle_is_rejected() {
     unsafe {
@@ -67,10 +67,6 @@ fn concurrent_use_of_one_handle_is_rejected() {
 
         let held = (&*tc).local.lock();
         assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_CONCURRENT_USE);
-        assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
-            HEGEL_E_CONCURRENT_USE
-        );
         drop(held);
 
         // With the lock free the handle works again.
@@ -78,6 +74,42 @@ fn concurrent_use_of_one_handle_is_rejected() {
         assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_OK);
 
         finish(ctx, s, run, tc);
+    }
+}
+
+/// `hegel_mark_complete` never reports `HEGEL_E_CONCURRENT_USE`: completion is
+/// first-caller-wins and always succeeds, so it waits for an in-flight
+/// operation on the same handle instead of erroring. A worker thread holds the
+/// handle's own `local` lock (standing in for a draw in progress) and releases
+/// it shortly after signalling; `hegel_mark_complete`, called while the lock
+/// is provably held, blocks until then and completes the case.
+#[test]
+fn mark_complete_waits_for_an_in_flight_operation() {
+    unsafe {
+        let (ctx, s, run, tc) = start_run_and_first_case();
+
+        let handle = &*tc;
+        std::thread::scope(|scope| {
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                let held = handle.local.lock();
+                locked_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                drop(held);
+            });
+            locked_rx.recv().unwrap();
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID,
+                ptr::null(),
+            ));
+        });
+
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
 

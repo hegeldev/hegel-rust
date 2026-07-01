@@ -119,6 +119,9 @@ pub enum hegel_result_t {
     /// several threads, `hegel_test_case_clone` the handle and give each
     /// thread its own clone. (Clones share the underlying test case but have
     /// independent per-handle locks, so they may be driven concurrently.)
+    /// Returned by the draw primitives; `hegel_mark_complete` instead waits
+    /// for the in-flight operation, because completion always succeeds under
+    /// first-caller-wins.
     HEGEL_E_CONCURRENT_USE = -9,
 }
 
@@ -498,11 +501,13 @@ struct LocalState {
 /// `hegel_target`, the collection primitives) and concludes it with
 /// `hegel_mark_complete`.
 ///
-/// A single handle must be driven by at most one thread at a time: each
+/// A single handle must be driven by at most one thread at a time: each draw
 /// primitive `try_lock`s the handle's own `local`, returning
-/// `HEGEL_E_CONCURRENT_USE` on contention. To draw from several threads, clone
-/// the handle with `hegel_test_case_clone` and give each thread its own clone;
-/// clones share the family but have independent locks.
+/// `HEGEL_E_CONCURRENT_USE` on contention (`hegel_mark_complete` is the
+/// exception — completion always succeeds, so it waits for an in-flight
+/// operation instead). To draw from several threads, clone the handle with
+/// `hegel_test_case_clone` and give each thread its own clone; clones share
+/// the family but have independent locks.
 ///
 /// Every handle — however it was produced — must be released with
 /// `hegel_test_case_free`. Each holds one reference to the shared family; the
@@ -1452,17 +1457,19 @@ unsafe fn tc_guard<'a>(
     Ok((tc, guard))
 }
 
-/// Like [`tc_guard`] but without the family-completion check: resolve the
-/// handle and lock it, returning `HEGEL_E_INVALID_HANDLE` for a null pointer or
-/// `HEGEL_E_CONCURRENT_USE` on contention. Used by `hegel_mark_complete`, which
-/// must run on an already-complete family (a second clone completing it is a
-/// no-op) — it does its own per-handle and `compare_exchange` checks instead.
+/// Like [`tc_guard`] but for `hegel_mark_complete`: no family-completion
+/// check (completing must work on an already-complete family — a second clone
+/// completing it is a no-op — so `hegel_mark_complete` does its own per-handle
+/// and `compare_exchange` checks), and a *blocking* lock instead of
+/// `try_lock`. Completion is first-caller-wins and always succeeds, so an
+/// in-flight operation on the same handle is waited for rather than reported
+/// as `HEGEL_E_CONCURRENT_USE`. Returns `HEGEL_E_INVALID_HANDLE` for a null
+/// pointer.
 unsafe fn tc_lock<'a>(
     tc: *const HegelTestCase,
 ) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
     let tc = unsafe { tc.as_ref() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
-    let guard = tc.local.try_lock().ok_or(HEGEL_E_CONCURRENT_USE)?;
-    Ok((tc, guard))
+    Ok((tc, tc.local.lock()))
 }
 
 fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_result_t {
@@ -2055,9 +2062,12 @@ pub unsafe extern "C" fn hegel_target(
 /// family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
 /// complete the same test case do not error — whichever wins sets the result.
 /// Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
-/// returns `HEGEL_E_ALREADY_COMPLETE`. Driving one handle from two threads at
-/// once returns `HEGEL_E_CONCURRENT_USE`; a NULL `tc` returns
-/// `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns `HEGEL_E_INVALID_ARG`.
+/// returns `HEGEL_E_ALREADY_COMPLETE`. Because completion always succeeds under
+/// first-caller-wins, `hegel_mark_complete` never returns
+/// `HEGEL_E_CONCURRENT_USE`: if another thread is mid-operation on this handle
+/// it waits for that operation to finish and then completes. A NULL `tc`
+/// returns `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns
+/// `HEGEL_E_INVALID_ARG`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_mark_complete(
     ctx: *mut HegelContext,

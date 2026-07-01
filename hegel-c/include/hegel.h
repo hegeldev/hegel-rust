@@ -132,6 +132,9 @@ typedef enum {
      several threads, `hegel_test_case_clone` the handle and give each
      thread its own clone. (Clones share the underlying test case but have
      independent per-handle locks, so they may be driven concurrently.)
+     Returned by the draw primitives; `hegel_mark_complete` instead waits
+     for the in-flight operation, because completion always succeeds under
+     first-caller-wins.
      */
     HEGEL_E_CONCURRENT_USE = -9,
 } hegel_result_t;
@@ -455,11 +458,13 @@ typedef struct hegel_settings_t hegel_settings_t;
  `hegel_target`, the collection primitives) and concludes it with
  `hegel_mark_complete`.
 
- A single handle must be driven by at most one thread at a time: each
+ A single handle must be driven by at most one thread at a time: each draw
  primitive `try_lock`s the handle's own `local`, returning
- `HEGEL_E_CONCURRENT_USE` on contention. To draw from several threads, clone
- the handle with `hegel_test_case_clone` and give each thread its own clone;
- clones share the family but have independent locks.
+ `HEGEL_E_CONCURRENT_USE` on contention (`hegel_mark_complete` is the
+ exception — completion always succeeds, so it waits for an in-flight
+ operation instead). To draw from several threads, clone the handle with
+ `hegel_test_case_clone` and give each thread its own clone; clones share
+ the family but have independent locks.
 
  Every handle — however it was produced — must be released with
  `hegel_test_case_free`. Each holds one reference to the shared family; the
@@ -1017,9 +1022,12 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
  family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
  complete the same test case do not error — whichever wins sets the result.
  Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
- returns `HEGEL_E_ALREADY_COMPLETE`. Driving one handle from two threads at
- once returns `HEGEL_E_CONCURRENT_USE`; a NULL `tc` returns
- `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns `HEGEL_E_INVALID_ARG`.
+ returns `HEGEL_E_ALREADY_COMPLETE`. Because completion always succeeds under
+ first-caller-wins, `hegel_mark_complete` never returns
+ `HEGEL_E_CONCURRENT_USE`: if another thread is mid-operation on this handle
+ it waits for that operation to finish and then completes. A NULL `tc`
+ returns `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns
+ `HEGEL_E_INVALID_ARG`.
  */
 hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
