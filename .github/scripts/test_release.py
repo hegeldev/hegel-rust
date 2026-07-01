@@ -157,6 +157,32 @@ class PlanReleaseTest(unittest.TestCase):
         self.assertEqual(c_body, "This release breaks the C ABI.")
 
 
+class CurrentVersionTest(unittest.TestCase):
+    def test_reads_the_package_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "Cargo.toml"
+            manifest.write_text(ROOT_CARGO)
+            self.assertEqual(release.current_version(manifest), "0.19.1")
+
+
+class ReleasePrDetailsTest(unittest.TestCase):
+    def test_rust_only_release_mentions_no_tag(self) -> None:
+        # A hegel-rust-only release cuts no tag, so the fallback PR must not
+        # claim one was pushed.
+        title, body = release.release_pr_details("0.23.3", [])
+        self.assertEqual(title, "Release v0.23.3")
+        self.assertNotIn("tag", body)
+        self.assertIn("The crates.io publish succeeded.", body)
+
+    def test_tagged_release_names_the_pushed_tag(self) -> None:
+        # The tag carries the hegel-c version, which is independent of the
+        # hegeltest version naming the PR.
+        title, body = release.release_pr_details("0.23.3", ["v0.24.0"])
+        self.assertEqual(title, "Release v0.23.3")
+        self.assertIn("after tagging v0.24.0", body)
+        self.assertIn("The tag and crates.io publish succeeded.", body)
+
+
 class BuildReleaseNotesTest(unittest.TestCase):
     def test_root_only_is_passed_through(self) -> None:
         self.assertEqual(release.build_release_notes("root body", None), "root body")

@@ -76,6 +76,12 @@ def bump_version(current: str, release_type: str) -> str:
     return f"{major}.{minor}.{patch}"
 
 
+def current_version(cargo_toml: Path) -> str:
+    """The `version = "..."` of the package manifest at `cargo_toml`."""
+    m = re.search(r'^version = "([^"]+)"', cargo_toml.read_text(), re.MULTILINE)
+    return m.group(1)
+
+
 def set_version(cargo_toml: Path, new_version: str) -> None:
     text = cargo_toml.read_text()
     new_text = re.sub(
@@ -301,14 +307,8 @@ def release() -> None:
     c_release = parse_release_file(c_path) if c_path.exists() else None
     assert root_release is not None or c_release is not None
 
-    rust_current = re.search(
-        r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.MULTILINE
-    ).group(1)
-    c_current = re.search(
-        r'^version = "([^"]+)"',
-        (ROOT / "hegel-c" / "Cargo.toml").read_text(),
-        re.MULTILINE,
-    ).group(1)
+    rust_current = current_version(ROOT / "Cargo.toml")
+    c_current = current_version(ROOT / "hegel-c" / "Cargo.toml")
     rust_version, c_version, root_content, c_content = plan_release(
         rust_current, c_current, root_release, c_release
     )
@@ -373,11 +373,35 @@ def release() -> None:
         )
 
 
-def push_or_pr() -> None:
-    m = re.search(
-        r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.MULTILINE
+def release_pr_details(version: str, tags: list[str]) -> tuple[str, str]:
+    """Title and body for the fallback PR opened when the release push races a
+    concurrent merge to main.
+
+    `version` is the hegeltest version of the release commit, which names the
+    PR. `tags` is whatever release tags point at that commit: the hegel-c
+    version tag when hegel-c released, and nothing for a hegel-rust-only
+    release, which cuts no tag — so the body only claims a tag was pushed when
+    one actually was, and names it (the tag carries the hegel-c version, not
+    `version`).
+    """
+    title = f"Release v{version}"
+    if tags:
+        pushed = f"after tagging {' and '.join(tags)} "
+        succeeded = "The tag and crates.io publish succeeded."
+    else:
+        pushed = ""
+        succeeded = "The crates.io publish succeeded."
+    body = (
+        f"The push to main {pushed}failed because main had diverged. "
+        f"{succeeded}\n\n"
+        f"This PR merges the release commit (version bump, changelog, "
+        f"RELEASE.md removal) into main."
     )
-    version = m.group(1)
+    return title, body
+
+
+def push_or_pr() -> None:
+    version = current_version(ROOT / "Cargo.toml")
 
     result = subprocess.run(
         ["git", "push", "origin", "main"], cwd=ROOT
@@ -401,17 +425,17 @@ def push_or_pr() -> None:
         cwd=ROOT,
     )
 
+    tags = subprocess.check_output(
+        ["git", "tag", "--points-at", "HEAD"], cwd=ROOT, text=True
+    ).split()
+    title, body = release_pr_details(version, tags)
     subprocess.run(
         [
             "gh", "pr", "create",
             "--base", "main",
             "--head", branch,
-            "--title", f"Release v{version}",
-            "--body",
-            f"The push to main after tagging v{version} failed because main had "
-            f"diverged. The tag and crates.io publish succeeded.\n\n"
-            f"This PR merges the release commit (version bump, changelog, "
-            f"RELEASE.md removal) into main.",
+            "--title", title,
+            "--body", body,
             "--label", "skip release",
         ],
         check=True,
