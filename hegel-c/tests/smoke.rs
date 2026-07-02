@@ -305,6 +305,10 @@ impl Api<'_> {
         let rc = unsafe { (self.mark_complete)(ctx, tc, status, origin) };
         unsafe { self.expect_ok(ctx, rc, "hegel_mark_complete") };
     }
+    unsafe fn test_case_free(&self, ctx: *mut u8, tc: *mut u8) {
+        let rc = unsafe { (self.test_case_free)(ctx, tc) };
+        unsafe { self.expect_ok(ctx, rc, "hegel_test_case_free") };
+    }
     /// Complete a case and then release the caller's handle, which every handle
     /// (run-owned included) now requires. Used wherever a case is concluded and
     /// not touched again.
@@ -316,7 +320,7 @@ impl Api<'_> {
         origin: *const c_char,
     ) {
         unsafe { self.mark_complete(ctx, tc, status, origin) };
-        unsafe { (self.test_case_free)(ctx, tc) };
+        unsafe { self.test_case_free(ctx, tc) };
     }
     /// The error-reporting reader: returns the message pointer directly (NULL
     /// for a NULL context), so it forwards the raw symbol unchanged.
@@ -918,7 +922,7 @@ fn libhegel_frees_run_owned_test_cases() {
 
     unsafe {
         let ctx = (a.context_new)();
-        (a.test_case_free)(ctx, ptr::null_mut());
+        a.test_case_free(ctx, ptr::null_mut());
 
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 1);
@@ -932,7 +936,7 @@ fn libhegel_frees_run_owned_test_cases() {
         // `hegel_test_case_free` like any other; the run keeps its own
         // reference, so freeing the handle here (without completing the case)
         // does not disturb the run, which winds it down on `run_free`.
-        (a.test_case_free)(ctx, tc);
+        a.test_case_free(ctx, tc);
         let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             err.is_empty(),
@@ -1371,7 +1375,7 @@ fn run_free_after_early_exit_does_not_hang() {
         a.run_free(ctx, run);
         // The caller still owns its handle after an early exit; free it now (as
         // a GC finaliser would), which drops the family's last reference.
-        (a.test_case_free)(ctx, tc);
+        a.test_case_free(ctx, tc);
         a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
