@@ -36,9 +36,12 @@
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
- * released with hegel_test_case_free exactly once. A clone and the handle it
- * was cloned from are independent handles onto one shared test case; the test
- * case itself is released once its last handle is freed, so a clone keeps
+ * released with hegel_test_case_free exactly once.
+ *
+ * A test case and all clones descended from it are considered to be part of a
+ * *family* of test cases. All test cases in a family are independent handles
+ * onto one shared underlying test case; the resources associated with the test
+ * case are released once its last handle is freed, so a clone keeps
  * working after the handle it was cloned from is freed. For a run-owned handle
  * the run keeps its own internal reference, so freeing your handle is always
  * memory-safe and never disturbs the run's state (this makes it easy to wrap a
