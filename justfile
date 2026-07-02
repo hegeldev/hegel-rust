@@ -53,10 +53,13 @@ check-test-modules:
 check-internal-asserts:
     scripts/check-internal-asserts.py
 
+check-generator-imports:
+    scripts/check-generator-imports.py
+
 check-release-script:
     .github/scripts/test_release.py
 
-check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-release-script
+check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-generator-imports check-release-script
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview

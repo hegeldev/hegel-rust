@@ -41,10 +41,12 @@ fn main() {}
 #[test]
 fn test_explicit_test_case_bad_syntax() {
     let code = r#"
+use hegel::generators as gs;
+
 #[hegel::test]
 #[hegel::explicit_test_case(x = 42;)]
 fn my_test(tc: hegel::TestCase) {
-    let x: i32 = tc.draw(hegel::generators::integers());
+    let x: i32 = tc.draw(gs::integers());
     let _ = x;
 }
 
@@ -338,11 +340,13 @@ fn test_explicit_double_consume_panics() {
 #[test]
 fn test_explicit_output_format_with_comment() {
     let code = r#"
+use hegel::generators as gs;
+
 fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "compute()", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
         panic!("intentional");
     });
 }
@@ -358,11 +362,13 @@ fn main() {
 #[test]
 fn test_explicit_output_format_without_comment() {
     let code = r#"
+use hegel::generators as gs;
+
 fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
         panic!("intentional");
     });
 }
@@ -383,11 +389,13 @@ fn main() {
 #[test]
 fn test_explicit_notes_printed_on_panic() {
     let code = r#"
+use hegel::generators as gs;
+
 fn main() {
     let etc = hegel::ExplicitTestCase::new()
         .with_value("x", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(hegel::generators::integers(), "x", false);
+        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
         tc.note("important debug info");
         panic!("intentional");
     });
@@ -404,10 +412,12 @@ fn main() {
 #[test]
 fn test_macro_explicit_case_output() {
     let code = r#"
+use hegel::generators as gs;
+
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42i32)]
 fn test_explicit(tc: hegel::TestCase) {
-    let x: i32 = tc.draw(hegel::generators::integers());
+    let x: i32 = tc.draw(gs::integers());
     panic!("fail: {}", x);
 }
 "#;

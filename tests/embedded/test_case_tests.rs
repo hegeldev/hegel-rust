@@ -1,5 +1,6 @@
 use super::*;
 use crate::ffi::{RunHandle, SettingsHandle};
+use crate::generators as gs;
 use crate::runner::{Mode, Settings};
 
 /// Start a real engine run and hand back its first live test case wrapped in an
@@ -36,10 +37,10 @@ fn debug_is_non_exhaustive() {
 fn a_clone_can_draw_from_another_thread() {
     let (_run, tc) = emitting_test_case();
     let worker = tc.clone();
-    std::thread::spawn(move || worker.draw(crate::generators::integers::<i64>()))
+    std::thread::spawn(move || worker.draw(gs::integers::<i64>()))
         .join()
         .unwrap();
-    tc.draw(crate::generators::booleans());
+    tc.draw(gs::booleans());
 }
 
 #[test]
@@ -109,7 +110,7 @@ fn drive_to_overrun(tc: &TestCase) {
     use std::panic::AssertUnwindSafe;
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         for _ in 0..10_000_000 {
-            let _: i64 = tc.draw(crate::generators::integers::<i64>());
+            let _: i64 = tc.draw(gs::integers::<i64>());
         }
     }));
     assert!(
@@ -123,7 +124,7 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
-    tc.start_span(crate::generators::labels::LIST);
+    tc.start_span(gs::labels::LIST);
     drive_to_overrun(&tc);
 
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
@@ -132,10 +133,8 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
         "stop_span after overrun should unwind as StopTest"
     );
 
-    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        tc.start_span(crate::generators::labels::LIST)
-    }))
-    .unwrap_err();
+    let payload =
+        std::panic::catch_unwind(AssertUnwindSafe(|| tc.start_span(gs::labels::LIST))).unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"
