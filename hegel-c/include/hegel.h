@@ -465,21 +465,14 @@ typedef struct hegel_settings_t hegel_settings_t;
  `hegel_target`, the collection primitives) and concludes it with
  `hegel_mark_complete`.
 
- A single handle must be driven by at most one thread at a time: each draw
- primitive `try_lock`s the handle's own `local`, returning
- `HEGEL_E_CONCURRENT_USE` on contention (`hegel_mark_complete` is the
- exception — completion always succeeds, so it waits for an in-flight
- operation instead). To draw from several threads, clone the handle with
- `hegel_test_case_clone` and give each thread its own clone; clones share
- the family but have independent locks.
+ A single handle must be driven by at most one thread at a time: If
+ multiple threads attempt to use the handle at the same time, operations
+ may raise `HEGEL_E_CONCURRENT_USE` on contention. To use a test case from
+ several threads, clone the handle with `hegel_test_case_clone` and give
+ each thread its own clone.
 
  Every handle — however it was produced — must be released with
- `hegel_test_case_free`. Each holds one reference to the shared family; the
- underlying data source is dropped when the last handle is freed (and, for a
- run-owned family, the run has also released its own reference). A run-owned
- handle becomes inert once the family is marked complete (`hegel_next_test_case`
- returns the next case, or NULL when the run is finished), but the caller
- still owns and must free it.
+ `hegel_test_case_free`
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
 
