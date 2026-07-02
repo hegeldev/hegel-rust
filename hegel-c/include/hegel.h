@@ -1087,11 +1087,13 @@ hegel_result_t hegel_run_result_failure_count(hegel_context_t *ctx,
 
 /*
  Write a caller-owned snapshot of the `index`-th failure (0-based) into
- `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
- The snapshot is independent of the result and run it came from and must be
- released with `hegel_failure_free`; each call writes a fresh snapshot,
- each freed separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
- `HEGEL_E_INVALID_ARG` for a NULL `out_failure`.
+ `*out_failure`. `index` must be less than
+ `hegel_run_result_failure_count(r)`. The snapshot is independent of the
+ result and run it came from and must be released with
+ `hegel_failure_free`; each call writes a fresh snapshot, each freed
+ separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r`, or
+ `HEGEL_E_INVALID_ARG` for a NULL `out_failure` or an out-of-range `index`
+ (with a diagnostic in `hegel_context_last_error`).
  */
 hegel_result_t hegel_run_result_failure(hegel_context_t *ctx,
                                         const hegel_run_result_t *r,

@@ -513,17 +513,16 @@ impl RunResult {
         count
     }
 
-    /// The `index`-th distinct failure, or `None` if out of range. The blob is
-    /// copied out and the libhegel failure snapshot released before returning.
-    pub(crate) fn failure(&self, index: usize) -> Option<Failure> {
+    /// The `index`-th distinct failure; `index` must be less than
+    /// [`failure_count`](Self::failure_count) (libhegel rejects an
+    /// out-of-range index). The blob is copied out and the libhegel failure
+    /// snapshot released before returning.
+    pub(crate) fn failure(&self, index: usize) -> Failure {
         let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
         // SAFETY: self.raw is this snapshot's live pointer; &mut f is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
         }));
-        if f.is_null() {
-            return None;
-        }
         let mut blob: *const c_char = ptr::null();
         // SAFETY: f is the failure snapshot allocated above; it is freed
         // exactly once, after the blob has been copied out by cstr_opt.
@@ -533,7 +532,7 @@ impl RunResult {
             require_ok(hegel_c::hegel_failure_free(ctx, f));
             reproduce_blob
         });
-        Some(Failure { reproduce_blob })
+        Failure { reproduce_blob }
     }
 }
 

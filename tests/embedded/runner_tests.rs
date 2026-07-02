@@ -211,7 +211,6 @@ mod reproduce {
         assert!(result.failure_count() > 0, "property should have failed");
         result
             .failure(0)
-            .expect("a failure")
             .reproduce_blob
             .expect("a shrunk failure carries a reproduce blob")
     }

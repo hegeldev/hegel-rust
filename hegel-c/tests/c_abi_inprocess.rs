@@ -91,8 +91,8 @@ unsafe fn failure_count_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> 
     n
 }
 
-/// The `index`-th failure pointer (null when out of range; the call still
-/// succeeds).
+/// The `index`-th failure snapshot; `index` must be in range (an out-of-range
+/// index is an `HEGEL_E_INVALID_ARG` error, asserted directly where tested).
 unsafe fn failure_at(
     ctx: *mut HegelContext,
     r: *const HegelRunResult,
@@ -852,7 +852,13 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             count >= 1,
             "the always-interesting property records a failure"
         );
-        assert!(failure_at(ctx, res, count).is_null());
+        let mut past_end: *mut HegelFailure = ptr::null_mut();
+        assert_eq!(
+            hegel_run_result_failure(ctx, res, count, &mut past_end),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(past_end.is_null());
+        assert!(last_error(ctx).contains("out of range"));
         let f = failure_at(ctx, res, 0);
         assert!(!f.is_null());
         assert_eq!(

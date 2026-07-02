@@ -477,7 +477,7 @@ pub(crate) fn drive<F>(
                 }
                 let blob = result
                     .failure(index)
-                    .and_then(|f| f.reproduce_blob)
+                    .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob) {
                     Ok(c_tc) => c_tc,

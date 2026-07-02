@@ -2249,11 +2249,13 @@ pub unsafe extern "C" fn hegel_run_result_failure_count(
 }
 
 /// Write a caller-owned snapshot of the `index`-th failure (0-based) into
-/// `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
-/// The snapshot is independent of the result and run it came from and must be
-/// released with `hegel_failure_free`; each call writes a fresh snapshot,
-/// each freed separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_failure`.
+/// `*out_failure`. `index` must be less than
+/// `hegel_run_result_failure_count(r)`. The snapshot is independent of the
+/// result and run it came from and must be released with
+/// `hegel_failure_free`; each call writes a fresh snapshot, each freed
+/// separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r`, or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_failure` or an out-of-range `index`
+/// (with a diagnostic in `hegel_context_last_error`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_failure(
     ctx: *mut HegelContext,
@@ -2270,13 +2272,19 @@ pub unsafe extern "C" fn hegel_run_result_failure(
         set_last_error(ctx, "hegel_run_result_failure: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe {
-        *out_failure = r
-            .failures
-            .get(index)
-            .map(|f| into_raw_send_sync(f.clone()))
-            .unwrap_or(ptr::null_mut());
-    }
+    unsafe { *out_failure = ptr::null_mut() };
+    let Some(f) = r.failures.get(index) else {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_run_result_failure: index {index} is out of range \
+                 (the result has {} failures)",
+                r.failures.len()
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    unsafe { *out_failure = into_raw_send_sync(f.clone()) };
     HEGEL_OK
 }
 
