@@ -337,8 +337,11 @@ jobs:
   # native engine and the in-process C-ABI boundary hegeltest drives it through.
   # The expensive quality/compile suites and subprocess-driven tests are
   # excluded (see `just check-miri`); the `test_miri` target drives every main
-  # feature through the FFI primitives at small example counts, which is what
-  # keeps the run tractable under Miri's interpreter.
+  # feature through the FFI primitives at small example counts, and the
+  # `c_abi_miri` test target drives the C-ABI directly (clone / free /
+  # reference-counted release / concurrent use, plus one complete generate-fail-
+  # shrink run) in a dedicated tractable subset, which is what keeps the run
+  # manageable under Miri's interpreter while covering the unsafe boundary.
   miri:
     name: miri
     runs-on: ubuntu-latest
@@ -370,22 +373,30 @@ jobs:
       # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
       # Used by our trusted publishing flow
       id-token: write
-    # Expose the new tag/version to `release-binaries` (cross-platform cdylib
-    # builds). `skipped` lets that job no-op cleanly on non-release pushes;
-    # `version` is the post-bump version it tags / uploads against.
+    # Expose the hegel-c release to `release-binaries` (cross-platform cdylib
+    # builds). `c_released` lets those jobs run only when hegel-c changed — a
+    # hegel-rust-only release ships no new shared libraries. `version` is the
+    # post-bump hegel-c version they tag / upload against.
     outputs:
-      skipped: ${{ steps.check.outputs.skip == 'true' }}
+      c_released: ${{ steps.check.outputs.c_release == 'true' }}
       version: ${{ steps.released-version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - name: Check for RELEASE.md
+      - name: Check for release files
         id: check
         run: |
-          if [ ! -f RELEASE.md ]; then
+          if [ ! -f RELEASE.md ] && [ ! -f hegel-c/RELEASE.md ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          # A hegel-c/RELEASE.md means the libhegel shared libraries are
+          # released: hegeltest-c is republished and a tagged GitHub release
+          # with cross-platform binaries is cut. Captured here, before the
+          # release commit consumes the file.
+          if [ -f hegel-c/RELEASE.md ]; then
+            echo "c_release=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate app token
@@ -410,11 +421,11 @@ jobs:
           HEGEL_RELEASE_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: python .github/scripts/release.py release
 
-      - name: Capture released version
+      - name: Capture released hegel-c version
         id: released-version
-        if: steps.check.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true' && steps.check.outputs.c_release == 'true'
         run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(grep '^version' hegel-c/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
@@ -447,18 +458,20 @@ jobs:
           exit 1
 
       - name: Publish hegeltest-c
-        if: steps.check.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true' && steps.check.outputs.c_release == 'true'
         # The engine crate. hegeltest now depends on it, so it must be
         # published (and indexed) before hegeltest. Its other role is to
         # reserve the name; the useful artefact for non-Rust consumers is the
         # `libhegel-<goos>-<goarch>.<ext>` cdylib uploaded by the
-        # `release-binaries` job, not this source crate.
+        # `release-binaries` job, not this source crate. Only published when
+        # hegel-c actually changed — its version is independent of hegeltest's,
+        # so a hegel-rust-only release leaves it at its already-published version.
         run: cargo publish -p hegeltest-c
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
       - name: Wait for hegeltest-c on crates.io index
-        if: steps.check.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true' && steps.check.outputs.c_release == 'true'
         run: |
           VERSION=$(grep '^version' hegel-c/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "waiting for hegeltest-c $VERSION to appear on crates.io..."
@@ -501,7 +514,7 @@ jobs:
     # showing the literal `${{ matrix.X }}` template, which GitHub does
     # not interpolate when a job-level `if:` evaluates to false before
     # matrix expansion.
-    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.c_released == 'true'
     needs: release
     permissions:
       contents: write
@@ -610,7 +623,7 @@ jobs:
   # expected asset is missing."
   release-binaries-verify:
     name: release-binaries-verify
-    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.c_released == 'true'
     needs: [release, release-binaries]
     runs-on: ubuntu-latest
     # `contents: write` (not just read) so this job can both view the draft
@@ -669,7 +682,7 @@ jobs:
   # dispatch failure for one repo from cancelling the others.
   bump-libhegel:
     name: bump-libhegel
-    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.skipped != 'true'
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.c_released == 'true'
     needs: [release, release-binaries-verify]
     runs-on: ubuntu-latest
     # The cross-repo dispatch uses the app token below, not GITHUB_TOKEN.

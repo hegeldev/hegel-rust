@@ -26,7 +26,7 @@ where
     F: Fn(TestCase) -> T + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        (self.f)(tc.clone())
+        (self.f)(tc.child(0))
     }
 }
 

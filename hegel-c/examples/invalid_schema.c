@@ -78,6 +78,7 @@ int main(void) {
     }
 
     HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INVALID, NULL);
+    HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     HEGEL_CHECK(hegel_run_free, ctx, run);
     HEGEL_CHECK(hegel_settings_free, ctx, s);
     HEGEL_CHECK(hegel_context_free, ctx);

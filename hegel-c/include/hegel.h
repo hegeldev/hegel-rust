@@ -22,27 +22,47 @@
  * (char*), CBOR byte buffers, and arrays of strings alike.
  *
  * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
- * written to an out-parameter otherwise), you own exactly the handles made by
- * the four constructors, and must release each with its matching free:
+ * written to an out-parameter otherwise), you own — and must release with the
+ * matching free — every handle from these:
  *
  *     hegel_context_new          ->  hegel_context_free
  *     hegel_settings_new         ->  hegel_settings_free
  *     hegel_run_start            ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
+ *     hegel_next_test_case       ->  hegel_test_case_free
+ *     hegel_test_case_clone      ->  hegel_test_case_free
+ *     hegel_run_result           ->  hegel_run_result_free
+ *     hegel_run_result_failure   ->  hegel_failure_free
  *
- * Every *other* pointer libhegel hands back is borrowed: libhegel still owns
- * it, you must not free it, and it is valid only until a point that the
- * function documents. Two cases are easy to trip over:
+ * Every test-case handle you receive — whether from hegel_test_case_from_blob,
+ * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
+ * released with hegel_test_case_free exactly once.
  *
- *   - The hegel_test_case_t* from hegel_next_test_case is borrowed from the
- *     run and freed by hegel_run_free. Do NOT pass it to hegel_test_case_free
- *     (that is only for a test case you made with hegel_test_case_from_blob).
- *     Likewise the hegel_run_result_t* and hegel_failure_t* you read from a
- *     run live until hegel_run_free.
- *   - Strings and byte buffers (e.g. from hegel_generate,
- *     hegel_context_last_error, hegel_run_result_error, the hegel_failure_*
- *     getters) are transient — hegel_generate's bytes, for instance, are
- *     invalidated by the next call on that test case. Copy them to keep them.
+ * A test case and all clones descended from it are considered to be part of a
+ * *family* of test cases. All test cases in a family are independent handles
+ * onto one shared underlying test case; the resources associated with the test
+ * case are released once its last handle is freed, so a clone keeps
+ * working after the handle it was cloned from is freed. For a run-owned handle
+ * the run keeps its own internal reference, so freeing your handle is always
+ * memory-safe and never disturbs the run's state (this makes it easy to wrap a
+ * handle in a garbage-collected language and free it from a finaliser). Note
+ * that freeing is not completing, though: a run-owned test case still needs
+ * hegel_mark_complete from some handle in its family before the run can
+ * advance, so conclude every case before dropping your last handle to it —
+ * see hegel_test_case_free.
+ *
+ * The result and failure snapshots those last two return own their data and
+ * are independent of the run: they stay valid after hegel_run_free, so a
+ * wrapper can free each object from its own finaliser in any order.
+ *
+ * Every *other* pointer libhegel hands back is a borrowed string or byte
+ * buffer: libhegel still owns it, you must not free it, and it is valid only
+ * until a point that the function documents. Strings read off a result or
+ * failure snapshot (hegel_run_result_error, the hegel_failure_* getters)
+ * live until that snapshot's free; the rest are transient —
+ * hegel_generate's bytes are invalidated by the next call on that test
+ * case, and hegel_context_last_error by the next call on that context. Copy
+ * them to keep them.
  */
 
 #ifndef HEGEL_H
@@ -113,6 +133,17 @@ typedef enum {
      bug. See `hegel_context_last_error()` for the diagnostic.
      */
     HEGEL_E_INTERNAL = -8,
+    /*
+     A single test-case handle was used from two threads at once. Each
+     handle may be driven by at most one thread at a time; to generate from
+     several threads, `hegel_test_case_clone` the handle and give each
+     thread its own clone. (Clones share the underlying test case but have
+     independent per-handle locks, so they may be driven concurrently.)
+     Returned by the draw primitives; `hegel_mark_complete` instead waits
+     for the in-flight operation, because completion always succeeds under
+     first-caller-wins.
+     */
+    HEGEL_E_CONCURRENT_USE = -9,
 } hegel_result_t;
 
 /*
@@ -381,10 +412,12 @@ typedef enum {
 typedef struct hegel_context_t hegel_context_t;
 
 /*
- One distinct interesting test case surfaced by the run. The strings are
- owned by the parent `hegel_run_result_t`; reading them via
- `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
- pointers that stay valid until `hegel_run_free`.
+ One distinct interesting test case surfaced by the run.
+ `hegel_run_result_failure` writes a caller-owned snapshot that owns its
+ strings: reading them via `hegel_failure_origin` /
+ `_reproduction_blob` returns `const char*` pointers that stay valid until
+ the failure is released with `hegel_failure_free`. The snapshot is
+ independent of the result and run it came from.
 
  A failure carries the origin the engine grouped on and the reproduce blob.
  The caller replays the blob (via `hegel_test_case_from_blob`) to produce
@@ -405,14 +438,15 @@ typedef struct hegel_failure_t hegel_failure_t;
 typedef struct hegel_run_t hegel_run_t;
 
 /*
- Aggregated outcome of a finished run, returned by
- `hegel_run_result`. Read the passed / failed / errored status via
+ Aggregated outcome of a finished run. `hegel_run_result` writes a
+ caller-owned snapshot of it: read the passed / failed / errored status via
  `hegel_run_result_status`, the number of distinct failures via
  `hegel_run_result_failure_count`, each failure via
  `hegel_run_result_failure(r, i)`, and — for an errored run — the
- run-level error message via `hegel_run_result_error`. The pointer is
- borrowed from the `hegel_run_t` and stays valid until `hegel_run_free`
- is called.
+ run-level error message via `hegel_run_result_error`. The snapshot is
+ independent of the run (it stays valid after `hegel_run_free`) and must be
+ released with `hegel_run_result_free`; the strings read off it live until
+ then.
  */
 typedef struct hegel_run_result_t hegel_run_result_t;
 
@@ -427,16 +461,21 @@ typedef struct hegel_run_result_t hegel_run_result_t;
 typedef struct hegel_settings_t hegel_settings_t;
 
 /*
- One in-flight test case handed to the caller by
- `hegel_next_test_case` (borrowed from the run) or constructed
- standalone by `hegel_test_case_from_blob` (owned by the caller). The
- caller drives it with the per-test-case primitives (`hegel_generate`,
- `hegel_start_span` / `hegel_stop_span`, `hegel_target`, the collection
- primitives) and concludes it with `hegel_mark_complete`. A run-owned
- handle becomes invalid once marked complete; calling
- `hegel_next_test_case` again returns the next test case (or NULL when
- the run is finished). A standalone handle must be released with
- `hegel_test_case_free`.
+ One in-flight test-case handle handed to the caller by
+ `hegel_next_test_case`, `hegel_test_case_from_blob`, or
+ `hegel_test_case_clone`. The caller drives it with the per-test-case
+ primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
+ `hegel_target`, the collection primitives) and concludes it with
+ `hegel_mark_complete`.
+
+ A single handle must be driven by at most one thread at a time: If
+ multiple threads attempt to use the handle at the same time, operations
+ may raise `HEGEL_E_CONCURRENT_USE` on contention. To use a test case from
+ several threads, clone the handle with `hegel_test_case_clone` and give
+ each thread its own clone.
+
+ Every handle — however it was produced — must be released with
+ `hegel_test_case_free`
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
 
@@ -619,10 +658,13 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
                                hegel_run_t **out_run);
 
 /*
- Block until the engine produces the next test case, writing a borrowed
- handle pointing into the parent `hegel_run_t` into `*out_test_case`.
+ Block until the engine produces the next test case, writing a handle for it
+ into `*out_test_case`.
 
- When the run is finished this writes NULL into `*out_test_case` and returns
+ The handle is owned by the caller and must be released with
+ `hegel_test_case_free` (the run keeps its own internal reference, so freeing
+ the handle never disturbs the run). When the run is finished this writes
+ NULL into `*out_test_case` and returns
  `HEGEL_OK`; call `hegel_run_result` to read the outcome. A non-`HEGEL_OK`
  code means something went wrong (caller misuse, engine crash) rather than
  normal completion: `HEGEL_E_NOT_COMPLETE` if the previous test case was not
@@ -634,22 +676,34 @@ hegel_result_t hegel_next_test_case(hegel_context_t *ctx,
                                     hegel_test_case_t **out_test_case);
 
 /*
- Write the aggregated result of a finished run, borrowed from the parent
- `hegel_run_t`, into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
+ Write a caller-owned snapshot of the aggregated result of a finished run
+ into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
  `hegel_context_last_error` set if the run hasn't finished yet
  (`hegel_next_test_case` has not yet reported completion on this run),
  `HEGEL_E_INVALID_HANDLE` for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a
  NULL `out_result`.
 
- The pointer written to `*out_result` is valid until `hegel_run_free`.
+ The snapshot is independent of the run: it stays valid after
+ `hegel_run_free` and must be released with `hegel_run_result_free`. Each
+ call writes a fresh snapshot, each freed separately.
  */
 hegel_result_t hegel_run_result(hegel_context_t *ctx,
                                 hegel_run_t *run,
-                                const hegel_run_result_t **out_result);
+                                hegel_run_result_t **out_result);
 
 /*
- Free a run handle and its result. Safe to call with NULL (a no-op that
- returns `HEGEL_OK`).
+ Release a run-result snapshot from `hegel_run_result`, along with the
+ strings read off it. Safe to call with NULL (a no-op that returns
+ `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+ snapshot twice is undefined behaviour.
+ */
+hegel_result_t hegel_run_result_free(hegel_context_t *ctx, hegel_run_result_t *r);
+
+/*
+ Free a run handle. Safe to call with NULL (a no-op that returns
+ `HEGEL_OK`). Result and failure snapshots from `hegel_run_result` /
+ `hegel_run_result_failure` are independent of the run and stay valid;
+ they are released with their own frees.
 
  If the caller exited its test loop early (e.g. with a still-active
  test case), this drains the worker thread cleanly: any in-flight
@@ -678,8 +732,8 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
  for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
  failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
  with a diagnostic in `hegel_context_last_error`. The handle written to
- `*out_test_case` is owned by the **caller** — unlike test cases from
- `hegel_next_test_case`, it must be released with `hegel_test_case_free`.
+ `*out_test_case` is owned by the **caller** and must be released with
+ `hegel_test_case_free`, like every test-case handle.
  */
 hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
                                          const hegel_settings_t *s,
@@ -687,17 +741,56 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
                                          hegel_test_case_t **out_test_case);
 
 /*
- Free a standalone test case previously returned by
- `hegel_test_case_from_blob`. Safe to call with NULL (a no-op that returns
- `HEGEL_OK`), and safe whether or not the test case was marked complete.
+ Release a test-case handle, whatever its origin — a handle from
+ `hegel_test_case_from_blob`, a clone from `hegel_test_case_clone`, or a
+ run-owned handle from `hegel_next_test_case`. Safe to call with NULL (a
+ no-op that returns `HEGEL_OK`), and safe whether or not the test case was
+ marked complete.
 
- Must NOT be called on a test case obtained from
- `hegel_next_test_case` — those are borrowed from the parent
- `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
- detected (while the run is still alive) and refused with
- `HEGEL_E_INVALID_HANDLE` and a diagnostic in `hegel_context_last_error`.
+ Each handle holds one reference to the shared test case. Freeing it drops
+ that reference; the underlying data source is released once the last
+ reference is gone (every handle freed, and — for a run-owned family — the
+ run has released its own reference). Each handle must be freed exactly once;
+ freeing the same handle twice is undefined behaviour.
+
+ Freeing is not completing: a run-owned test case still needs
+ `hegel_mark_complete` from some handle in its family before the run can
+ advance. Freeing the last handle of an uncompleted run-owned family leaves
+ `hegel_next_test_case` returning `HEGEL_E_NOT_COMPLETE` with no way to
+ complete the case, and the run can then only be torn down with
+ `hegel_run_free` — so conclude every case before dropping your last handle
+ to it.
  */
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
+
+/*
+ Clone a test-case handle, writing a new handle that shares the same
+ underlying test case into `*out_test_case`.
+
+ The clone is a *view onto the same test case*, not an independent one: it
+ draws from the same data source, and `hegel_mark_complete` on any handle in
+ the family marks them all complete. Clones exist so a test case can be
+ driven from several threads — each handle has its own lock, so two clones
+ may draw concurrently, whereas using a *single* handle from two threads
+ returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
+ currently non-deterministic; making them robust is future work.)
+
+ Cloning is allowed on a clone (the result shares the same family) and
+ after the family has completed (the clone simply reports
+ `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
+ lock, so a handle may be cloned while another thread is mid-draw on it.
+
+ The new handle holds its own reference to the shared test case and must be
+ released with `hegel_test_case_free`, like any other handle. The underlying
+ test case stays alive until every handle (this clone, the handle it was
+ cloned from, and any others) has been freed.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, or `HEGEL_E_INVALID_ARG`
+ for a NULL `out_test_case`.
+ */
+hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
+                                     const hegel_test_case_t *tc,
+                                     hegel_test_case_t **out_test_case);
 
 /*
  Draw a value from the test case's data source, using the
@@ -937,6 +1030,19 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
  origin from the *location* of the failing assertion, not the
  assertion's message. hegel-rust's own panic-to-failure path does
  exactly this (see `src/run_lifecycle.rs`).
+
+ Completing a test case is **first-caller-wins and family-wide**: the first
+ `hegel_mark_complete` anywhere in the family (any clone or the root) records
+ the outcome and unblocks the run. A later call on a *different* handle in the
+ family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
+ complete the same test case do not error — whichever wins sets the result.
+ Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
+ returns `HEGEL_E_ALREADY_COMPLETE`. Because completion always succeeds under
+ first-caller-wins, `hegel_mark_complete` never returns
+ `HEGEL_E_CONCURRENT_USE`: if another thread is mid-operation on this handle
+ it waits for that operation to finish and then completes. A NULL `tc`
+ returns `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns
+ `HEGEL_E_INVALID_ARG`.
  */
 hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
@@ -961,9 +1067,9 @@ hegel_result_t hegel_run_result_status(hegel_context_t *ctx,
  — or NULL when it completed normally. An errored run has
  `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
  error is a failure of the run itself, not a counterexample to the property.
- The written pointer is valid until `hegel_run_free`. Returns
- `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG` for a NULL
- `out_error`.
+ The written pointer is owned by the result snapshot and valid until
+ `hegel_run_result_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
+ `HEGEL_E_INVALID_ARG` for a NULL `out_error`.
  */
 hegel_result_t hegel_run_result_error(hegel_context_t *ctx,
                                       const hegel_run_result_t *r,
@@ -980,16 +1086,25 @@ hegel_result_t hegel_run_result_failure_count(hegel_context_t *ctx,
                                               size_t *out_count);
 
 /*
- Write a borrowed pointer to the `index`-th failure (0-based) into
+ Write a caller-owned snapshot of the `index`-th failure (0-based) into
  `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
- The pointer is valid until `hegel_run_free` is called on the parent run.
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
- for a NULL `out_failure`.
+ The snapshot is independent of the result and run it came from and must be
+ released with `hegel_failure_free`; each call writes a fresh snapshot,
+ each freed separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
+ `HEGEL_E_INVALID_ARG` for a NULL `out_failure`.
  */
 hegel_result_t hegel_run_result_failure(hegel_context_t *ctx,
                                         const hegel_run_result_t *r,
                                         size_t index,
-                                        const hegel_failure_t **out_failure);
+                                        hegel_failure_t **out_failure);
+
+/*
+ Release a failure snapshot from `hegel_run_result_failure`, along with the
+ strings read off it. Safe to call with NULL (a no-op that returns
+ `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+ snapshot twice is undefined behaviour.
+ */
+hegel_result_t hegel_failure_free(hegel_context_t *ctx, hegel_failure_t *f);
 
 /*
  Write the failure's origin string — the stable identifier the shrinker used
@@ -1005,8 +1120,8 @@ hegel_result_t hegel_failure_origin(hegel_context_t *ctx,
  Write the failure's reproduce blob — a base64 string encoding the minimal
  counterexample's choice sequence, suitable for deterministic replay via
  `hegel_test_case_from_blob` — into `*out_blob`, or NULL if the engine
- produced no blob for this failure. The written pointer is borrowed from the
- parent `hegel_run_result_t` and stays valid until `hegel_run_free`. Returns
+ produced no blob for this failure. The written pointer is owned by the
+ failure snapshot and stays valid until `hegel_failure_free`. Returns
  `HEGEL_E_INVALID_HANDLE` for a NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL
  `out_blob`.
  */

@@ -36,7 +36,7 @@ check-format-nix:
     nix run nixpkgs#nixfmt -- --check nix/flake.nix
 
 check-clippy:
-    cargo clippy --all-features --all-targets -- -D warnings
+    cargo clippy --workspace --all-features --all-targets -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs
@@ -133,6 +133,17 @@ c-header:
 # tractable under Miri's interpreter (small example counts, no 100-example
 # property loops or budget-exhaustion draws).
 #
+# The hegeltest-c `c_abi_miri` test target is run too: it drives the C-ABI
+# directly — the reference-counted clone/free handle lifecycle (clone,
+# free-in-any-order, two clones used concurrently from two threads) plus one
+# complete run that generates, fails, and shrinks — which is the pointer/
+# aliasing and run-loop logic Miri checks for use-after-free, double-free,
+# leaks, and races. It is a dedicated tractable subset; the exhaustive
+# `c_abi_inprocess` suite is too slow to interpret in full (chiefly its
+# million-draw overrun test) and runs only under normal `cargo test`, and the
+# dlopen `smoke` test cannot run under Miri at all (valgrind covers that
+# boundary instead).
+#
 # Requires the nightly toolchain with the miri component:
 # `rustup +nightly component add miri`.
 #
@@ -140,6 +151,7 @@ c-header:
 # isolation is disabled because the engine seeds its PRNG from OS entropy.
 check-miri:
     CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test test_miri
+    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p hegeltest-c --test c_abi_miri
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer
 # forms.

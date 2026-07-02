@@ -18,7 +18,7 @@ fn emitting_test_case() -> (RunHandle, TestCase) {
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    let tc = TestCase::new(c_tc, true, Mode::TestRun);
+    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun);
     (run, tc)
 }
 
@@ -28,6 +28,20 @@ fn debug_is_non_exhaustive() {
     assert_eq!(format!("{:?}", tc), "TestCase { .. }");
 }
 
+/// Cloning a `TestCase` hands back an independent handle onto the same test
+/// case (`hegel_test_case_clone`), so a clone can be moved to another thread
+/// and drawn from there while the original keeps drawing. The spawn/join gives
+/// the happens-before that keeps this draw-at-a-time pattern well-defined.
+#[test]
+fn a_clone_can_draw_from_another_thread() {
+    let (_run, tc) = emitting_test_case();
+    let worker = tc.clone();
+    std::thread::spawn(move || worker.draw(crate::generators::integers::<i64>()))
+        .join()
+        .unwrap();
+    tc.draw(crate::generators::booleans());
+}
+
 #[test]
 fn repeatable_display_name_skips_a_taken_name() {
     let (_run, tc) = emitting_test_case();
@@ -35,14 +49,8 @@ fn repeatable_display_name_skips_a_taken_name() {
     tc.record_named_draw(&false, "x", true);
     tc.record_named_draw(&false, "x", true);
 
-    let mut names: Vec<String> = tc.with_shared(|shared| {
-        shared
-            .draw_state
-            .allocated_display_names
-            .iter()
-            .cloned()
-            .collect()
-    });
+    let mut names: Vec<String> = tc
+        .with_draw_state(|draw_state| draw_state.allocated_display_names.iter().cloned().collect());
     names.sort();
     assert_eq!(names, vec!["x_1", "x_2", "x_3"]);
 }
