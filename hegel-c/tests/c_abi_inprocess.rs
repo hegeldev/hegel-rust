@@ -12,18 +12,18 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelSettings, HegelTestCase,
     hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_failure_origin,
+    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
     hegel_failure_reproduction_blob, hegel_generate, hegel_label_t, hegel_mark_complete,
     hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
     hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_primitive_boolean,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
-    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
-    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
-    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
-    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_version,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
+    hegel_settings_set_mode, hegel_settings_set_phases,
+    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
+    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -66,8 +66,8 @@ unsafe fn next_case(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelTes
     tc
 }
 
-unsafe fn result(ctx: *mut HegelContext, run: *mut HegelRun) -> *const HegelRunResult {
-    let mut r: *const HegelRunResult = ptr::null();
+unsafe fn result(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelRunResult {
+    let mut r: *mut HegelRunResult = ptr::null_mut();
     assert_eq!(unsafe { hegel_run_result(ctx, run, &mut r) }, HEGEL_OK);
     assert!(!r.is_null());
     r
@@ -97,8 +97,8 @@ unsafe fn failure_at(
     ctx: *mut HegelContext,
     r: *const HegelRunResult,
     index: usize,
-) -> *const HegelFailure {
-    let mut f: *const HegelFailure = ptr::null();
+) -> *mut HegelFailure {
+    let mut f: *mut HegelFailure = ptr::null_mut();
     assert_eq!(
         unsafe { hegel_run_result_failure(ctx, r, index, &mut f) },
         HEGEL_OK
@@ -192,7 +192,7 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_next_test_case(ctx, ptr::null_mut(), &mut tc),
             HEGEL_E_INVALID_HANDLE
         );
-        let mut res: *const HegelRunResult = ptr::null();
+        let mut res: *mut HegelRunResult = ptr::null_mut();
         assert_eq!(
             hegel_run_result(ctx, ptr::null_mut(), &mut res),
             HEGEL_E_INVALID_HANDLE
@@ -217,7 +217,7 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_run_result_failure_count(ctx, ptr::null(), &mut n),
             HEGEL_E_INVALID_HANDLE
         );
-        let mut f: *const HegelFailure = ptr::null();
+        let mut f: *mut HegelFailure = ptr::null_mut();
         assert_eq!(
             hegel_run_result_failure(ctx, ptr::null(), 0, &mut f),
             HEGEL_E_INVALID_HANDLE
@@ -234,6 +234,8 @@ fn null_handles_are_rejected_without_crashing() {
         assert_eq!(hegel_settings_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_run_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(hegel_test_case_free(ctx, ptr::null_mut()), HEGEL_OK);
+        assert_eq!(hegel_run_result_free(ctx, ptr::null_mut()), HEGEL_OK);
+        assert_eq!(hegel_failure_free(ctx, ptr::null_mut()), HEGEL_OK);
 
         assert_eq!(
             hegel_test_case_clone(ctx, ptr::null(), ptr::null_mut()),
@@ -368,6 +370,7 @@ fn out_parameters_are_rejected_when_null() {
             hegel_run_result_failure(ctx, res, 0, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        ok(hegel_run_result_free(ctx, res));
 
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
@@ -452,7 +455,7 @@ fn explicit_backend_run_and_lifecycle_misuse() {
 
         let run = start(ctx, s);
 
-        let mut res: *const HegelRunResult = ptr::null();
+        let mut res: *mut HegelRunResult = ptr::null_mut();
         assert_eq!(hegel_run_result(ctx, run, &mut res), HEGEL_E_NOT_COMPLETE);
         assert!(res.is_null());
 
@@ -507,7 +510,7 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             ok(hegel_test_case_free(ctx, tc));
         }
 
-        let _ = result(ctx, run);
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
@@ -790,7 +793,7 @@ fn live_test_case_argument_validation() {
             ok(hegel_test_case_free(ctx, tc));
         }
 
-        let _ = result(ctx, run);
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
@@ -865,6 +868,8 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             .into_owned();
         assert!(origin.contains("Panic at <unknown>"), "got {origin:?}");
         let _ = repro_blob_of(ctx, f);
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
 
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
@@ -922,6 +927,8 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             "got {origin_back:?}"
         );
         assert!(repro_blob_of(ctx, f).is_null());
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
 
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
@@ -1180,9 +1187,65 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
         let blob_ptr = repro_blob_of(ctx, f);
         assert!(!blob_ptr.is_null(), "a shrunk failure carries a blob");
         let blob = std::ffi::CStr::from_ptr(blob_ptr).to_owned();
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         blob
+    }
+}
+
+/// Result and failure snapshots are independent of the run: here they are
+/// read, the run (and settings) are freed, and only then are the status,
+/// count, origin, and blob inspected — the snapshots and the strings read off
+/// them stay valid until their own frees. This is what lets a GC binding free
+/// each wrapper from its finaliser in any order.
+#[test]
+fn result_and_failure_snapshots_outlive_the_run() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        let run = start(ctx, s);
+        let schema = integer_schema();
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut p: *const u8 = ptr::null();
+            let mut n = 0usize;
+            let status = if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
+                == HEGEL_OK
+            {
+                hegel_status_t::HEGEL_STATUS_INTERESTING
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN
+            };
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+
+        let res = result(ctx, run);
+        let f = failure_at(ctx, res, 0);
+        assert!(!f.is_null());
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        assert!(failure_count_of(ctx, res) >= 1);
+        let origin = std::ffi::CStr::from_ptr(origin_of(ctx, f))
+            .to_string_lossy()
+            .into_owned();
+        assert!(!origin.is_empty());
+        assert!(!repro_blob_of(ctx, f).is_null());
+
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_context_free(ctx));
     }
 }
 
@@ -1274,7 +1337,7 @@ fn clones_share_a_run_owned_family() {
             ));
             ok(hegel_test_case_free(ctx, tc));
         }
-        let _ = result(ctx, run);
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
@@ -1416,7 +1479,7 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
             ));
             ok(hegel_test_case_free(ctx, tc));
         }
-        let _ = result(ctx, run);
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));

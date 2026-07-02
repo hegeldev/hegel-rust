@@ -101,11 +101,12 @@ int main(void) {
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
     bool passed = status == HEGEL_RUN_STATUS_PASSED;
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     /* Every rule should have been selected at least once across the run —
      * swarm testing restricts the mix per test case, not globally. */

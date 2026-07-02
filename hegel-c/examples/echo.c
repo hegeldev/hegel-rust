@@ -117,7 +117,7 @@ int main(void) {
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
@@ -128,17 +128,20 @@ int main(void) {
     HEGEL_CHECK(hegel_run_result_failure_count, ctx, result, &nf);
     printf("ran %zu valid test cases, %s, %zu failures\n", cases, status_str, nf);
     for (size_t i = 0; i < nf; i++) {
-        const hegel_failure_t *f;
+        hegel_failure_t *f;
         HEGEL_CHECK(hegel_run_result_failure, ctx, result, i, &f);
         const char *origin;
         HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
         printf("  failure %zu: origin=%s\n", i, origin);
+        HEGEL_CHECK(hegel_failure_free, ctx, f);
     }
     if (status == HEGEL_RUN_STATUS_ERROR) {
         const char *run_err;
         HEGEL_CHECK(hegel_run_result_error, ctx, result, &run_err);
         fprintf(stderr, "run error: %s\n", run_err);
     }
+    /* The result is a caller-owned snapshot, freed independently of the run. */
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     HEGEL_CHECK(hegel_run_free, ctx, run);
     HEGEL_CHECK(hegel_settings_free, ctx, s);

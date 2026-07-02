@@ -110,7 +110,9 @@ type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, *mut u8, bool) -> c_i
 type FnSettingsBackend = unsafe extern "C" fn(*mut u8, *mut u8, CBackend) -> c_int;
 type FnRunStart = unsafe extern "C" fn(*mut u8, *const u8, *mut *mut u8) -> c_int;
 type FnNextTestCase = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
-type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8, *mut *const u8) -> c_int;
+type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
+type FnRunResultFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
+type FnFailureFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnRunFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnGenerate =
     unsafe extern "C" fn(*mut u8, *mut u8, *const u8, usize, *mut *const u8, *mut usize) -> c_int;
@@ -135,7 +137,7 @@ type FnCollectionMore = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut bool) -
 type FnRunResultStatus = unsafe extern "C" fn(*mut u8, *const u8, *mut CRunStatus) -> c_int;
 type FnRunResultError = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
 type FnRunResultFailureCount = unsafe extern "C" fn(*mut u8, *const u8, *mut usize) -> c_int;
-type FnRunResultFailure = unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *const u8) -> c_int;
+type FnRunResultFailure = unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *mut u8) -> c_int;
 type FnFailureOrigin = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
 type FnFailureReproduceBlob = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
 type FnTestCaseFromBlob =
@@ -172,8 +174,10 @@ struct Api<'a> {
     run_result_error: Symbol<'a, FnRunResultError>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
+    run_result_free: Symbol<'a, FnRunResultFree>,
     failure_origin: Symbol<'a, FnFailureOrigin>,
     failure_reproduce_blob: Symbol<'a, FnFailureReproduceBlob>,
+    failure_free: Symbol<'a, FnFailureFree>,
     test_case_from_blob: Symbol<'a, FnTestCaseFromBlob>,
     test_case_free: Symbol<'a, FnTestCaseFree>,
 }
@@ -210,8 +214,10 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
+            run_result_free: lib.get(b"hegel_run_result_free\0").unwrap(),
             failure_origin: lib.get(b"hegel_failure_origin\0").unwrap(),
             failure_reproduce_blob: lib.get(b"hegel_failure_reproduction_blob\0").unwrap(),
+            failure_free: lib.get(b"hegel_failure_free\0").unwrap(),
             test_case_from_blob: lib.get(b"hegel_test_case_from_blob\0").unwrap(),
             test_case_free: lib.get(b"hegel_test_case_free\0").unwrap(),
         }
@@ -271,11 +277,19 @@ impl Api<'_> {
         unsafe { self.expect_ok(ctx, rc, "hegel_next_test_case") };
         tc
     }
-    unsafe fn run_result(&self, ctx: *mut u8, run: *mut u8) -> *const u8 {
-        let mut r: *const u8 = ptr::null();
+    unsafe fn run_result(&self, ctx: *mut u8, run: *mut u8) -> *mut u8 {
+        let mut r: *mut u8 = ptr::null_mut();
         let rc = unsafe { (self.run_result)(ctx, run, &mut r) };
         unsafe { self.expect_ok(ctx, rc, "hegel_run_result") };
         r
+    }
+    unsafe fn run_result_free(&self, ctx: *mut u8, r: *mut u8) {
+        let rc = unsafe { (self.run_result_free)(ctx, r) };
+        unsafe { self.expect_ok(ctx, rc, "hegel_run_result_free") };
+    }
+    unsafe fn failure_free(&self, ctx: *mut u8, f: *mut u8) {
+        let rc = unsafe { (self.failure_free)(ctx, f) };
+        unsafe { self.expect_ok(ctx, rc, "hegel_failure_free") };
     }
     unsafe fn run_free(&self, ctx: *mut u8, run: *mut u8) {
         let rc = unsafe { (self.run_free)(ctx, run) };
@@ -327,8 +341,8 @@ impl Api<'_> {
         unsafe { self.expect_ok(ctx, rc, "hegel_run_result_failure_count") };
         n
     }
-    unsafe fn run_result_failure(&self, ctx: *mut u8, r: *const u8, index: usize) -> *const u8 {
-        let mut f: *const u8 = ptr::null();
+    unsafe fn run_result_failure(&self, ctx: *mut u8, r: *const u8, index: usize) -> *mut u8 {
+        let mut f: *mut u8 = ptr::null_mut();
         let rc = unsafe { (self.run_result_failure)(ctx, r, index, &mut f) };
         unsafe { self.expect_ok(ctx, rc, "hegel_run_result_failure") };
         f
@@ -460,6 +474,7 @@ fn libhegel_runs_passing_property() {
             a.run_result_error(ctx, result).is_null(),
             "a normal run carries no run-level error"
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -526,6 +541,7 @@ fn libhegel_runs_with_urandom_backend() {
         assert!(!result.is_null());
         assert_eq!(a.run_result_status(ctx, result), CRunStatus::Passed);
         assert_eq!(a.run_result_failure_count(ctx, result), 0);
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -719,6 +735,8 @@ fn libhegel_reports_shrunk_failure() {
             "expected failure origin to contain 'n >= 5 failed', got: {}",
             origin_back
         );
+        a.failure_free(ctx, f);
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -794,6 +812,8 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
             "expected a reproduce blob on the failure"
         );
         let blob = CStr::from_ptr(blob_ptr).to_owned();
+        a.failure_free(ctx, f);
+        a.run_result_free(ctx, result);
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
         blob
@@ -1013,6 +1033,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
             CRunStatus::Passed,
             "expected passing run"
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -1126,6 +1147,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             CRunStatus::Passed,
             "expected to pass"
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -1200,6 +1222,7 @@ fn libhegel_primitive_boolean_draws_and_forces() {
             CRunStatus::Passed,
             "expected a passed run"
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -1280,6 +1303,7 @@ fn libhegel_primitive_boolean_rejects_invalid_arguments() {
             CRunStatus::Passed,
             "expected a passed run"
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);
@@ -1558,6 +1582,7 @@ fn health_check_surfaces_as_run_error() {
             "expected the run error to reference FilterTooMuch, got: {}",
             msg
         );
+        a.run_result_free(ctx, result);
 
         a.run_free(ctx, run);
         a.settings_free(ctx, s);

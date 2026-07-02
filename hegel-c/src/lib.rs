@@ -560,28 +560,33 @@ pub struct HegelRun {
     drained: bool,
 }
 
-/// Aggregated outcome of a finished run, returned by
-/// `hegel_run_result`. Read the passed / failed / errored status via
+/// Aggregated outcome of a finished run. `hegel_run_result` writes a
+/// caller-owned snapshot of it: read the passed / failed / errored status via
 /// `hegel_run_result_status`, the number of distinct failures via
 /// `hegel_run_result_failure_count`, each failure via
 /// `hegel_run_result_failure(r, i)`, and — for an errored run — the
-/// run-level error message via `hegel_run_result_error`. The pointer is
-/// borrowed from the `hegel_run_t` and stays valid until `hegel_run_free`
-/// is called.
+/// run-level error message via `hegel_run_result_error`. The snapshot is
+/// independent of the run (it stays valid after `hegel_run_free`) and must be
+/// released with `hegel_run_result_free`; the strings read off it live until
+/// then.
+#[derive(Clone)]
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
 }
 
-/// One distinct interesting test case surfaced by the run. The strings are
-/// owned by the parent `hegel_run_result_t`; reading them via
-/// `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
-/// pointers that stay valid until `hegel_run_free`.
+/// One distinct interesting test case surfaced by the run.
+/// `hegel_run_result_failure` writes a caller-owned snapshot that owns its
+/// strings: reading them via `hegel_failure_origin` /
+/// `_reproduction_blob` returns `const char*` pointers that stay valid until
+/// the failure is released with `hegel_failure_free`. The snapshot is
+/// independent of the result and run it came from.
 ///
 /// A failure carries the origin the engine grouped on and the reproduce blob.
 /// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
 /// the diagnostic and re-raise the test's own failure.
+#[derive(Clone)]
 pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
@@ -1189,33 +1194,35 @@ pub unsafe extern "C" fn hegel_next_test_case(
     }
 }
 
-/// Write the aggregated result of a finished run, borrowed from the parent
-/// `hegel_run_t`, into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
+/// Write a caller-owned snapshot of the aggregated result of a finished run
+/// into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
 /// `hegel_context_last_error` set if the run hasn't finished yet
 /// (`hegel_next_test_case` has not yet reported completion on this run),
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a
 /// NULL `out_result`.
 ///
-/// The pointer written to `*out_result` is valid until `hegel_run_free`.
+/// The snapshot is independent of the run: it stays valid after
+/// `hegel_run_free` and must be released with `hegel_run_result_free`. Each
+/// call writes a fresh snapshot, each freed separately.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result(
     ctx: *mut HegelContext,
     run: *mut HegelRun,
-    out_result: *mut *const HegelRunResult,
+    out_result: *mut *mut HegelRunResult,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     if out_result.is_null() {
         set_last_error(ctx, "hegel_run_result: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_result = ptr::null() };
+    unsafe { *out_result = ptr::null_mut() };
     let Some(run) = (unsafe { run.as_ref() }) else {
         set_last_error(ctx, "hegel_run_result: run pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
     match &run.result {
         Some(r) => {
-            unsafe { *out_result = r as *const HegelRunResult };
+            unsafe { *out_result = into_raw_send_sync(r.clone()) };
             HEGEL_OK
         }
         None => {
@@ -1225,8 +1232,29 @@ pub unsafe extern "C" fn hegel_run_result(
     }
 }
 
-/// Free a run handle and its result. Safe to call with NULL (a no-op that
-/// returns `HEGEL_OK`).
+/// Release a run-result snapshot from `hegel_run_result`, along with the
+/// strings read off it. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+/// snapshot twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_free(
+    ctx: *mut HegelContext,
+    r: *mut HegelRunResult,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if r.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `r` is a non-null snapshot from `hegel_run_result` that the
+    // caller is freeing exactly once.
+    drop(unsafe { Box::from_raw(r) });
+    HEGEL_OK
+}
+
+/// Free a run handle. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Result and failure snapshots from `hegel_run_result` /
+/// `hegel_run_result_failure` are independent of the run and stay valid;
+/// they are released with their own frees.
 ///
 /// If the caller exited its test loop early (e.g. with a still-active
 /// test case), this drains the worker thread cleanly: any in-flight
@@ -2182,9 +2210,9 @@ pub unsafe extern "C" fn hegel_run_result_status(
 /// — or NULL when it completed normally. An errored run has
 /// `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
 /// error is a failure of the run itself, not a counterexample to the property.
-/// The written pointer is valid until `hegel_run_free`. Returns
-/// `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG` for a NULL
-/// `out_error`.
+/// The written pointer is owned by the result snapshot and valid until
+/// `hegel_run_result_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_error`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_error(
     ctx: *mut HegelContext,
@@ -2227,17 +2255,18 @@ pub unsafe extern "C" fn hegel_run_result_failure_count(
     HEGEL_OK
 }
 
-/// Write a borrowed pointer to the `index`-th failure (0-based) into
+/// Write a caller-owned snapshot of the `index`-th failure (0-based) into
 /// `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
-/// The pointer is valid until `hegel_run_free` is called on the parent run.
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
-/// for a NULL `out_failure`.
+/// The snapshot is independent of the result and run it came from and must be
+/// released with `hegel_failure_free`; each call writes a fresh snapshot,
+/// each freed separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_failure`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_failure(
     ctx: *mut HegelContext,
     r: *const HegelRunResult,
     index: usize,
-    out_failure: *mut *const HegelFailure,
+    out_failure: *mut *mut HegelFailure,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let r = match unsafe { result_ref(ctx, r, "hegel_run_result_failure") } {
@@ -2252,9 +2281,28 @@ pub unsafe extern "C" fn hegel_run_result_failure(
         *out_failure = r
             .failures
             .get(index)
-            .map(|f| f as *const HegelFailure)
-            .unwrap_or(ptr::null());
+            .map(|f| into_raw_send_sync(f.clone()))
+            .unwrap_or(ptr::null_mut());
     }
+    HEGEL_OK
+}
+
+/// Release a failure snapshot from `hegel_run_result_failure`, along with the
+/// strings read off it. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+/// snapshot twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_free(
+    ctx: *mut HegelContext,
+    f: *mut HegelFailure,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if f.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `f` is a non-null snapshot from `hegel_run_result_failure` that
+    // the caller is freeing exactly once.
+    drop(unsafe { Box::from_raw(f) });
     HEGEL_OK
 }
 
@@ -2284,8 +2332,8 @@ pub unsafe extern "C" fn hegel_failure_origin(
 /// Write the failure's reproduce blob — a base64 string encoding the minimal
 /// counterexample's choice sequence, suitable for deterministic replay via
 /// `hegel_test_case_from_blob` — into `*out_blob`, or NULL if the engine
-/// produced no blob for this failure. The written pointer is borrowed from the
-/// parent `hegel_run_result_t` and stays valid until `hegel_run_free`. Returns
+/// produced no blob for this failure. The written pointer is owned by the
+/// failure snapshot and stays valid until `hegel_failure_free`. Returns
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL
 /// `out_blob`.
 #[unsafe(no_mangle)]

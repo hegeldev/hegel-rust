@@ -235,18 +235,15 @@ impl RunHandle {
         }
     }
 
-    /// Read the aggregate result. Borrowed from the run; valid until the run
-    /// is dropped.
-    pub(crate) fn result(&self) -> RunResult<'_> {
-        let mut raw: *const hegel_c::HegelRunResult = ptr::null();
-        // SAFETY: called after the pull loop drained; libhegel writes a borrowed
+    /// Read the aggregate result as an owned snapshot, independent of the
+    /// run's lifetime; freed on drop.
+    pub(crate) fn result(&self) -> RunResult {
+        let mut raw: *mut hegel_c::HegelRunResult = ptr::null_mut();
+        // SAFETY: called after the pull loop drained; &mut raw is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result(ctx, self.raw, &mut raw)
         }));
-        RunResult {
-            raw,
-            _run: std::marker::PhantomData,
-        }
+        RunResult { raw }
     }
 }
 
@@ -479,17 +476,17 @@ impl Drop for CTestCase {
     }
 }
 
-/// Borrowed view of a finished run's aggregate result. Tied to its
-/// [`RunHandle`] by the lifetime parameter so it cannot outlive the run.
-pub(crate) struct RunResult<'run> {
-    raw: *const hegel_c::HegelRunResult,
-    _run: std::marker::PhantomData<&'run RunHandle>,
+/// Owned snapshot of a finished run's aggregate result, independent of the
+/// [`RunHandle`] it was read from; released via `hegel_run_result_free` on
+/// drop.
+pub(crate) struct RunResult {
+    raw: *mut hegel_c::HegelRunResult,
 }
 
-impl RunResult<'_> {
+impl RunResult {
     pub(crate) fn status(&self) -> hegel_c::hegel_run_status_t {
         let mut status = hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR;
-        // SAFETY: self.raw is borrowed from the run; &mut status is valid.
+        // SAFETY: self.raw is this snapshot's live pointer; &mut status is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_status(ctx, self.raw, &mut status)
         }));
@@ -500,7 +497,7 @@ impl RunResult<'_> {
     /// panic), or `None` for a normal run.
     pub(crate) fn error(&self) -> Option<String> {
         let mut p: *const c_char = ptr::null();
-        // SAFETY: self.raw is borrowed from the run; &mut p is valid.
+        // SAFETY: self.raw is this snapshot's live pointer; &mut p is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_error(ctx, self.raw, &mut p)
         }));
@@ -509,17 +506,18 @@ impl RunResult<'_> {
 
     pub(crate) fn failure_count(&self) -> usize {
         let mut count = 0;
-        // SAFETY: self.raw is borrowed from the run; &mut count is valid.
+        // SAFETY: self.raw is this snapshot's live pointer; &mut count is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure_count(ctx, self.raw, &mut count)
         }));
         count
     }
 
-    /// The `index`-th distinct failure, or `None` if out of range.
+    /// The `index`-th distinct failure, or `None` if out of range. The blob is
+    /// copied out and the libhegel failure snapshot released before returning.
     pub(crate) fn failure(&self, index: usize) -> Option<Failure> {
-        let mut f: *const hegel_c::HegelFailure = ptr::null();
-        // SAFETY: self.raw is borrowed from the run; &mut f is valid.
+        let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
+        // SAFETY: self.raw is this snapshot's live pointer; &mut f is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
         }));
@@ -527,13 +525,24 @@ impl RunResult<'_> {
             return None;
         }
         let mut blob: *const c_char = ptr::null();
-        // SAFETY: f is borrowed from the run result; &mut blob is valid.
+        // SAFETY: f is the failure snapshot allocated above; it is freed
+        // exactly once, after the blob has been copied out by cstr_opt.
+        let reproduce_blob = with_context(|ctx| unsafe {
+            require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
+            let reproduce_blob = cstr_opt(blob);
+            require_ok(hegel_c::hegel_failure_free(ctx, f));
+            reproduce_blob
+        });
+        Some(Failure { reproduce_blob })
+    }
+}
+
+impl Drop for RunResult {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from hegel_run_result and is freed exactly once.
         require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob)
+            hegel_c::hegel_run_result_free(ctx, self.raw)
         }));
-        Some(Failure {
-            reproduce_blob: cstr_opt(blob),
-        })
     }
 }
 

@@ -14,10 +14,11 @@
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_failure_reproduction_blob, hegel_generate, hegel_mark_complete,
-    hegel_next_test_case, hegel_run_free, hegel_run_result, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
+    hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob, hegel_generate,
+    hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_result,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
+    hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
     hegel_settings_set_test_cases, hegel_start_span, hegel_status_t, hegel_stop_span,
     hegel_test_case_clone, hegel_test_case_free,
 };
@@ -229,12 +230,13 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
 
 /// Drive one complete run that always fails and therefore shrinks, through the
 /// raw C ABI: each case draws an integer and is marked INTERESTING, so the
-/// engine reports a failure and runs its full shrink. Reading the result back —
-/// status, failure count, the failure, and its reproduction blob — exercises
-/// the run loop, the engine's shrinker, and the result/failure readers under
-/// Miri (the handle-lifecycle tests above never generate or shrink). A small
-/// example count and the minimal `[0, 100]` integer keep the shrink tractable
-/// for Miri's interpreter, as the engine/shrinking tests in `test_miri` do.
+/// engine reports a failure and runs its full shrink. The result and failure
+/// snapshots are read back — status, failure count, origin, reproduction blob
+/// — *after* the run and settings have been freed, so Miri checks both the
+/// run loop / shrinker and the snapshots' independence from the run (the
+/// handle-lifecycle tests above never generate or shrink). A small example
+/// count and the minimal `[0, 100]` integer keep the shrink tractable for
+/// Miri's interpreter, as the engine/shrinking tests in `test_miri` do.
 #[test]
 fn full_run_generates_fails_and_shrinks() {
     unsafe {
@@ -270,8 +272,14 @@ fn full_run_generates_fails_and_shrinks() {
             ok(hegel_test_case_free(ctx, tc));
         }
 
-        let mut res: *const HegelRunResult = ptr::null();
+        let mut res: *mut HegelRunResult = ptr::null_mut();
         ok(hegel_run_result(ctx, run, &mut res));
+        let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
+        ok(hegel_run_result_failure(ctx, res, 0, &mut f));
+        assert!(!f.is_null());
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+
         let mut run_status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         ok(hegel_run_result_status(ctx, res, &mut run_status));
         assert!(run_status == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
@@ -281,18 +289,14 @@ fn full_run_generates_fails_and_shrinks() {
             count >= 1,
             "an always-interesting property records a failure"
         );
-        let mut f: *const hegel_c::HegelFailure = ptr::null();
-        ok(hegel_run_result_failure(ctx, res, 0, &mut f));
-        assert!(!f.is_null());
         let mut blob: *const std::os::raw::c_char = ptr::null();
         ok(hegel_failure_reproduction_blob(ctx, f, &mut blob));
         assert!(
             !blob.is_null(),
             "a shrunk failure carries a reproduction blob"
         );
-
-        ok(hegel_run_free(ctx, run));
-        ok(hegel_settings_free(ctx, s));
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
         ok(hegel_context_free(ctx));
     }
 }

@@ -97,7 +97,7 @@ int main(void) {
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
@@ -113,7 +113,7 @@ int main(void) {
         return 1;
     }
 
-    const hegel_failure_t *f;
+    hegel_failure_t *f;
     HEGEL_CHECK(hegel_run_result_failure, ctx, result, 0, &f);
     const char *origin;
     HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
@@ -123,6 +123,10 @@ int main(void) {
     }
 
     printf("got expected failure: origin=%s\n", origin);
+
+    /* Result and failure are caller-owned snapshots, freed independently. */
+    HEGEL_CHECK(hegel_failure_free, ctx, f);
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     HEGEL_CHECK(hegel_run_free, ctx, run);
     HEGEL_CHECK(hegel_settings_free, ctx, s);
