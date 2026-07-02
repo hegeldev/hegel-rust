@@ -167,16 +167,12 @@ class CurrentVersionTest(unittest.TestCase):
 
 class ReleasePrDetailsTest(unittest.TestCase):
     def test_rust_only_release_mentions_no_tag(self) -> None:
-        # A hegel-rust-only release cuts no tag, so the fallback PR must not
-        # claim one was pushed.
         title, body = release.release_pr_details("0.23.3", [])
         self.assertEqual(title, "Release v0.23.3")
         self.assertNotIn("tag", body)
         self.assertIn("The crates.io publish succeeded.", body)
 
     def test_tagged_release_names_the_pushed_tag(self) -> None:
-        # The tag carries the hegel-c version, which is independent of the
-        # hegeltest version naming the PR.
         title, body = release.release_pr_details("0.23.3", ["v0.24.0"])
         self.assertEqual(title, "Release v0.23.3")
         self.assertIn("after tagging v0.24.0", body)

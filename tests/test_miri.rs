@@ -277,9 +277,6 @@ fn a_test_case_leaked_to_a_thread_outlives_its_case_safely() {
     )
     .run();
 
-    // Only now — with the run over and every engine-side case concluded — is
-    // the leaked thread allowed to draw. It must fail by panicking in that
-    // thread, never by dereferencing a freed handle.
     let (release_tx, handle) = worker.lock().unwrap().take().unwrap();
     release_tx.send(()).unwrap();
     assert!(handle.join().is_err());

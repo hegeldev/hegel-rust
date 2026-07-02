@@ -26,12 +26,6 @@ where
     F: Fn(TestCase) -> T + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        // The closure takes `TestCase` by value (that's the `compose!`
-        // ergonomics), but a composed body is synchronous nested generation on
-        // this thread, so it gets a `child` — the same engine handle, no
-        // `hegel_test_case_clone` per draw. Drawing on it from a second thread
-        // concurrently with the parent is rejected as concurrent use; a body
-        // that needs that calls `tc.clone()` itself.
         (self.f)(tc.child(0))
     }
 }
