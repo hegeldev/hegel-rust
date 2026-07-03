@@ -1297,7 +1297,6 @@ fn clones_share_a_run_owned_family() {
             HEGEL_OK
         );
 
-        // Cloning a clone creates a further independent stream.
         let mut c1a: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, c1, &mut c1a), HEGEL_OK);
         assert_eq!(
@@ -1327,8 +1326,6 @@ fn clones_share_a_run_owned_family() {
             HEGEL_E_ALREADY_COMPLETE
         );
 
-        // Cloning is a stream operation, so it too reports the family
-        // complete rather than handing out a dead handle.
         let mut c2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
             hegel_test_case_clone(ctx, root, &mut c2),
@@ -1370,8 +1367,6 @@ fn clones_share_a_run_owned_family() {
 fn standalone_handles_are_freed_independently() {
     let ctx = hegel_context_new();
     unsafe {
-        // Two recorded choices, so the root stream has room for two clone
-        // nodes (each clone consumes one choice position on its source).
         let blob = shrunk_failure_blob_with_draws(ctx, 2);
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
