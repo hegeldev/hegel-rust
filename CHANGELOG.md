@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.23.3 - 2026-07-03
+
+This patch fixes a use-after-free: a `TestCase` moved to a thread that outlived its test could touch freed memory when it drew after the test had finished. Such a draw now fails with a clear panic in that thread instead. As before, any thread that draws should be joined before the test returns.
+
 ## 0.23.2 - 2026-06-29
 
 This release fixes a couple of Tree Borrows violations detected by Miri.
