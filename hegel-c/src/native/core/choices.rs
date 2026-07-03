@@ -732,12 +732,7 @@ impl CloneRecord {
         }
     }
 
-    /// The empty record: a clone that drew nothing. Realized (with no
-    /// nodes or spans), not values-only: the engine substitutes this record
-    /// wherever a clone value is punned or placeholdered
-    /// ([`ChoiceKind::simplest`], [`ChoiceKind::unit`], the pre-reassembly
-    /// clone node), and those positions can end up in shrink candidates that
-    /// get sort-key-compared — which requires realized info.
+    /// The empty record: a clone that drew nothing.
     pub fn empty() -> Self {
         Self::from_run(Vec::new(), Vec::new(), Vec::new())
     }
