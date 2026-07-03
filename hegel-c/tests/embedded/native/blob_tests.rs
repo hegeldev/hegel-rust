@@ -82,3 +82,20 @@ fn decode_rejects_raw_payload_that_is_not_valid_choices() {
     let blob = base64_encode(&[PREFIX_RAW, 0xAB]);
     assert!(decode_failure(&blob).is_none());
 }
+
+#[test]
+fn blob_roundtrips_clone_values() {
+    let choices = vec![
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Clone(std::sync::Arc::new(
+            crate::native::core::CloneRecord::from_values(vec![
+                ChoiceValue::Integer(crate::native::bignum::BigInt::from(7)),
+                ChoiceValue::Clone(std::sync::Arc::new(
+                    crate::native::core::CloneRecord::from_values(Vec::new()),
+                )),
+            ]),
+        )),
+    ];
+    let blob = encode_failure(&choices);
+    assert_eq!(decode_failure(&blob), Some(choices));
+}

@@ -364,3 +364,94 @@ fn move_value_falls_back_to_delete_save_when_dst_dir_create_fails() {
     perms.set_mode(0o755);
     std::fs::set_permissions(dir.path(), perms).unwrap();
 }
+
+fn clone_value(children: Vec<ChoiceValue>) -> ChoiceValue {
+    ChoiceValue::Clone(std::sync::Arc::new(
+        crate::native::core::CloneRecord::from_values(children),
+    ))
+}
+
+#[test]
+fn serialize_roundtrips_clone_values() {
+    let choices = vec![
+        ChoiceValue::Boolean(true),
+        clone_value(vec![
+            ChoiceValue::Integer(BigInt::from(42)),
+            clone_value(vec![ChoiceValue::String(vec![0x61, 0x62])]),
+            clone_value(Vec::new()),
+        ]),
+        ChoiceValue::Bytes(vec![7]),
+    ];
+    let bytes = serialize_choices(&choices);
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn serialize_clone_drops_realized_info_but_preserves_equality() {
+    use crate::native::core::choices::BooleanChoice;
+    use crate::native::core::{ChoiceKind, ChoiceNode, CloneRecord, Span, SpanEvent};
+    let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
+        vec![ChoiceNode::new(
+            ChoiceKind::Boolean(BooleanChoice),
+            ChoiceValue::Boolean(true),
+            false,
+        )],
+        vec![Span {
+            start: 0,
+            end: 1,
+            label: "9".to_string(),
+            depth: 0,
+            parent: None,
+            discarded: false,
+        }],
+        vec![(0, SpanEvent::Open { label: 9 })],
+    )));
+    let bytes = serialize_choices(std::slice::from_ref(&realized));
+    let round_tripped = deserialize_choices(&bytes).unwrap();
+    assert_eq!(round_tripped.len(), 1);
+    assert_eq!(round_tripped[0], realized);
+    let ChoiceValue::Clone(record) = &round_tripped[0] else {
+        panic!("expected a clone value");
+    };
+    assert!(record.realized_nodes().is_none());
+    assert!(record.spans().is_empty());
+}
+
+#[test]
+fn deserialize_returns_none_on_truncated_clone_children() {
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(5);
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+    bytes.push(1);
+    bytes.push(1);
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_returns_none_on_missing_clone_header() {
+    let mut bytes = 1u32.to_le_bytes().to_vec();
+    bytes.push(5);
+    bytes.extend_from_slice(&[0, 0]);
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn deserialize_rejects_clone_nesting_beyond_max_depth() {
+    let depth = crate::native::core::MAX_CLONE_DEPTH + 1;
+    let mut bytes = Vec::new();
+    for _ in 0..depth {
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.push(5);
+    }
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    assert!(deserialize_choices(&bytes).is_none());
+
+    let mut ok_bytes = Vec::new();
+    for _ in 0..crate::native::core::MAX_CLONE_DEPTH {
+        ok_bytes.extend_from_slice(&1u32.to_le_bytes());
+        ok_bytes.push(5);
+    }
+    ok_bytes.extend_from_slice(&0u32.to_le_bytes());
+    let decoded = deserialize_choices(&ok_bytes).unwrap();
+    assert_eq!(decoded.len(), 1);
+}

@@ -22,7 +22,10 @@ use crate::native::rng::EngineRng;
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
 /// stays distinct from `0.0` and individual NaN payloads are tracked
-/// separately — both matter for novel-prefix exhaustion accounting.
+/// separately — both matter for novel-prefix exhaustion accounting. Clone
+/// values key by their child value sequence, recursively (the
+/// [`CloneRecord`](crate::native::core::CloneRecord) `Eq`/`Hash` impls
+/// compare values only, so realized info never splits a key).
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
     Integer(BigInt),
@@ -30,6 +33,7 @@ enum ChoiceValueKey {
     Float(u64),
     Bytes(Vec<u8>),
     String(Vec<u32>),
+    Clone(Arc<crate::native::core::CloneRecord>),
 }
 
 impl From<&ChoiceValue> for ChoiceValueKey {
@@ -40,6 +44,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
             ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
+            ChoiceValue::Clone(r) => ChoiceValueKey::Clone(Arc::clone(r)),
         }
     }
 }
@@ -54,6 +59,7 @@ impl ChoiceValueKey {
             ChoiceValueKey::Float(bits) => ChoiceValue::Float(f64::from_bits(*bits)),
             ChoiceValueKey::Bytes(b) => ChoiceValue::Bytes(b.clone()),
             ChoiceValueKey::String(s) => ChoiceValue::String(s.clone()),
+            ChoiceValueKey::Clone(r) => ChoiceValue::Clone(Arc::clone(r)),
         }
     }
 }
