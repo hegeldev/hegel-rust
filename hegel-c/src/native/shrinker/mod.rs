@@ -1,4 +1,5 @@
 mod bytes;
+mod clones;
 mod coarse;
 mod deletion;
 mod floats;
@@ -503,6 +504,10 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "try_shortening_via_increment",
                 Box::new(|sh| sh.try_shortening_via_increment()),
+            ),
+            ShrinkPass::new(
+                "shrink_clone_streams",
+                Box::new(|sh| sh.shrink_clone_streams()),
             ),
             ShrinkPass::new("mutate_and_shrink", Box::new(|sh| sh.mutate_and_shrink())),
         ];

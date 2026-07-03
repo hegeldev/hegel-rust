@@ -1262,3 +1262,23 @@ fn clone_record_accessors_expose_children_and_realized_info() {
     assert!(empty.is_empty());
     assert_eq!(empty.flat_len(), 0);
 }
+
+#[test]
+fn clone_vs_clone_ordering_compares_flat_len_then_child_count() {
+    use crate::native::core::sort_key;
+    let a = vec![
+        clone_node(vec![boolean_node(false)]),
+        clone_node(vec![boolean_node(false), boolean_node(false)]),
+    ];
+    let b = vec![
+        clone_node(vec![boolean_node(false), boolean_node(false)]),
+        clone_node(vec![boolean_node(false)]),
+    ];
+    assert_eq!(flattened_len(&a), flattened_len(&b));
+    assert!(sort_key(&a) < sort_key(&b));
+
+    let shallow = vec![clone_node(vec![boolean_node(true), boolean_node(true)])];
+    let deep = vec![clone_node(vec![clone_node(vec![boolean_node(true)])])];
+    assert_eq!(flattened_len(&deep), flattened_len(&shallow));
+    assert!(sort_key(&deep) < sort_key(&shallow));
+}

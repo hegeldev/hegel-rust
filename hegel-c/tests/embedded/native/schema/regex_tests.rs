@@ -678,7 +678,7 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
     assert!(result.is_err());
-    assert_eq!(ntc.status, Some(Status::Invalid));
+    assert_eq!(ntc.status(), Some(Status::Invalid));
 }
 
 #[test]

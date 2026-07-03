@@ -87,7 +87,7 @@ impl<'a> Shrinker<'a> {
             .map(|n| n.value.clone())
             .collect();
         prefix.push(ChoiceValue::Integer(v.clone()));
-        let max_size = self.current_nodes.len() + 16;
+        let max_size = crate::native::core::flattened_len(&self.current_nodes) + 16;
         let epoch = self.improvements;
         for _ in 0..3 {
             self.probe(&prefix, max_size)?;

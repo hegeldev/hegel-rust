@@ -165,7 +165,7 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
         result.is_err(),
         "expected StopTest once rejections overflow"
     );
-    assert_eq!(ntc.status, Some(Status::Invalid));
+    assert_eq!(ntc.status(), Some(Status::Invalid));
 }
 
 #[test]

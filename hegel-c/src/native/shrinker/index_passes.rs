@@ -10,8 +10,13 @@ use crate::native::core::{ChoiceKind, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker};
 
-fn is_sequence(kind: &std::sync::Arc<ChoiceKind>) -> bool {
-    matches!(**kind, ChoiceKind::Bytes(_) | ChoiceKind::String(_))
+/// Nodes the index passes skip: sequence kinds get their own dedicated
+/// passes, and clone nodes are opaque containers with no dense index.
+fn is_unindexed(kind: &std::sync::Arc<ChoiceKind>) -> bool {
+    matches!(
+        **kind,
+        ChoiceKind::Bytes(_) | ChoiceKind::String(_) | ChoiceKind::Clone
+    )
 }
 
 impl<'a> Shrinker<'a> {
@@ -29,7 +34,7 @@ impl<'a> Shrinker<'a> {
                 let i = idx;
                 let node_i = self.current_nodes[i].clone();
                 let kind_i = node_i.kind.clone();
-                if is_sequence(&kind_i) {
+                if is_unindexed(&kind_i) {
                     idx += 1;
                     continue;
                 }
@@ -70,7 +75,7 @@ impl<'a> Shrinker<'a> {
                     }
                     self.consider(&zeroed)?;
 
-                    if j < self.current_nodes.len() && !is_sequence(&self.current_nodes[j].kind) {
+                    if j < self.current_nodes.len() && !is_unindexed(&self.current_nodes[j].kind) {
                         let kind_j = self.current_nodes[j].kind.clone();
                         let target_idx = kind_j.to_index(&self.current_nodes[j].value);
                         let mut bumped_any_relative = false;
@@ -119,7 +124,7 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
             let kind = node.kind.clone();
-            if is_sequence(&kind) {
+            if is_unindexed(&kind) {
                 i += 1;
                 continue;
             }

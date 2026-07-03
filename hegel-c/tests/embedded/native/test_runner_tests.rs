@@ -1025,3 +1025,53 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
     assert_eq!(a1, a2, "the same key must replay the same draws");
     assert_ne!(a1, b, "different keys must not share a derandomized stream");
 }
+
+#[test]
+fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
+    let body = |ds: &dyn DataSource| -> TestCaseResult {
+        let child = match ds.clone_stream() {
+            Ok(c) => c,
+            Err(_) => return TestCaseResult::Overrun,
+        };
+        if rint(ds, 0, 1000).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        match rint(&*child, 0, 1000) {
+            Ok(v) if v >= 100 => boom("child too big"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        }
+    };
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new().test_cases(50).database(None).seed(Some(7));
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let result = complete_native(exploration).unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("child too big"));
+
+    let blob = result.failures[0].reproduce_blob.as_ref().unwrap();
+    let choices = crate::native::blob::decode_failure(blob).unwrap();
+    assert_eq!(choices.len(), 2);
+    let crate::native::core::ChoiceValue::Clone(record) = &choices[0] else {
+        panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
+    };
+    assert_eq!(
+        record.values().cloned().collect::<Vec<_>>(),
+        vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(
+            100
+        ))]
+    );
+    assert_eq!(
+        choices[1],
+        ChoiceValue::Integer(crate::native::bignum::BigInt::from(0))
+    );
+}

@@ -36,6 +36,7 @@ impl<'a> Shrinker<'a> {
                 *kind.as_ref(),
                 crate::native::core::ChoiceKind::Bytes(_)
                     | crate::native::core::ChoiceKind::String(_)
+                    | crate::native::core::ChoiceKind::Clone
             ) {
                 i += 1;
                 continue;
@@ -63,7 +64,7 @@ impl<'a> Shrinker<'a> {
                     .map(|n| n.value.clone())
                     .chain(std::iter::once(new_val.clone()))
                     .collect();
-                let max_size = self.current_nodes.len();
+                let max_size = crate::native::core::flattened_len(&self.current_nodes);
 
                 for _ in 0..=RANDOM_ATTEMPTS {
                     self.probe(&prefix, max_size)?;
@@ -75,6 +76,9 @@ impl<'a> Shrinker<'a> {
                     j_offset += 1;
 
                     let kind_j = self.current_nodes[j].kind.clone();
+                    if matches!(*kind_j.as_ref(), crate::native::core::ChoiceKind::Clone) {
+                        continue;
+                    }
                     let Some(unit_val) = kind_j.from_index(BigUint::from(1u32)) else {
                         continue;
                     };

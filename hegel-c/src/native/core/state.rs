@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use rand::{Rng, RngExt};
 
 use crate::native::rng::EngineRng;
 
+use super::MAX_CLONE_DEPTH;
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
-    ChoiceValue, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status, StringChoice,
+    ChoiceValue, CloneRecord, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status,
+    StringChoice,
 };
 use super::float_index::index_to_float;
 use super::state_machine::NativeStateMachine;
@@ -913,26 +916,147 @@ pub trait DataObserver: Send {
     fn conclude_test(&mut self, _status: Status, _origin: Option<InterestingOrigin>) {}
 }
 
+/// Shared handle to one stream of a test case family. The root stream is
+/// owned directly by whoever constructed it; cloned streams are only ever
+/// reachable through this handle.
+pub type NativeTestCaseHandle = Arc<Mutex<NativeTestCase>>;
+
+/// The [`Status`] mirror value meaning "not concluded yet" in
+/// [`FamilyCore::concluded_status`].
+const STATUS_UNSET: u8 = u8::MAX;
+
+/// State shared by every stream of one test-case *family*: the root
+/// [`NativeTestCase`] plus every stream cloned from it, directly or
+/// transitively, via [`NativeTestCase::clone_stream`].
+///
+/// A family concludes exactly once: the first stream to conclude wins, and
+/// every other stream's subsequent draws fail fast with the family's
+/// verdict. The draw budget and `tc.target()` observations are likewise
+/// family-wide. Collections, variable pools, and state machines are shared
+/// across streams so ids remain valid on any clone; they are shared mutable
+/// state, so when several clones use one concurrently the interleaving (and
+/// therefore replay of the affected values) is scheduling-dependent.
+pub struct FamilyCore {
+    /// The family's write-once conclusion, with the interesting origin for
+    /// an `Interesting` verdict.
+    conclusion: Mutex<Option<(Status, Option<InterestingOrigin>)>>,
+    /// Lock-free mirror of the conclusion's status for the draw hot path:
+    /// [`STATUS_UNSET`] until concluded, then the status discriminant.
+    concluded_status: AtomicU8,
+    /// Draws made across every stream of the family.
+    total_draws: AtomicUsize,
+    /// Cap on [`Self::total_draws`]. `usize::MAX` for bare replays, whose
+    /// per-stream prefix caps already bound every stream; the requested
+    /// `max_size` whenever an RNG or trailing template can extend draws.
+    budget: AtomicUsize,
+    /// `tc.target()` observations, keyed by label. Family-wide so the
+    /// once-per-test-case label uniqueness holds across clones.
+    pub(crate) target_observations: Mutex<HashMap<String, f64>>,
+    /// Variable-length collection state, keyed by collection id.
+    pub(crate) collections: Mutex<HashMap<i64, ManyState>>,
+    next_collection_id: AtomicI64,
+    /// Variable pools for stateful testing, indexed by pool id.
+    pub(crate) variable_pools: Mutex<Vec<NativeVariables>>,
+    /// State machines, indexed by machine id. Each machine sits behind its
+    /// own lock so two clones drawing rules concurrently serialize on the
+    /// machine while drawing from their own streams.
+    pub(crate) state_machines: Mutex<Vec<Arc<Mutex<NativeStateMachine>>>>,
+}
+
+impl FamilyCore {
+    fn new(budget: usize) -> Self {
+        FamilyCore {
+            conclusion: Mutex::new(None),
+            concluded_status: AtomicU8::new(STATUS_UNSET),
+            total_draws: AtomicUsize::new(0),
+            budget: AtomicUsize::new(budget),
+            target_observations: Mutex::new(HashMap::new()),
+            collections: Mutex::new(HashMap::new()),
+            next_collection_id: AtomicI64::new(0),
+            variable_pools: Mutex::new(Vec::new()),
+            state_machines: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The family's concluded status, or `None` while still running.
+    pub fn status(&self) -> Option<Status> {
+        match self.concluded_status.load(Ordering::Acquire) {
+            STATUS_UNSET => None,
+            raw => Some(match raw {
+                0 => Status::EarlyStop,
+                1 => Status::Invalid,
+                2 => Status::Valid,
+                3 => Status::Interesting,
+                _ => unreachable!("concluded_status only stores Status discriminants"),
+            }),
+        }
+    }
+
+    /// Claim the family-wide conclusion. First caller wins; later calls are
+    /// no-ops.
+    pub fn conclude(&self, status: Status, origin: Option<InterestingOrigin>) {
+        let mut guard = self.conclusion.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some((status, origin));
+            self.concluded_status.store(status as u8, Ordering::Release);
+        }
+    }
+
+    /// The full conclusion (status plus origin), or `None` while running.
+    pub fn conclusion(&self) -> Option<(Status, Option<InterestingOrigin>)> {
+        self.conclusion
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Reserve one draw against the family budget. Returns `false` when the
+    /// budget is exhausted.
+    fn try_take_draw(&self) -> bool {
+        self.total_draws.fetch_add(1, Ordering::Relaxed) < self.budget.load(Ordering::Relaxed)
+    }
+
+    fn set_budget(&self, budget: usize) {
+        self.budget.store(budget, Ordering::Relaxed);
+    }
+
+    /// Allocate the next collection id.
+    pub(crate) fn next_collection_id(&self) -> i64 {
+        self.next_collection_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
 /// During replay/shrinking, choices are drawn from a prefix.
+///
+/// One `NativeTestCase` is one *stream* of a test-case family: the root
+/// stream, or a cloned stream created by [`Self::clone_stream`]. Each stream
+/// has its own prefix, RNG, nodes, and span structure, so streams driven
+/// from different threads generate independently; the conclusion, draw
+/// budget, and stateful bookkeeping are shared through [`FamilyCore`].
 pub struct NativeTestCase {
     prefix: Vec<ChoiceValue>,
     prefix_nodes: Option<Vec<ChoiceNode>>,
     rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
-    pub status: Option<Status>,
     /// Set to `true` by [`Self::freeze`] on the first call; subsequent calls
-    /// are no-ops. A dedicated boolean (rather than checking `status`) lets
-    /// `conclude_test` set `self.status` before calling `freeze()` without
-    /// triggering the idempotency early-return.
+    /// are no-ops. A dedicated boolean (rather than checking the family's
+    /// status) lets `conclude_test` conclude before calling `freeze()`
+    /// without triggering the idempotency early-return.
     frozen: bool,
-    pub collections: HashMap<i64, ManyState>,
-    next_collection_id: i64,
-    pub variable_pools: Vec<NativeVariables>,
-    pub state_machines: Vec<NativeStateMachine>,
+    /// State shared with every other stream of this test case's family.
+    pub(crate) family: Arc<FamilyCore>,
+    /// This stream's position in the clone tree: empty for the root, the
+    /// parent's id plus the parent's clone counter for a cloned stream.
+    clone_id: Vec<usize>,
+    /// Number of clones made from this stream so far.
+    clone_counter: usize,
+    /// Streams cloned from this one, each with the index of its clone node
+    /// in [`Self::nodes`]. Drained by [`Self::reassemble`].
+    clone_children: Vec<(usize, NativeTestCaseHandle)>,
     pub spans: Spans,
     /// Indices into `spans` for currently-open spans, in nesting order.
     /// Each entry was pushed by `start_span` and is awaiting a matching
@@ -964,10 +1088,6 @@ pub struct NativeTestCase {
     /// Set by [`Self::for_choices`] and called by each draw method and
     /// by [`Self::freeze`].
     observer: Option<Box<dyn DataObserver>>,
-    /// The interesting origin set by [`Self::conclude_test`], if any.
-    /// `None` for test cases concluded by [`Self::freeze`] directly
-    /// (`Status::Valid`).
-    interesting_origin: Option<InterestingOrigin>,
     /// Optional template applied to every draw past the explicit `prefix`.
     /// `count` is mutated in-place as draws consume the template; when
     /// `count` reaches zero the next draw is overrun
@@ -994,18 +1114,48 @@ impl NativeTestCase {
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
+        let max_size = max_size.max(choices.len());
+        let budget = if trailing.is_some() {
+            max_size
+        } else {
+            usize::MAX
+        };
+        Self::new_stream(
+            choices.to_vec(),
+            prefix_nodes.map(|n| n.to_vec()),
+            None,
+            trailing,
+            max_size,
+            observer,
+            Arc::new(FamilyCore::new(budget)),
+            Vec::new(),
+        )
+    }
+
+    /// Build one stream — the root (fresh family) or a clone (shared
+    /// family). The only place a `NativeTestCase` is constructed.
+    #[allow(clippy::too_many_arguments)]
+    fn new_stream(
+        prefix: Vec<ChoiceValue>,
+        prefix_nodes: Option<Vec<ChoiceNode>>,
+        rng: Option<EngineRng>,
+        trailing_template: Option<ChoiceTemplate>,
+        max_size: usize,
+        observer: Option<Box<dyn DataObserver>>,
+        family: Arc<FamilyCore>,
+        clone_id: Vec<usize>,
+    ) -> Self {
         NativeTestCase {
-            prefix: choices.to_vec(),
-            prefix_nodes: prefix_nodes.map(|n| n.to_vec()),
-            rng: None,
-            max_size: max_size.max(choices.len()),
+            prefix,
+            prefix_nodes,
+            rng,
+            max_size,
             nodes: Vec::new(),
-            status: None,
             frozen: false,
-            collections: HashMap::new(),
-            next_collection_id: 0,
-            variable_pools: Vec::new(),
-            state_machines: Vec::new(),
+            family,
+            clone_id,
+            clone_counter: 0,
+            clone_children: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
             span_events: Vec::new(),
@@ -1013,8 +1163,7 @@ impl NativeTestCase {
             tags: HashSet::new(),
             labels_for_structure_stack: Vec::new(),
             observer,
-            interesting_origin: None,
-            trailing_template: trailing,
+            trailing_template,
         }
     }
 
@@ -1053,10 +1202,105 @@ impl NativeTestCase {
 
     /// Attach an RNG for post-prefix random draws.  Internal builder used by
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
-    /// constructor without duplicating the struct literal.
+    /// constructor without duplicating the struct literal. Random draws can
+    /// extend any stream, so the family budget becomes the requested
+    /// `max_size` rather than the bare-replay `usize::MAX`.
     fn with_random(mut self, rng: EngineRng) -> Self {
         self.rng = Some(rng);
+        self.family.set_budget(self.max_size);
         self
+    }
+
+    /// The family state shared by every stream of this test case.
+    pub(crate) fn family(&self) -> &Arc<FamilyCore> {
+        &self.family
+    }
+
+    /// Create an independent cloned stream of this test case.
+    ///
+    /// The clone occupies one choice position in this stream (a
+    /// [`ChoiceKind::Clone`] node) and gets its own prefix, RNG, and span
+    /// structure, so it can be drawn from concurrently with every other
+    /// stream without perturbing them. On replay, a [`ChoiceValue::Clone`]
+    /// prefix value at this position hands the child its recorded stream; a
+    /// non-clone prefix value puns to an empty child (which overruns on its
+    /// first draw in a bare replay, or extends randomly under a probe).
+    ///
+    /// Fails with the family's verdict if the family has concluded, and
+    /// marks the family invalid when clones nest deeper than
+    /// [`MAX_CLONE_DEPTH`].
+    pub fn clone_stream(&mut self) -> Result<NativeTestCaseHandle, EngineError> {
+        self.pre_choice()?;
+        if self.clone_id.len() + 1 > MAX_CLONE_DEPTH {
+            self.conclude(Status::Invalid, None);
+            self.freeze();
+            return Err(EngineError::InvalidTestCase);
+        }
+        let idx = self.nodes.len();
+        let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
+            Some(ChoiceValue::Clone(record)) => (
+                record.values().cloned().collect::<Vec<_>>(),
+                record.realized_nodes().map(<[ChoiceNode]>::to_vec),
+            ),
+            _ => (Vec::new(), None),
+        };
+        let child_rng = self.rng.as_mut().map(EngineRng::spawn);
+        let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
+            kind: t.kind,
+            count: None,
+        });
+        let child_max_size = if child_rng.is_some() || child_template.is_some() {
+            usize::MAX
+        } else {
+            child_prefix.len()
+        };
+        let mut child_id = self.clone_id.clone();
+        child_id.push(self.clone_counter);
+        self.clone_counter += 1;
+
+        let child = Self::new_stream(
+            child_prefix,
+            child_prefix_nodes,
+            child_rng,
+            child_template,
+            child_max_size,
+            None,
+            Arc::clone(&self.family),
+            child_id,
+        );
+        let handle = Arc::new(Mutex::new(child));
+        self.nodes.push(ChoiceNode::new(
+            ChoiceKind::Clone,
+            ChoiceValue::Clone(Arc::new(CloneRecord::empty())),
+            false,
+        ));
+        self.clone_children.push((idx, Arc::clone(&handle)));
+        Ok(handle)
+    }
+
+    /// Replace each clone node's placeholder value with the realized record
+    /// of its stream — nodes, spans, and span events — recursively, so
+    /// [`Self::nodes`] becomes the self-contained pieced-together choice
+    /// sequence of the whole family.
+    ///
+    /// A no-op until the family has concluded: streams can still grow while
+    /// the family is running, and a concluded family's streams cannot (every
+    /// draw fails fast), so the records are snapshotted exactly once.
+    pub fn reassemble(&mut self) {
+        if self.family.status().is_none() {
+            return;
+        }
+        for (idx, handle) in std::mem::take(&mut self.clone_children) {
+            let mut child = handle.lock().unwrap_or_else(|e| e.into_inner());
+            child.freeze();
+            child.reassemble();
+            let record = CloneRecord::from_run(
+                child.nodes.clone(),
+                child.spans.clone().into_vec(),
+                child.span_events.clone(),
+            );
+            self.nodes[idx].value = ChoiceValue::Clone(Arc::new(record));
+        }
     }
 
     /// Open a new span at the current choice position, labelled with `label`.
@@ -1145,36 +1389,38 @@ impl NativeTestCase {
         }
         self.conclude(Status::Valid, None);
         if let Some(ref mut obs) = self.observer {
-            let origin = self.interesting_origin.clone();
-            obs.conclude_test(self.status.unwrap(), origin);
+            let (status, origin) = self
+                .family
+                .conclusion()
+                .unwrap_or_else(|| unreachable!("freeze just concluded the family"));
+            obs.conclude_test(status, origin);
         }
     }
 
     /// Conclude the test case with `status` (and `origin`, for an interesting
-    /// verdict). This is the single, write-once status assignment: if the case
-    /// has already concluded — an overrun or failed assume during a draw, a
-    /// too-deep nesting, or the body's reported verdict — that conclusion
-    /// stands and this is a no-op. Every status the engine or the test body
-    /// assigns flows through here, so a concluded case can never be
-    /// re-concluded.
+    /// verdict). This is the single, write-once status assignment for the
+    /// whole family: if any stream has already concluded — an overrun or
+    /// failed assume during a draw, a too-deep nesting, or the body's
+    /// reported verdict — that conclusion stands and this is a no-op. Every
+    /// status the engine or the test body assigns flows through here, so a
+    /// concluded case can never be re-concluded.
     pub fn conclude(&mut self, status: Status, origin: Option<InterestingOrigin>) {
-        if self.status.is_none() {
-            self.status = Some(status);
-            self.interesting_origin = origin;
-        }
+        self.family.conclude(status, origin);
     }
 
-    /// The interesting origin recorded by [`Self::conclude`], if the case
-    /// concluded with [`Status::Interesting`].
-    pub fn interesting_origin(&self) -> Option<&InterestingOrigin> {
-        self.interesting_origin.as_ref()
+    /// The family's concluded status, or `None` while still running.
+    pub fn status(&self) -> Option<Status> {
+        self.family.status()
     }
 
     /// Allocate a new collection ID and store the given state.
     pub fn new_collection(&mut self, state: ManyState) -> i64 {
-        let id = self.next_collection_id;
-        self.next_collection_id += 1;
-        self.collections.insert(id, state);
+        let id = self.family.next_collection_id();
+        self.family
+            .collections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, state);
         id
     }
 
@@ -1453,13 +1699,13 @@ impl NativeTestCase {
         Ok(v)
     }
     fn pre_choice(&mut self) -> Result<(), EngineError> {
-        if let Some(status) = self.status {
+        if let Some(status) = self.family.status() {
             return Err(match status {
                 Status::Invalid => EngineError::InvalidTestCase,
                 _ => EngineError::Overrun,
             });
         }
-        if self.nodes.len() >= self.max_size {
+        if self.nodes.len() >= self.max_size || !self.family.try_take_draw() {
             self.conclude(Status::EarlyStop, None);
             return Err(EngineError::Overrun);
         }
@@ -1520,3 +1766,7 @@ impl NativeTestCase {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/state_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/state_clone_tests.rs"]
+mod clone_tests;

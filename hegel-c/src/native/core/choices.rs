@@ -827,6 +827,11 @@ pub fn flattened_len(nodes: &[ChoiceNode]) -> usize {
     flattened_len_of_values(nodes.iter().map(|n| &n.value))
 }
 
+/// [`flattened_len`] over bare choice values (e.g. a replay prefix).
+pub fn flattened_values_len(values: &[ChoiceValue]) -> usize {
+    flattened_len_of_values(values.iter())
+}
+
 fn flattened_len_of_values<'a>(values: impl Iterator<Item = &'a ChoiceValue>) -> usize {
     values
         .map(|v| match v {

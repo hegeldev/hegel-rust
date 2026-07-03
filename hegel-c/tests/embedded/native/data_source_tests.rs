@@ -1,6 +1,7 @@
 use super::*;
-use crate::backend::{DataSource, DataSourceError};
+use crate::backend::{DataSource, DataSourceError, TestCaseResult};
 use crate::cbor_utils::{cbor_map, map_get};
+use crate::native::core::ChoiceValue;
 use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
 
@@ -302,4 +303,93 @@ fn target_observation_rejects_duplicate_label() {
         matches!(&err, DataSourceError::InvalidArgument(m) if m.contains("would overwrite previous")),
         "{err:?}"
     );
+}
+
+#[test]
+fn clone_stream_draws_independently_and_reassembles() {
+    let (ds, handle) = random_source();
+    let schema = cbor_map! {
+        "type" => "integer",
+        "min_value" => 0,
+        "max_value" => 1000,
+    };
+    ds.generate(&schema).unwrap();
+    let child = ds.clone_stream().unwrap();
+    child.generate(&schema).unwrap();
+    ds.generate(&schema).unwrap();
+    ds.mark_complete(&TestCaseResult::Valid);
+
+    let nodes = NativeDataSource::take_nodes(&handle);
+    assert_eq!(nodes.len(), 3);
+    let ChoiceValue::Clone(record) = &nodes[1].value else {
+        panic!("expected the clone node to carry its stream");
+    };
+    assert_eq!(record.realized_nodes().unwrap().len(), 1);
+}
+
+#[test]
+fn pools_are_shared_across_cloned_streams() {
+    let (ds, _handle) = random_source();
+    let pool = ds.new_pool().unwrap();
+    let v1 = ds.pool_add(pool).unwrap();
+    let child = ds.clone_stream().unwrap();
+    let got = child.pool_generate(pool, true).unwrap();
+    assert_eq!(got, v1);
+    assert!(matches!(
+        ds.pool_generate(pool, false),
+        Err(DataSourceError::Assume)
+    ));
+}
+
+#[test]
+fn collections_are_shared_across_cloned_streams() {
+    let (ds, _handle) = random_source();
+    let collection = ds.new_collection(1, Some(1)).unwrap();
+    let child = ds.clone_stream().unwrap();
+    assert!(child.collection_more(collection).unwrap());
+    assert!(!child.collection_more(collection).unwrap());
+}
+
+#[test]
+fn state_machines_are_shared_across_cloned_streams() {
+    let (ds, _handle) = random_source();
+    let machine = ds.new_state_machine(&["a", "b", "c"], &[]).unwrap();
+    let child = ds.clone_stream().unwrap();
+    assert!(child.state_machine_next_rule(machine).unwrap() < 3);
+    assert!(ds.state_machine_next_rule(machine).unwrap() < 3);
+}
+
+#[test]
+fn target_labels_are_unique_across_cloned_streams() {
+    let (ds, _handle) = random_source();
+    let child = ds.clone_stream().unwrap();
+    ds.target_observation(1.0, "score").unwrap();
+    let err = child.target_observation(2.0, "score").unwrap_err();
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    child.target_observation(2.0, "other").unwrap();
+
+    let (_, handle) = random_source();
+    let observations = NativeDataSource::take_target_observations(&handle);
+    assert!(observations.is_empty());
+}
+
+#[test]
+fn mark_complete_from_a_clone_concludes_the_family() {
+    let (ds, handle) = random_source();
+    let child = ds.clone_stream().unwrap();
+    child.mark_complete(&TestCaseResult::Invalid);
+    let schema = cbor_map! {
+        "type" => "boolean",
+    };
+    assert!(matches!(ds.generate(&schema), Err(DataSourceError::Assume)));
+    assert!(matches!(
+        NativeDataSource::take_outcome(&handle),
+        TestCaseResult::Invalid
+    ));
+}
+
+#[test]
+fn clone_stream_on_an_exhausted_source_stops_the_test() {
+    let (ds, _handle) = exhausted_source();
+    assert!(matches!(ds.clone_stream(), Err(DataSourceError::StopTest)));
 }
