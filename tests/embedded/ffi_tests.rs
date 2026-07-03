@@ -151,12 +151,8 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     let result = run.result();
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
-    let failure = result.failure(0).unwrap();
-    assert!(
-        result.failure(result.failure_count()).is_none(),
-        "failure index past the end must be None"
-    );
-    let blob = failure
+    let blob = result
+        .failure(0)
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 
@@ -169,6 +165,32 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         "the blob replays the minimal counterexample"
     );
     replay.mark_complete(INTERESTING, Some(origin)).unwrap();
+}
+
+/// `clone_handle` yields an independent handle onto the same test case: both
+/// the root and the clone draw from one shared source, each holding its own
+/// reference. Dropping the clone frees only its own handle (dropping its
+/// reference); the shared test case stays alive for the root, which is still
+/// usable.
+#[test]
+fn ffi_clone_handle_shares_the_test_case() {
+    let settings = test_settings(1);
+    let sh = SettingsHandle::build(&settings, None);
+    let run = RunHandle::start(&sh).unwrap();
+    let schema = int_schema(0, 100);
+
+    let tc = run.next_test_case().unwrap();
+    let clone = tc.clone_handle();
+    clone.generate(&schema).unwrap();
+    tc.generate(&schema).unwrap();
+    drop(clone);
+    tc.generate(&schema).unwrap();
+    tc.mark_complete(VALID, None).unwrap();
+
+    while let Some(t) = run.next_test_case() {
+        let _ = t.generate(&schema);
+        t.mark_complete(VALID, None).unwrap();
+    }
 }
 
 #[test]

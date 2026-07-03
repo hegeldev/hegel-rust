@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use ciborium::Value;
+use parking_lot::Mutex;
 
 /// cbindgen:ignore
 mod antithesis_detect;
@@ -71,6 +72,7 @@ use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[allow(non_camel_case_types)]
+#[must_use]
 pub enum hegel_result_t {
     /// Success.
     HEGEL_OK = 0,
@@ -111,6 +113,16 @@ pub enum hegel_result_t {
     /// re-serialisation). Should not happen in practice; please file a
     /// bug. See `hegel_context_last_error()` for the diagnostic.
     HEGEL_E_INTERNAL = -8,
+
+    /// A single test-case handle was used from two threads at once. Each
+    /// handle may be driven by at most one thread at a time; to generate from
+    /// several threads, `hegel_test_case_clone` the handle and give each
+    /// thread its own clone. (Clones share the underlying test case but have
+    /// independent per-handle locks, so they may be driven concurrently.)
+    /// Returned by the draw primitives; `hegel_mark_complete` instead waits
+    /// for the in-flight operation, because completion always succeeds under
+    /// first-caller-wins.
+    HEGEL_E_CONCURRENT_USE = -9,
 }
 
 use hegel_result_t::*;
@@ -416,29 +428,101 @@ enum WorkerMessage {
     Done(Result<TestRunResult, String>),
 }
 
-/// One in-flight test case handed to the caller by
-/// `hegel_next_test_case` (borrowed from the run) or constructed
-/// standalone by `hegel_test_case_from_blob` (owned by the caller). The
-/// caller drives it with the per-test-case primitives (`hegel_generate`,
-/// `hegel_start_span` / `hegel_stop_span`, `hegel_target`, the collection
-/// primitives) and concludes it with `hegel_mark_complete`. A run-owned
-/// handle becomes invalid once marked complete; calling
-/// `hegel_next_test_case` again returns the next test case (or NULL when
-/// the run is finished). A standalone handle must be released with
-/// `hegel_test_case_free`.
-pub struct HegelTestCase {
+/// State shared by every handle in a clone *family* — the handle produced by
+/// `hegel_next_test_case` / `hegel_test_case_from_blob` and every
+/// `hegel_test_case_clone` descended from it.
+///
+/// The data source, completion status, and run ack are family-wide: marking
+/// any handle complete marks the whole family, and the underlying
+/// `DataSource` is the single connection all handles draw from. Concurrent
+/// draws from two clones are memory-safe (the `NativeDataSource` serialises
+/// internally) but currently non-deterministic — making concurrent clone use
+/// robust is future work.
+///
+/// Every handle owns one `Arc<FamilyShared>` reference; the run keeps its own
+/// reference too. The `Arc` strong count is the family's reference count, so
+/// the data source is dropped only once every handle has been freed and the
+/// run has released its reference.
+struct FamilyShared {
+    /// The single underlying data source, shared by every handle through the
+    /// family's own `Arc`.
     ds: Box<dyn DataSource + Send + Sync>,
-    completed: bool,
-    /// Backing buffer for the borrowed `out_value_cbor` pointer returned
-    /// from `hegel_generate`. Re-allocated per call; the previous draw's
-    /// bytes are invalidated on the next `hegel_generate`.
-    last_value: Vec<u8>,
-    /// `Some` for a test case pumped out of a run's worker thread (the
-    /// worker blocks on this ack until `hegel_mark_complete`); `None` for
-    /// a standalone test case from `hegel_test_case_from_blob`. Doubles as
-    /// the ownership marker: `None` means the caller owns the allocation
-    /// and must free it with `hegel_test_case_free`.
+    /// Family-wide completion status. Set once via `compare_exchange` in
+    /// [`Self::complete`] so `ds.mark_complete` runs and the ack is sent
+    /// exactly once, no matter which handle reports it.
+    completed: AtomicBool,
+    /// `Some` for a family rooted in a run's worker thread (the worker blocks
+    /// on this ack until completion); `None` for a standalone family from
+    /// `hegel_test_case_from_blob`. Sent on by the caller that wins the
+    /// completion `compare_exchange` in [`Self::complete`], which is what
+    /// guarantees send-once.
     ack: Option<mpsc::Sender<()>>,
+}
+
+impl FamilyShared {
+    /// Claim family-wide completion. First caller wins: it records `outcome`
+    /// on the data source and sends the worker ack; every later call — a
+    /// racing clone, or the run tearing down an in-flight case — is a no-op.
+    /// This is the single home of the exactly-once completion protocol.
+    fn complete(&self, outcome: &TestCaseResult) {
+        if self
+            .completed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.ds.mark_complete(outcome);
+            if let Some(ack) = &self.ack {
+                let _ = ack.send(());
+            }
+        }
+    }
+}
+
+/// Per-handle state guarded by the handle's own lock.
+struct LocalState {
+    /// Backing buffer for the borrowed `out_value_cbor` pointer returned from
+    /// `hegel_generate`. Re-allocated per call; the previous draw's bytes are
+    /// invalidated on the next `hegel_generate` *on this handle*. Per-handle
+    /// (not family-wide) so two clones drawing at once don't stomp each
+    /// other's returned buffers.
+    last_value: Vec<u8>,
+    /// Whether `hegel_mark_complete` has already been called on *this* handle.
+    /// Completing the family is first-caller-wins and family-wide (see
+    /// `FamilyShared::completed`), so a second handle completing is a safe
+    /// no-op; but completing the *same* handle twice is a usage error, which
+    /// this per-handle flag detects.
+    completed: bool,
+}
+
+/// One in-flight test-case handle handed to the caller by
+/// `hegel_next_test_case`, `hegel_test_case_from_blob`, or
+/// `hegel_test_case_clone`. The caller drives it with the per-test-case
+/// primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
+/// `hegel_target`, the collection primitives) and concludes it with
+/// `hegel_mark_complete`.
+///
+/// A single handle must be driven by at most one thread at a time: If
+/// multiple threads attempt to use the handle at the same time, operations
+/// may raise `HEGEL_E_CONCURRENT_USE` on contention. To use a test case from
+/// several threads, clone the handle with `hegel_test_case_clone` and give
+/// each thread its own clone.
+///
+/// Every handle — however it was produced — must be released with
+/// `hegel_test_case_free`
+pub struct HegelTestCase {
+    family: Arc<FamilyShared>,
+    local: Mutex<LocalState>,
+}
+
+/// Box `value` and leak it to a raw pointer for the C ABI.
+///
+/// The `Send + Sync` bound is the point: every `HegelTestCase` is allocated
+/// through here, so it is a compile-time check that the handle stays
+/// `Send + Sync` (its `Arc<FamilyShared>` shared, its `Mutex`es `Sync`). The C
+/// consumer relies on that when it moves a handle, or shares a family, between
+/// threads.
+fn into_raw_send_sync<T: Send + Sync>(value: T) -> *mut T {
+    Box::into_raw(Box::new(value))
 }
 
 /// In-flight property-test run.
@@ -453,14 +537,15 @@ pub struct HegelRun {
     worker: Option<JoinHandle<()>>,
     from_worker: mpsc::Receiver<WorkerMessage>,
     abort: Arc<AtomicBool>,
-    // The current test case.
+    // The run's own reference to the current test case's family.
     //
-    // This is a logically owned pointer, and would be
-    // `Option<Box<HegelTestCase>>` but for the fact that `Box` also asserts
-    // noalias (i.e., that there are no mutable references that aren't derived
-    // from `current_tc`). Since the caller mutates the current test case
-    // through a different pointer, we use a raw pointer instead.
-    current_tc: Option<*mut HegelTestCase>,
+    // The handle returned to the caller from `hegel_next_test_case` is freed
+    // by the caller (via `hegel_test_case_free`); this is a *separate*
+    // reference the run holds so the data source stays alive while the run is
+    // reading it, and so the caller freeing its handle early does not drop the
+    // family. It is released (decrementing the family refcount) when the run
+    // advances to the next case or is freed.
+    current_family: Option<Arc<FamilyShared>>,
     result: Option<HegelRunResult>,
     /// Set once a TestRunDone (or worker-died Err) has been observed on
     /// `from_worker`. Stops `hegel_next_test_case` from blocking forever
@@ -468,28 +553,33 @@ pub struct HegelRun {
     drained: bool,
 }
 
-/// Aggregated outcome of a finished run, returned by
-/// `hegel_run_result`. Read the passed / failed / errored status via
+/// Aggregated outcome of a finished run. `hegel_run_result` writes a
+/// caller-owned snapshot of it: read the passed / failed / errored status via
 /// `hegel_run_result_status`, the number of distinct failures via
 /// `hegel_run_result_failure_count`, each failure via
 /// `hegel_run_result_failure(r, i)`, and — for an errored run — the
-/// run-level error message via `hegel_run_result_error`. The pointer is
-/// borrowed from the `hegel_run_t` and stays valid until `hegel_run_free`
-/// is called.
+/// run-level error message via `hegel_run_result_error`. The snapshot is
+/// independent of the run (it stays valid after `hegel_run_free`) and must be
+/// released with `hegel_run_result_free`; the strings read off it live until
+/// then.
+#[derive(Clone)]
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
 }
 
-/// One distinct interesting test case surfaced by the run. The strings are
-/// owned by the parent `hegel_run_result_t`; reading them via
-/// `hegel_failure_origin` / `_reproduction_blob` returns `const char*`
-/// pointers that stay valid until `hegel_run_free`.
+/// One distinct interesting test case surfaced by the run.
+/// `hegel_run_result_failure` writes a caller-owned snapshot that owns its
+/// strings: reading them via `hegel_failure_origin` /
+/// `_reproduction_blob` returns `const char*` pointers that stay valid until
+/// the failure is released with `hegel_failure_free`. The snapshot is
+/// independent of the result and run it came from.
 ///
 /// A failure carries the origin the engine grouped on and the reproduce blob.
 /// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
 /// the diagnostic and re-raise the test's own failure.
+#[derive(Clone)]
 pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
@@ -1014,7 +1104,7 @@ pub unsafe extern "C" fn hegel_run_start(
         worker: Some(worker),
         from_worker,
         abort,
-        current_tc: None,
+        current_family: None,
         result: None,
         drained: false,
     }));
@@ -1022,10 +1112,13 @@ pub unsafe extern "C" fn hegel_run_start(
     HEGEL_OK
 }
 
-/// Block until the engine produces the next test case, writing a borrowed
-/// handle pointing into the parent `hegel_run_t` into `*out_test_case`.
+/// Block until the engine produces the next test case, writing a handle for it
+/// into `*out_test_case`.
 ///
-/// When the run is finished this writes NULL into `*out_test_case` and returns
+/// The handle is owned by the caller and must be released with
+/// `hegel_test_case_free` (the run keeps its own internal reference, so freeing
+/// the handle never disturbs the run). When the run is finished this writes
+/// NULL into `*out_test_case` and returns
 /// `HEGEL_OK`; call `hegel_run_result` to read the outcome. A non-`HEGEL_OK`
 /// code means something went wrong (caller misuse, engine crash) rather than
 /// normal completion: `HEGEL_E_NOT_COMPLETE` if the previous test case was not
@@ -1048,25 +1141,20 @@ pub unsafe extern "C" fn hegel_next_test_case(
         return HEGEL_E_INVALID_HANDLE;
     };
 
-    if let Some(tc) = run.current_tc {
-        // SAFETY: `run.current_tc` only ever holds a live pointer created by
-        // `Box::into_raw`, and the caller is expected to not be concurrently
-        // mutating the test case while calling this function.
-        if !unsafe { (*tc).completed } {
+    if let Some(family) = run.current_family.take() {
+        if !family.completed.load(Ordering::Acquire) {
             set_last_error(
                 ctx,
                 "hegel_next_test_case: previous test case was not marked complete \
                  (call hegel_mark_complete before requesting the next case)",
             );
+            run.current_family = Some(family);
             return HEGEL_E_NOT_COMPLETE;
         }
-        // At this point, the test case has been marked completed, so...
-        //
-        // SAFETY: `run.current_tc` only ever holds a live pointer created by
-        // `Box::into_raw`, and the caller is expected to not dereference this
-        // pointer once it has been freed here.
-        drop(unsafe { Box::from_raw(tc) });
-        run.current_tc = None;
+        // The previous case is complete; dropping the run's reference here
+        // releases the data source unless the caller still holds a handle to
+        // it (in which case it lives until the caller frees that handle).
+        drop(family);
     }
 
     if run.drained {
@@ -1075,13 +1163,9 @@ pub unsafe extern "C" fn hegel_next_test_case(
 
     match run.from_worker.recv() {
         Ok(WorkerMessage::TestCase { ds, ack }) => {
-            let case = Box::into_raw(Box::new(HegelTestCase {
-                ds,
-                completed: false,
-                last_value: Vec::new(),
-                ack: Some(ack),
-            }));
-            run.current_tc = Some(case);
+            let family = new_family(ds, Some(ack));
+            let case = handle_from_family(Arc::clone(&family));
+            run.current_family = Some(family);
             unsafe { *out_test_case = case };
             HEGEL_OK
         }
@@ -1103,33 +1187,35 @@ pub unsafe extern "C" fn hegel_next_test_case(
     }
 }
 
-/// Write the aggregated result of a finished run, borrowed from the parent
-/// `hegel_run_t`, into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
+/// Write a caller-owned snapshot of the aggregated result of a finished run
+/// into `*out_result`. Returns `HEGEL_E_NOT_COMPLETE` with
 /// `hegel_context_last_error` set if the run hasn't finished yet
 /// (`hegel_next_test_case` has not yet reported completion on this run),
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a
 /// NULL `out_result`.
 ///
-/// The pointer written to `*out_result` is valid until `hegel_run_free`.
+/// The snapshot is independent of the run: it stays valid after
+/// `hegel_run_free` and must be released with `hegel_run_result_free`. Each
+/// call writes a fresh snapshot, each freed separately.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result(
     ctx: *mut HegelContext,
     run: *mut HegelRun,
-    out_result: *mut *const HegelRunResult,
+    out_result: *mut *mut HegelRunResult,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     if out_result.is_null() {
         set_last_error(ctx, "hegel_run_result: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_result = ptr::null() };
+    unsafe { *out_result = ptr::null_mut() };
     let Some(run) = (unsafe { run.as_ref() }) else {
         set_last_error(ctx, "hegel_run_result: run pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
     match &run.result {
         Some(r) => {
-            unsafe { *out_result = r as *const HegelRunResult };
+            unsafe { *out_result = into_raw_send_sync(r.clone()) };
             HEGEL_OK
         }
         None => {
@@ -1139,8 +1225,29 @@ pub unsafe extern "C" fn hegel_run_result(
     }
 }
 
-/// Free a run handle and its result. Safe to call with NULL (a no-op that
-/// returns `HEGEL_OK`).
+/// Release a run-result snapshot from `hegel_run_result`, along with the
+/// strings read off it. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+/// snapshot twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_free(
+    ctx: *mut HegelContext,
+    r: *mut HegelRunResult,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if r.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `r` is a non-null snapshot from `hegel_run_result` that the
+    // caller is freeing exactly once.
+    drop(unsafe { Box::from_raw(r) });
+    HEGEL_OK
+}
+
+/// Free a run handle. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Result and failure snapshots from `hegel_run_result` /
+/// `hegel_run_result_failure` are independent of the run and stay valid;
+/// they are released with their own frees.
 ///
 /// If the caller exited its test loop early (e.g. with a still-active
 /// test case), this drains the worker thread cleanly: any in-flight
@@ -1160,18 +1267,14 @@ pub unsafe extern "C" fn hegel_run_free(
 
     run.abort.store(true, Ordering::Release);
 
-    if let Some(tc) = run.current_tc.take() {
-        // SAFETY: `run.current_tc` only ever holds a live pointer created by
-        // `Box::into_raw`, and the caller is expected to not dereference this
-        // pointer once it has been freed here.
-        let mut tc = unsafe { Box::from_raw(tc) };
-        if !tc.completed {
-            tc.ds.mark_complete(&TestCaseResult::Valid);
-            if let Some(ack) = &tc.ack {
-                let _ = ack.send(());
-            }
-            tc.completed = true;
-        }
+    if let Some(family) = run.current_family.take() {
+        // If the caller bailed out of its loop with this case still in flight,
+        // claim completion for the family (releasing the worker's ack so it
+        // can wind down). Dropping the run's reference here releases the
+        // data source unless the caller still holds a handle to it, in which
+        // case it lives until the caller frees that handle.
+        family.complete(&TestCaseResult::Valid);
+        drop(family);
     }
 
     while let Ok(msg) = run.from_worker.recv() {
@@ -1207,8 +1310,8 @@ pub unsafe extern "C" fn hegel_run_free(
 /// for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
 /// failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
 /// with a diagnostic in `hegel_context_last_error`. The handle written to
-/// `*out_test_case` is owned by the **caller** — unlike test cases from
-/// `hegel_next_test_case`, it must be released with `hegel_test_case_free`.
+/// `*out_test_case` is owned by the **caller** and must be released with
+/// `hegel_test_case_free`, like every test-case handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_from_blob(
     ctx: *mut HegelContext,
@@ -1242,25 +1345,30 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         );
         return HEGEL_E_INVALID_ARG;
     };
-    let tc = Box::into_raw(Box::new(HegelTestCase {
-        ds,
-        completed: false,
-        last_value: Vec::new(),
-        ack: None,
-    }));
+    let tc = handle_from_family(new_family(ds, None));
     unsafe { *out_test_case = tc };
     HEGEL_OK
 }
 
-/// Free a standalone test case previously returned by
-/// `hegel_test_case_from_blob`. Safe to call with NULL (a no-op that returns
-/// `HEGEL_OK`), and safe whether or not the test case was marked complete.
+/// Release a test-case handle, whatever its origin — a handle from
+/// `hegel_test_case_from_blob`, a clone from `hegel_test_case_clone`, or a
+/// run-owned handle from `hegel_next_test_case`. Safe to call with NULL (a
+/// no-op that returns `HEGEL_OK`), and safe whether or not the test case was
+/// marked complete.
 ///
-/// Must NOT be called on a test case obtained from
-/// `hegel_next_test_case` — those are borrowed from the parent
-/// `hegel_run_t` and are released by `hegel_run_free`. Passing one here is
-/// detected (while the run is still alive) and refused with
-/// `HEGEL_E_INVALID_HANDLE` and a diagnostic in `hegel_context_last_error`.
+/// Each handle holds one reference to the shared test case. Freeing it drops
+/// that reference; the underlying data source is released once the last
+/// reference is gone (every handle freed, and — for a run-owned family — the
+/// run has released its own reference). Each handle must be freed exactly once;
+/// freeing the same handle twice is undefined behaviour.
+///
+/// Freeing is not completing: a run-owned test case still needs
+/// `hegel_mark_complete` from some handle in its family before the run can
+/// advance. Freeing the last handle of an uncompleted run-owned family leaves
+/// `hegel_next_test_case` returning `HEGEL_E_NOT_COMPLETE` with no way to
+/// complete the case, and the run can then only be torn down with
+/// `hegel_run_free` — so conclude every case before dropping your last handle
+/// to it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_free(
     ctx: *mut HegelContext,
@@ -1270,24 +1378,119 @@ pub unsafe extern "C" fn hegel_test_case_free(
     if tc.is_null() {
         return HEGEL_OK;
     }
-    if unsafe { (*tc).ack.is_some() } {
-        set_last_error(
-            ctx,
-            "hegel_test_case_free: this test case is owned by its hegel_run_t \
-             (it came from hegel_next_test_case); it is freed by hegel_run_free",
-        );
-        return HEGEL_E_INVALID_HANDLE;
-    }
+    // SAFETY: `tc` is a non-null handle from a `hegel_*` constructor that the
+    // caller is freeing exactly once; reconstituting the `Box` drops this
+    // handle and its reference to the family.
     drop(unsafe { Box::from_raw(tc) });
     HEGEL_OK
 }
 
-unsafe fn tc_mut<'a>(tc: *mut HegelTestCase) -> Result<&'a mut HegelTestCase, hegel_result_t> {
-    let tc = unsafe { tc.as_mut() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
-    if tc.completed {
+/// Clone a test-case handle, writing a new handle that shares the same
+/// underlying test case into `*out_test_case`.
+///
+/// The clone is a *view onto the same test case*, not an independent one: it
+/// draws from the same data source, and `hegel_mark_complete` on any handle in
+/// the family marks them all complete. Clones exist so a test case can be
+/// driven from several threads — each handle has its own lock, so two clones
+/// may draw concurrently, whereas using a *single* handle from two threads
+/// returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
+/// currently non-deterministic; making them robust is future work.)
+///
+/// Cloning is allowed on a clone (the result shares the same family) and
+/// after the family has completed (the clone simply reports
+/// `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
+/// lock, so a handle may be cloned while another thread is mid-draw on it.
+///
+/// The new handle holds its own reference to the shared test case and must be
+/// released with `hegel_test_case_free`, like any other handle. The underlying
+/// test case stays alive until every handle (this clone, the handle it was
+/// cloned from, and any others) has been freed.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, or `HEGEL_E_INVALID_ARG`
+/// for a NULL `out_test_case`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_clone(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    out_test_case: *mut *mut HegelTestCase,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_test_case.is_null() {
+        set_last_error(ctx, "hegel_test_case_clone: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_test_case = ptr::null_mut() };
+    let Some(src) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_clone: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    let clone = handle_from_family(Arc::clone(&src.family));
+    unsafe { *out_test_case = clone };
+    HEGEL_OK
+}
+
+/// Allocate a fresh family from a data source and optional run ack. `ack` is
+/// `Some` for a run-owned family (the worker blocks on it until completion),
+/// `None` for a standalone (`from_blob`) family.
+fn new_family(
+    ds: Box<dyn DataSource + Send + Sync>,
+    ack: Option<mpsc::Sender<()>>,
+) -> Arc<FamilyShared> {
+    Arc::new(FamilyShared {
+        ds,
+        completed: AtomicBool::new(false),
+        ack,
+    })
+}
+
+/// Allocate a handle holding one reference to `family`, and return its raw
+/// pointer. Each handle has its own `local` buffer so concurrent clones do not
+/// stomp each other's borrowed values.
+fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
+    into_raw_send_sync(HegelTestCase {
+        family,
+        local: Mutex::new(LocalState {
+            last_value: Vec::new(),
+            completed: false,
+        }),
+    })
+}
+
+/// Resolve a test-case handle for a per-test-case primitive, returning the
+/// handle and its locked per-instance state.
+///
+/// Takes a *shared* reference (never `&mut`: two threads racing the same
+/// handle pointer would make `&mut` instant UB, whereas `&HegelTestCase` is
+/// sound because the type is `Sync`). Errors, in order:
+/// - `HEGEL_E_INVALID_HANDLE` for a null pointer,
+/// - `HEGEL_E_ALREADY_COMPLETE` if the family is already complete (checked
+///   before the lock so completion wins over contention),
+/// - `HEGEL_E_CONCURRENT_USE` if this handle is already locked by another
+///   thread (each handle may be driven by at most one thread at a time).
+unsafe fn tc_guard<'a>(
+    tc: *const HegelTestCase,
+) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
+    let tc = unsafe { tc.as_ref() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
+    if tc.family.completed.load(Ordering::Acquire) {
         return Err(HEGEL_E_ALREADY_COMPLETE);
     }
-    Ok(tc)
+    let guard = tc.local.try_lock().ok_or(HEGEL_E_CONCURRENT_USE)?;
+    Ok((tc, guard))
+}
+
+/// Like [`tc_guard`] but for `hegel_mark_complete`: no family-completion
+/// check (completing must work on an already-complete family — a second clone
+/// completing it is a no-op — so `hegel_mark_complete` does its own per-handle
+/// and `compare_exchange` checks), and a *blocking* lock instead of
+/// `try_lock`. Completion is first-caller-wins and always succeeds, so an
+/// in-flight operation on the same handle is waited for rather than reported
+/// as `HEGEL_E_CONCURRENT_USE`. Returns `HEGEL_E_INVALID_HANDLE` for a null
+/// pointer.
+unsafe fn tc_lock<'a>(
+    tc: *const HegelTestCase,
+) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
+    let tc = unsafe { tc.as_ref() }.ok_or(HEGEL_E_INVALID_HANDLE)?;
+    Ok((tc, tc.local.lock()))
 }
 
 fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_result_t {
@@ -1327,7 +1530,7 @@ pub unsafe extern "C" fn hegel_generate(
     out_value_len: *mut usize,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, mut local) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1352,13 +1555,13 @@ pub unsafe extern "C" fn hegel_generate(
         }
     };
 
-    let value = match tc.ds.generate(&schema) {
+    let value = match tc.family.ds.generate(&schema) {
         Ok(v) => v,
         Err(e) => return translate_ds_error(ctx, e),
     };
 
-    tc.last_value.clear();
-    if let Err(e) = ciborium::ser::into_writer(&value, &mut tc.last_value) {
+    local.last_value.clear();
+    if let Err(e) = ciborium::ser::into_writer(&value, &mut local.last_value) {
         // nocov start
         set_last_error(
             ctx,
@@ -1367,8 +1570,8 @@ pub unsafe extern "C" fn hegel_generate(
         return HEGEL_E_INTERNAL; // nocov
     }
     unsafe {
-        *out_value_cbor = tc.last_value.as_ptr();
-        *out_value_len = tc.last_value.len();
+        *out_value_cbor = local.last_value.as_ptr();
+        *out_value_len = local.last_value.len();
     }
     HEGEL_OK
 }
@@ -1388,11 +1591,11 @@ pub unsafe extern "C" fn hegel_start_span(
     label: u64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.ds.start_span(label) {
+    match tc.family.ds.start_span(label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1408,11 +1611,11 @@ pub unsafe extern "C" fn hegel_stop_span(
     discard: bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.ds.stop_span(discard) {
+    match tc.family.ds.stop_span(discard) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1435,7 +1638,7 @@ pub unsafe extern "C" fn hegel_new_collection(
     out_collection_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1448,7 +1651,7 @@ pub unsafe extern "C" fn hegel_new_collection(
     } else {
         Some(max_size)
     };
-    match tc.ds.new_collection(min_size, max) {
+    match tc.family.ds.new_collection(min_size, max) {
         Ok(id) => {
             unsafe { *out_collection_id = id };
             HEGEL_OK
@@ -1469,7 +1672,7 @@ pub unsafe extern "C" fn hegel_collection_more(
     out_more: *mut bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1477,7 +1680,7 @@ pub unsafe extern "C" fn hegel_collection_more(
         set_last_error(ctx, "hegel_collection_more: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.collection_more(collection_id) {
+    match tc.family.ds.collection_more(collection_id) {
         Ok(m) => {
             unsafe { *out_more = m };
             HEGEL_OK
@@ -1498,7 +1701,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
     why: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1513,7 +1716,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
             }
         }
     };
-    match tc.ds.collection_reject(collection_id, why_str) {
+    match tc.family.ds.collection_reject(collection_id, why_str) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1537,7 +1740,7 @@ pub unsafe extern "C" fn hegel_new_pool(
     out_pool_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1545,7 +1748,7 @@ pub unsafe extern "C" fn hegel_new_pool(
         set_last_error(ctx, "hegel_new_pool: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.new_pool() {
+    match tc.family.ds.new_pool() {
         Ok(id) => {
             unsafe { *out_pool_id = id };
             HEGEL_OK
@@ -1568,7 +1771,7 @@ pub unsafe extern "C" fn hegel_pool_add(
     out_variable_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1576,7 +1779,7 @@ pub unsafe extern "C" fn hegel_pool_add(
         set_last_error(ctx, "hegel_pool_add: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.pool_add(pool_id) {
+    match tc.family.ds.pool_add(pool_id) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1605,7 +1808,7 @@ pub unsafe extern "C" fn hegel_pool_generate(
     out_variable_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1613,7 +1816,7 @@ pub unsafe extern "C" fn hegel_pool_generate(
         set_last_error(ctx, "hegel_pool_generate: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.pool_generate(pool_id, consume) {
+    match tc.family.ds.pool_generate(pool_id, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1684,7 +1887,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     out_state_machine_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1718,7 +1921,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     };
     let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
     let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
-    match tc.ds.new_state_machine(&rule_refs, &invariant_refs) {
+    match tc.family.ds.new_state_machine(&rule_refs, &invariant_refs) {
         Ok(id) => {
             unsafe { *out_state_machine_id = id };
             HEGEL_OK
@@ -1748,7 +1951,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     out_rule_index: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1756,7 +1959,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         set_last_error(ctx, "hegel_state_machine_next_rule: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.state_machine_next_rule(state_machine_id) {
+    match tc.family.ds.state_machine_next_rule(state_machine_id) {
         Ok(index) => {
             unsafe { *out_rule_index = index };
             HEGEL_OK
@@ -1792,7 +1995,7 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
     out_value: *mut bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1800,7 +2003,11 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
         set_last_error(ctx, "hegel_primitive_boolean: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.ds.primitive_boolean(p, has_forced.then_some(forced)) {
+    match tc
+        .family
+        .ds
+        .primitive_boolean(p, has_forced.then_some(forced))
+    {
         Ok(v) => {
             unsafe { *out_value = v };
             HEGEL_OK
@@ -1828,7 +2035,7 @@ pub unsafe extern "C" fn hegel_target(
     label: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc_mut(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
@@ -1843,7 +2050,7 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    match tc.ds.target_observation(value, label) {
+    match tc.family.ds.target_observation(value, label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1869,6 +2076,19 @@ pub unsafe extern "C" fn hegel_target(
 /// origin from the *location* of the failing assertion, not the
 /// assertion's message. hegel-rust's own panic-to-failure path does
 /// exactly this (see `src/run_lifecycle.rs`).
+///
+/// Completing a test case is **first-caller-wins and family-wide**: the first
+/// `hegel_mark_complete` anywhere in the family (any clone or the root) records
+/// the outcome and unblocks the run. A later call on a *different* handle in the
+/// family is then a safe no-op that returns `HEGEL_OK`, so two clones racing to
+/// complete the same test case do not error — whichever wins sets the result.
+/// Calling `hegel_mark_complete` on the *same* handle twice is a usage error and
+/// returns `HEGEL_E_ALREADY_COMPLETE`. Because completion always succeeds under
+/// first-caller-wins, `hegel_mark_complete` never returns
+/// `HEGEL_E_CONCURRENT_USE`: if another thread is mid-operation on this handle
+/// it waits for that operation to finish and then completes. A NULL `tc`
+/// returns `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns
+/// `HEGEL_E_INVALID_ARG`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_mark_complete(
     ctx: *mut HegelContext,
@@ -1877,11 +2097,15 @@ pub unsafe extern "C" fn hegel_mark_complete(
     origin: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let tc = match unsafe { tc.as_mut() } {
-        Some(t) => t,
-        None => return HEGEL_E_INVALID_HANDLE,
+    let (tc, mut guard) = match unsafe { tc_lock(tc) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
     };
-    if tc.completed {
+
+    // Completing the *same* handle twice is a usage error. (A different handle
+    // in the family completing after this one is handled below: it is a no-op,
+    // not an error.)
+    if guard.completed {
         return HEGEL_E_ALREADY_COMPLETE;
     }
 
@@ -1908,11 +2132,12 @@ pub unsafe extern "C" fn hegel_mark_complete(
         }
     };
 
-    tc.ds.mark_complete(&outcome);
-    if let Some(ack) = &tc.ack {
-        let _ = ack.send(());
-    }
-    tc.completed = true;
+    guard.completed = true;
+
+    // First handle in the family to complete wins: it records the outcome and
+    // unblocks the run. A later clone completing the (already-complete) family
+    // is a safe no-op, so concurrent clones don't race to an error.
+    tc.family.complete(&outcome);
     HEGEL_OK
 }
 
@@ -1978,9 +2203,9 @@ pub unsafe extern "C" fn hegel_run_result_status(
 /// — or NULL when it completed normally. An errored run has
 /// `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
 /// error is a failure of the run itself, not a counterexample to the property.
-/// The written pointer is valid until `hegel_run_free`. Returns
-/// `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG` for a NULL
-/// `out_error`.
+/// The written pointer is owned by the result snapshot and valid until
+/// `hegel_run_result_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_error`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_error(
     ctx: *mut HegelContext,
@@ -2023,17 +2248,20 @@ pub unsafe extern "C" fn hegel_run_result_failure_count(
     HEGEL_OK
 }
 
-/// Write a borrowed pointer to the `index`-th failure (0-based) into
-/// `*out_failure`, or NULL if `index >= hegel_run_result_failure_count(r)`.
-/// The pointer is valid until `hegel_run_free` is called on the parent run.
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r` or `HEGEL_E_INVALID_ARG`
-/// for a NULL `out_failure`.
+/// Write a caller-owned snapshot of the `index`-th failure (0-based) into
+/// `*out_failure`. `index` must be less than
+/// `hegel_run_result_failure_count(r)`. The snapshot is independent of the
+/// result and run it came from and must be released with
+/// `hegel_failure_free`; each call writes a fresh snapshot, each freed
+/// separately. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `r`, or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_failure` or an out-of-range `index`
+/// (with a diagnostic in `hegel_context_last_error`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_result_failure(
     ctx: *mut HegelContext,
     r: *const HegelRunResult,
     index: usize,
-    out_failure: *mut *const HegelFailure,
+    out_failure: *mut *mut HegelFailure,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let r = match unsafe { result_ref(ctx, r, "hegel_run_result_failure") } {
@@ -2044,13 +2272,38 @@ pub unsafe extern "C" fn hegel_run_result_failure(
         set_last_error(ctx, "hegel_run_result_failure: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe {
-        *out_failure = r
-            .failures
-            .get(index)
-            .map(|f| f as *const HegelFailure)
-            .unwrap_or(ptr::null());
+    unsafe { *out_failure = ptr::null_mut() };
+    let Some(f) = r.failures.get(index) else {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_run_result_failure: index {index} is out of range \
+                 (the result has {} failures)",
+                r.failures.len()
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    unsafe { *out_failure = into_raw_send_sync(f.clone()) };
+    HEGEL_OK
+}
+
+/// Release a failure snapshot from `hegel_run_result_failure`, along with the
+/// strings read off it. Safe to call with NULL (a no-op that returns
+/// `HEGEL_OK`). Must be called exactly once per snapshot; freeing the same
+/// snapshot twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_free(
+    ctx: *mut HegelContext,
+    f: *mut HegelFailure,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if f.is_null() {
+        return HEGEL_OK;
     }
+    // SAFETY: `f` is a non-null snapshot from `hegel_run_result_failure` that
+    // the caller is freeing exactly once.
+    drop(unsafe { Box::from_raw(f) });
     HEGEL_OK
 }
 
@@ -2080,8 +2333,8 @@ pub unsafe extern "C" fn hegel_failure_origin(
 /// Write the failure's reproduce blob — a base64 string encoding the minimal
 /// counterexample's choice sequence, suitable for deterministic replay via
 /// `hegel_test_case_from_blob` — into `*out_blob`, or NULL if the engine
-/// produced no blob for this failure. The written pointer is borrowed from the
-/// parent `hegel_run_result_t` and stays valid until `hegel_run_free`. Returns
+/// produced no blob for this failure. The written pointer is owned by the
+/// failure snapshot and stays valid until `hegel_failure_free`. Returns
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `f` or `HEGEL_E_INVALID_ARG` for a NULL
 /// `out_blob`.
 #[unsafe(no_mangle)]
@@ -2133,3 +2386,7 @@ pub unsafe extern "C" fn hegel_version(
     unsafe { *out_version = VERSION.as_ptr() };
     HEGEL_OK
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/lib_tests.rs"]
+mod tests;

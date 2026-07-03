@@ -178,10 +178,11 @@ fn hegel_run_skips_when_generate_phase_disabled() {
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
+    use crate::generators as gs;
 
     /// Property used by the replay tests: fails for any drawn i32 >= 1000.
     fn failing_property(tc: TestCase) {
-        let n: i32 = tc.draw(crate::generators::integers::<i32>());
+        let n: i32 = tc.draw(gs::integers::<i32>());
         assert!(n < 1000, "boom: n = {n}");
     }
 
@@ -211,7 +212,6 @@ mod reproduce {
         assert!(result.failure_count() > 0, "property should have failed");
         result
             .failure(0)
-            .expect("a failure")
             .reproduce_blob
             .expect("a shrunk failure carries a reproduce blob")
     }
@@ -282,7 +282,7 @@ mod reproduce {
         let blob = discover_reproduce_blob();
         let msg = run_panic_message(
             Hegel::new(|tc: TestCase| {
-                let _: i32 = tc.draw(crate::generators::integers::<i32>());
+                let _: i32 = tc.draw(gs::integers::<i32>());
             })
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .reproduce_failure(blob),

@@ -69,12 +69,14 @@ int main(void) {
         hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if (rc != HEGEL_OK) {
             const char *err = hegel_context_last_error(ctx);
             fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, err);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -82,6 +84,7 @@ int main(void) {
         if (n < 0) {
             fprintf(stderr, "decode failed\n");
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -90,9 +93,11 @@ int main(void) {
         } else {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
         }
+        /* The caller owns every handle from hegel_next_test_case and must free it. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
@@ -108,7 +113,7 @@ int main(void) {
         return 1;
     }
 
-    const hegel_failure_t *f;
+    hegel_failure_t *f;
     HEGEL_CHECK(hegel_run_result_failure, ctx, result, 0, &f);
     const char *origin;
     HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
@@ -118,6 +123,10 @@ int main(void) {
     }
 
     printf("got expected failure: origin=%s\n", origin);
+
+    /* Result and failure are caller-owned snapshots, freed independently. */
+    HEGEL_CHECK(hegel_failure_free, ctx, f);
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     HEGEL_CHECK(hegel_run_free, ctx, run);
     HEGEL_CHECK(hegel_settings_free, ctx, s);

@@ -68,8 +68,16 @@ pub(crate) use invalid_argument;
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
 ///   generator's schema) was semantically invalid; the diagnostic is read
 ///   synchronously from this thread's libhegel error context.
+/// - `HEGEL_E_ALREADY_COMPLETE` — the test case has finished. Unreachable
+///   from a test body (the outcome is reported only after the body returns),
+///   so it means a `TestCase` outlived its test — typically moved to a thread
+///   that was never joined — and the panic message says so.
 /// - anything else — an engine/framework invariant we don't expect on the hot
 ///   path; treat it as an internal error rather than a shrinkable failure.
+///   This includes `HEGEL_E_CONCURRENT_USE`: the frontend never drives one
+///   handle from two threads (`clone` forks a fresh handle, `TestCase` is
+///   `!Sync`, and `hegel_mark_complete` waits instead of erroring), so it
+///   cannot arise here in correct use.
 #[track_caller]
 pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     use hegel_c::hegel_result_t::*;
@@ -77,6 +85,11 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
         HEGEL_E_STOP_TEST => raise_control(StopTest),
         HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
         HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
+        HEGEL_E_ALREADY_COMPLETE => panic!(
+            "this test case has already finished; was the TestCase moved to a \
+             thread that outlived the test? Join any thread that draws before \
+             the test returns."
+        ),
         other => hegel_internal_error!(
             "libhegel returned unexpected code {}: {}",
             other as i32,
@@ -94,18 +107,13 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
-    /// Fine-grained lock over the state shared between clones of a
-    /// `TestCase`. Acquired briefly around each individual backend call
-    /// and around each mutation of the draw-tracking bookkeeping, not
-    /// around entire user-visible operations like a `draw`. The mutex is
-    /// non-reentrant; no method holds it while calling back into
-    /// `TestCase`.
-    shared: Mutex<SharedState>,
-}
-
-pub(crate) struct SharedState {
-    ctc: CTestCase,
-    draw_state: DrawState,
+    /// Draw-name bookkeeping shared between every clone of a `TestCase`,
+    /// behind a blocking, non-reentrant mutex. The backend handle is no longer
+    /// shared here — each `TestCase` instance owns its own libhegel handle (so
+    /// clones can be driven concurrently) — so this lock only serialises the
+    /// frontend's own draw-name accounting, never backend traffic. No method
+    /// holds it while calling back into `TestCase`.
+    draw_state: Mutex<DrawState>,
 }
 
 pub(crate) struct DrawState {
@@ -163,13 +171,14 @@ pub(crate) struct TestCaseLocalData {
 ///
 /// ## What is guaranteed
 ///
-/// Individual backend operations (a single `generate`, `start_span`,
-/// `stop_span`, or pool/collection call) are serialised by a shared
-/// mutex, so the bytes on the wire to the backend stay well-formed no
-/// matter how clones are used across threads.
+/// Each clone owns its own backend handle, so a clone may be moved to and
+/// driven from another thread freely. A *single* handle (one clone) may only
+/// be driven by one thread at a time — the backend rejects concurrent use of
+/// one handle outright — which is why you `clone` to hand work to a thread
+/// rather than sharing one `TestCase` across threads (the type is `!Sync`, so
+/// the compiler enforces this too).
 ///
-/// This is enough for patterns where threads do not race on generation —
-/// for example:
+/// This covers patterns where threads do not race on generation — for example:
 ///
 /// - Spawn a worker, let it draw, `join` it, then continue on the main
 ///   thread.
@@ -184,14 +193,11 @@ pub(crate) struct TestCaseLocalData {
 /// right now should be considered a borderline-internal feature. If
 /// you do not know exactly what you're doing it probably won't work.
 ///
-/// Two or more threads drawing concurrently from clones of the same
-/// `TestCase` is allowed by the type system but is **not deterministic**:
-/// the order in which draws interleave depends on thread scheduling, and
-/// the backend has no way to reproduce that order on replay. Composite
-/// draws are also not atomic with respect to other threads — another
-/// thread's draws can land between this thread's `start_span` and
-/// `stop_span`, corrupting the shrink-friendly span structure. In
-/// practice this means such tests may:
+/// Two or more clones drawing *concurrently* is allowed (each has its own
+/// handle, and the backend keeps the shared engine state internally
+/// consistent), but it is **not deterministic**: the order in which draws
+/// interleave depends on thread scheduling, and the backend has no way to
+/// reproduce that order on replay. In practice this means such tests may:
 ///
 /// - Produce different values on successive runs of the same seed.
 /// - Shrink poorly or not at all.
@@ -209,6 +215,15 @@ pub(crate) struct TestCaseLocalData {
 pub struct TestCase {
     global: Arc<TestCaseGlobalData>,
     local: RefCell<TestCaseLocalData>,
+    /// This instance's libhegel handle, shared through the `Arc` with the
+    /// lifecycle that created it and with any [`child`](TestCase::child)
+    /// instances, so a `TestCase` that escapes its test (moved to a thread
+    /// that is never joined) keeps the handle alive rather than dangling —
+    /// its later draws fail cleanly because the case has finished.
+    /// [`clone`](TestCase::clone) instead gets a fresh handle
+    /// (`hegel_test_case_clone`) with its own lock, so two clones can be
+    /// driven from different threads concurrently.
+    handle: Arc<CTestCase>,
 }
 
 impl Clone for TestCase {
@@ -216,6 +231,7 @@ impl Clone for TestCase {
         TestCase {
             global: self.global.clone(),
             local: RefCell::new(self.local.borrow().clone()),
+            handle: Arc::new(self.handle.clone_handle()),
         }
     }
 }
@@ -269,7 +285,7 @@ impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
     /// true on a non-quiet final replay or in verbose mode, where drawn
     /// values and notes should be surfaced.
-    pub(crate) fn new(ctc: CTestCase, emit: bool, mode: Mode) -> Self {
+    pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, mode: Mode) -> Self {
         let override_sink = current_output_sink();
         let on_draw: OutputSink = match override_sink {
             Some(sink) if emit => sink,
@@ -280,13 +296,10 @@ impl TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
                 emit,
-                shared: Mutex::new(SharedState {
-                    ctc,
-                    draw_state: DrawState {
-                        named_draw_counts: HashMap::new(),
-                        named_draw_repeatable: HashMap::new(),
-                        allocated_display_names: HashSet::new(),
-                    },
+                draw_state: Mutex::new(DrawState {
+                    named_draw_counts: HashMap::new(),
+                    named_draw_repeatable: HashMap::new(),
+                    allocated_display_names: HashSet::new(),
                 }),
             }),
             local: RefCell::new(TestCaseLocalData {
@@ -294,6 +307,7 @@ impl TestCase {
                 indent: 0,
                 on_draw,
             }),
+            handle,
         }
     }
 
@@ -301,14 +315,13 @@ impl TestCase {
         self.global.mode
     }
 
-    /// Acquire the shared mutex for the duration of `f`.
+    /// Acquire the shared draw-name bookkeeping for the duration of `f`.
     ///
-    /// Held briefly around individual backend calls or draw-state updates,
-    /// never around whole user-visible operations. The mutex is
-    /// non-reentrant, so `f` must not call any other method that also
-    /// acquires the shared mutex.
-    fn with_shared<R>(&self, f: impl FnOnce(&mut SharedState) -> R) -> R {
-        let mut guard = self.global.shared.lock();
+    /// Held briefly around draw-state updates, never around whole user-visible
+    /// operations. The mutex is non-reentrant, so `f` must not call any other
+    /// method that also acquires it.
+    pub(crate) fn with_draw_state<R>(&self, f: impl FnOnce(&mut DrawState) -> R) -> R {
+        let mut guard = self.global.draw_state.lock();
         f(&mut guard)
     }
 
@@ -471,7 +484,7 @@ impl TestCase {
     /// Has no effect during replays or if the test case has been aborted.
     pub fn target_labelled(&self, score: f64, label: impl Into<String>) {
         let label = label.into();
-        let outcome = self.with_shared(|shared| shared.ctc.target(score, &label));
+        let outcome = self.with_ctc(|ctc| ctc.target(score, &label));
         if let Err(rc) = outcome {
             raise_for_rc(rc);
         }
@@ -566,15 +579,14 @@ impl TestCase {
                 indent: local.indent + extra_indent,
                 on_draw: local.on_draw.clone(),
             }),
+            handle: Arc::clone(&self.handle),
         }
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
         let emit = self.global.emit;
 
-        let display_name = self.with_shared(|shared| {
-            let draw_state = &mut shared.draw_state;
-
+        let display_name = self.with_draw_state(|draw_state| {
             match draw_state.named_draw_repeatable.get(name) {
                 Some(&prev) if prev != repeatable => {
                     hegel_internal_error!(
@@ -648,42 +660,14 @@ impl TestCase {
         ));
     }
 
-    /// Run `f` with access to this test case's data source.
+    /// Run `f` with this instance's own libhegel handle.
     ///
-    /// Acquires the shared mutex for the duration of the call so
-    /// concurrent threads don't scramble backend traffic. The closure
-    /// must not call back into any other `TestCase` method that would
-    /// re-acquire the shared mutex.
+    /// Each `TestCase` instance owns its handle, so there is no shared lock to
+    /// take here: libhegel serialises a single handle against concurrent use
+    /// itself (returning `HEGEL_E_CONCURRENT_USE`), and clones each carry their
+    /// own handle and lock.
     pub(crate) fn with_ctc<R>(&self, f: impl FnOnce(&CTestCase) -> R) -> R {
-        self.with_shared(|shared| f(&shared.ctc))
-    }
-
-    /// Report the test case's outcome to the engine via `hegel_mark_complete`.
-    ///
-    /// Only the status — and, for an interesting (failing) case, the bug
-    /// origin — crosses the C ABI; the panic message and reproduce blob are
-    /// recovered from the run result afterward, not pushed through here.
-    pub(crate) fn mark_complete(&self, result: &crate::backend::TestCaseResult) {
-        use crate::backend::TestCaseResult as R;
-        use hegel_c::hegel_status_t as Status;
-        let (status, origin) = match result {
-            R::Valid => (Status::HEGEL_STATUS_VALID, None),
-            R::Invalid => (Status::HEGEL_STATUS_INVALID, None),
-            R::Overrun => (Status::HEGEL_STATUS_OVERRUN, None),
-            R::Interesting(failure) => (
-                Status::HEGEL_STATUS_INTERESTING,
-                Some(failure.origin.as_str()),
-            ),
-        };
-        if let Err(rc) = self.with_ctc(|ctc| ctc.mark_complete(status, origin)) {
-            // nocov start
-            hegel_internal_error!(
-                "hegel_mark_complete failed: rc={} {}",
-                rc as i32,
-                crate::ffi::last_error_string()
-            );
-            // nocov end
-        }
+        f(&self.handle)
     }
 
     #[doc(hidden)]

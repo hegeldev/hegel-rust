@@ -14,7 +14,7 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
 use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
@@ -208,9 +208,16 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// Run the user's test body once against the supplied libhegel test case,
 /// catching any panic and translating it to a [`TestCaseResult`].
 ///
-/// Reports the outcome back to the engine via [`TestCase::mark_complete`]
-/// (which calls `hegel_mark_complete`): that is the channel for per-test-case
-/// results, and the engine reads it back over the C ABI.
+/// The body's `TestCase` shares `c_tc` through an `Arc`, and the outcome is
+/// reported on the same shared handle after the body finishes — so no
+/// per-case libhegel clone is needed (a real clone is created only when the
+/// body itself calls `tc.clone()`), while a `TestCase` that escapes the body
+/// (moved to a thread that is never joined) keeps the handle alive rather
+/// than dangling; its later draws fail cleanly because the case has finished.
+///
+/// Reports the outcome back to the engine via [`report_outcome`] (which calls
+/// `hegel_mark_complete`): that is the channel for per-test-case results, and
+/// the engine reads it back over the C ABI.
 /// On the `Interesting` path the panic site is captured as a
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
 /// shrinking can key on it, and the rendered diagnostic block (panic
@@ -238,8 +245,9 @@ pub(crate) fn run_test_case(
     let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
 
-    let tc = TestCase::new(c_tc, should_emit, mode);
-    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc.clone()))));
+    let c_tc = Arc::new(c_tc);
+    let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode);
+    let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
     let (tc_result, payload, diagnostic) = match result {
         Ok(()) => (TestCaseResult::Valid, None, None),
@@ -286,9 +294,33 @@ pub(crate) fn run_test_case(
         emit_verbose_stop_reason(&tc_result);
     }
 
-    tc.mark_complete(&tc_result);
+    report_outcome(&c_tc, &tc_result);
 
     (tc_result, payload, diagnostic)
+}
+
+/// Report a test case's outcome to the engine over the C ABI.
+///
+/// Only the status — and, for an interesting (failing) case, the bug origin —
+/// crosses the boundary; the panic message and reproduce blob are recovered
+/// from the run result afterward, not pushed through here. This reports on
+/// the handle the body drew on (shared with it through the `Arc`);
+/// `hegel_mark_complete` waits for any in-flight operation on the handle, so
+/// a still-running leaked thread cannot make this report fail.
+fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
+    use hegel_c::hegel_status_t as Status;
+    let (status, origin) = match result {
+        TestCaseResult::Valid => (Status::HEGEL_STATUS_VALID, None),
+        TestCaseResult::Invalid => (Status::HEGEL_STATUS_INVALID, None),
+        TestCaseResult::Overrun => (Status::HEGEL_STATUS_OVERRUN, None),
+        TestCaseResult::Interesting(failure) => (
+            Status::HEGEL_STATUS_INTERESTING,
+            Some(failure.origin.as_str()),
+        ),
+    };
+    handle
+        .mark_complete(status, origin)
+        .unwrap_or_else(|rc| crate::test_case::raise_for_rc(rc));
 }
 
 /// Print a per-test-case line describing why this test case stopped.
@@ -445,7 +477,7 @@ pub(crate) fn drive<F>(
                 }
                 let blob = result
                     .failure(index)
-                    .and_then(|f| f.reproduce_blob)
+                    .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob) {
                     Ok(c_tc) => c_tc,

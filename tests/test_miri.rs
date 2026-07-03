@@ -160,7 +160,9 @@ fn optional_and_one_of_and_sampled() {
 
 #[test]
 fn map_filter_flatmap() {
-    check(gs::integers::<i32>().map(|x| x * 2), |x| x % 2 == 0);
+    check(gs::integers::<i32>().map(|x| x.wrapping_mul(2)), |x| {
+        x % 2 == 0
+    });
     check(
         gs::integers::<i32>()
             .min_value(0)
@@ -241,4 +243,41 @@ fn deferred_delegates_to_inner() {
 fn shrinks_to_minimal_integer() {
     let x = minimal(gs::integers::<i32>(), |x| *x > 1000);
     assert_eq!(x, 1001);
+}
+
+/// A `TestCase` moved into a thread that outlives its test case must stay
+/// memory-safe: the body's handle is reference-counted, so the leaked
+/// thread's later draw fails by panicking cleanly (the case has finished)
+/// instead of touching freed engine state. Run under Miri this catches the
+/// use-after-free that a non-owning body handle would reintroduce.
+#[test]
+fn a_test_case_leaked_to_a_thread_outlives_its_case_safely() {
+    use std::sync::mpsc;
+    use std::thread::JoinHandle;
+
+    type Leaked = (mpsc::Sender<()>, JoinHandle<()>);
+    let worker: Arc<Mutex<Option<Leaked>>> = Arc::new(Mutex::new(None));
+    let worker_in_body = Arc::clone(&worker);
+    Hegel::new(move |tc: TestCase| {
+        let mut slot = worker_in_body.lock().unwrap();
+        if slot.is_none() {
+            let (release_tx, release_rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                release_rx.recv().unwrap();
+                tc.draw(gs::booleans());
+            });
+            *slot = Some((release_tx, handle));
+        }
+    })
+    .settings(
+        Settings::new()
+            .test_cases(1)
+            .database(None)
+            .suppress_health_check(HealthCheck::all()),
+    )
+    .run();
+
+    let (release_tx, handle) = worker.lock().unwrap().take().unwrap();
+    release_tx.send(()).unwrap();
+    assert!(handle.join().is_err());
 }

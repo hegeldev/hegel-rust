@@ -106,24 +106,29 @@ int main(void) {
         int n = draw_bool_list(ctx, tc, MIN_SIZE, MAX_SIZE);
         if (n < 0) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if ((uint64_t)n < MIN_SIZE || (uint64_t)n > MAX_SIZE) {
             char origin[64];
             snprintf(origin, sizeof origin, "size %d out of range", n);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, origin);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         total++;
         if ((size_t)n > max_seen) max_seen = (size_t)n;
         HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+        /* The caller owns every handle from hegel_next_test_case and must free it. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
     bool passed = status == HEGEL_RUN_STATUS_PASSED;
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     printf("ran %zu valid cases (max list size seen: %zu), %s\n",
            total, max_seen, passed ? "PASSED" : "FAILED");

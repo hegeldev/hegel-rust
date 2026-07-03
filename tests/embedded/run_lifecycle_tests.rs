@@ -1,7 +1,7 @@
 //! Embedded tests for `src/run_lifecycle.rs`.
 
 use super::*;
-use crate::generators::{booleans, integers};
+use crate::generators as gs;
 
 #[test]
 fn panic_message_returns_unknown_panic_for_non_string_payload() {
@@ -189,7 +189,7 @@ fn drive_panic_message(body: impl FnMut(TestCase), settings: &Settings) -> Strin
 fn drive_single_failure_reraises_the_tests_own_panic() {
     let msg = drive_panic_message(
         |tc| {
-            let x: i32 = tc.draw(integers());
+            let x: i32 = tc.draw(gs::integers());
             assert!(x == 0, "boom x={x}");
         },
         &test_settings(),
@@ -204,7 +204,7 @@ fn drive_single_failure_reraises_the_tests_own_panic() {
 fn drive_multiple_failures_panics_with_the_count() {
     let msg = drive_panic_message(
         |tc| {
-            let b: bool = tc.draw(booleans());
+            let b: bool = tc.draw(gs::booleans());
             if b {
                 panic!("boom A");
             }
@@ -222,7 +222,7 @@ fn drive_multiple_failures_panics_with_the_count() {
 fn drive_run_error_panics_with_the_engines_message() {
     let msg = drive_panic_message(
         |tc| {
-            let _: i32 = tc.draw(integers());
+            let _: i32 = tc.draw(gs::integers());
             tc.assume(false);
         },
         &test_settings(),
@@ -241,7 +241,7 @@ fn drive_run_error_panics_with_the_engines_message() {
 fn drive_passing_run_does_not_panic() {
     drive(
         |tc| {
-            let _: i32 = tc.draw(integers());
+            let _: i32 = tc.draw(gs::integers());
         },
         &test_settings(),
         None,

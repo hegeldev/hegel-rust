@@ -19,8 +19,67 @@ fn warmup_shared_target() {
     WARMUP.get_or_init(|| {
         let hegel_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let shared_target = shared_target_dir();
+        sweep_stale_temp_artifacts(&shared_target, &pid_is_live);
         run_warmup_build(&hegel_path, &shared_target);
     });
+}
+
+/// The PID embedded in a `temp_hegel_test_{pid}_{counter}` crate's artifact
+/// name (with or without a trailing `-hash` / extension), or `None` for
+/// anything that is not a temp-crate artifact.
+pub fn temp_crate_pid(artifact_name: &str) -> Option<u32> {
+    let rest = artifact_name.strip_prefix("temp_hegel_test_")?;
+    let (pid, _) = rest.split_once('_')?;
+    pid.parse().ok()
+}
+
+/// Whether a process with this PID is currently running. Only Linux gives a
+/// cheap dependency-free answer (`/proc/<pid>`); elsewhere every PID is
+/// conservatively reported live, making the sweep a no-op.
+pub fn pid_is_live(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        Path::new("/proc").join(pid.to_string()).exists()
+    } else {
+        true
+    }
+}
+
+/// Remove artifacts left in the shared target directory by temp crates whose
+/// owning process is gone.
+///
+/// Temp crate names are unique per (process, counter), so cargo can never
+/// reuse a dead run's artifacts — without this sweep they accumulate at
+/// roughly 15MB per `TempRustProject` per suite run until the disk fills.
+/// The current process's artifacts are always kept, whatever `is_live` says;
+/// removal errors are ignored (another test binary may be sweeping the same
+/// entries concurrently).
+pub fn sweep_stale_temp_artifacts(shared_target: &Path, is_live: &dyn Fn(u32) -> bool) {
+    let debug = shared_target.join("debug");
+    for dir in [
+        debug.clone(),
+        debug.join("deps"),
+        debug.join("incremental"),
+        debug.join(".fingerprint"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name.to_str().and_then(temp_crate_pid) else {
+                continue;
+            };
+            if pid == std::process::id() || is_live(pid) {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
 }
 
 fn write_atomic(path: &Path, content: &[u8]) {
@@ -62,6 +121,7 @@ hegeltest = {{ path = "{path}" }}
         .args(["build", "--quiet"])
         .current_dir(&warmup_dir)
         .env("CARGO_TARGET_DIR", shared_target)
+        .env("CARGO_INCREMENTAL", "0")
         .output()
         .unwrap();
     assert!(
@@ -251,7 +311,10 @@ hegeltest = {{ path = "{path}"{features} }}
             .current_dir(&self.project.project_path)
             .env("CARGO_TARGET_DIR", shared_target_dir());
 
-        cmd.env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only")
+        // A temp crate's name is unique per run, so its incremental cache can
+        // never be reused — it would only bloat the shared target dir.
+        cmd.env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only")
             .env("CARGO_PROFILE_TEST_DEBUG", "line-tables-only");
 
         if use_coverage {

@@ -92,12 +92,14 @@ int main(void) {
         hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
         if (rc == HEGEL_E_STOP_TEST) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if (rc != HEGEL_OK) {
             const char *err = hegel_context_last_error(ctx);
             fprintf(stderr, "hegel_generate failed: rc=%d %s\n", rc, err);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
@@ -110,9 +112,12 @@ int main(void) {
             cases++;
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
         }
+        /* Every handle hegel_next_test_case hands back is owned by the caller
+           and must be released, even though the run keeps its own reference. */
+        HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 
-    const hegel_run_result_t *result;
+    hegel_run_result_t *result;
     HEGEL_CHECK(hegel_run_result, ctx, run, &result);
     hegel_run_status_t status;
     HEGEL_CHECK(hegel_run_result_status, ctx, result, &status);
@@ -123,17 +128,20 @@ int main(void) {
     HEGEL_CHECK(hegel_run_result_failure_count, ctx, result, &nf);
     printf("ran %zu valid test cases, %s, %zu failures\n", cases, status_str, nf);
     for (size_t i = 0; i < nf; i++) {
-        const hegel_failure_t *f;
+        hegel_failure_t *f;
         HEGEL_CHECK(hegel_run_result_failure, ctx, result, i, &f);
         const char *origin;
         HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
         printf("  failure %zu: origin=%s\n", i, origin);
+        HEGEL_CHECK(hegel_failure_free, ctx, f);
     }
     if (status == HEGEL_RUN_STATUS_ERROR) {
         const char *run_err;
         HEGEL_CHECK(hegel_run_result_error, ctx, result, &run_err);
         fprintf(stderr, "run error: %s\n", run_err);
     }
+    /* The result is a caller-owned snapshot, freed independently of the run. */
+    HEGEL_CHECK(hegel_run_result_free, ctx, result);
 
     HEGEL_CHECK(hegel_run_free, ctx, run);
     HEGEL_CHECK(hegel_settings_free, ctx, s);
