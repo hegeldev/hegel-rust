@@ -361,16 +361,17 @@ fn state_machines_are_shared_across_cloned_streams() {
 
 #[test]
 fn target_labels_are_unique_across_cloned_streams() {
-    let (ds, _handle) = random_source();
+    let (ds, handle) = random_source();
     let child = ds.clone_stream().unwrap();
     ds.target_observation(1.0, "score").unwrap();
     let err = child.target_observation(2.0, "score").unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     child.target_observation(2.0, "other").unwrap();
 
-    let (_, handle) = random_source();
     let observations = NativeDataSource::take_target_observations(&handle);
-    assert!(observations.is_empty());
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations["score"], 1.0);
+    assert_eq!(observations["other"], 2.0);
 }
 
 #[test]

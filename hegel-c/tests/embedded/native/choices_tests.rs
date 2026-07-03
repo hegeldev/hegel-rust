@@ -1097,6 +1097,14 @@ fn clone_kind_simplest_and_unit_are_the_empty_clone() {
 }
 
 #[test]
+fn simplest_clone_value_sort_key_compares_equal_to_an_executed_empty_stream() {
+    let punned = ChoiceNode::new(ChoiceKind::Clone, ChoiceKind::Clone.simplest(), false);
+    let executed = clone_node(Vec::new());
+    assert!(punned.sort_key_ref() == executed.sort_key_ref());
+    assert!(executed.sort_key_ref() == punned.sort_key_ref());
+}
+
+#[test]
 fn clone_kind_max_children_saturating_is_cap() {
     assert_eq!(ChoiceKind::Clone.max_children_saturating(17), 17);
     assert_eq!(

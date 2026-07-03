@@ -564,15 +564,18 @@ fn values_only_clone_records_disable_prediction_quietly() {
     let mut root = DataTreeNode::default();
     assert!(record_tree(&mut root, &[node], Status::Valid, &[]).is_none());
     assert_eq!(
-        simulate(&root, &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])]),
+        simulate(
+            &root,
+            &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
+        ),
         Some(Status::Valid)
     );
     assert_eq!(
         simulate(
             &root,
-            &[clone_prefix_value(vec![ChoiceValue::Integer(BigInt::from(
-                999
-            ))])]
+            &[clone_prefix_value(vec![ChoiceValue::Integer(
+                BigInt::from(999)
+            )])]
         ),
         None
     );
