@@ -121,6 +121,12 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
 }
 
 #[test]
+fn ffi_string_generator_debug_is_opaque() {
+    let g = StringGenerator::email().unwrap();
+    assert_eq!(format!("{g:?}"), "StringGenerator { .. }");
+}
+
+#[test]
 fn ffi_string_generator_constructors_cover_every_kind() {
     let alphabet = StringGenerator::text(
         0,

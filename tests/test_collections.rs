@@ -623,6 +623,41 @@ mod sampled_from {
     }
 
     #[test]
+    fn test_sets_of_samples_with_duplicated_source_values() {
+        Hegel::new(|tc| {
+            let x: HashSet<i64> =
+                tc.draw(gs::hashsets(gs::sampled_from(vec![0_i64, 0, 1])).min_size(2));
+            let expected: HashSet<i64> = [0, 1].into_iter().collect();
+            assert_eq!(x, expected);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_sets_of_samples_beyond_the_pool_bound_fall_back_to_rejection() {
+        Hegel::new(|tc| {
+            let x: HashSet<i64> = tc.draw(
+                gs::hashsets(gs::sampled_from((0..10_001).collect::<Vec<i64>>())).max_size(3),
+            );
+            assert!(x.len() <= 3);
+        })
+        .settings(Settings::new().test_cases(5).database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_filter_on_a_generator_reference_uses_its_enumerated_values() {
+        Hegel::new(|tc| {
+            let source = gs::sampled_from(vec![0_i64, 1, 2, 3]);
+            let v: i64 = tc.draw((&source).filter(|x: &i64| *x % 2 == 0));
+            assert!(v == 0 || v == 2);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
     fn test_does_not_include_duplicates_even_when_duplicated_in_collection() {
         assert_all_examples(
             gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true),

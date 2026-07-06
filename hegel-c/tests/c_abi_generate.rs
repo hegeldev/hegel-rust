@@ -887,6 +887,52 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("categories[0] is not valid UTF-8"));
 
+        let null_excl_cat: [*const c_char; 1] = [ptr::null()];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                null_excl_cat.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("exclude_categories[0] is null"));
+
+        let bad_exclude: [u8; 1] = [0xFF];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                bad_exclude.as_ptr(),
+                1,
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("exclude_characters is not valid UTF-8"));
+
         let ascii = CString::new("ascii").unwrap();
         let nd = CString::new("Nd").unwrap();
         let cats: [*const c_char; 1] = [nd.as_ptr()];
@@ -1148,6 +1194,45 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
         };
         assert_eq!(
             hegel_generate_date(ctx, ptr::null_mut(), &mut date),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut null_time = hegel_c::hegel_time_t {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+        };
+        assert_eq!(
+            hegel_generate_time(ctx, ptr::null_mut(), &mut null_time),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut null_dt = hegel_c::hegel_datetime_t {
+            date: hegel_c::hegel_date_t {
+                year: 0,
+                month: 0,
+                day: 0,
+            },
+            time: null_time,
+        };
+        assert_eq!(
+            hegel_generate_datetime(ctx, ptr::null_mut(), &mut null_dt),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut null_uuid = [0u8; 16];
+        assert_eq!(
+            hegel_generate_uuid(ctx, ptr::null_mut(), 0, false, null_uuid.as_mut_ptr()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut null_ip = [0u8; 16];
+        let mut null_ip_len = 0usize;
+        assert_eq!(
+            hegel_generate_ip_address(
+                ctx,
+                ptr::null_mut(),
+                4,
+                null_ip.as_mut_ptr(),
+                &mut null_ip_len,
+            ),
             HEGEL_E_INVALID_HANDLE
         );
 

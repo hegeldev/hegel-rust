@@ -103,6 +103,23 @@ fn assume_code_unwinds_as_assume_failed() {
     );
 }
 
+/// The typed uuid/ip draws surface invalid arguments through
+/// [`raise_for_rc`], like every other draw.
+#[test]
+fn uuid_and_ip_invalid_arguments_are_raised_as_usage_errors() {
+    use std::panic::AssertUnwindSafe;
+    let (_run, tc) = emitting_test_case();
+
+    let err =
+        std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_uuid(Some(16)))).unwrap_err();
+    let msg = panic_payload_message(err);
+    assert!(msg.contains("hex nibble"), "{msg}");
+
+    let err = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ip_address(5))).unwrap_err();
+    let msg = panic_payload_message(err);
+    assert!(msg.contains("unsupported version 5"), "{msg}");
+}
+
 /// Draw integers straight off `tc` until the engine's choice budget is
 /// exhausted, catching the resulting `StopTest` unwind so the underlying
 /// handle is left aborted (every subsequent primitive then reports STOP_TEST).
