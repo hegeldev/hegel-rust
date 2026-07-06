@@ -275,3 +275,18 @@ fn validate_domain_max_length_matches_generate() {
     assert!(validate_domain_max_length(4).is_ok());
     assert!(validate_domain_max_length(255).is_ok());
 }
+
+#[test]
+fn domain_max_length_above_255_is_an_invalid_argument() {
+    for max_length in [256, 100_000] {
+        let err = validate_domain_max_length(max_length).unwrap_err();
+        let EngineError::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("255"), "unexpected message: {msg}");
+
+        let mut ntc = fresh_ntc(0);
+        let err = generate_domain(&mut ntc, max_length).unwrap_err();
+        assert!(matches!(err, EngineError::InvalidArgument(_)));
+    }
+}

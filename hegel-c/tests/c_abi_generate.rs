@@ -1084,6 +1084,11 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         );
         assert!(last_error(ctx).contains("no eligible TLDs"));
         assert_eq!(
+            hegel_string_generator_domain(ctx, 256, &mut domain_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("255"));
+        assert_eq!(
             hegel_string_generator_domain(ctx, 255, &mut domain_g),
             HEGEL_OK
         );

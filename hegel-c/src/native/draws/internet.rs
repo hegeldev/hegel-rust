@@ -72,6 +72,11 @@ fn mark_invalid(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
 /// a draw would produce. Used by the string-generator constructor so an
 /// unsatisfiable `max_length` surfaces at construction time.
 pub(crate) fn validate_domain_max_length(max_length: usize) -> Result<(), EngineError> {
+    if max_length > 255 {
+        return Err(EngineError::InvalidArgument(format!(
+            "domain max_length={max_length} exceeds the RFC 1035 limit of 255"
+        )));
+    }
     if eligible_tlds(max_length).is_empty() {
         return Err(EngineError::InvalidArgument(format!(
             "domain max_length={max_length} leaves no eligible TLDs"
@@ -107,12 +112,8 @@ pub(crate) fn generate_domain(
 ) -> Result<String, EngineError> {
     const MAX_LABEL_LEN: usize = 63;
 
+    validate_domain_max_length(max_length)?;
     let eligible = eligible_tlds(max_length);
-    if eligible.is_empty() {
-        return Err(EngineError::InvalidArgument(format!(
-            "domain max_length={max_length} leaves no eligible TLDs"
-        )));
-    }
     let idx = ntc
         .draw_integer(BigInt::from(0), BigInt::from(eligible.len() as i64 - 1))?
         .to_i128()
