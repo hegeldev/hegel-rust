@@ -56,7 +56,7 @@ fn build_intervals_unknown_codec_is_invalid_argument() {
 fn build_intervals_codepoint_range() {
     let iv = build_intervals(&TextAlphabet {
         min_codepoint: b'a' as u32,
-        max_codepoint: Some(b'z' as u32),
+        max_codepoint: b'z' as u32,
         ..Default::default()
     })
     .unwrap();
@@ -67,7 +67,7 @@ fn build_intervals_codepoint_range() {
 fn build_intervals_range_straddles_surrogates() {
     let iv = build_intervals(&TextAlphabet {
         min_codepoint: 0xD700,
-        max_codepoint: Some(0xE100),
+        max_codepoint: 0xE100,
         ..Default::default()
     })
     .unwrap();
@@ -78,7 +78,7 @@ fn build_intervals_range_straddles_surrogates() {
 fn build_intervals_range_entirely_in_surrogates_is_empty() {
     let iv = build_intervals(&TextAlphabet {
         min_codepoint: 0xD800,
-        max_codepoint: Some(0xDFFF),
+        max_codepoint: 0xDFFF,
         ..Default::default()
     })
     .unwrap();
@@ -89,7 +89,7 @@ fn build_intervals_range_entirely_in_surrogates_is_empty() {
 fn build_intervals_inverted_codepoint_range_is_empty() {
     let iv = build_intervals(&TextAlphabet {
         min_codepoint: b'z' as u32,
-        max_codepoint: Some(b'a' as u32),
+        max_codepoint: b'a' as u32,
         ..Default::default()
     })
     .unwrap();
@@ -136,7 +136,7 @@ fn build_intervals_exclude_only_cs_skips_category_scan() {
 fn build_intervals_exclude_characters_subtracts() {
     let iv = build_intervals(&TextAlphabet {
         min_codepoint: b'a' as u32,
-        max_codepoint: Some(b'z' as u32),
+        max_codepoint: b'z' as u32,
         exclude_characters: Some("aeiou".to_string()),
         ..Default::default()
     })

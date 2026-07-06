@@ -2484,7 +2484,7 @@ pub unsafe extern "C" fn hegel_string_generator_text(
     let alphabet = crate::native::draws::TextAlphabet {
         codec,
         min_codepoint,
-        max_codepoint: Some(max_codepoint),
+        max_codepoint,
         categories,
         exclude_categories,
         include_characters,

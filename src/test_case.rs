@@ -22,8 +22,8 @@ pub fn __assert_is_test_case<T: __IsTestCase>() {}
 /// Raise an invalid-argument (usage) error carrying `message`.
 ///
 /// The same usage error can be detected either while a test case is running
-/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside a
-/// schema build) or up front, before any run (constructing a generator and
+/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside
+/// a draw) or up front, before any run (constructing a generator and
 /// validating its arguments eagerly). To read cleanly in both cases:
 ///
 /// - **Inside a test context**, the error unwinds as a typed
@@ -63,7 +63,7 @@ pub(crate) use invalid_argument;
 /// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
 /// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
-///   generator's schema) was semantically invalid; the diagnostic is read
+///   generator argument) was semantically invalid; the diagnostic is read
 ///   synchronously from this thread's libhegel error context.
 /// - `HEGEL_E_ALREADY_COMPLETE` — the test case has finished. Unreachable
 ///   from a test body (the outcome is reported only after the body returns),

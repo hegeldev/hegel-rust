@@ -709,7 +709,7 @@ impl NativeVariables {
     }
 }
 
-/// A span within the choice sequence, labelled by schema type or by the
+/// A span within the choice sequence, labelled by draw kind or by the
 /// numeric label of an enclosing `start_span` call.
 ///
 /// Recorded to enable span-mutation exploration (see `try_span_mutation`)
@@ -1715,7 +1715,7 @@ impl NativeTestCase {
     /// Resolve a choice value from forced, prefix, or random.
     ///
     /// Implements punning logic for replaying choice sequences whose
-    /// schema has shifted across runs.
+    /// choice kinds have shifted across runs.
     fn resolve_choice(
         &mut self,
         _kind: &ChoiceKind,

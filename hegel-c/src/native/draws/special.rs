@@ -104,8 +104,8 @@ pub fn generate_datetime(ntc: &mut NativeTestCase) -> Result<DateTime, EngineErr
     })
 }
 
-/// The unspanned UUID draw shared by [`generate_uuid`] and the schema
-/// interpreter. Returns the UUID's 16 big-endian bytes.
+/// Draw a UUID's 16 big-endian bytes, wrapped in a span. When `version` is
+/// set, the RFC 4122 version and variant nibbles are forced accordingly.
 ///
 /// Hypothesis's `uuids()` strategy uses `random.getrandbits(128)` via
 /// `use_true_random=True`, so its UUIDs sit outside the choice tree and do
@@ -120,7 +120,7 @@ pub fn generate_datetime(ntc: &mut NativeTestCase) -> Result<DateTime, EngineErr
 /// would be the nil UUID. Hypothesis can't produce nil because `getrandbits`
 /// sits outside the choice tree; here we bump the low bit so the
 /// "uuids never produce nil" property carries over.
-pub(crate) fn draw_uuid(
+pub fn generate_uuid(
     ntc: &mut NativeTestCase,
     version: Option<u8>,
 ) -> Result<[u8; 16], EngineError> {
@@ -131,35 +131,28 @@ pub(crate) fn draw_uuid(
             )));
         }
     }
-    let hi = ntc
-        .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
-        .to_u64()
-        .unwrap();
-    let lo = ntc
-        .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
-        .to_u64()
-        .unwrap();
-    let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
+    spanned(ntc, LABEL_UUID, |ntc| {
+        let hi = ntc
+            .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
+        let lo = ntc
+            .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
+            .to_u64()
+            .unwrap();
+        let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
 
-    if let Some(v) = version {
-        n &= !(0xc000u128 << 48);
-        n |= 0x8000u128 << 48;
-        n &= !(0xf000u128 << 64);
-        n |= u128::from(v) << 76;
-    } else if n == 0 {
-        n = 1;
-    }
+        if let Some(v) = version {
+            n &= !(0xc000u128 << 48);
+            n |= 0x8000u128 << 48;
+            n &= !(0xf000u128 << 64);
+            n |= u128::from(v) << 76;
+        } else if n == 0 {
+            n = 1;
+        }
 
-    Ok(n.to_be_bytes())
-}
-
-/// Draw a UUID's 16 big-endian bytes, wrapped in a span. When `version` is
-/// set, the RFC 4122 version and variant nibbles are forced accordingly.
-pub fn generate_uuid(
-    ntc: &mut NativeTestCase,
-    version: Option<u8>,
-) -> Result<[u8; 16], EngineError> {
-    spanned(ntc, LABEL_UUID, |ntc| draw_uuid(ntc, version))
+        Ok(n.to_be_bytes())
+    })
 }
 
 const SPECIAL_IPV4_CIDRS: &[&str] = &[

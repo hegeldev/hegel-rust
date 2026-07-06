@@ -301,8 +301,7 @@ pub fn generate_string(ntc: &mut NativeTestCase, spec: &StringSpec) -> Result<St
 /// every open span).
 ///
 /// Every draw exposed at the API surface — the primitives included — is
-/// wrapped in one of these, mirroring how the old schema interpreter wrapped
-/// every schema dispatch: the shrinker's span-mutation machinery duplicates
+/// wrapped in one of these: the shrinker's span-mutation machinery duplicates
 /// same-label spans to propose values that already appear elsewhere in the
 /// test case, which is how "find a list containing this integer"-shaped
 /// examples are discovered.

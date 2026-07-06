@@ -7,14 +7,13 @@ use crate::unicodedata;
 
 /// Character-alphabet constraints for a text draw, as accepted at the
 /// `hegel_string_generator_text` API surface.
-#[derive(Default)]
 pub struct TextAlphabet {
     /// Restrict to a codec's range: `"ascii"`, `"latin-1"` / `"iso-8859-1"`,
     /// or `"utf-8"` (the default full-Unicode range).
     pub codec: Option<String>,
     /// Inclusive codepoint bounds, intersected with the codec range.
     pub min_codepoint: u32,
-    pub max_codepoint: Option<u32>,
+    pub max_codepoint: u32,
     /// Restrict to the union of these Unicode general categories. `Some`
     /// with an empty list means an empty alphabet.
     pub categories: Option<Vec<String>>,
@@ -24,6 +23,20 @@ pub struct TextAlphabet {
     pub include_characters: Option<String>,
     /// Always exclude these characters.
     pub exclude_characters: Option<String>,
+}
+
+impl Default for TextAlphabet {
+    fn default() -> Self {
+        TextAlphabet {
+            codec: None,
+            min_codepoint: 0,
+            max_codepoint: u32::MAX,
+            categories: None,
+            exclude_categories: None,
+            include_characters: None,
+            exclude_characters: None,
+        }
+    }
 }
 
 /// Build the effective character alphabet for a text draw. Mirrors
@@ -43,7 +56,7 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
         }
     };
     let cp_min = codec_min.max(alphabet.min_codepoint);
-    let cp_max = codec_max.min(alphabet.max_codepoint.unwrap_or(u32::MAX));
+    let cp_max = codec_max.min(alphabet.max_codepoint);
 
     let categories = alphabet.categories.as_ref();
     let exclude_categories = alphabet.exclude_categories.as_ref();

@@ -32,8 +32,8 @@ pub const SRE_FLAG_ASCII: u32 = 256;
 pub const TYPE_FLAGS: u32 = SRE_FLAG_ASCII | SRE_FLAG_LOCALE | SRE_FLAG_UNICODE;
 
 /// Position assertion codes. Matches Python's `ATCODES` in `_constants.py`,
-/// restricted to the subset the parser actually emits and the schema
-/// interpreter checks for.
+/// restricted to the subset the parser actually emits and the regex
+/// generator checks for.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AtCode {
     Beginning,
