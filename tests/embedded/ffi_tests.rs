@@ -253,3 +253,18 @@ fn ffi_string_from_engine_bytes_accepts_valid_utf8() {
 fn ffi_string_from_engine_bytes_raises_internal_error_on_invalid_utf8() {
     string_from_engine_bytes(vec![0xFF]);
 }
+
+#[test]
+fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
+    thread_local! {
+        static CACHED: std::cell::RefCell<Option<StringGenerator>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    std::thread::spawn(|| {
+        CACHED.with(|c| {
+            *c.borrow_mut() = Some(StringGenerator::domain(255).unwrap());
+        });
+    })
+    .join()
+    .unwrap();
+}
