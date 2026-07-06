@@ -5,16 +5,18 @@
 //! `c_abi_inprocess.rs`: calling the exported functions directly as Rust
 //! items so the branches are measured by coverage.
 
+mod common;
+
+use common::{last_error, make_settings_no_db, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelRun, HegelSettings, HegelStringGenerator, HegelTestCase, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
+    HegelContext, HegelRun, HegelStringGenerator, HegelTestCase, hegel_context_free,
+    hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
     hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_date,
     hegel_generate_datetime, hegel_generate_float, hegel_generate_integer,
     hegel_generate_integer_big, hegel_generate_ipv4, hegel_generate_ipv6, hegel_generate_string,
     hegel_generate_string_result_free, hegel_generate_string_result_t, hegel_generate_time,
-    hegel_generate_uuid, hegel_mark_complete, hegel_next_test_case, hegel_run_free,
-    hegel_run_start, hegel_settings_free, hegel_settings_new, hegel_settings_set_database,
+    hegel_generate_uuid, hegel_mark_complete, hegel_run_free, hegel_settings_free,
     hegel_settings_set_test_cases, hegel_status_t, hegel_string_generator_domain,
     hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
     hegel_string_generator_text, hegel_string_generator_url,
@@ -22,44 +24,6 @@ use hegel_c::{
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
-
-fn ok(rc: hegel_c::hegel_result_t) {
-    assert_eq!(rc, HEGEL_OK);
-}
-
-fn last_error(ctx: *const HegelContext) -> String {
-    let p = unsafe { hegel_context_last_error(ctx) };
-    if p.is_null() {
-        String::new()
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(p) }
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-unsafe fn make_settings(ctx: *mut HegelContext) -> *mut HegelSettings {
-    let mut s: *mut HegelSettings = ptr::null_mut();
-    assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
-    let empty = CString::new("").unwrap();
-    assert_eq!(
-        unsafe { hegel_settings_set_database(ctx, s, empty.as_ptr()) },
-        HEGEL_OK
-    );
-    s
-}
-
-unsafe fn start(ctx: *mut HegelContext, s: *const HegelSettings) -> *mut HegelRun {
-    let mut run: *mut HegelRun = ptr::null_mut();
-    assert_eq!(unsafe { hegel_run_start(ctx, s, &mut run) }, HEGEL_OK);
-    run
-}
-
-unsafe fn next_case(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelTestCase {
-    let mut tc: *mut HegelTestCase = ptr::null_mut();
-    assert_eq!(unsafe { hegel_next_test_case(ctx, run, &mut tc) }, HEGEL_OK);
-    tc
-}
 
 unsafe fn complete_valid(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
     unsafe {
@@ -108,7 +72,7 @@ fn integer_draws_respect_bounds_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 20));
         let run = start(ctx, s);
         loop {
@@ -180,7 +144,7 @@ fn big_integer_draws_round_trip_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 20));
         let run = start(ctx, s);
         loop {
@@ -342,7 +306,7 @@ fn big_integer_draws_round_trip_and_validate_arguments() {
 fn big_integer_boundary_values_fit_documented_buffer_size() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
         loop {
@@ -427,7 +391,7 @@ fn float_draws_respect_spec_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 20));
         let run = start(ctx, s);
         loop {
@@ -631,7 +595,7 @@ fn boolean_draws_validate_and_respect_degenerate_probabilities() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
@@ -679,7 +643,7 @@ fn bytes_draws_transfer_ownership_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
@@ -1029,7 +993,7 @@ fn text_generator_constructor_validates_and_draws() {
             HEGEL_OK
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 20));
         let run = start(ctx, s);
         loop {
@@ -1135,7 +1099,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
             HEGEL_OK
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 10));
         let run = start(ctx, s);
         loop {
@@ -1212,7 +1176,7 @@ fn generate_string_validates_handles_and_reports_stop_test() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
@@ -1310,7 +1274,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
 
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 20));
         let run = start(ctx, s);
         loop {
@@ -1435,7 +1399,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
 fn structured_draws_after_overrun_report_stop_test() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
@@ -1510,7 +1474,7 @@ fn structured_draws_after_overrun_report_stop_test() {
 fn typed_draws_after_overrun_report_stop_test() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = make_settings(ctx);
+        let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);

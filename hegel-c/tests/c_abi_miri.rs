@@ -11,6 +11,9 @@
 //! result/failure/blob readers are all exercised through the raw C ABI under
 //! Miri, not just the handle pointers.
 
+mod common;
+
+use common::ok;
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
@@ -24,11 +27,6 @@ use hegel_c::{
 };
 use std::ffi::CString;
 use std::ptr;
-
-/// Assert a call that should always succeed for these tests returned `HEGEL_OK`.
-fn ok(rc: hegel_c::hegel_result_t) {
-    assert_eq!(rc, HEGEL_OK);
-}
 
 /// Carries a test-case handle into a spawned thread.
 struct SendPtr(*mut HegelTestCase);

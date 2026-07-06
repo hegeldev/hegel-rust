@@ -8,63 +8,29 @@
 //! they hit are measured. The happy path is covered by hegeltest driving the
 //! engine over this same ABI.
 
+mod common;
+
+use common::{last_error, make_settings, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelSettings, HegelTestCase,
-    hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
-    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
-    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
-    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
-    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
-    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
-    hegel_settings_set_mode, hegel_settings_set_phases,
-    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase, hegel_backend_t,
+    hegel_collection_more, hegel_collection_reject, hegel_context_free, hegel_context_last_error,
+    hegel_context_new, hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
+    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
+    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
+    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_run_free, hegel_run_result,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
+    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
-
-/// Assert a call that should always succeed in this test returned `HEGEL_OK`.
-fn ok(rc: hegel_c::hegel_result_t) {
-    assert_eq!(rc, HEGEL_OK);
-}
-
-fn last_error(ctx: *const HegelContext) -> String {
-    let p = unsafe { hegel_context_last_error(ctx) };
-    if p.is_null() {
-        String::new()
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(p) }
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-unsafe fn make_settings(ctx: *mut HegelContext) -> *mut HegelSettings {
-    let mut s: *mut HegelSettings = ptr::null_mut();
-    assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
-    assert!(!s.is_null());
-    s
-}
-
-unsafe fn start(ctx: *mut HegelContext, s: *const HegelSettings) -> *mut HegelRun {
-    let mut run: *mut HegelRun = ptr::null_mut();
-    assert_eq!(unsafe { hegel_run_start(ctx, s, &mut run) }, HEGEL_OK);
-    assert!(!run.is_null());
-    run
-}
-
-/// The next case the run hands out, or null at completion (`HEGEL_OK` + null).
-unsafe fn next_case(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelTestCase {
-    let mut tc: *mut HegelTestCase = ptr::null_mut();
-    assert_eq!(unsafe { hegel_next_test_case(ctx, run, &mut tc) }, HEGEL_OK);
-    tc
-}
 
 unsafe fn result(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelRunResult {
     let mut r: *mut HegelRunResult = ptr::null_mut();
