@@ -25,6 +25,37 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
 
+const FULL_MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+    year: 1,
+    month: 1,
+    day: 1,
+};
+const FULL_MAX_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+    year: 9999,
+    month: 12,
+    day: 31,
+};
+const MIDNIGHT: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+    hour: 0,
+    minute: 0,
+    second: 0,
+    microsecond: 0,
+};
+const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+    hour: 23,
+    minute: 59,
+    second: 59,
+    microsecond: 999_999,
+};
+const FULL_MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+    date: FULL_MIN_DATE,
+    time: MIDNIGHT,
+};
+const FULL_MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+    date: FULL_MAX_DATE,
+    time: LAST_MICROSECOND,
+};
+
 unsafe fn complete_valid(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
     unsafe {
         ok(hegel_mark_complete(
@@ -1234,7 +1265,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             day: 0,
         };
         assert_eq!(
-            hegel_generate_date(ctx, ptr::null_mut(), &mut date),
+            hegel_generate_date(
+                ctx,
+                ptr::null_mut(),
+                FULL_MIN_DATE,
+                FULL_MAX_DATE,
+                &mut date
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         let mut null_time = hegel_c::hegel_time_t {
@@ -1244,7 +1281,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             microsecond: 0,
         };
         assert_eq!(
-            hegel_generate_time(ctx, ptr::null_mut(), &mut null_time),
+            hegel_generate_time(
+                ctx,
+                ptr::null_mut(),
+                MIDNIGHT,
+                LAST_MICROSECOND,
+                &mut null_time
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         let mut null_dt = hegel_c::hegel_datetime_t {
@@ -1256,7 +1299,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             time: null_time,
         };
         assert_eq!(
-            hegel_generate_datetime(ctx, ptr::null_mut(), &mut null_dt),
+            hegel_generate_datetime(
+                ctx,
+                ptr::null_mut(),
+                FULL_MIN_DATETIME,
+                FULL_MAX_DATETIME,
+                &mut null_dt
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         let mut null_uuid = [0u8; 16];
@@ -1283,15 +1332,21 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                 break;
             }
             assert_eq!(
-                hegel_generate_date(ctx, tc, ptr::null_mut()),
+                hegel_generate_date(ctx, tc, FULL_MIN_DATE, FULL_MAX_DATE, ptr::null_mut()),
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
-                hegel_generate_time(ctx, tc, ptr::null_mut()),
+                hegel_generate_time(ctx, tc, MIDNIGHT, LAST_MICROSECOND, ptr::null_mut()),
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
-                hegel_generate_datetime(ctx, tc, ptr::null_mut()),
+                hegel_generate_datetime(
+                    ctx,
+                    tc,
+                    FULL_MIN_DATETIME,
+                    FULL_MAX_DATETIME,
+                    ptr::null_mut()
+                ),
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
@@ -1320,7 +1375,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                     HEGEL_E_STOP_TEST => true,
                     other => panic!("unexpected rc: {other:?}"),
                 };
-                if check(hegel_generate_date(ctx, tc, &mut date)) {
+                if check(hegel_generate_date(
+                    ctx,
+                    tc,
+                    FULL_MIN_DATE,
+                    FULL_MAX_DATE,
+                    &mut date,
+                )) {
                     break 'draws true;
                 }
                 assert!((1..=9999).contains(&date.year));
@@ -1333,7 +1394,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                     second: 0,
                     microsecond: 0,
                 };
-                if check(hegel_generate_time(ctx, tc, &mut time)) {
+                if check(hegel_generate_time(
+                    ctx,
+                    tc,
+                    MIDNIGHT,
+                    LAST_MICROSECOND,
+                    &mut time,
+                )) {
                     break 'draws true;
                 }
                 assert!(time.hour <= 23 && time.minute <= 59 && time.second <= 59);
@@ -1352,7 +1419,13 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                         microsecond: 0,
                     },
                 };
-                if check(hegel_generate_datetime(ctx, tc, &mut dt)) {
+                if check(hegel_generate_datetime(
+                    ctx,
+                    tc,
+                    FULL_MIN_DATETIME,
+                    FULL_MAX_DATETIME,
+                    &mut dt,
+                )) {
                     break 'draws true;
                 }
                 assert!((1..=9999).contains(&dt.date.year));
@@ -1419,14 +1492,20 @@ fn structured_draws_after_overrun_report_stop_test() {
             month: 0,
             day: 0,
         };
-        assert_eq!(hegel_generate_date(ctx, tc, &mut date), HEGEL_E_STOP_TEST);
+        assert_eq!(
+            hegel_generate_date(ctx, tc, FULL_MIN_DATE, FULL_MAX_DATE, &mut date),
+            HEGEL_E_STOP_TEST
+        );
         let mut time = hegel_c::hegel_time_t {
             hour: 0,
             minute: 0,
             second: 0,
             microsecond: 0,
         };
-        assert_eq!(hegel_generate_time(ctx, tc, &mut time), HEGEL_E_STOP_TEST);
+        assert_eq!(
+            hegel_generate_time(ctx, tc, MIDNIGHT, LAST_MICROSECOND, &mut time),
+            HEGEL_E_STOP_TEST
+        );
         let mut dt = hegel_c::hegel_datetime_t {
             date: hegel_c::hegel_date_t {
                 year: 0,
@@ -1440,7 +1519,10 @@ fn structured_draws_after_overrun_report_stop_test() {
                 microsecond: 0,
             },
         };
-        assert_eq!(hegel_generate_datetime(ctx, tc, &mut dt), HEGEL_E_STOP_TEST);
+        assert_eq!(
+            hegel_generate_datetime(ctx, tc, FULL_MIN_DATETIME, FULL_MAX_DATETIME, &mut dt),
+            HEGEL_E_STOP_TEST
+        );
         let mut uuid = [0u8; 16];
         assert_eq!(
             hegel_generate_uuid(ctx, tc, 0, false, uuid.as_mut_ptr()),
@@ -1546,6 +1628,92 @@ fn typed_draws_after_overrun_report_stop_test() {
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn structured_draws_respect_explicit_bounds() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 20));
+        let run = start(ctx, s);
+        let min_date = hegel_c::hegel_date_t {
+            year: 1990,
+            month: 6,
+            day: 15,
+        };
+        let max_date = hegel_c::hegel_date_t {
+            year: 2010,
+            month: 2,
+            day: 3,
+        };
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut date = min_date;
+            ok(hegel_generate_date(ctx, tc, min_date, max_date, &mut date));
+            assert!((1990..=2010).contains(&date.year), "{}", date.year);
+
+            let bad = hegel_c::hegel_date_t {
+                year: 2001,
+                month: 2,
+                day: 30,
+            };
+            assert_eq!(
+                hegel_generate_date(ctx, tc, bad, max_date, &mut date),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("not a valid date"));
+            assert_eq!(
+                hegel_generate_date(ctx, tc, max_date, min_date, &mut date),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("min_value"));
+
+            let mut time = MIDNIGHT;
+            let min_time = hegel_c::hegel_time_t {
+                hour: 9,
+                minute: 30,
+                second: 0,
+                microsecond: 0,
+            };
+            let max_time = hegel_c::hegel_time_t {
+                hour: 17,
+                minute: 0,
+                second: 0,
+                microsecond: 0,
+            };
+            ok(hegel_generate_time(ctx, tc, min_time, max_time, &mut time));
+            assert!((9..=17).contains(&time.hour), "{}", time.hour);
+            assert_eq!(
+                hegel_generate_time(ctx, tc, max_time, min_time, &mut time),
+                HEGEL_E_INVALID_ARG
+            );
+
+            let mut dt = FULL_MIN_DATETIME;
+            let lo = hegel_c::hegel_datetime_t {
+                date: min_date,
+                time: min_time,
+            };
+            let hi = hegel_c::hegel_datetime_t {
+                date: min_date,
+                time: max_time,
+            };
+            ok(hegel_generate_datetime(ctx, tc, lo, hi, &mut dt));
+            assert_eq!((dt.date.year, dt.date.month, dt.date.day), (1990, 6, 15));
+            assert!((9..=17).contains(&dt.time.hour));
+            assert_eq!(
+                hegel_generate_datetime(ctx, tc, hi, lo, &mut dt),
+                HEGEL_E_INVALID_ARG
+            );
+            complete_valid(ctx, tc);
+        }
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
     }

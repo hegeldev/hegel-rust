@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use super::{Generator, TestCase, labels};
 use crate::control::hegel_internal_assert;
 use crate::ffi;
-use crate::test_case::invalid_argument;
+use crate::test_case::{full_ranges, invalid_argument};
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
 /// surrogates, so these are forbidden in `categories()`.
@@ -551,7 +551,7 @@ pub struct DateGenerator;
 
 impl Generator<String> for DateGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        format_date(tc.generate_date())
+        format_date(tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE))
     }
 }
 
@@ -565,7 +565,7 @@ pub struct TimeGenerator;
 
 impl Generator<String> for TimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        format_time(tc.generate_time())
+        format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND))
     }
 }
 
@@ -579,7 +579,7 @@ pub struct DateTimeGenerator;
 
 impl Generator<String> for DateTimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        let dt = tc.generate_datetime();
+        let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME);
         format!("{}T{}", format_date(dt.date), format_time(dt.time))
     }
 }

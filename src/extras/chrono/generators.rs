@@ -228,11 +228,18 @@ impl Generator<NaiveDate> for NaiveDateGenerator {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        let n = integers::<i32>()
-            .min_value(self.min_value.num_days_from_ce())
-            .max_value(self.max_value.num_days_from_ce())
-            .do_draw(tc);
-        NaiveDate::from_num_days_from_ce_opt(n).unwrap()
+        let d = tc.generate_date(hegel_date(self.min_value), hegel_date(self.max_value));
+        NaiveDate::from_ymd_opt(d.year, u32::from(d.month), u32::from(d.day)).unwrap()
+    }
+}
+
+/// Convert a [`NaiveDate`] to the engine's date struct. Every `NaiveDate`
+/// fits: chrono spans years ±262143 and the engine accepts ±999999.
+fn hegel_date(d: NaiveDate) -> hegel_c::hegel_date_t {
+    hegel_c::hegel_date_t {
+        year: d.year(),
+        month: d.month() as u8,
+        day: d.day() as u8,
     }
 }
 

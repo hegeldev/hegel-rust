@@ -97,11 +97,12 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
         let s = tc.generate_string(&text)?;
         assert!(s.chars().count() <= 5);
 
-        let d = tc.generate_date()?;
+        use crate::test_case::full_ranges;
+        let d = tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE)?;
         assert!((1..=9999).contains(&d.year));
-        let t = tc.generate_time()?;
+        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND)?;
         assert!(t.hour <= 23);
-        let dt = tc.generate_datetime()?;
+        let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME)?;
         assert!((1..=12).contains(&dt.date.month));
         let uuid = tc.generate_uuid(Some(4))?;
         assert_eq!(uuid[6] >> 4, 4);
@@ -252,4 +253,29 @@ fn ffi_string_from_engine_bytes_accepts_valid_utf8() {
 #[should_panic(expected = "libhegel returned invalid UTF-8")]
 fn ffi_string_from_engine_bytes_raises_internal_error_on_invalid_utf8() {
     string_from_engine_bytes(vec![0xFF]);
+}
+
+#[test]
+fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
+    thread_local! {
+        static CACHED: std::cell::RefCell<Option<StringGenerator>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    std::thread::spawn(|| {
+        CACHED.with(|c| {
+            *c.borrow_mut() = Some(StringGenerator::domain(255).unwrap());
+        });
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+#[should_panic(expected = "was not marked complete")]
+fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
+    let settings = test_settings(1);
+    let sh = SettingsHandle::build(&settings, None);
+    let run = RunHandle::start(&sh).unwrap();
+    let _first = run.next_test_case().unwrap();
+    run.next_test_case();
 }

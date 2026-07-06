@@ -79,6 +79,20 @@ fn with_context<R>(f: impl FnOnce(*mut hegel_c::HegelContext) -> R) -> R {
     CONTEXT.with(|c| f(c.as_ptr()))
 }
 
+/// Run a libhegel free function from a `Drop` impl.
+///
+/// A handle a user caches in their own thread-local can be dropped during
+/// thread teardown after this thread's [`CONTEXT`] has already been
+/// destroyed (thread-local destructors run last-initialized-first, and the
+/// user's slot may well be initialized before our context). `LocalKey::with`
+/// panics on a destroyed key, and a panic inside a thread-local destructor
+/// aborts the process — so this uses `try_with` and skips the free when the
+/// context is gone. The engine-side allocation leaks at thread exit, which
+/// is harmless by comparison.
+fn free_on_drop(f: impl FnOnce(*mut hegel_c::HegelContext) -> hegel_c::hegel_result_t) {
+    let _ = CONTEXT.try_with(|c| require_ok(f(c.as_ptr())));
+}
+
 /// The most recent error message libhegel recorded on this thread's context,
 /// or an empty string if the last call on it succeeded. Read synchronously on
 /// the same thread that made the failing call, before any later call can
@@ -201,9 +215,7 @@ impl SettingsHandle {
 impl Drop for SettingsHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_settings_new and is freed exactly once.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_settings_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_settings_free(ctx, self.raw) });
     }
 }
 
@@ -237,7 +249,8 @@ impl RunHandle {
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
-        if rc != hegel_result_t::HEGEL_OK || raw.is_null() {
+        require_ok(rc);
+        if raw.is_null() {
             None
         } else {
             Some(CTestCase { raw })
@@ -259,9 +272,7 @@ impl RunHandle {
 impl Drop for RunHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_start and is freed exactly once;
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_run_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_run_free(ctx, self.raw) });
     }
 }
 
@@ -457,48 +468,41 @@ impl CTestCase {
         Ok(string_from_engine_bytes(bytes))
     }
 
-    /// Draw a Gregorian calendar date.
-    pub(crate) fn generate_date(&self) -> Result<hegel_c::hegel_date_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_date_t {
-            year: 0,
-            month: 0,
-            day: 0,
-        };
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_generate_date(ctx, self.raw, &mut out) });
-        rc_to_value(rc, out)
-    }
-
-    /// Draw a time of day.
-    pub(crate) fn generate_time(&self) -> Result<hegel_c::hegel_time_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_time_t {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            microsecond: 0,
-        };
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_generate_time(ctx, self.raw, &mut out) });
-        rc_to_value(rc, out)
-    }
-
-    /// Draw a naive datetime.
-    pub(crate) fn generate_datetime(&self) -> Result<hegel_c::hegel_datetime_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_datetime_t {
-            date: hegel_c::hegel_date_t {
-                year: 0,
-                month: 0,
-                day: 0,
-            },
-            time: hegel_c::hegel_time_t {
-                hour: 0,
-                minute: 0,
-                second: 0,
-                microsecond: 0,
-            },
-        };
+    /// Draw a Gregorian calendar date in `[min, max]`.
+    pub(crate) fn generate_date(
+        &self,
+        min: hegel_c::hegel_date_t,
+        max: hegel_c::hegel_date_t,
+    ) -> Result<hegel_c::hegel_date_t, hegel_result_t> {
+        let mut out = min;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_generate_datetime(ctx, self.raw, &mut out)
+            hegel_c::hegel_generate_date(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a time of day in `[min, max]`.
+    pub(crate) fn generate_time(
+        &self,
+        min: hegel_c::hegel_time_t,
+        max: hegel_c::hegel_time_t,
+    ) -> Result<hegel_c::hegel_time_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_time(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a naive datetime in `[min, max]`.
+    pub(crate) fn generate_datetime(
+        &self,
+        min: hegel_c::hegel_datetime_t,
+        max: hegel_c::hegel_datetime_t,
+    ) -> Result<hegel_c::hegel_datetime_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_datetime(ctx, self.raw, min, max, &mut out)
         });
         rc_to_value(rc, out)
     }
@@ -672,9 +676,7 @@ impl Drop for CTestCase {
         // SAFETY: every `CTestCase` is an independent libhegel handle this
         // frontend created (from_blob, next_test_case, or clone_handle) and is
         // freed exactly once here, dropping its reference to the test case.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
     }
 }
 
@@ -809,9 +811,7 @@ impl Drop for StringGenerator {
     fn drop(&mut self) {
         // SAFETY: `raw` came from a hegel_string_generator_* constructor and
         // is freed exactly once.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_string_generator_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_string_generator_free(ctx, self.raw) });
     }
 }
 
@@ -878,9 +878,7 @@ impl RunResult {
 impl Drop for RunResult {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_result and is freed exactly once.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_run_result_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_run_result_free(ctx, self.raw) });
     }
 }
 

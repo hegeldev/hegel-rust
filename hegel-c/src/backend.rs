@@ -18,10 +18,11 @@ pub enum DataSourceError {
     /// The backend rejected the current draw (e.g. a generated float could
     /// not be represented at the requested width).
     Assume,
-    /// A caller-supplied argument (typically a schema) was semantically
-    /// invalid. The main library converts this to a panic at the API surface;
-    /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
-    /// `hegel_context_last_error`. Carries a human-readable diagnostic.
+    /// A caller-supplied draw argument (a bound, size, pattern, or similar)
+    /// was semantically invalid. The main library converts this to a panic
+    /// at the API surface; libhegel maps it to `HEGEL_E_INVALID_ARG` with
+    /// the message exposed via `hegel_context_last_error`. Carries a
+    /// human-readable diagnostic.
     InvalidArgument(String),
 }
 
@@ -70,14 +71,18 @@ pub trait DataSource: Send + Sync {
     /// email, url, or domain).
     fn generate_string(&self, spec: &StringSpec) -> Result<String, DataSourceError>;
 
-    /// Draw a Gregorian calendar [`Date`].
-    fn generate_date(&self) -> Result<Date, DataSourceError>;
+    /// Draw a Gregorian calendar [`Date`] in `[min, max]`, shrinking toward
+    /// 2000-01-01 (clamped into range). Errors with `InvalidArgument` for
+    /// invalid or inverted bounds.
+    fn generate_date(&self, min: Date, max: Date) -> Result<Date, DataSourceError>;
 
-    /// Draw a [`Time`] of day.
-    fn generate_time(&self) -> Result<Time, DataSourceError>;
+    /// Draw a [`Time`] of day in `[min, max]`, shrinking toward `min`.
+    /// Errors with `InvalidArgument` for invalid or inverted bounds.
+    fn generate_time(&self, min: Time, max: Time) -> Result<Time, DataSourceError>;
 
-    /// Draw a naive [`DateTime`].
-    fn generate_datetime(&self) -> Result<DateTime, DataSourceError>;
+    /// Draw a naive [`DateTime`] in `[min, max]`. Errors with
+    /// `InvalidArgument` for invalid or inverted bounds.
+    fn generate_datetime(&self, min: DateTime, max: DateTime) -> Result<DateTime, DataSourceError>;
 
     /// Draw a UUID's 16 big-endian bytes. When `version` is set, the RFC
     /// 4122 version and variant nibbles are forced accordingly; errors with

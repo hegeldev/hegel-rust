@@ -3,14 +3,14 @@ use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
 use crate::generators::{BoxedGenerator, Generator, TestCase, integers};
-use crate::test_case::invalid_argument;
+use crate::test_case::{full_ranges, invalid_argument};
 
 /// Generator for [`jiff::civil::Date`] values. Created by [`dates()`].
 pub struct DateGenerator;
 
 impl Generator<Date> for DateGenerator {
     fn do_draw(&self, tc: &TestCase) -> Date {
-        let d = tc.generate_date();
+        let d = tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE);
         Date::new(d.year as i16, d.month as i8, d.day as i8).unwrap()
     }
 }
@@ -39,7 +39,7 @@ pub struct TimeGenerator;
 
 impl Generator<Time> for TimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> Time {
-        let t = tc.generate_time();
+        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND);
         Time::new(
             t.hour as i8,
             t.minute as i8,

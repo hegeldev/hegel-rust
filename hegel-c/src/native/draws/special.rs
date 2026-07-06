@@ -54,52 +54,175 @@ fn draw_i64(ntc: &mut NativeTestCase, min: i64, max: i64) -> Result<i64, EngineE
         .unwrap())
 }
 
-/// The unspanned date draw shared by [`generate_date`] and
+/// Inclusive year envelope accepted by the bounded date draws. Wide enough
+/// for every date type the frontends expose (chrono's `NaiveDate` spans
+/// years ±262143) while keeping the day arithmetic comfortably inside `i64`.
+pub const MIN_YEAR: i32 = -999_999;
+pub const MAX_YEAR: i32 = 999_999;
+
+/// Days from 1970-01-01 to `d` in the proleptic Gregorian calendar. Port of
+/// Howard Hinnant's `days_from_civil`.
+pub(crate) fn days_from_civil(d: &Date) -> i64 {
+    let y = i64::from(d.year) - i64::from(d.month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = i64::from(d.month) + if d.month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + i64::from(d.day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Inverse of [`days_from_civil`]. Port of Hinnant's `civil_from_days`.
+pub(crate) fn civil_from_days(z: i64) -> Date {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+    Date {
+        year: (y + i64::from(month <= 2)) as i32,
+        month,
+        day,
+    }
+}
+
+fn validate_date(what: &str, d: &Date) -> Result<(), EngineError> {
+    let valid = (MIN_YEAR..=MAX_YEAR).contains(&d.year)
+        && (1..=12).contains(&d.month)
+        && d.day >= 1
+        && i64::from(d.day) <= days_in_month(d.year, d.month);
+    if !valid {
+        return Err(EngineError::InvalidArgument(format!(
+            "{what} is not a valid date (year in [{MIN_YEAR}, {MAX_YEAR}]): \
+             {:05}-{:02}-{:02}",
+            d.year, d.month, d.day
+        )));
+    }
+    Ok(())
+}
+
+fn validate_time(what: &str, t: &Time) -> Result<(), EngineError> {
+    let valid = t.hour <= 23 && t.minute <= 59 && t.second <= 59 && t.microsecond <= 999_999;
+    if !valid {
+        return Err(EngineError::InvalidArgument(format!(
+            "{what} is not a valid time: {:02}:{:02}:{:02}.{:06}",
+            t.hour, t.minute, t.second, t.microsecond
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn time_to_us(t: &Time) -> i64 {
+    ((i64::from(t.hour) * 60 + i64::from(t.minute)) * 60 + i64::from(t.second)) * 1_000_000
+        + i64::from(t.microsecond)
+}
+
+fn time_from_us(us: i64) -> Time {
+    Time {
+        hour: (us / 3_600_000_000) as u8,
+        minute: (us / 60_000_000 % 60) as u8,
+        second: (us / 1_000_000 % 60) as u8,
+        microsecond: (us % 1_000_000) as u32,
+    }
+}
+
+const LAST_US_OF_DAY: i64 = 86_400_000_000 - 1;
+
+/// The unspanned bounded date draw shared by [`generate_date`] and
 /// [`generate_datetime`].
 ///
-/// Hypothesis draws year ∈ [1, 9999] with shrink_towards=2000, month ∈ [1, 12],
-/// then day ∈ [1, days_in_month(year, month)]. Native lacks a parameterised
-/// `shrink_towards` on `draw_integer` (always 0), so we draw the year as an
-/// offset from 2000 to get the same shrink target. The observable
-/// distribution is identical because `biased_integer_sample` boosts the
-/// endpoints (here ±offset bounds) at the same rate either way.
-pub(crate) fn draw_date(ntc: &mut NativeTestCase) -> Result<Date, EngineError> {
-    let year = (2000 + draw_i64(ntc, 1 - 2000, 9999 - 2000)?) as i32;
-    let month = draw_i64(ntc, 1, 12)? as u8;
-    let day = draw_i64(ntc, 1, days_in_month(year, month))? as u8;
-    Ok(Date { year, month, day })
-}
-
-/// The unspanned time draw shared by [`generate_time`] and
-/// [`generate_datetime`].
-pub(crate) fn draw_time(ntc: &mut NativeTestCase) -> Result<Time, EngineError> {
-    let hour = draw_i64(ntc, 0, 23)? as u8;
-    let minute = draw_i64(ntc, 0, 59)? as u8;
-    let second = draw_i64(ntc, 0, 59)? as u8;
-    let microsecond = draw_i64(ntc, 0, 999_999)? as u32;
-    Ok(Time {
-        hour,
-        minute,
-        second,
-        microsecond,
+/// Mirrors Hypothesis's `DateStrategy`: one integer draw of a day offset
+/// within the bounds, centred on 2000-01-01 (clamped into range) so that is
+/// the shrink target. Native lacks a parameterised `shrink_towards` on
+/// `draw_integer` (always 0), so the offset is drawn relative to the centre.
+fn draw_date_in(
+    ntc: &mut NativeTestCase,
+    min_days: i64,
+    max_days: i64,
+) -> Result<Date, EngineError> {
+    let center = days_from_civil(&Date {
+        year: 2000,
+        month: 1,
+        day: 1,
     })
+    .clamp(min_days, max_days);
+    let offset = draw_i64(ntc, min_days - center, max_days - center)?;
+    Ok(civil_from_days(center + offset))
 }
 
-/// Draw a [`Date`], wrapped in a span so the shrinker treats it as a unit.
-pub fn generate_date(ntc: &mut NativeTestCase) -> Result<Date, EngineError> {
-    spanned(ntc, LABEL_DATE, draw_date)
+/// The unspanned bounded time draw shared by [`generate_time`] and
+/// [`generate_datetime`].
+///
+/// Mirrors Hypothesis's `TimeStrategy`: one integer draw of a microsecond
+/// offset from `min_us`, shrinking toward `min_us` (the representable time
+/// closest to midnight).
+fn draw_time_in(ntc: &mut NativeTestCase, min_us: i64, max_us: i64) -> Result<Time, EngineError> {
+    let offset = draw_i64(ntc, 0, max_us - min_us)?;
+    Ok(time_from_us(min_us + offset))
 }
 
-/// Draw a [`Time`], wrapped in a span.
-pub fn generate_time(ntc: &mut NativeTestCase) -> Result<Time, EngineError> {
-    spanned(ntc, LABEL_TIME, draw_time)
+/// Draw a [`Date`] in `[min, max]`, wrapped in a span so the shrinker treats
+/// it as a unit. Shrinks toward 2000-01-01, or the nearest bound when that
+/// is out of range.
+pub fn generate_date(ntc: &mut NativeTestCase, min: Date, max: Date) -> Result<Date, EngineError> {
+    validate_date("min_value", &min)?;
+    validate_date("max_value", &max)?;
+    let (min_days, max_days) = (days_from_civil(&min), days_from_civil(&max));
+    if min_days > max_days {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_date requires min_value <= max_value, got [{min:?}, {max:?}]"
+        )));
+    }
+    spanned(ntc, LABEL_DATE, |ntc| draw_date_in(ntc, min_days, max_days))
 }
 
-/// Draw a [`DateTime`], wrapped in a span.
-pub fn generate_datetime(ntc: &mut NativeTestCase) -> Result<DateTime, EngineError> {
+/// Draw a [`Time`] in `[min, max]`, wrapped in a span. Shrinks toward `min`
+/// (the representable time closest to midnight).
+pub fn generate_time(ntc: &mut NativeTestCase, min: Time, max: Time) -> Result<Time, EngineError> {
+    validate_time("min_value", &min)?;
+    validate_time("max_value", &max)?;
+    let (min_us, max_us) = (time_to_us(&min), time_to_us(&max));
+    if min_us > max_us {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_time requires min_value <= max_value, got [{min:?}, {max:?}]"
+        )));
+    }
+    spanned(ntc, LABEL_TIME, |ntc| draw_time_in(ntc, min_us, max_us))
+}
+
+/// Draw a [`DateTime`] in `[min, max]`, wrapped in a span: a bounded date
+/// draw, then a time draw whose bounds tighten to the endpoint times when
+/// the drawn date lands on a boundary date.
+pub fn generate_datetime(
+    ntc: &mut NativeTestCase,
+    min: DateTime,
+    max: DateTime,
+) -> Result<DateTime, EngineError> {
+    validate_date("min_value.date", &min.date)?;
+    validate_date("max_value.date", &max.date)?;
+    validate_time("min_value.time", &min.time)?;
+    validate_time("max_value.time", &max.time)?;
+    let (min_days, max_days) = (days_from_civil(&min.date), days_from_civil(&max.date));
+    let (min_us, max_us) = (time_to_us(&min.time), time_to_us(&max.time));
+    if (min_days, min_us) > (max_days, max_us) {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_datetime requires min_value <= max_value, got [{min:?}, {max:?}]"
+        )));
+    }
     spanned(ntc, LABEL_DATETIME, |ntc| {
-        let date = draw_date(ntc)?;
-        let time = draw_time(ntc)?;
+        let date = draw_date_in(ntc, min_days, max_days)?;
+        let day = days_from_civil(&date);
+        let lo = if day == min_days { min_us } else { 0 };
+        let hi = if day == max_days {
+            max_us
+        } else {
+            LAST_US_OF_DAY
+        };
+        let time = draw_time_in(ntc, lo, hi)?;
         Ok(DateTime { date, time })
     })
 }

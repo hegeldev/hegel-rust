@@ -1354,40 +1354,58 @@ hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
                                                  hegel_generate_string_result_t *result);
 
 /*
- Draw a Gregorian calendar date, shrinking toward 2000-01-01.
+ Draw a Gregorian calendar date in `[min_value, max_value]` (both
+ inclusive), shrinking toward 2000-01-01, or the nearest bound when that
+ is out of range. Bounds are proleptic Gregorian dates with `year` in
+ `[-999999, 999999]`; pass `{1, 1, 1}` and `{9999, 12, 31}` for the
+ conventional full range.
 
  On success writes the drawn date into `*out_value` and returns
  `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
  is exhausted for this test case (the caller should abort the body and
  call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
- `HEGEL_E_INVALID_ARG` for a NULL `out_value`.
+ `HEGEL_E_INVALID_ARG` for a NULL `out_value`, an invalid calendar date
+ in either bound, or `min_value > max_value`.
  */
 hegel_result_t hegel_generate_date(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
+                                   hegel_date_t min_value,
+                                   hegel_date_t max_value,
                                    hegel_date_t *out_value);
 
 /*
- Draw a time of day, shrinking toward midnight.
+ Draw a time of day in `[min_value, max_value]` (both inclusive),
+ shrinking toward `min_value` (the representable time closest to
+ midnight). Pass all-zeros and `{23, 59, 59, 999999}` for the full day.
 
  On success writes the drawn time into `*out_value` and returns
  `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
  is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
- NULL `out_value`.
+ NULL `out_value`, an out-of-range field in either bound, or
+ `min_value > max_value`.
  */
 hegel_result_t hegel_generate_time(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
+                                   hegel_time_t min_value,
+                                   hegel_time_t max_value,
                                    hegel_time_t *out_value);
 
 /*
- Draw a naive datetime (no timezone), shrinking toward 2000-01-01T00:00:00.
+ Draw a naive datetime (no timezone) in `[min_value, max_value]` (both
+ inclusive), shrinking toward 2000-01-01T00:00:00 clamped into range: a
+ bounded date draw, then a time draw whose bounds tighten to the endpoint
+ times when the drawn date lands on a boundary date.
 
  On success writes the drawn datetime into `*out_value` and returns
  `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
  is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
- NULL `out_value`.
+ NULL `out_value`, an invalid date or time in either bound, or
+ `min_value > max_value`.
  */
 hegel_result_t hegel_generate_datetime(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
+                                       hegel_datetime_t min_value,
+                                       hegel_datetime_t max_value,
                                        hegel_datetime_t *out_value);
 
 /*
