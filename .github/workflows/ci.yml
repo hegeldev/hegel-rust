@@ -690,7 +690,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repo: [hegel-go, hegel-ocaml, hegel-typescript]
+        repo: [hegel-go, hegel-ocaml, hegel-typescript, hegel-cpp]
     steps:
       - name: Generate app token
         uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
