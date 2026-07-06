@@ -688,22 +688,25 @@ impl TestCase {
 }
 
 impl TestCase {
+    /// Run a draw against this instance's libhegel handle, raising the
+    /// appropriate control-flow payload on failure.
+    fn draw_or_raise<T>(
+        &self,
+        f: impl FnOnce(&CTestCase) -> Result<T, hegel_c::hegel_result_t>,
+    ) -> T {
+        self.with_ctc(f).unwrap_or_else(|rc| raise_for_rc(rc))
+    }
+
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
     pub(crate) fn generate_integer_i64(&self, min_value: i64, max_value: i64) -> i64 {
-        match self.with_ctc(|ctc| ctc.generate_integer(min_value, max_value)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_integer(min_value, max_value))
     }
 
     /// Draw an integer with bounds given as two's-complement little-endian
     /// byte encodings, returning the value's encoding sign-extended to 17
     /// bytes.
     pub(crate) fn generate_integer_le17(&self, min_value: &[u8], max_value: &[u8]) -> [u8; 17] {
-        match self.with_ctc(|ctc| ctc.generate_integer_big(min_value, max_value)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_integer_big(min_value, max_value))
     }
 
     /// Draw a float according to the full libhegel spec.
@@ -719,7 +722,7 @@ impl TestCase {
         exclude_max: bool,
         smallest_nonzero_magnitude: f64,
     ) -> f64 {
-        let outcome = self.with_ctc(|ctc| {
+        self.draw_or_raise(|ctc| {
             ctc.generate_float(
                 width,
                 min_value,
@@ -730,83 +733,52 @@ impl TestCase {
                 exclude_max,
                 smallest_nonzero_magnitude,
             )
-        });
-        match outcome {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        })
     }
 
     /// Draw a boolean that is `true` with probability `p`.
     pub(crate) fn generate_boolean(&self, p: f64) -> bool {
-        match self.with_ctc(|ctc| ctc.generate_boolean(p)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_boolean(p))
     }
 
     /// Draw a byte string with length in `[min_size, max_size]`.
     pub(crate) fn generate_bytes(&self, min_size: usize, max_size: usize) -> Vec<u8> {
-        match self.with_ctc(|ctc| ctc.generate_bytes(min_size as u64, max_size as u64)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_bytes(min_size as u64, max_size as u64))
     }
 
     /// Draw a string described by a prebuilt libhegel string generator.
     pub(crate) fn generate_string(&self, generator: &crate::ffi::StringGenerator) -> String {
-        match self.with_ctc(|ctc| ctc.generate_string(generator)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_string(generator))
     }
 
     /// Draw a Gregorian calendar date.
     pub(crate) fn generate_date(&self) -> hegel_c::hegel_date_t {
-        match self.with_ctc(|ctc| ctc.generate_date()) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_date())
     }
 
     /// Draw a time of day.
     pub(crate) fn generate_time(&self) -> hegel_c::hegel_time_t {
-        match self.with_ctc(|ctc| ctc.generate_time()) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_time())
     }
 
     /// Draw a naive datetime.
     pub(crate) fn generate_datetime(&self) -> hegel_c::hegel_datetime_t {
-        match self.with_ctc(|ctc| ctc.generate_datetime()) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_datetime())
     }
 
     /// Draw a UUID's 16 big-endian bytes, optionally forcing the version.
     pub(crate) fn generate_uuid(&self, version: Option<u8>) -> [u8; 16] {
-        match self.with_ctc(|ctc| ctc.generate_uuid(version)) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_uuid(version))
     }
 
     /// Draw an IPv4 address.
     pub(crate) fn generate_ipv4(&self) -> std::net::Ipv4Addr {
-        match self.with_ctc(|ctc| ctc.generate_ipv4()) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_ipv4())
     }
 
     /// Draw an IPv6 address.
     pub(crate) fn generate_ipv6(&self) -> std::net::Ipv6Addr {
-        match self.with_ctc(|ctc| ctc.generate_ipv6()) {
-            Ok(v) => v,
-            Err(rc) => raise_for_rc(rc),
-        }
+        self.draw_or_raise(|ctc| ctc.generate_ipv6())
     }
 }
 
@@ -881,22 +853,24 @@ impl<'a> Collection<'a> {
 
 #[doc(hidden)]
 pub mod labels {
-    pub const LIST: u64 = 1;
-    pub const LIST_ELEMENT: u64 = 2;
-    pub const SET: u64 = 3;
-    pub const SET_ELEMENT: u64 = 4;
-    pub const MAP: u64 = 5;
-    pub const MAP_ENTRY: u64 = 6;
-    pub const TUPLE: u64 = 7;
-    pub const ONE_OF: u64 = 8;
-    pub const OPTIONAL: u64 = 9;
-    pub const FIXED_DICT: u64 = 10;
-    pub const FLAT_MAP: u64 = 11;
-    pub const FILTER: u64 = 12;
-    pub const MAPPED: u64 = 13;
-    pub const SAMPLED_FROM: u64 = 14;
-    pub const ENUM_VARIANT: u64 = 15;
-    pub const FEATURE_FLAG: u64 = 16;
+    use hegel_c::hegel_label_t;
+
+    pub const LIST: u64 = hegel_label_t::HEGEL_LABEL_LIST as u64;
+    pub const LIST_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_LIST_ELEMENT as u64;
+    pub const SET: u64 = hegel_label_t::HEGEL_LABEL_SET as u64;
+    pub const SET_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_SET_ELEMENT as u64;
+    pub const MAP: u64 = hegel_label_t::HEGEL_LABEL_MAP as u64;
+    pub const MAP_ENTRY: u64 = hegel_label_t::HEGEL_LABEL_MAP_ENTRY as u64;
+    pub const TUPLE: u64 = hegel_label_t::HEGEL_LABEL_TUPLE as u64;
+    pub const ONE_OF: u64 = hegel_label_t::HEGEL_LABEL_ONE_OF as u64;
+    pub const OPTIONAL: u64 = hegel_label_t::HEGEL_LABEL_OPTIONAL as u64;
+    pub const FIXED_DICT: u64 = hegel_label_t::HEGEL_LABEL_FIXED_DICT as u64;
+    pub const FLAT_MAP: u64 = hegel_label_t::HEGEL_LABEL_FLAT_MAP as u64;
+    pub const FILTER: u64 = hegel_label_t::HEGEL_LABEL_FILTER as u64;
+    pub const MAPPED: u64 = hegel_label_t::HEGEL_LABEL_MAPPED as u64;
+    pub const SAMPLED_FROM: u64 = hegel_label_t::HEGEL_LABEL_SAMPLED_FROM as u64;
+    pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
+    pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
-use crate::generators::{BoxedGenerator, Generator, TestCase, integers, labels};
+use crate::generators::{BoxedGenerator, Generator, TestCase, integers};
 use crate::test_case::invalid_argument;
 
 /// Generator for [`jiff::civil::Date`] values. Created by [`dates()`].
@@ -425,10 +425,8 @@ where
     TZ: Generator<TimeZone>,
 {
     fn do_draw(&self, tc: &TestCase) -> Zoned {
-        tc.start_span(labels::TUPLE);
-        let ts = self.timestamp_gen.do_draw(tc);
-        let tz = self.timezone_gen.do_draw(tc);
-        tc.stop_span(false);
+        let (ts, tz) =
+            crate::generators::tuples2(&self.timestamp_gen, &self.timezone_gen).do_draw(tc);
         Zoned::new(ts, tz)
     }
 }

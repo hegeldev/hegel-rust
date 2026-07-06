@@ -414,10 +414,7 @@ impl<S> NaiveWeekGenerator<S> {
 
 impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
     fn do_draw(&self, tc: &TestCase) -> NaiveWeek {
-        tc.start_span(crate::generators::labels::TUPLE);
-        let date = self.date_gen.do_draw(tc);
-        let start = self.start_gen.do_draw(tc);
-        tc.stop_span(false);
+        let (date, start) = crate::generators::tuples2(&self.date_gen, &self.start_gen).do_draw(tc);
         date.week(start)
     }
 }
