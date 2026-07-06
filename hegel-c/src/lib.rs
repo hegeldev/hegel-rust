@@ -1554,6 +1554,45 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
     }
 }
 
+/// Reconstruct and drop an engine-allocated buffer handed out by a
+/// `hegel_generate_*` draw. `data` must come from `Box::into_raw` on a boxed
+/// `[u8]` of length `len` and must not be freed again.
+unsafe fn free_engine_buffer(data: *mut u8, len: usize) {
+    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len)) });
+}
+
+/// Shared prologue/epilogue for the typed `hegel_generate_*` draws: clear
+/// the error channel, check the test-case handle, require a non-null out
+/// pointer (reporting "<fn_name>: out parameter is null"), run `draw`
+/// against the handle, pass the drawn value to `write`, and translate draw
+/// errors onto `ctx`. `write` performs the caller's raw out-pointer store,
+/// so it runs only when the out pointer is non-null and the draw succeeded.
+unsafe fn typed_draw<T>(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    fn_name: &str,
+    out_is_null: bool,
+    draw: impl FnOnce(&HegelTestCase) -> Result<T, DataSourceError>,
+    write: impl FnOnce(T),
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_is_null {
+        set_last_error(ctx, &format!("{fn_name}: out parameter is null"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    match draw(tc) {
+        Ok(v) => {
+            write(v);
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
 /// Open a labeled span around a group of draws so the shrinker can
 /// reason about them as a unit. Pair with exactly one
 /// `hegel_stop_span(tc, false)` call when the structure is complete.
@@ -1972,21 +2011,15 @@ pub unsafe extern "C" fn hegel_generate_boolean(
     has_forced: bool,
     out_value: *mut bool,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_boolean: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_boolean(p, has_forced.then_some(forced)) {
-        Ok(v) => {
-            unsafe { *out_value = v };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_boolean",
+            out_value.is_null(),
+            |tc| tc.stream.generate_boolean(p, has_forced.then_some(forced)),
+            |v| unsafe { *out_value = v },
+        )
     }
 }
 
@@ -2009,26 +2042,20 @@ pub unsafe extern "C" fn hegel_generate_integer(
     max_value: i64,
     out_value: *mut i64,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_integer: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc
-        .stream
-        .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
-    {
-        Ok(v) => {
-            unsafe {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_integer",
+            out_value.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
+            },
+            |v| unsafe {
                 *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds")
-            };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+            },
+        )
     }
 }
 
@@ -2163,15 +2190,6 @@ pub unsafe extern "C" fn hegel_generate_float(
     smallest_nonzero_magnitude: f64,
     out_value: *mut f64,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_float: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let spec = crate::native::draws::FloatSpec {
         width,
         min_value,
@@ -2182,12 +2200,15 @@ pub unsafe extern "C" fn hegel_generate_float(
         exclude_max,
         smallest_nonzero_magnitude,
     };
-    match tc.stream.generate_float(&spec) {
-        Ok(v) => {
-            unsafe { *out_value = v };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_float",
+            out_value.is_null(),
+            |tc| tc.stream.generate_float(&spec),
+            |v| unsafe { *out_value = v },
+        )
     }
 }
 
@@ -2221,27 +2242,23 @@ pub unsafe extern "C" fn hegel_generate_bytes(
     max_size: u64,
     out_result: *mut hegel_generate_bytes_result_t,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_result.is_null() {
-        set_last_error(ctx, "hegel_generate_bytes: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc
-        .stream
-        .generate_bytes(size_arg(min_size), size_arg(max_size))
-    {
-        Ok(v) => {
-            let boxed = v.into_boxed_slice();
-            let len = boxed.len();
-            let data = Box::into_raw(boxed) as *mut u8;
-            unsafe { *out_result = hegel_generate_bytes_result_t { data, len } };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_bytes",
+            out_result.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_bytes(size_arg(min_size), size_arg(max_size))
+            },
+            |v| {
+                let boxed = v.into_boxed_slice();
+                let len = boxed.len();
+                let data = Box::into_raw(boxed) as *mut u8;
+                unsafe { *out_result = hegel_generate_bytes_result_t { data, len } };
+            },
+        )
     }
 }
 
@@ -2261,7 +2278,7 @@ pub unsafe extern "C" fn hegel_generate_bytes_result_free(
         // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
         // `hegel_generate_bytes` and are freed exactly once here (the struct
         // is zeroed below, making a second call a no-op).
-        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(result.data, result.len)) });
+        unsafe { free_engine_buffer(result.data, result.len) };
     }
     result.data = ptr::null_mut();
     result.len = 0;
@@ -2356,25 +2373,7 @@ unsafe fn optional_utf8_array_arg(
     if p.is_null() {
         return Ok(None);
     }
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        let entry = unsafe { *p.add(i) };
-        if entry.is_null() {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name}[{i}] is null"));
-            return Err(HEGEL_E_INVALID_ARG);
-        }
-        match unsafe { CStr::from_ptr(entry) }.to_str() {
-            Ok(s) => out.push(s.to_string()),
-            Err(_) => {
-                set_last_error(
-                    ctx,
-                    &format!("{fn_name}: {arg_name}[{i}] is not valid UTF-8"),
-                );
-                return Err(HEGEL_E_INVALID_ARG);
-            }
-        }
-    }
-    Ok(Some(out))
+    unsafe { names_from_c_array(ctx, fn_name, arg_name, p, len) }.map(Some)
 }
 
 /// Write a constructed string generator through `out_generator`, boxing it
@@ -2522,19 +2521,18 @@ pub unsafe extern "C" fn hegel_string_generator_regex(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_generator = ptr::null_mut() };
-    if pattern.is_null() {
-        set_last_error(ctx, "hegel_string_generator_regex: pattern is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    let Ok(pattern) = (unsafe { CStr::from_ptr(pattern) }).to_str() else {
-        set_last_error(
-            ctx,
-            "hegel_string_generator_regex: pattern is not valid UTF-8",
-        );
-        return HEGEL_E_INVALID_ARG;
-    };
+    let pattern =
+        match unsafe { optional_utf8_arg(ctx, "hegel_string_generator_regex", "pattern", pattern) }
+        {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                set_last_error(ctx, "hegel_string_generator_regex: pattern is null");
+                return HEGEL_E_INVALID_ARG;
+            }
+            Err(rc) => return rc,
+        };
     let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &g.spec);
-    match crate::native::draws::StringSpec::regex(pattern, fullmatch, alphabet_spec) {
+    match crate::native::draws::StringSpec::regex(&pattern, fullmatch, alphabet_spec) {
         Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
         Err(e) => translate_construct_error(ctx, e),
     }
@@ -2556,6 +2554,7 @@ pub unsafe extern "C" fn hegel_string_generator_email(
         set_last_error(ctx, "hegel_string_generator_email: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_generator = ptr::null_mut() };
     unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::email()) }
 }
 
@@ -2574,6 +2573,7 @@ pub unsafe extern "C" fn hegel_string_generator_url(
         set_last_error(ctx, "hegel_string_generator_url: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_generator = ptr::null_mut() };
     unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::url()) }
 }
 
@@ -2664,6 +2664,7 @@ pub unsafe extern "C" fn hegel_generate_string(
         Err(rc) => return rc,
     };
     let Some(generator) = (unsafe { generator.as_ref() }) else {
+        set_last_error(ctx, "hegel_generate_string: generator handle is null");
         return HEGEL_E_INVALID_HANDLE;
     };
     if out_result.is_null() {
@@ -2698,12 +2699,7 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
         // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
         // `hegel_generate_string` and are freed exactly once here (the
         // struct is zeroed below, making a second call a no-op).
-        drop(unsafe {
-            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                result.data.cast::<u8>(),
-                result.len,
-            ))
-        });
+        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len) };
     }
     result.data = ptr::null_mut();
     result.len = 0;
@@ -2769,21 +2765,15 @@ pub unsafe extern "C" fn hegel_generate_date(
     tc: *mut HegelTestCase,
     out_value: *mut hegel_date_t,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_date: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_date() {
-        Ok(d) => {
-            unsafe { *out_value = c_date(d) };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_date",
+            out_value.is_null(),
+            |tc| tc.stream.generate_date(),
+            |d| unsafe { *out_value = c_date(d) },
+        )
     }
 }
 
@@ -2799,21 +2789,15 @@ pub unsafe extern "C" fn hegel_generate_time(
     tc: *mut HegelTestCase,
     out_value: *mut hegel_time_t,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_time: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_time() {
-        Ok(t) => {
-            unsafe { *out_value = c_time(t) };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_time",
+            out_value.is_null(),
+            |tc| tc.stream.generate_time(),
+            |t| unsafe { *out_value = c_time(t) },
+        )
     }
 }
 
@@ -2829,26 +2813,20 @@ pub unsafe extern "C" fn hegel_generate_datetime(
     tc: *mut HegelTestCase,
     out_value: *mut hegel_datetime_t,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_generate_datetime: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_datetime() {
-        Ok(dt) => {
-            unsafe {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_datetime",
+            out_value.is_null(),
+            |tc| tc.stream.generate_datetime(),
+            |dt| unsafe {
                 *out_value = hegel_datetime_t {
                     date: c_date(dt.date),
                     time: c_time(dt.time),
                 }
-            };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+            },
+        )
     }
 }
 
@@ -2872,21 +2850,15 @@ pub unsafe extern "C" fn hegel_generate_uuid(
     has_version: bool,
     out_bytes: *mut u8,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_bytes.is_null() {
-        set_last_error(ctx, "hegel_generate_uuid: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_uuid(has_version.then_some(version)) {
-        Ok(bytes) => {
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16) };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_uuid",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_uuid(has_version.then_some(version)),
+            |bytes| unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16) },
+        )
     }
 }
 
@@ -2904,22 +2876,18 @@ pub unsafe extern "C" fn hegel_generate_ipv4(
     tc: *mut HegelTestCase,
     out_bytes: *mut u8,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_bytes.is_null() {
-        set_last_error(ctx, "hegel_generate_ipv4: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_ipv4() {
-        Ok(a) => {
-            let octets = a.octets();
-            unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4) };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_ipv4",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_ipv4(),
+            |a| {
+                let octets = a.octets();
+                unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4) };
+            },
+        )
     }
 }
 
@@ -2936,22 +2904,18 @@ pub unsafe extern "C" fn hegel_generate_ipv6(
     tc: *mut HegelTestCase,
     out_bytes: *mut u8,
 ) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if out_bytes.is_null() {
-        set_last_error(ctx, "hegel_generate_ipv6: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    match tc.stream.generate_ipv6() {
-        Ok(a) => {
-            let octets = a.octets();
-            unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16) };
-            HEGEL_OK
-        }
-        Err(e) => translate_ds_error(ctx, e),
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_ipv6",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_ipv6(),
+            |a| {
+                let octets = a.octets();
+                unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16) };
+            },
+        )
     }
 }
 
