@@ -326,6 +326,8 @@ impl CTestCase {
     /// Draw an integer with bounds given as two's-complement little-endian
     /// byte encodings, returning the drawn value's encoding sign-extended to
     /// fill a 17-byte buffer (wide enough for any `i128` or `u128` value).
+    /// libhegel sign-fills the buffer beyond the minimal encoding, so the
+    /// whole array reads directly as a fixed-width value.
     pub(crate) fn generate_integer_big(
         &self,
         min_value: &[u8],
@@ -348,14 +350,6 @@ impl CTestCase {
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(rc);
-        }
-        let fill = if out[out_len - 1] & 0x80 != 0 {
-            0xFF
-        } else {
-            0x00
-        };
-        for byte in &mut out[out_len..] {
-            *byte = fill;
         }
         Ok(out)
     }

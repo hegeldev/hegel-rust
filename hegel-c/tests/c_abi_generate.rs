@@ -371,6 +371,32 @@ fn big_integer_boundary_values_fit_documented_buffer_size() {
                 assert_eq!(out_len, bound.len());
                 assert_eq!(&out_buf[..out_len], &bound[..]);
             }
+
+            for (value, fill) in [((-128i64), 0xFFu8), (7, 0x00)] {
+                let bound = value.to_le_bytes();
+                let mut out_buf = [0xABu8; 8];
+                let mut out_len = 0usize;
+                ok(hegel_generate_integer_big(
+                    ctx,
+                    tc,
+                    bound.as_ptr(),
+                    1,
+                    bound.as_ptr(),
+                    1,
+                    out_buf.as_mut_ptr(),
+                    out_buf.len(),
+                    &mut out_len,
+                ));
+                assert_eq!(out_len, 1);
+                assert_eq!(out_buf[0], bound[0]);
+                assert_eq!(
+                    &out_buf[1..],
+                    &[fill; 7],
+                    "buffer beyond out_len must be sign-filled so fixed-width \
+                     reads of the full buffer are correct"
+                );
+                assert_eq!(i64::from_le_bytes(out_buf), value);
+            }
             complete_valid(ctx, tc);
         }
         ok(hegel_run_free(ctx, run));

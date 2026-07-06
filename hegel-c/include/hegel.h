@@ -1138,9 +1138,13 @@ hegel_result_t hegel_generate_integer(hegel_context_t *ctx,
  required and must be non-empty.
 
  On success writes the drawn value's two's-complement little-endian bytes
- into `out_value` (capacity `out_value_cap`), its length into
- `*out_value_len`, and returns `HEGEL_OK`. A value in range never needs
- more bytes than the longer of the two bound encodings, so passing
+ into `out_value` (capacity `out_value_cap`), its minimal length into
+ `*out_value_len`, sign-fills the rest of the buffer up to
+ `out_value_cap` (so reading the whole buffer as a fixed-width
+ two's-complement integer also yields the drawn value, with no
+ sign-extension needed on the caller's side), and returns `HEGEL_OK`. A
+ value in range never needs more bytes than the longer of the two bound
+ encodings, so passing
  `out_value_cap >= max(min_value_len, max_value_len)` always succeeds.
  Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
  for this test case. Returns `HEGEL_E_INVALID_ARG` for NULL or empty
