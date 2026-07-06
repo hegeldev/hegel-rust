@@ -94,6 +94,15 @@ fn cstring_lossy(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| CString::new(s.replace('\0', "\u{FFFD}")).unwrap())
 }
 
+/// Convert an engine-produced string buffer into an owned `String`, raising
+/// an internal error if the engine violated its guarantee of returning valid
+/// UTF-8.
+fn string_from_engine_bytes(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        crate::control::hegel_internal_error!("libhegel returned invalid UTF-8: {e}")
+    })
+}
+
 /// Owns a `*mut HegelSettings` and frees it on drop. Built from a frontend
 /// [`Settings`] plus its database key by [`SettingsHandle::build`].
 pub(crate) struct SettingsHandle {
@@ -445,11 +454,7 @@ impl CTestCase {
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_generate_string_result_free(ctx, &mut result)
         }));
-        Ok(String::from_utf8(bytes).unwrap_or_else(|e| {
-            // nocov start
-            crate::control::hegel_internal_error!("libhegel returned invalid UTF-8: {e}")
-            // nocov end
-        }))
+        Ok(string_from_engine_bytes(bytes))
     }
 
     /// Draw a Gregorian calendar date.

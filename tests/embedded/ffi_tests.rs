@@ -242,3 +242,14 @@ fn ffi_from_blob_rejects_undecodable_input() {
     };
     assert!(!err.is_empty(), "an undecodable blob yields a diagnostic");
 }
+
+#[test]
+fn ffi_string_from_engine_bytes_accepts_valid_utf8() {
+    assert_eq!(string_from_engine_bytes(b"h\xC3\xA9gel".to_vec()), "hégel");
+}
+
+#[test]
+#[should_panic(expected = "libhegel returned invalid UTF-8")]
+fn ffi_string_from_engine_bytes_raises_internal_error_on_invalid_utf8() {
+    string_from_engine_bytes(vec![0xFF]);
+}
