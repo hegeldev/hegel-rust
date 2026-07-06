@@ -126,6 +126,11 @@ fn integer_draws_respect_bounds_and_validate_arguments() {
                 HEGEL_E_INVALID_ARG
             );
             assert!(last_error(ctx).contains("min_value"));
+            assert!(
+                last_error(ctx).contains("[10, -5]"),
+                "bounds should print as plain integers: {:?}",
+                last_error(ctx)
+            );
 
             ok(hegel_generate_integer(ctx, tc, -5, 10, &mut out));
             assert!((-5..=10).contains(&out));

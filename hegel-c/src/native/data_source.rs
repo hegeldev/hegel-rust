@@ -192,7 +192,7 @@ impl DataSource for NativeDataSource {
             if min_value > max_value {
                 return Err(EngineError::InvalidArgument(format!(
                     "generate_integer requires min_value <= max_value, \
-                     got [{min_value:?}, {max_value:?}]"
+                     got [{min_value}, {max_value}]"
                 )));
             }
             draws::spanned(ntc, draws::LABEL_INTEGER, |ntc| {
