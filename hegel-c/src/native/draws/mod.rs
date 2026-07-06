@@ -13,23 +13,25 @@ use std::sync::Arc;
 
 pub use text::TextAlphabet;
 
-/// Span labels for the engine-side compound draws, matching the
+use crate::hegel_label_t;
+
+/// Span labels for the engine-side compound draws, derived from the
 /// `hegel_label_t` values exported by the C ABI. Emitted internally so the
 /// shrinker sees each compound string / structured draw as a unit.
-pub(crate) const LABEL_REGEX: u64 = 17;
-pub(crate) const LABEL_EMAIL: u64 = 18;
-pub(crate) const LABEL_URL: u64 = 19;
-pub(crate) const LABEL_DOMAIN: u64 = 20;
-pub(crate) const LABEL_DATE: u64 = 21;
-pub(crate) const LABEL_TIME: u64 = 22;
-pub(crate) const LABEL_DATETIME: u64 = 23;
-pub(crate) const LABEL_UUID: u64 = 24;
-pub(crate) const LABEL_IP_ADDRESS: u64 = 25;
-pub(crate) const LABEL_INTEGER: u64 = 26;
-pub(crate) const LABEL_FLOAT: u64 = 27;
-pub(crate) const LABEL_BOOLEAN: u64 = 28;
-pub(crate) const LABEL_BYTES: u64 = 29;
-pub(crate) const LABEL_STRING: u64 = 30;
+pub(crate) const LABEL_REGEX: u64 = hegel_label_t::HEGEL_LABEL_REGEX as u64;
+pub(crate) const LABEL_EMAIL: u64 = hegel_label_t::HEGEL_LABEL_EMAIL as u64;
+pub(crate) const LABEL_URL: u64 = hegel_label_t::HEGEL_LABEL_URL as u64;
+pub(crate) const LABEL_DOMAIN: u64 = hegel_label_t::HEGEL_LABEL_DOMAIN as u64;
+pub(crate) const LABEL_DATE: u64 = hegel_label_t::HEGEL_LABEL_DATE as u64;
+pub(crate) const LABEL_TIME: u64 = hegel_label_t::HEGEL_LABEL_TIME as u64;
+pub(crate) const LABEL_DATETIME: u64 = hegel_label_t::HEGEL_LABEL_DATETIME as u64;
+pub(crate) const LABEL_UUID: u64 = hegel_label_t::HEGEL_LABEL_UUID as u64;
+pub(crate) const LABEL_IP_ADDRESS: u64 = hegel_label_t::HEGEL_LABEL_IP_ADDRESS as u64;
+pub(crate) const LABEL_INTEGER: u64 = hegel_label_t::HEGEL_LABEL_INTEGER as u64;
+pub(crate) const LABEL_FLOAT: u64 = hegel_label_t::HEGEL_LABEL_FLOAT as u64;
+pub(crate) const LABEL_BOOLEAN: u64 = hegel_label_t::HEGEL_LABEL_BOOLEAN as u64;
+pub(crate) const LABEL_BYTES: u64 = hegel_label_t::HEGEL_LABEL_BYTES as u64;
+pub(crate) const LABEL_STRING: u64 = hegel_label_t::HEGEL_LABEL_STRING as u64;
 
 /// Parameters of a float draw as accepted at the `hegel_generate_float` API
 /// surface. Width-32 handling (bound clamping, result rounding) and the
