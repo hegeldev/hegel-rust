@@ -1,4 +1,8 @@
-use ciborium::Value;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use crate::native::bignum::BigInt;
+use crate::native::draws::special::{Date, DateTime, Time};
+use crate::native::draws::{FloatSpec, StringSpec};
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 ///
@@ -44,8 +48,47 @@ impl std::error::Error for DataSourceError {}
 /// Implementations must be `Send + Sync` so a `TestCase` clone can be moved to
 /// another thread.
 pub trait DataSource: Send + Sync {
-    /// Send a CBOR schema and receive a generated CBOR value.
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError>;
+    /// Draw an integer uniformly-ish from `[min_value, max_value]`, biased
+    /// toward boundary values as the engine sees fit. Errors with
+    /// `InvalidArgument` when `min_value > max_value`.
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError>;
+
+    /// Draw a float according to `spec` (bounds, width, NaN/infinity policy,
+    /// exclusive-bound handling). Errors with `InvalidArgument` for an
+    /// invalid spec.
+    fn generate_float(&self, spec: &FloatSpec) -> Result<f64, DataSourceError>;
+
+    /// Draw a byte string with length in `[min_size, max_size]`. Errors with
+    /// `InvalidArgument` when `min_size > max_size`.
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError>;
+
+    /// Draw a string according to a validated [`StringSpec`] (text, regex,
+    /// email, url, or domain).
+    fn generate_string(&self, spec: &StringSpec) -> Result<String, DataSourceError>;
+
+    /// Draw a Gregorian calendar [`Date`].
+    fn generate_date(&self) -> Result<Date, DataSourceError>;
+
+    /// Draw a [`Time`] of day.
+    fn generate_time(&self) -> Result<Time, DataSourceError>;
+
+    /// Draw a naive [`DateTime`].
+    fn generate_datetime(&self) -> Result<DateTime, DataSourceError>;
+
+    /// Draw a UUID's 16 big-endian bytes. When `version` is set, the RFC
+    /// 4122 version and variant nibbles are forced accordingly; errors with
+    /// `InvalidArgument` when `version > 15`.
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError>;
+
+    /// Draw an IPv4 address.
+    fn generate_ipv4(&self) -> Result<Ipv4Addr, DataSourceError>;
+
+    /// Draw an IPv6 address.
+    fn generate_ipv6(&self) -> Result<Ipv6Addr, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;
@@ -94,7 +137,7 @@ pub trait DataSource: Send + Sync {
     /// If `forced` is `Some`, the choice is still recorded (so replay and
     /// shrinking stay aligned) but the value is forced and no entropy is
     /// consumed.
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;

@@ -136,3 +136,15 @@ fn completion_is_reported_before_concurrent_use() {
         ok(hegel_context_free(ctx));
     }
 }
+
+#[test]
+fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
+    assert_eq!(size_arg(0), 0);
+    assert_eq!(size_arg(255), 255);
+    assert_eq!(size_arg(u64::MAX), usize::MAX);
+    assert_eq!(
+        size_arg(usize::MAX as u64),
+        usize::MAX,
+        "usize::MAX converts exactly on every target"
+    );
+}

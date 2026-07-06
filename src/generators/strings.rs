@@ -1,14 +1,16 @@
-use std::str::FromStr;
+use std::sync::OnceLock;
 
-use super::{BasicGenerator, Generator, TestCase};
-use crate::cbor_utils::{cbor_array, cbor_map, map_extend, map_insert};
+use super::{Generator, TestCase, labels};
 use crate::control::hegel_internal_assert;
+use crate::ffi;
 use crate::test_case::invalid_argument;
-use ciborium::Value;
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
 /// surrogates, so these are forbidden in `categories()`.
 const SURROGATE_CATEGORIES: &[&str] = &["Cs", "C"];
+
+/// Default upper bound for string/byte sizes when the caller doesn't set one.
+const DEFAULT_MAX_SIZE: usize = 100;
 
 /// Shared character filtering fields used by both [`TextGenerator`] and
 /// [`CharactersGenerator`].
@@ -35,19 +37,13 @@ impl CharacterFields {
         }
     }
 
-    /// Build a schema map containing the character filtering fields.
-    fn to_schema(&self) -> Value {
-        let mut schema = cbor_map! {};
-        if let Some(ref codec) = self.codec {
-            map_insert(&mut schema, "codec", codec.as_str());
-        }
-        if let Some(min_cp) = self.min_codepoint {
-            map_insert(&mut schema, "min_codepoint", min_cp as u64);
-        }
-        if let Some(max_cp) = self.max_codepoint {
-            map_insert(&mut schema, "max_codepoint", max_cp as u64);
-        }
-        if let Some(ref cats) = self.categories {
+    /// Build a libhegel text generator over this alphabet with the given
+    /// size bounds. Surrogates are always excluded: category restrictions
+    /// naming a surrogate category are rejected, and without explicit
+    /// categories the `Cs` category is excluded (Rust strings cannot hold
+    /// surrogates).
+    fn build_text_handle(&self, min_size: u64, max_size: u64) -> ffi::StringGenerator {
+        let (categories, exclude_categories) = if let Some(ref cats) = self.categories {
             for cat in cats {
                 if SURROGATE_CATEGORIES.contains(&cat.as_str()) {
                     invalid_argument!(
@@ -56,23 +52,26 @@ impl CharacterFields {
                     );
                 }
             }
-            let arr = Value::Array(cats.iter().map(|c| Value::from(c.as_str())).collect());
-            map_insert(&mut schema, "categories", arr);
+            (Some(cats.clone()), None)
         } else {
             let mut excl = self.exclude_categories.clone().unwrap_or_default();
             if !excl.iter().any(|c| c == "Cs") {
                 excl.push("Cs".to_string());
             }
-            let arr = Value::Array(excl.iter().map(|c| Value::from(c.as_str())).collect());
-            map_insert(&mut schema, "exclude_categories", arr);
-        }
-        if let Some(ref incl) = self.include_characters {
-            map_insert(&mut schema, "include_characters", incl.as_str());
-        }
-        if let Some(ref excl) = self.exclude_characters {
-            map_insert(&mut schema, "exclude_characters", excl.as_str());
-        }
-        schema
+            (None, Some(excl))
+        };
+        ffi::StringGenerator::text(
+            min_size,
+            max_size,
+            self.codec.as_deref(),
+            self.min_codepoint.unwrap_or(0),
+            self.max_codepoint,
+            categories.as_deref(),
+            exclude_categories.as_deref(),
+            self.include_characters.as_deref(),
+            self.exclude_characters.as_deref(),
+        )
+        .unwrap_or_else(|msg| invalid_argument!("{msg}"))
     }
 }
 
@@ -83,6 +82,7 @@ pub struct TextGenerator {
     char_fields: CharacterFields,
     alphabet_called: bool,
     char_param_called: bool,
+    handle: OnceLock<ffi::StringGenerator>,
 }
 
 impl TextGenerator {
@@ -171,36 +171,26 @@ impl TextGenerator {
         self
     }
 
-    fn build_schema(&self) -> Value {
-        if self.alphabet_called && self.char_param_called {
-            invalid_argument!("Cannot combine .alphabet() with character methods.");
-        }
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
+    fn handle(&self) -> &ffi::StringGenerator {
+        self.handle.get_or_init(|| {
+            if self.alphabet_called && self.char_param_called {
+                invalid_argument!("Cannot combine .alphabet() with character methods.");
             }
-        }
-
-        let mut schema = cbor_map! {
-            "type" => "string",
-            "min_size" => self.min_size as u64
-        };
-
-        if let Some(max) = self.max_size {
-            map_insert(&mut schema, "max_size", max as u64);
-        }
-        map_extend(&mut schema, self.char_fields.to_schema());
-
-        schema
+            if let Some(max) = self.max_size {
+                if self.min_size > max {
+                    invalid_argument!("Cannot have max_size < min_size");
+                }
+            }
+            let max_size = self.max_size.unwrap_or(self.min_size.max(DEFAULT_MAX_SIZE));
+            self.char_fields
+                .build_text_handle(self.min_size as u64, max_size as u64)
+        })
     }
 }
 
 impl Generator<String> for TextGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(
-            self.build_schema(),
-            super::deserialize_value,
-        ))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        tc.generate_string(self.handle())
     }
 }
 
@@ -214,12 +204,14 @@ pub fn text() -> TextGenerator {
         char_fields: CharacterFields::new(),
         alphabet_called: false,
         char_param_called: false,
+        handle: OnceLock::new(),
     }
 }
 
 /// Generator for single Unicode characters ([`char`]). Created by [`characters()`].
 pub struct CharactersGenerator {
     char_fields: CharacterFields,
+    handle: OnceLock<ffi::StringGenerator>,
 }
 
 impl CharactersGenerator {
@@ -270,38 +262,31 @@ impl CharactersGenerator {
         self
     }
 
-    fn build_schema(&self) -> Value {
-        let mut schema = cbor_map! {
-            "type" => "string",
-            "min_size" => 1u64,
-            "max_size" => 1u64
-        };
-        map_extend(&mut schema, self.char_fields.to_schema());
-        schema
+    fn handle(&self) -> &ffi::StringGenerator {
+        self.handle
+            .get_or_init(|| self.char_fields.build_text_handle(1, 1))
     }
 
-    /// Build a standalone schema for use as a regex alphabet constraint.
-    pub(super) fn build_alphabet_schema(&self) -> Value {
-        self.char_fields.to_schema()
+    /// Build a standalone text handle carrying this alphabet, for use as a
+    /// regex alphabet constraint. Sized `0..=0` so an empty alphabet — legal
+    /// for regex padding, which simply pads nothing — passes construction.
+    pub(super) fn build_alphabet_handle(&self) -> ffi::StringGenerator {
+        self.char_fields.build_text_handle(0, 0)
     }
-}
-
-fn parse_char(raw: Value) -> char {
-    let s: String = super::deserialize_value(raw);
-    let mut chars = s.chars();
-    let c = chars
-        .next()
-        .expect("expected a single character, got empty string");
-    hegel_internal_assert!(
-        chars.next().is_none(),
-        "expected a single character, got multiple"
-    );
-    c
 }
 
 impl Generator<char> for CharactersGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, char>> {
-        Some(BasicGenerator::new(self.build_schema(), parse_char))
+    fn do_draw(&self, tc: &TestCase) -> char {
+        let s = tc.generate_string(self.handle());
+        let mut chars = s.chars();
+        let c = chars
+            .next()
+            .expect("expected a single character, got empty string");
+        hegel_internal_assert!(
+            chars.next().is_none(),
+            "expected a single character, got multiple"
+        );
+        c
     }
 }
 
@@ -311,6 +296,7 @@ impl Generator<char> for CharactersGenerator {
 pub fn characters() -> CharactersGenerator {
     CharactersGenerator {
         char_fields: CharacterFields::new(),
+        handle: OnceLock::new(),
     }
 }
 
@@ -322,6 +308,7 @@ pub struct RegexGenerator {
     pattern: String,
     fullmatch: bool,
     alphabet: Option<CharactersGenerator>,
+    handle: OnceLock<ffi::StringGenerator>,
 }
 
 impl RegexGenerator {
@@ -337,44 +324,30 @@ impl RegexGenerator {
         self
     }
 
-    // nocov start
-    fn build_schema(&self) -> Value {
-        let mut schema = cbor_map! {
-            "type" => "regex",
-            "pattern" => self.pattern.as_str(),
-            "fullmatch" => self.fullmatch
-        // nocov end
-        };
-
-        if let Some(ref alphabet) = self.alphabet {
-            map_insert(&mut schema, "alphabet", alphabet.build_alphabet_schema());
-        }
-
-        schema
+    fn handle(&self) -> &ffi::StringGenerator {
+        self.handle.get_or_init(|| {
+            let alphabet = self.alphabet.as_ref().map(|a| a.build_alphabet_handle());
+            ffi::StringGenerator::regex(&self.pattern, self.fullmatch, alphabet.as_ref())
+                .unwrap_or_else(|msg| invalid_argument!("{msg}"))
+        })
     }
 }
 
 impl Generator<String> for RegexGenerator {
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(
-            self.build_schema(),
-            super::deserialize_value,
-            // nocov end
-        ))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        tc.generate_string(self.handle())
     }
 }
 
 /// Generate strings matching a regex pattern.
 ///
 /// See [`RegexGenerator`] for builder methods.
-// nocov start
 pub fn from_regex(pattern: &str) -> RegexGenerator {
     RegexGenerator {
         pattern: pattern.to_string(),
         fullmatch: false,
         alphabet: None,
-        // nocov end
+        handle: OnceLock::new(),
     }
 }
 
@@ -396,37 +369,17 @@ impl BinaryGenerator {
         self.max_size = Some(max_size);
         self
     }
+}
 
-    fn build_schema(&self) -> Value {
+impl Generator<Vec<u8>> for BinaryGenerator {
+    fn do_draw(&self, tc: &TestCase) -> Vec<u8> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-
-        let mut schema = cbor_map! {
-            "type" => "binary",
-            "min_size" => self.min_size as u64
-        };
-
-        if let Some(max) = self.max_size {
-            map_insert(&mut schema, "max_size", max as u64);
-        }
-
-        schema
-    }
-}
-
-fn parse_binary(raw: Value) -> Vec<u8> {
-    match raw {
-        Value::Bytes(bytes) => bytes,
-        _ => panic!("expected Value::Bytes, got {:?}", raw), // nocov
-    }
-}
-
-impl Generator<Vec<u8>> for BinaryGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Vec<u8>>> {
-        Some(BasicGenerator::new(self.build_schema(), parse_binary))
+        let max_size = self.max_size.unwrap_or(self.min_size.max(DEFAULT_MAX_SIZE));
+        tc.generate_bytes(self.min_size, max_size)
     }
 }
 
@@ -441,40 +394,51 @@ pub fn binary() -> BinaryGenerator {
 }
 
 /// Generator for email address strings. Created by [`emails()`].
-pub struct EmailGenerator;
+pub struct EmailGenerator {
+    handle: OnceLock<ffi::StringGenerator>,
+}
 
 impl Generator<String> for EmailGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "email"}, |raw| {
-            super::deserialize_value(raw)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        let handle = self.handle.get_or_init(|| {
+            ffi::StringGenerator::email().unwrap_or_else(|msg| invalid_argument!("{msg}"))
+        });
+        tc.generate_string(handle)
     }
 }
 
 /// Generate email address strings.
 pub fn emails() -> EmailGenerator {
-    EmailGenerator
+    EmailGenerator {
+        handle: OnceLock::new(),
+    }
 }
 
 /// Generator for URL strings. Created by [`urls()`].
-pub struct UrlGenerator;
+pub struct UrlGenerator {
+    handle: OnceLock<ffi::StringGenerator>,
+}
 
 impl Generator<String> for UrlGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "url"}, |raw| {
-            super::deserialize_value(raw)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        let handle = self.handle.get_or_init(|| {
+            ffi::StringGenerator::url().unwrap_or_else(|msg| invalid_argument!("{msg}"))
+        });
+        tc.generate_string(handle)
     }
 }
 
 /// Generate URL strings.
 pub fn urls() -> UrlGenerator {
-    UrlGenerator
+    UrlGenerator {
+        handle: OnceLock::new(),
+    }
 }
 
 /// Generator for domain name strings. Created by [`domains()`].
 pub struct DomainGenerator {
     max_length: usize,
+    handle: OnceLock<ffi::StringGenerator>,
 }
 
 impl DomainGenerator {
@@ -483,24 +447,18 @@ impl DomainGenerator {
         self.max_length = max_length;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if !(self.max_length >= 4 && self.max_length <= 255) {
-            invalid_argument!("max_length must be between 4 and 255");
-        }
-
-        cbor_map! {
-            "type" => "domain",
-            "max_length" => self.max_length as u64
-        }
-    }
 }
 
 impl Generator<String> for DomainGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        let handle = self.handle.get_or_init(|| {
+            if !(self.max_length >= 4 && self.max_length <= 255) {
+                invalid_argument!("max_length must be between 4 and 255");
+            }
+            ffi::StringGenerator::domain(self.max_length as u64)
+                .unwrap_or_else(|msg| invalid_argument!("{msg}"))
+        });
+        tc.generate_string(handle)
     }
 }
 
@@ -508,7 +466,10 @@ impl Generator<String> for DomainGenerator {
 ///
 /// See [`DomainGenerator`] for builder methods.
 pub fn domains() -> DomainGenerator {
-    DomainGenerator { max_length: 255 }
+    DomainGenerator {
+        max_length: 255,
+        handle: OnceLock::new(),
+    }
 }
 
 /// Generator for IP addresses. Created by [`ip_addresses()`].
@@ -526,60 +487,36 @@ impl IpAddressGenerator {
     pub fn v6(self) -> Ipv6AddressGenerator {
         Ipv6AddressGenerator {}
     }
-
-    fn build_schema(&self) -> Value {
-        cbor_map! {
-            "type" => "one_of",
-            "generators" => cbor_array![
-                cbor_map!{"type" => "ip_address", "version" => 4u64},
-                cbor_map!{"type" => "ip_address", "version" => 6u64}
-            ]
-        }
-    }
 }
 
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::IpAddr>> {
-        Some(BasicGenerator::new(self.build_schema(), move |raw| {
-            let inner = raw.into_array().unwrap().into_iter().nth(1).unwrap();
-            let string: String = super::deserialize_value(inner);
-            std::net::IpAddr::from_str(&string).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
+        tc.start_span(labels::ONE_OF);
+        let addr = if tc.generate_integer_i64(0, 1) == 0 {
+            std::net::IpAddr::V4(tc.generate_ipv4())
+        } else {
+            std::net::IpAddr::V6(tc.generate_ipv6())
+        };
+        tc.stop_span(false);
+        addr
     }
 }
+
 /// Generator for IPv4 addresses. Created by [`IpAddressGenerator::v4`].
 pub struct Ipv4AddressGenerator {}
 
-impl Ipv4AddressGenerator {
-    fn build_schema(&self) -> Value {
-        cbor_map! {"type" => "ip_address", "version" => 4u64}
-    }
-}
-
 impl Generator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::Ipv4Addr>> {
-        Some(BasicGenerator::new(self.build_schema(), move |raw| {
-            let string: String = super::deserialize_value(raw);
-            std::net::Ipv4Addr::from_str(&string).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> std::net::Ipv4Addr {
+        tc.generate_ipv4()
     }
 }
 
 /// Generator for IPv6 addresses. Created by [`IpAddressGenerator::v6`].
 pub struct Ipv6AddressGenerator {}
 
-impl Ipv6AddressGenerator {
-    fn build_schema(&self) -> Value {
-        cbor_map! {"type" => "ip_address", "version" => 6u64}
-    }
-}
-
 impl Generator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, std::net::Ipv6Addr>> {
-        Some(BasicGenerator::new(self.build_schema(), move |raw| {
-            let string: String = super::deserialize_value(raw);
-            std::net::Ipv6Addr::from_str(&string).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> std::net::Ipv6Addr {
+        tc.generate_ipv6()
     }
 }
 
@@ -590,65 +527,66 @@ pub fn ip_addresses() -> IpAddressGenerator {
     IpAddressGenerator {}
 }
 
+/// Format a drawn date as `YYYY-MM-DD`, matching `st.dates().isoformat()`.
+pub(crate) fn format_date(d: hegel_c::hegel_date_t) -> String {
+    format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
+}
+
+/// Format a drawn time as `HH:MM:SS` or `HH:MM:SS.ffffff`, matching
+/// `st.times().isoformat()`: the fractional part is present iff
+/// `microsecond != 0`.
+pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
+    if t.microsecond == 0 {
+        format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second)
+    } else {
+        format!(
+            "{:02}:{:02}:{:02}.{:06}",
+            t.hour, t.minute, t.second, t.microsecond
+        )
+    }
+}
+
 /// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].
 pub struct DateGenerator;
 
 impl Generator<String> for DateGenerator {
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "date"}, |raw| {
-            super::deserialize_value(raw)
-            // nocov end
-        }))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        format_date(tc.generate_date())
     }
 }
 
 /// Generate date strings in YYYY-MM-DD format.
-// nocov start
 pub fn dates() -> DateGenerator {
     DateGenerator
-    // nocov end
 }
 
 /// Generator for time strings in HH:MM:SS format. Created by [`times()`].
 pub struct TimeGenerator;
 
 impl Generator<String> for TimeGenerator {
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "time"}, |raw| {
-            super::deserialize_value(raw)
-            // nocov end
-        }))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        format_time(tc.generate_time())
     }
 }
 
 /// Generate time strings in HH:MM:SS format.
-// nocov start
 pub fn times() -> TimeGenerator {
     TimeGenerator
-    // nocov end
 }
 
 /// Generator for ISO 8601 datetime strings. Created by [`datetimes()`].
 pub struct DateTimeGenerator;
 
 impl Generator<String> for DateTimeGenerator {
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(
-            cbor_map! {"type" => "datetime"},
-            super::deserialize_value,
-            // nocov end
-        ))
+    fn do_draw(&self, tc: &TestCase) -> String {
+        let dt = tc.generate_datetime();
+        format!("{}T{}", format_date(dt.date), format_time(dt.time))
     }
 }
 
 /// Generate ISO 8601 datetime strings.
-// nocov start
 pub fn datetimes() -> DateTimeGenerator {
     DateTimeGenerator
-    // nocov end
 }
 
 /// Generator for UUID strings in canonical hyphenated form. Created by [`uuids()`].
@@ -665,25 +603,30 @@ impl UuidsGenerator {
         self.version = Some(version);
         self
     }
-
-    fn build_schema(&self) -> Value {
-        match self.version {
-            Some(v) => cbor_map! {"type" => "uuid", "version" => v as u64},
-            None => cbor_map! {"type" => "uuid"},
-        }
-    }
 }
 
 impl Generator<String> for UuidsGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        self.as_basic().unwrap().do_draw(tc)
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, String>> {
-        Some(BasicGenerator::new(
-            self.build_schema(),
-            super::deserialize_value,
-        ))
+        let b = tc.generate_uuid(self.version);
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            b[5],
+            b[6],
+            b[7],
+            b[8],
+            b[9],
+            b[10],
+            b[11],
+            b[12],
+            b[13],
+            b[14],
+            b[15],
+        )
     }
 }
 

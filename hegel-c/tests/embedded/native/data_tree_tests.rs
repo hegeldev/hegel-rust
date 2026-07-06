@@ -259,7 +259,7 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
         ),
         forced(
             ChoiceKind::String(StringChoice {
-                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]).into(),
                 min_size: 0,
                 max_size: 4,
             }),

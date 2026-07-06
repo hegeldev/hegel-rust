@@ -606,7 +606,7 @@ fn draw_string_notifies_observer() {
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let intervals =
         crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)]);
-    let s = tc.draw_string(intervals, 0, 10).ok().unwrap();
+    let s = tc.draw_string(intervals.into(), 0, 10).ok().unwrap();
     assert_eq!(s, "abc");
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some(("abc".to_string(), false)));
@@ -964,7 +964,8 @@ fn biased_string_sample_caps_constant_pool_probability() {
         intervals: crate::native::intervalsets::IntervalSet::new(vec![
             (0, 0xD7FF),
             (0xE000, 0x10FFFF),
-        ]),
+        ])
+        .into(),
         min_size: 0,
         max_size: 100,
     };
@@ -1172,7 +1173,7 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tc.draw_string(intervals, 5, 4)
+        tc.draw_string(intervals.into(), 5, 4)
     }))
     .unwrap_err();
     let msg = payload.downcast_ref::<String>().unwrap();
@@ -1185,7 +1186,7 @@ fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tc.draw_string(intervals, 0, 4)
+        tc.draw_string(intervals.into(), 0, 4)
     }))
     .unwrap_err();
     let msg = payload.downcast_ref::<String>().unwrap();

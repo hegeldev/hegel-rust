@@ -136,7 +136,7 @@ fn test_sampled_from_accepts_array(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_non_primitive(tc: TestCase) {
-    #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq)]
     struct Point {
         x: i32,
         y: i32,

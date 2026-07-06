@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
-use crate::utils::{cbor_to_iter, default_gen_bounds, tuple_schema};
+use crate::utils::default_gen_bounds;
 
 /// Derive Generator for a struct.
 pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
@@ -76,40 +76,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         }
     });
 
-    let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
-        .iter()
-        .map(|name| {
-            let basic_name = format_ident!("basic_{}", name);
-            quote! { let #basic_name = self.#name.as_basic()?; }
-        })
-        .collect();
-
-    let schema_elements: Vec<_> = field_names
-        .iter()
-        .map(|name| {
-            let basic_name = format_ident!("basic_{}", name);
-            quote! { #basic_name.schema().clone() }
-        })
-        .collect();
-
-    let field_parse_in_closure: Vec<proc_macro2::TokenStream> = field_names
-        .iter()
-        .map(|name| {
-            let basic_name = format_ident!("basic_{}", name);
-            quote! {
-                let #name = #basic_name.parse_raw(
-                    iter.next().unwrap_or_else(|| panic!("Missing element in tuple"))
-                );
-            }
-        })
-        .collect();
-
-    let construct_fields: Vec<&syn::Ident> = field_names.clone();
-
     let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
-
-    let schema_ts = tuple_schema(schema_elements);
-    let parse_iter_ts = cbor_to_iter("iter", quote! { raw }, "Expected tuple from struct schema");
 
     let expanded = quote! {
         const _: () = {
@@ -144,32 +111,12 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
             impl<'a> hegel::generators::Generator<#name> for #generator_name<'a> {
                 fn do_draw(&self, __tc: &hegel::TestCase) -> #name {
-                    if let Some(basic) = self.as_basic() {
-                        basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
-                    } else {
-                        __tc.start_span(hegel::generators::labels::FIXED_DICT);
-                        let __result = #name {
-                            #(#generate_fields,)*
-                        };
-                        __tc.stop_span(false);
-                        __result
-                    }
-                }
-
-                fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #name>> {
-                    #(#basic_bindings)*
-
-                    let schema = #schema_ts;
-
-                    Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                        #parse_iter_ts
-
-                        #(#field_parse_in_closure)*
-
-                        #name {
-                            #(#construct_fields,)*
-                        }
-                    }))
+                    __tc.start_span(hegel::generators::labels::FIXED_DICT);
+                    let __result = #name {
+                        #(#generate_fields,)*
+                    };
+                    __tc.stop_span(false);
+                    __result
                 }
             }
 

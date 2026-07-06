@@ -418,7 +418,6 @@ name = "hegeltest-c"
 version = "0.25.0"
 dependencies = [
  "cbindgen",
- "ciborium",
  "crc32fast",
  "ctor",
  "dashu-int",
@@ -429,7 +428,6 @@ dependencies = [
  "rand",
  "regex",
  "rustc-hash",
- "serde",
  "serde_json",
  "tempfile",
 ]

@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ciborium::Value;
-
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, NativeTestCaseHandle,
     Span, SpanEvent, Status,
 };
-use crate::native::schema;
+use crate::native::draws;
 
 pub struct NativeDataSource {
     inner: NativeTestCaseHandle,
@@ -185,8 +183,56 @@ fn checked_id(kind: &str, id: i64, len: usize) -> Result<usize, EngineError> {
 }
 
 impl DataSource for NativeDataSource {
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError> {
-        self.with_ntc(|ntc| schema::interpret_schema(ntc, schema))
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_integer(ntc, min_value, max_value))
+    }
+
+    fn generate_float(
+        &self,
+        spec: &crate::native::draws::FloatSpec,
+    ) -> Result<f64, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_float(ntc, spec))
+    }
+
+    fn generate_string(
+        &self,
+        spec: &crate::native::draws::StringSpec,
+    ) -> Result<String, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_string(ntc, spec))
+    }
+
+    fn generate_date(&self) -> Result<crate::native::draws::special::Date, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_date)
+    }
+
+    fn generate_time(&self) -> Result<crate::native::draws::special::Time, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_time)
+    }
+
+    fn generate_datetime(
+        &self,
+    ) -> Result<crate::native::draws::special::DateTime, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_datetime)
+    }
+
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_uuid(ntc, version))
+    }
+
+    fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv4)
+    }
+
+    fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv6)
+    }
+
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_bytes(ntc, min_size, max_size))
     }
 
     fn start_span(&self, label: u64) -> Result<(), DataSourceError> {
@@ -223,7 +269,7 @@ impl DataSource for NativeDataSource {
             let state = collections
                 .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            schema::many_more(ntc, state)
+            draws::many_more(ntc, state)
         })
     }
 
@@ -238,7 +284,7 @@ impl DataSource for NativeDataSource {
             let state = collections
                 .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            schema::many_reject(ntc, state)
+            draws::many_reject(ntc, state)
         })
     }
 
@@ -284,25 +330,8 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
-        self.with_ntc(|ntc| {
-            if !(0.0..=1.0).contains(&p) {
-                return Err(EngineError::InvalidArgument(format!(
-                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
-                )));
-            }
-            if forced == Some(true) && p == 0.0 {
-                return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
-                ));
-            }
-            if forced == Some(false) && p == 1.0 {
-                return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
-                ));
-            }
-            ntc.weighted_precise(p, forced)
-        })
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }
 
     fn new_pool(&self) -> Result<i64, DataSourceError> {

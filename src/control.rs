@@ -74,23 +74,6 @@ macro_rules! hegel_internal_assert {
 }
 pub(crate) use hegel_internal_assert;
 
-/// [`hegel_internal_assert!`] for equality, with both values in the message.
-macro_rules! hegel_internal_assert_eq {
-    ($left:expr, $right:expr $(,)?) => {
-        match (&$left, &$right) {
-            (left, right) => $crate::control::hegel_internal_assert!(
-                left == right,
-                "internal assertion failed: {} == {} (left: {:?}, right: {:?})",
-                ::std::stringify!($left),
-                ::std::stringify!($right),
-                left,
-                right
-            ),
-        }
-    };
-}
-pub(crate) use hegel_internal_assert_eq;
-
 /// Raise an internal error (a bug in Hegel) directly, formatting like
 /// [`format!`]. The non-assertion counterpart of
 /// [`hegel_internal_assert!`], for invariant violations detected by

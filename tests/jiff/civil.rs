@@ -82,14 +82,14 @@ fn test_jiff_datetimes_max_value() {
     assert_all_examples(jiff_gs::datetimes().max_value(max), move |dt| *dt <= max);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_jiff_datetimes_min_greater_than_max() {
-    use hegel::generators::Generator;
-    let g = jiff_gs::datetimes()
-        .min_value(jiff::civil::DateTime::constant(2025, 1, 1, 0, 0, 0, 0))
-        .max_value(jiff::civil::DateTime::constant(2024, 1, 1, 0, 0, 0, 0));
-    g.as_basic();
+fn test_jiff_datetimes_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        jiff_gs::datetimes()
+            .min_value(jiff::civil::DateTime::constant(2025, 1, 1, 0, 0, 0, 0))
+            .max_value(jiff::civil::DateTime::constant(2024, 1, 1, 0, 0, 0, 0)),
+    );
 }
 
 #[test]

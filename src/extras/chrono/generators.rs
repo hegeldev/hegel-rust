@@ -1,11 +1,9 @@
-use crate::cbor_utils::{cbor_array, cbor_map};
-use crate::generators::{BasicGenerator, DefaultGenerator, Generator, TestCase};
+use crate::generators::{DefaultGenerator, Generator, TestCase, hashsets, integers};
 use crate::test_case::invalid_argument;
 use chrono::{
     DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, TimeDelta,
     TimeZone, Timelike, Utc, Weekday, WeekdaySet,
 };
-use ciborium::Value;
 use std::marker::PhantomData;
 
 /// Convert a [`NaiveTime`] to a total nanosecond count from midnight.
@@ -41,33 +39,16 @@ fn naive_time_default_max() -> NaiveTime {
 /// Generator for [`chrono::WeekdaySet`] values. Created by [`weekday_sets()`].
 pub struct WeekdaySetGenerator;
 
-impl WeekdaySetGenerator {
-    fn build_schema(&self) -> Value {
-        cbor_map! {
-            "type" => "list",
-            "unique" => true,
-            "elements" => cbor_map! {
-                "type" => "integer",
-                "min_value" => 0u64,
-                "max_value" => 6u64,
-            },
-            "min_size" => 0u64,
-            "max_size" => 7u64,
-        }
-    }
-}
-
 impl Generator<WeekdaySet> for WeekdaySetGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, WeekdaySet>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let arr = raw.into_array().unwrap();
-            let mut set = WeekdaySet::EMPTY;
-            for v in arr {
-                let n: u8 = crate::generators::deserialize_value(v);
-                set.insert(Weekday::try_from(n).unwrap());
-            }
-            set
-        }))
+    fn do_draw(&self, tc: &TestCase) -> WeekdaySet {
+        let days = hashsets(integers::<u8>().min_value(0).max_value(6))
+            .max_size(7)
+            .do_draw(tc);
+        let mut set = WeekdaySet::EMPTY;
+        for n in days {
+            set.insert(Weekday::try_from(n).unwrap());
+        }
+        set
     }
 }
 
@@ -106,27 +87,20 @@ impl FixedOffsetGenerator {
         self.max_value = max;
         self
     }
+}
 
-    fn build_schema(&self) -> Value {
+impl Generator<FixedOffset> for FixedOffsetGenerator {
+    fn do_draw(&self, tc: &TestCase) -> FixedOffset {
         let min_secs = self.min_value.local_minus_utc();
         let max_secs = self.max_value.local_minus_utc();
         if min_secs > max_secs {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => i64::from(min_secs),
-            "max_value" => i64::from(max_secs),
-        }
-    }
-}
-
-impl Generator<FixedOffset> for FixedOffsetGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, FixedOffset>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let secs: i32 = crate::generators::deserialize_value(raw);
-            FixedOffset::east_opt(secs).unwrap()
-        }))
+        let secs = integers::<i32>()
+            .min_value(min_secs)
+            .max_value(max_secs)
+            .do_draw(tc);
+        FixedOffset::east_opt(secs).unwrap()
     }
 }
 
@@ -186,25 +160,18 @@ impl TimeDeltaGenerator {
         self.max_value = max;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if self.min_value > self.max_value {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => timedelta_to_nanos(self.min_value),
-            "max_value" => timedelta_to_nanos(self.max_value),
-        }
-    }
 }
 
 impl Generator<TimeDelta> for TimeDeltaGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, TimeDelta>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let nanos: i128 = crate::generators::deserialize_value(raw);
-            nanos_to_timedelta(nanos)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> TimeDelta {
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let nanos = integers::<i128>()
+            .min_value(timedelta_to_nanos(self.min_value))
+            .max_value(timedelta_to_nanos(self.max_value))
+            .do_draw(tc);
+        nanos_to_timedelta(nanos)
     }
 }
 
@@ -254,25 +221,18 @@ impl NaiveDateGenerator {
         self.max_value = max;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if self.min_value > self.max_value {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_value.num_days_from_ce(),
-            "max_value" => self.max_value.num_days_from_ce(),
-        }
-    }
 }
 
 impl Generator<NaiveDate> for NaiveDateGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, NaiveDate>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let n: i32 = crate::generators::deserialize_value(raw);
-            NaiveDate::from_num_days_from_ce_opt(n).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> NaiveDate {
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let n = integers::<i32>()
+            .min_value(self.min_value.num_days_from_ce())
+            .max_value(self.max_value.num_days_from_ce())
+            .do_draw(tc);
+        NaiveDate::from_num_days_from_ce_opt(n).unwrap()
     }
 }
 
@@ -317,27 +277,20 @@ impl NaiveTimeGenerator {
         self.max_value = max;
         self
     }
+}
 
-    fn build_schema(&self) -> Value {
+impl Generator<NaiveTime> for NaiveTimeGenerator {
+    fn do_draw(&self, tc: &TestCase) -> NaiveTime {
         let min_nanos = time_to_total_nanos(self.min_value);
         let max_nanos = time_to_total_nanos(self.max_value);
         if min_nanos > max_nanos {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => min_nanos,
-            "max_value" => max_nanos,
-        }
-    }
-}
-
-impl Generator<NaiveTime> for NaiveTimeGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, NaiveTime>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let n: i64 = crate::generators::deserialize_value(raw);
-            total_nanos_to_time(n)
-        }))
+        let n = integers::<i64>()
+            .min_value(min_nanos)
+            .max_value(max_nanos)
+            .do_draw(tc);
+        total_nanos_to_time(n)
     }
 }
 
@@ -384,19 +337,15 @@ impl NaiveDateTimeGenerator {
 }
 
 impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, NaiveDateTime>> {
+    fn do_draw(&self, tc: &TestCase) -> NaiveDateTime {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => datetime_to_nanos(&self.min_value.and_utc()),
-            "max_value" => datetime_to_nanos(&self.max_value.and_utc()),
-        };
-        Some(BasicGenerator::new(schema, |raw| {
-            let n: i128 = crate::generators::deserialize_value(raw);
-            nanos_to_utc_datetime(n).naive_utc()
-        }))
+        let n = integers::<i128>()
+            .min_value(datetime_to_nanos(&self.min_value.and_utc()))
+            .max_value(datetime_to_nanos(&self.max_value.and_utc()))
+            .do_draw(tc);
+        nanos_to_utc_datetime(n).naive_utc()
     }
 }
 
@@ -464,22 +413,9 @@ impl<S> NaiveWeekGenerator<S> {
 }
 
 impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, NaiveWeek>> {
-        let date_basic = self.date_gen.as_basic()?;
-        let start_basic = self.start_gen.as_basic()?;
-        let schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                date_basic.schema().clone(),
-                start_basic.schema().clone(),
-            ],
-        };
-        Some(BasicGenerator::new(schema, move |raw| {
-            let [d_raw, s_raw]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
-            let date = date_basic.parse_raw(d_raw);
-            let start = start_basic.parse_raw(s_raw);
-            date.week(start)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> NaiveWeek {
+        let (date, start) = crate::generators::tuples2(&self.date_gen, &self.start_gen).do_draw(tc);
+        date.week(start)
     }
 }
 

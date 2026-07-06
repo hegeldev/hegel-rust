@@ -54,15 +54,15 @@ The opening verb should tell the reader what *kind* of change this is:
 
 ## Describe the user impact, not the implementation
 
-Bad: `"Refactored the socket handling code to use a shared connection pool."`
+Bad: `"Refactored the shrinker's pass scheduling to skip dormant passes."`
 
-Good: `"This patch changes the way the client manages the server to run a single persistent process for the whole test run. This should improve the performance of running many hegel tests."`
+Good: `"This patch improves the performance of shrinking, particularly for tests that are slow to run. Shrinking now spends less time re-running simplification passes that have stopped making progress."`
 
 For **bug fixes**, describe the bug (what went wrong from the user's perspective), not just "fixed a bug":
 
-Bad: `"Fix bug in server crash detection."`
+Bad: `"Fix bug in failure database replay."`
 
-Good: `"Fix server crash detection. The client now properly detects when the hegel server process exits unexpectedly, instead of hanging indefinitely."`
+Good: `"Fix failure database replay. Failures saved in the database are now correctly replayed at the start of the next run, instead of being silently skipped."`
 
 ## Length calibration
 
@@ -117,7 +117,7 @@ This patch fixes `generators::hashsets` generating duplicate elements in rare ca
 ```
 RELEASE_TYPE: patch
 
-Internal refactoring of the protocol handling code.
+Internal refactoring of the failure database code.
 ```
 
 **Good patch (new feature):**

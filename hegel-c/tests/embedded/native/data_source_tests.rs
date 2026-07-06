@@ -1,6 +1,6 @@
 use super::*;
 use crate::backend::{DataSource, DataSourceError, TestCaseResult};
-use crate::cbor_utils::{cbor_map, map_get};
+use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
@@ -18,18 +18,14 @@ fn exhausted_source() -> (NativeDataSource, NativeTestCaseHandle) {
 #[test]
 fn take_nodes_and_take_spans_return_recorded_data() {
     let (ds, handle) = random_source();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 0,
-        "max_value" => 10,
-    };
-    ds.generate(&schema).unwrap();
+    ds.generate_integer(&BigInt::from(0), &BigInt::from(10))
+        .unwrap();
 
     let nodes = NativeDataSource::take_nodes(&handle);
     let spans = NativeDataSource::take_spans(&handle);
     assert_eq!(nodes.len(), 1);
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].label, "integer");
+    assert_eq!(spans[0].label, "26");
 }
 
 #[test]
@@ -134,76 +130,78 @@ fn state_machine_next_rule_on_exhausted_source_stops_test() {
 }
 
 #[test]
-fn primitive_boolean_forced_returns_forced_value() {
+fn generate_boolean_forced_returns_forced_value() {
     let (ds, _handle) = random_source();
-    assert!(ds.primitive_boolean(0.5, Some(true)).unwrap());
-    assert!(!ds.primitive_boolean(0.5, Some(false)).unwrap());
+    assert!(ds.generate_boolean(0.5, Some(true)).unwrap());
+    assert!(!ds.generate_boolean(0.5, Some(false)).unwrap());
 }
 
 #[test]
-fn primitive_boolean_boundary_p_auto_forces() {
+fn generate_boolean_boundary_p_auto_forces() {
     let (ds, _handle) = random_source();
-    assert!(!ds.primitive_boolean(0.0, None).unwrap());
-    assert!(ds.primitive_boolean(1.0, None).unwrap());
+    assert!(!ds.generate_boolean(0.0, None).unwrap());
+    assert!(ds.generate_boolean(1.0, None).unwrap());
 }
 
 #[test]
-fn primitive_boolean_invalid_p_maps_to_invalid_argument_without_aborting() {
+fn generate_boolean_invalid_p_maps_to_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
     for p in [f64::NAN, -0.5, 1.5] {
-        let err = ds.primitive_boolean(p, None).unwrap_err();
+        let err = ds.generate_boolean(p, None).unwrap_err();
         assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     }
     assert!(!ds.test_aborted());
-    assert!(ds.primitive_boolean(0.5, None).is_ok());
+    assert!(ds.generate_boolean(0.5, None).is_ok());
 }
 
 #[test]
-fn primitive_boolean_forced_contradicting_boundary_is_invalid_argument() {
+fn generate_boolean_forced_contradicting_boundary_is_invalid_argument() {
     let (ds, _handle) = random_source();
     assert!(matches!(
-        ds.primitive_boolean(0.0, Some(true)),
+        ds.generate_boolean(0.0, Some(true)),
         Err(DataSourceError::InvalidArgument(_))
     ));
     assert!(matches!(
-        ds.primitive_boolean(1.0, Some(false)),
+        ds.generate_boolean(1.0, Some(false)),
         Err(DataSourceError::InvalidArgument(_))
     ));
-    assert!(ds.primitive_boolean(1.0, Some(true)).unwrap());
-    assert!(!ds.primitive_boolean(0.0, Some(false)).unwrap());
+    assert!(ds.generate_boolean(1.0, Some(true)).unwrap());
+    assert!(!ds.generate_boolean(0.0, Some(false)).unwrap());
 }
 
 #[test]
-fn generate_invalid_schema_maps_to_invalid_argument_without_aborting() {
+fn generate_inverted_bounds_map_to_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
-    let schema = cbor_map! { "type" => "no-such-type" };
-    let err = ds.generate(&schema).unwrap_err();
+    let err = ds
+        .generate_integer(&BigInt::from(1), &BigInt::from(0))
+        .unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(!ds.test_aborted());
-    let good = cbor_map! { "type" => "integer", "min_value" => 0, "max_value" => 0 };
-    assert!(ds.generate(&good).is_ok());
+    assert!(
+        ds.generate_integer(&BigInt::from(0), &BigInt::from(0))
+            .is_ok()
+    );
 }
 
 #[test]
 fn generate_stoptest_sets_aborted_and_short_circuits() {
     let (ds, _handle) = exhausted_source();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 0,
-        "max_value" => 10,
-    };
-    let err = ds.generate(&schema).unwrap_err();
+    let err = ds
+        .generate_integer(&BigInt::from(0), &BigInt::from(10))
+        .unwrap_err();
     assert!(matches!(err, DataSourceError::StopTest));
     assert!(ds.test_aborted());
 
-    let err2 = ds.generate(&schema).unwrap_err();
+    let err2 = ds
+        .generate_integer(&BigInt::from(0), &BigInt::from(10))
+        .unwrap_err();
     assert!(matches!(err2, DataSourceError::StopTest));
     assert!(ds.start_span(0).is_err());
     assert!(ds.stop_span(false).is_err());
     assert!(ds.new_collection(0, None).is_err());
     assert!(ds.collection_more(0).is_err());
     assert!(ds.collection_reject(0, None).is_err());
-    assert!(ds.primitive_boolean(0.5, None).is_err());
+    assert!(ds.generate_boolean(0.5, None).is_err());
     assert!(ds.new_pool().is_err());
     assert!(ds.pool_add(0).is_err());
     assert!(ds.pool_generate(0, false).is_err());
@@ -244,16 +242,10 @@ fn unknown_handle_ids_map_to_invalid_argument_without_panicking() {
 #[test]
 fn generate_integer_round_trips() {
     let (ds, _handle) = random_source();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 5,
-        "max_value" => 5,
-    };
-    let value = ds.generate(&schema).unwrap();
-    let n = map_get(&cbor_map! { "v" => value.clone() }, "v")
-        .cloned()
+    let value = ds
+        .generate_integer(&BigInt::from(5), &BigInt::from(5))
         .unwrap();
-    assert_eq!(n, ciborium::Value::Integer(5.into()));
+    assert_eq!(value, BigInt::from(5));
 }
 
 #[test]
@@ -308,15 +300,11 @@ fn target_observation_rejects_duplicate_label() {
 #[test]
 fn clone_stream_draws_independently_and_reassembles() {
     let (ds, handle) = random_source();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 0,
-        "max_value" => 1000,
-    };
-    ds.generate(&schema).unwrap();
+    let bounds = (BigInt::from(0), BigInt::from(1000));
+    ds.generate_integer(&bounds.0, &bounds.1).unwrap();
     let child = ds.clone_stream().unwrap();
-    child.generate(&schema).unwrap();
-    ds.generate(&schema).unwrap();
+    child.generate_integer(&bounds.0, &bounds.1).unwrap();
+    ds.generate_integer(&bounds.0, &bounds.1).unwrap();
     ds.mark_complete(&TestCaseResult::Valid);
 
     let nodes = NativeDataSource::take_nodes(&handle);
@@ -379,10 +367,10 @@ fn mark_complete_from_a_clone_concludes_the_family() {
     let (ds, handle) = random_source();
     let child = ds.clone_stream().unwrap();
     child.mark_complete(&TestCaseResult::Invalid);
-    let schema = cbor_map! {
-        "type" => "boolean",
-    };
-    assert!(matches!(ds.generate(&schema), Err(DataSourceError::Assume)));
+    assert!(matches!(
+        ds.generate_boolean(0.5, None),
+        Err(DataSourceError::Assume)
+    ));
     assert!(matches!(
         NativeDataSource::take_outcome(&handle),
         TestCaseResult::Invalid

@@ -1,6 +1,6 @@
 use crate::common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::extras::jiff as jiff_gs;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 use jiff::{SignedDuration, Span, Timestamp};
 
 #[test]
@@ -52,13 +52,14 @@ fn test_jiff_timestamps_property(tc: hegel::TestCase) {
     assert!(v >= lo && v <= hi);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_jiff_timestamps_min_greater_than_max() {
-    let g = jiff_gs::timestamps()
-        .min_value(Timestamp::from_second(10).unwrap())
-        .max_value(Timestamp::from_second(5).unwrap());
-    g.as_basic();
+fn test_jiff_timestamps_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        jiff_gs::timestamps()
+            .min_value(Timestamp::from_second(10).unwrap())
+            .max_value(Timestamp::from_second(5).unwrap()),
+    );
 }
 
 #[test]
@@ -106,18 +107,16 @@ fn test_jiff_spans_property(tc: hegel::TestCase) {
     assert!(n >= lo && n <= hi);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_nanoseconds < min_nanoseconds")]
-fn test_jiff_spans_min_greater_than_max() {
-    let g = jiff_gs::spans().min_nanoseconds(10).max_nanoseconds(5);
-    g.as_basic();
+fn test_jiff_spans_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(jiff_gs::spans().min_nanoseconds(10).max_nanoseconds(5));
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "min_nanoseconds must be >= -i64::MAX")]
-fn test_jiff_spans_min_below_span_limit() {
-    let g = jiff_gs::spans().min_nanoseconds(i64::MIN);
-    g.as_basic();
+fn test_jiff_spans_min_below_span_limit(tc: hegel::TestCase) {
+    tc.draw(jiff_gs::spans().min_nanoseconds(i64::MIN));
 }
 
 #[test]
@@ -194,11 +193,12 @@ fn test_jiff_signed_durations_beyond_i64_nanos() {
     );
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_jiff_signed_durations_min_greater_than_max() {
-    let g = jiff_gs::signed_durations()
-        .min_value(SignedDuration::from_nanos(10))
-        .max_value(SignedDuration::from_nanos(5));
-    g.as_basic();
+fn test_jiff_signed_durations_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        jiff_gs::signed_durations()
+            .min_value(SignedDuration::from_nanos(10))
+            .max_value(SignedDuration::from_nanos(5)),
+    );
 }

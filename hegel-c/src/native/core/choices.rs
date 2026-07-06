@@ -243,7 +243,7 @@ impl BytesChoice {
 /// reverse, then characters above `'Z'` in natural order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
-    pub intervals: IntervalSet,
+    pub intervals: Arc<IntervalSet>,
     pub min_size: usize,
     pub max_size: usize,
 }
@@ -268,7 +268,7 @@ impl StringChoice {
 
     /// The simplest codepoint in the alphabet (shrink-order position 0).
     /// Panics on an empty alphabet — callers must reject empty alphabets at
-    /// the schema layer before constructing the `StringChoice`.
+    /// the draws layer before constructing the `StringChoice`.
     pub(crate) fn simplest_codepoint(&self) -> u32 {
         hegel_internal_assert!(
             !self.intervals.is_empty(),
@@ -1384,11 +1384,11 @@ pub enum Status {
     Interesting = 3,
 }
 
-/// Error raised while interpreting a schema / drawing from the engine.
+/// Error raised while drawing from the engine.
 ///
 /// `StopTest` is the overwhelmingly common case: normal data-exhaustion
 /// control flow that ends the current test case. `InvalidArgument` carries a
-/// caller-supplied-schema diagnostic that must surface as an error
+/// caller-supplied-argument diagnostic that must surface as an error
 /// (libhegel: `HEGEL_E_INVALID_ARG`) or a panic (main library), but never an
 /// uncaught panic that crosses the FFI boundary and aborts the host process.
 #[derive(Debug)]
@@ -1406,9 +1406,9 @@ pub enum EngineError {
     /// likes. Unlike [`Self::InvalidTestCase`] it leaves the status unset and
     /// does not abort the data source.
     AssumeViolation,
-    /// A caller-supplied schema was semantically invalid (unknown type,
-    /// empty character set, unparseable regex, etc.). The string is a
-    /// human-readable diagnostic.
+    /// A caller-supplied draw argument was semantically invalid (inverted
+    /// bounds, empty character set, unparseable regex, etc.). The string is
+    /// a human-readable diagnostic.
     InvalidArgument(String),
 }
 

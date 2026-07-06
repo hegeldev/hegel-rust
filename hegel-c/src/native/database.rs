@@ -146,7 +146,7 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
 /// We hash keys and values onto the filesystem to give every entry a
 /// fixed-width, path-safe name regardless of the raw bytes: database
 /// keys are arbitrary user-chosen strings (e.g. test names with
-/// `::` separators) and values are CBOR-encoded choice sequences full
+/// `::` separators) and values are serialized choice sequences full
 /// of arbitrary bytes.  FNV-1a is fine here because we only need
 /// collision-avoidance, not cryptographic security.
 pub(super) fn fnv_hex(s: &[u8]) -> String {

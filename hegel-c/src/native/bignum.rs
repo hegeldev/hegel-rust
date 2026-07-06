@@ -42,7 +42,6 @@ pub struct BigUint(UBig);
 pub trait ToPrimitive {
     fn to_i64(&self) -> Option<i64>;
     fn to_i128(&self) -> Option<i128>;
-    fn to_u32(&self) -> Option<u32>;
     fn to_u64(&self) -> Option<u64>;
     fn to_u128(&self) -> Option<u128>;
     fn to_f64(&self) -> Option<f64>;
@@ -121,6 +120,12 @@ impl BigInt {
         }
         if sign == DashuSign::Negative {
             twos_complement_le(&mut bytes);
+            while bytes.len() > 1
+                && *bytes.last().unwrap() == 0xFF
+                && bytes[bytes.len() - 2] & 0x80 != 0
+            {
+                bytes.pop();
+            }
         }
         bytes
     }
@@ -219,9 +224,6 @@ macro_rules! impl_to_primitive {
             }
             fn to_i128(&self) -> Option<i128> {
                 i128::try_from(&self.0).ok()
-            }
-            fn to_u32(&self) -> Option<u32> {
-                u32::try_from(&self.0).ok()
             }
             fn to_u64(&self) -> Option<u64> {
                 u64::try_from(&self.0).ok()

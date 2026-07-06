@@ -1,6 +1,6 @@
 ---
 name: new-generator
-description: "How to add a new generator to hegel-rust. Use when the user asks to implement, add, or write a generator for a type — e.g. 'add a generator for Url', 'implement a UUID generator', 'write a generator for jiff::civil::Date'. Covers the generator struct, builder methods, Generate trait impl, schema asserts, mod.rs wiring, rustdoc, and the required test set. Pair with the new-default-generator skill to also wire up gs::default::<T>()."
+description: "How to add a new generator to hegel-rust. Use when the user asks to implement, add, or write a generator for a type — e.g. 'add a generator for Url', 'implement a UUID generator', 'write a generator for jiff::civil::Date'. Covers the generator struct, builder methods, Generator trait impl, argument validation, mod.rs wiring, rustdoc, and the required test set. Pair with the new-default-generator skill to also wire up gs::default::<T>()."
 ---
 
 # Adding a New Generator
@@ -9,11 +9,11 @@ A reference + checklist for implementing a single new generator. The pattern is 
 
 This skill covers writing the generator itself. To make `gs::default::<T>()` work for the new type, also run the **new-default-generator** skill after this one.
 
-## When server-side schema work would be required
+## When engine-side draw work would be required
 
-Server-side schema mods (in `hegel-core`) are **out of scope** for this skill. Do not modify the server.
+Engine-side draw mods (the typed draws in `hegel-c/src/native/draws/` and their `hegel_generate_*` C ABI) are **out of scope** for this skill.
 
-If you find that the generator would *dramatically and fundamentally* benefit from a new or extended server schema (e.g. the type cannot reasonably be expressed via existing schemas, or every interesting builder method would need a new schema field), stop and surface that to the user. Do not start the server-side work yourself. Otherwise, compose existing schemas — `{"type": "integer"}`, `{"type": "string"}`, `{"type": "date"}`, etc. — even if the result is slightly less ergonomic on the wire.
+If you find that the generator would *dramatically and fundamentally* benefit from a new engine-side draw (e.g. it needs bundled data like the Unicode tables or the TLD list, or every interesting builder method would need a new ABI parameter), stop and surface that to the user. Do not start the engine-side work yourself. Otherwise, compose the existing generators and `TestCase` draw methods — `gs::integers()`, `gs::text()`, `tc.generate_date()`, etc. — even if the result is slightly less direct.
 
 ## File placement
 
@@ -34,7 +34,7 @@ A generator is four pieces. Use the existing modules as templates verbatim — n
 
 ### 1. The generator struct
 
-A struct holding the generator's configuration. One field per builder option. `Option<T>` for fields that have a meaningful "unset" state (so `build_schema` can omit the corresponding schema field), plain `T` for fields with a sensible default (like `min` = 0).
+A struct holding the generator's configuration. One field per builder option. `Option<T>` for fields that have a meaningful "unset" state, plain `T` for fields with a sensible default (like `min` = 0).
 
 Naming: `<Type>Generator` (e.g. `DurationGenerator`, `FloatGenerator`). Public.
 
@@ -44,36 +44,33 @@ One `pub fn` per option, each returning `Self` so they chain. Take the value by 
 
 If two builder methods are mutually exclusive, document the exclusion on both methods (see `TextGenerator::categories` / `exclude_categories`).
 
-### 3. `build_schema` + `assert!`s
+### 3. Validation `invalid_argument!`s
 
-A private `fn build_schema(&self) -> ciborium::Value` that turns the configuration into a CBOR schema using the `cbor_map!` / `cbor_array!` / `map_insert` / `map_extend` helpers from `crate::cbor_utils`.
-
-**Every invalid combination of builder values must be caught here with `assert!` or `panic!`, with a clear message.** Examples to model, all inside `build_schema`:
-- `IntegerGenerator` and `FloatGenerator` in `src/generators/numeric.rs` — bound ordering (`min <= max`), and a descriptive `panic!` for the sign-aware-empty float range
+**Every invalid combination of builder values must be caught at draw time with `invalid_argument!`, with a clear message.** Validation runs at the start of `do_draw` (or, for string-shaped generators, inside the cached-handle builder). Examples to model:
+- `IntegerGenerator` and `FloatGenerator` in `src/generators/numeric.rs` — bound ordering (`min <= max`), and a descriptive message for the sign-aware-empty float range
 - `DurationGenerator` in `src/generators/time.rs` — bound ordering for nanoseconds
 - `TextGenerator` in `src/generators/strings.rs` — combination check for `alphabet` vs character methods
 
-These messages are part of the public API: tests assert against them with `#[should_panic(expected = "...")]`. Pick a stable, descriptive substring.
+These messages are part of the public API: tests assert against them. Pick a stable, descriptive substring.
 
 ### 4. `Generator<T>` impl
 
 ```rust
 impl Generator<T> for FooGenerator {
     fn do_draw(&self, tc: &TestCase) -> T {
-        super::generate_from_schema(tc, &self.build_schema())
-        // or, for types needing a custom parse:
-        // parse_foo(super::generate_raw(tc, &self.build_schema()))
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            // transform raw ciborium::Value into T
-        }))
+        if self.min > self.max {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let n = integers::<i64>()
+            .min_value(self.min)
+            .max_value(self.max)
+            .do_draw(tc);
+        parse_foo(n)
     }
 }
 ```
 
-**Always implement `as_basic` returning `Some` when the generator can be expressed as a single server schema.** This is the central optimization of the crate — `map()` on a basic generator preserves the schema. The only time `as_basic` returns `None` (or is omitted) is when generation fundamentally requires multiple draws or runtime decisions that can't be encoded as one schema.
+Compose existing generators (`integers()`, `text()`, …) or, for a leaf that maps directly onto an engine draw, the `pub(crate)` typed draw methods on `TestCase` (`generate_integer_i64`, `generate_date`, `generate_string`, …). A generator that makes *several* draws should wrap them in a span (`tc.start_span(label)` / `tc.stop_span(false)`) with a label from `test_case::labels` so the shrinker treats the value as a unit. String-shaped generators that need a `ffi::StringGenerator` handle cache it in a `OnceLock` (see `TextGenerator`) so the alphabet/pattern construction happens once.
 
 ### 5. Factory function + module export
 
@@ -93,7 +90,7 @@ Required on every new generator:
 
 - `///` on the generator struct, including a `Created by [`foos()`].` cross-reference.
 - `///` on every builder method describing what it constrains.
-- `///` on the factory function with a runnable `#[hegel::test]` example wrapped in ` ```no_run ` (use `no_run` because doctests don't have a hegel server available).
+- `///` on the factory function with a runnable `#[hegel::test]` example wrapped in ` ```no_run ` (use `no_run` so the example compiles but doctests don't execute a full property run).
 
 The example block in the factory function is a *requirement*, not aspirational — see the `durations()` factory in `src/generators/time.rs` for the canonical shape.
 
@@ -135,7 +132,7 @@ Model on `tests/test_strings.rs` — most builder methods on `text()` and `chara
 
 ### Test 3 — Composition in `vecs` (required)
 
-A single test that nests the generator inside `gs::vecs(...)`. Critical: this exercises the *non-basic* code path (because at the time of writing some collection contexts go through different machinery), which the standalone tests don't cover.
+A single test that nests the generator inside `gs::vecs(...)`, exercising the generator inside the engine-managed collection protocol.
 
 ```rust
 #[test]
@@ -152,16 +149,15 @@ fn test_foos_in_vec() {
 
 Lives in the **new-default-generator** skill, not here. Skip if you're not also wiring up the default impl.
 
-### Test 5 — Panic on invalid config (required, one per assert)
+### Test 5 — Panic on invalid config (required, one per validation)
 
-For every `assert!` / `panic!` in `build_schema`, a `#[should_panic(expected = "...")]` test that triggers it. Force `as_basic()` to evaluate the schema:
+For every `invalid_argument!` in the generator, a test that triggers it by drawing. Validation happens at draw time, so the test draws inside a run (either the `expect_draw_panic` helper in `tests/test_validation.rs`, or a `#[hegel::test]` with `#[should_panic]`):
 
 ```rust
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_foos_min_greater_than_max() {
-    let g = gs::foos().min_value(10).max_value(5);
-    g.as_basic();
+fn test_foos_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(gs::foos().min_value(10).max_value(5));
 }
 ```
 
@@ -171,7 +167,7 @@ For **feature-gated generators**, panic tests live alongside the rest of the lib
 
 The `expected` substring must match a stable part of the panic message — keep it short and free of formatting.
 
-### Test 7 — Randomized-bound property test (recommended)
+### Test 6 — Randomized-bound property test (recommended)
 
 A single `#[hegel::test]` per generator that itself draws values for any/all builder options, applies them, draws a value from the configured generator, and asserts the value is within the expected range. This is a strictly more powerful version of test #2 — it catches bugs at parameter combinations a fixed-bound test wouldn't reach.
 
@@ -189,9 +185,9 @@ Model on `tests/test_strings.rs:test_text_codepoint_range` and `test_characters_
 
 When the generator's options interact in nontrivial ways (e.g. `floats()` with `allow_nan` × `min_value`), use `tc.assume(...)` to filter out combinations the generator rejects rather than picking them apart by hand.
 
-### Test 6 / 8 — Skip
+### Tests not to add
 
-Conformance binaries (`tests/conformance/rust/src/bin/`) and explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
+Explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
 
 ## Final checklist
 
@@ -199,15 +195,15 @@ Before declaring the generator done:
 
 - [ ] Generator struct with `///` doc and `Created by [`foos()`].` cross-reference
 - [ ] Every builder method has `///` doc
-- [ ] `build_schema` has `assert!` / `panic!` for every invalid configuration
-- [ ] `Generator<T>` impl with `as_basic` returning `Some` (unless fundamentally non-basic)
+- [ ] Every invalid configuration is caught with `invalid_argument!` at draw time
+- [ ] `Generator<T>` impl composing existing generators / `TestCase` draw methods, with spans around multi-draw structures
 - [ ] Factory function with `///` doc and runnable `#[hegel::test]` example in `no_run`
 - [ ] Module wiring done: re-exported from `src/generators/mod.rs` (first-party) or `pub` in `src/extras/<lib>/generators.rs` (feature-gated; surfaced via the existing `pub use generators::*;` in `mod.rs`)
 - [ ] Test 1 (sanity, `check_can_generate_examples`)
 - [ ] Test 2 (one test per builder method)
 - [ ] Test 3 (composition in `vecs`)
 - [ ] Test 5 (one panic test per assert; first-party → `tests/test_validation.rs`, feature-gated → `tests/<lib>/`)
-- [ ] Test 7 (randomized-bound property test, recommended)
+- [ ] Test 6 (randomized-bound property test, recommended)
 - [ ] `just check` passes (formatting, lint, tests, docs)
 - [ ] Coverage is 100% on the new code (see the `coverage` skill if anything is uncovered)
 

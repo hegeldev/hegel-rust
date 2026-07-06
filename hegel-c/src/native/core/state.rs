@@ -709,7 +709,7 @@ impl NativeVariables {
     }
 }
 
-/// A span within the choice sequence, labelled by schema type or by the
+/// A span within the choice sequence, labelled by draw kind or by the
 /// numeric label of an enclosing `start_span` call.
 ///
 /// Recorded to enable span-mutation exploration (see `try_span_mutation`)
@@ -1596,7 +1596,7 @@ impl NativeTestCase {
     /// codepoints lie in the given [`IntervalSet`] alphabet.
     pub fn draw_string(
         &mut self,
-        intervals: IntervalSet,
+        intervals: Arc<IntervalSet>,
         min_size: usize,
         max_size: usize,
     ) -> Result<String, EngineError> {
@@ -1648,7 +1648,7 @@ impl NativeTestCase {
     /// Like [`Self::weighted`], but samples with the full-precision
     /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
     /// sampler's 1/256 floor (e.g. a stateful stop signal at `p = 2^-16`) are
-    /// honored. Routed here from `primitive_boolean`.
+    /// honored. Routed here from `generate_boolean`.
     pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         self.weighted_with(p, forced, weighted_boolean_sample_precise)
     }
@@ -1715,7 +1715,7 @@ impl NativeTestCase {
     /// Resolve a choice value from forced, prefix, or random.
     ///
     /// Implements punning logic for replaying choice sequences whose
-    /// schema has shifted across runs.
+    /// choice kinds have shifted across runs.
     fn resolve_choice(
         &mut self,
         _kind: &ChoiceKind,

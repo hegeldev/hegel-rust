@@ -1,5 +1,5 @@
 use super::*;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::catch_unwind;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     payload
@@ -44,16 +44,4 @@ fn internal_assert_includes_the_condition_when_it_fails() {
 fn internal_assert_passes_silently() {
     hegel_internal_assert!(1 + 1 == 2);
     hegel_internal_assert!(1 + 1 == 2, "with a message {}", "argument");
-}
-
-#[test]
-fn internal_assert_eq_reports_both_values() {
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_assert_eq!(2 + 2, 5);
-    }))
-    .unwrap_err();
-    let msg = panic_message(payload);
-    assert!(msg.contains("2 + 2 == 5"), "{msg}");
-    assert!(msg.contains("left: 4, right: 5"), "{msg}");
-    hegel_internal_assert_eq!(2 + 2, 4);
 }

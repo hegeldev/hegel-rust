@@ -19,12 +19,8 @@ mod strings;
 mod time;
 mod tuples;
 
-pub(crate) mod value;
-
 #[doc(hidden)]
-pub use crate::test_case::{
-    Collection, TestCase, deserialize_value, generate_from_schema, generate_raw, labels,
-};
+pub use crate::test_case::{Collection, TestCase, labels};
 
 #[doc(inline)]
 pub use crate::tuples;
@@ -40,8 +36,6 @@ pub use compose::ComposedGenerator;
 pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred};
-#[doc(hidden)]
-pub use generators::BasicGenerator;
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};

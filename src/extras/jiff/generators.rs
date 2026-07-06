@@ -1,23 +1,17 @@
-use std::str::FromStr;
-
-use ciborium::Value;
 use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
-use crate::cbor_utils::{cbor_array, cbor_map};
-use crate::generators::{BasicGenerator, BoxedGenerator, Generator, deserialize_value};
+use crate::generators::{BoxedGenerator, Generator, TestCase, integers};
 use crate::test_case::invalid_argument;
 
 /// Generator for [`jiff::civil::Date`] values. Created by [`dates()`].
 pub struct DateGenerator;
 
 impl Generator<Date> for DateGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Date>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "date"}, |raw| {
-            let s: String = deserialize_value(raw);
-            Date::from_str(&s).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Date {
+        let d = tc.generate_date();
+        Date::new(d.year as i16, d.month as i8, d.day as i8).unwrap()
     }
 }
 
@@ -44,11 +38,15 @@ pub fn dates() -> DateGenerator {
 pub struct TimeGenerator;
 
 impl Generator<Time> for TimeGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Time>> {
-        Some(BasicGenerator::new(cbor_map! {"type" => "time"}, |raw| {
-            let s: String = deserialize_value(raw);
-            Time::from_str(&s).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Time {
+        let t = tc.generate_time();
+        Time::new(
+            t.hour as i8,
+            t.minute as i8,
+            t.second as i8,
+            (t.microsecond * 1000) as i32,
+        )
+        .unwrap()
     }
 }
 
@@ -114,19 +112,15 @@ impl DateTimeGenerator {
 }
 
 impl Generator<DateTime> for DateTimeGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, DateTime>> {
+    fn do_draw(&self, tc: &TestCase) -> DateTime {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => datetime_to_nanos(self.min_value),
-            "max_value" => datetime_to_nanos(self.max_value),
-        };
-        Some(BasicGenerator::new(schema, |raw| {
-            let n: i128 = deserialize_value(raw);
-            nanos_to_datetime(n)
-        }))
+        let n = integers::<i128>()
+            .min_value(datetime_to_nanos(self.min_value))
+            .max_value(datetime_to_nanos(self.max_value))
+            .do_draw(tc);
+        nanos_to_datetime(n)
     }
 }
 
@@ -172,25 +166,18 @@ impl TimestampGenerator {
         self.max_value = max;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if self.min_value > self.max_value {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_value.as_nanosecond(),
-            "max_value" => self.max_value.as_nanosecond(),
-        }
-    }
 }
 
 impl Generator<Timestamp> for TimestampGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Timestamp>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let nanos: i128 = deserialize_value(raw);
-            Timestamp::from_nanosecond(nanos).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Timestamp {
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let nanos = integers::<i128>()
+            .min_value(self.min_value.as_nanosecond())
+            .max_value(self.max_value.as_nanosecond())
+            .do_draw(tc);
+        Timestamp::from_nanosecond(nanos).unwrap()
     }
 }
 
@@ -239,28 +226,21 @@ impl SpanGenerator {
         self.max_nanos = max;
         self
     }
+}
 
-    fn build_schema(&self) -> Value {
+impl Generator<Span> for SpanGenerator {
+    fn do_draw(&self, tc: &TestCase) -> Span {
         if self.min_nanos > self.max_nanos {
             invalid_argument!("Cannot have max_nanoseconds < min_nanoseconds");
         }
         if self.min_nanos < -SPAN_NANOS_LIMIT {
             invalid_argument!("min_nanoseconds must be >= -i64::MAX (the Span nanosecond limit)");
         }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_nanos,
-            "max_value" => self.max_nanos,
-        }
-    }
-}
-
-impl Generator<Span> for SpanGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Span>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let nanos: i64 = deserialize_value(raw);
-            Span::new().try_nanoseconds(nanos).unwrap()
-        }))
+        let nanos = integers::<i64>()
+            .min_value(self.min_nanos)
+            .max_value(self.max_nanos)
+            .do_draw(tc);
+        Span::new().try_nanoseconds(nanos).unwrap()
     }
 }
 
@@ -311,25 +291,18 @@ impl SignedDurationGenerator {
         self.max_value = max;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if self.min_value > self.max_value {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_value.as_nanos(),
-            "max_value" => self.max_value.as_nanos(),
-        }
-    }
 }
 
 impl Generator<SignedDuration> for SignedDurationGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, SignedDuration>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let nanos: i128 = deserialize_value(raw);
-            nanos_to_signed_duration(nanos)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> SignedDuration {
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let nanos = integers::<i128>()
+            .min_value(self.min_value.as_nanos())
+            .max_value(self.max_value.as_nanos())
+            .do_draw(tc);
+        nanos_to_signed_duration(nanos)
     }
 }
 
@@ -377,25 +350,18 @@ impl OffsetGenerator {
         self.max_value = max;
         self
     }
-
-    fn build_schema(&self) -> Value {
-        if self.min_value.seconds() > self.max_value.seconds() {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_value.seconds(),
-            "max_value" => self.max_value.seconds(),
-        }
-    }
 }
 
 impl Generator<Offset> for OffsetGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Offset>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let secs: i32 = deserialize_value(raw);
-            Offset::from_seconds(secs).unwrap()
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Offset {
+        if self.min_value.seconds() > self.max_value.seconds() {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let secs = integers::<i32>()
+            .min_value(self.min_value.seconds())
+            .max_value(self.max_value.seconds())
+            .do_draw(tc);
+        Offset::from_seconds(secs).unwrap()
     }
 }
 
@@ -458,22 +424,10 @@ where
     TS: Generator<Timestamp>,
     TZ: Generator<TimeZone>,
 {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Zoned>> {
-        let ts_basic = self.timestamp_gen.as_basic()?;
-        let tz_basic = self.timezone_gen.as_basic()?;
-        let schema = cbor_map! {
-            "type" => "tuple",
-            "elements" => cbor_array![
-                ts_basic.schema().clone(),
-                tz_basic.schema().clone(),
-            ],
-        };
-        Some(BasicGenerator::new(schema, move |raw| {
-            let [ts_raw, tz_raw]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
-            let ts = ts_basic.parse_raw(ts_raw);
-            let tz = tz_basic.parse_raw(tz_raw);
-            Zoned::new(ts, tz)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Zoned {
+        let (ts, tz) =
+            crate::generators::tuples2(&self.timestamp_gen, &self.timezone_gen).do_draw(tc);
+        Zoned::new(ts, tz)
     }
 }
 

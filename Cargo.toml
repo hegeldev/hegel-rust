@@ -36,9 +36,9 @@ doc-scrape-examples = true
 
 [dependencies]
 serde = { version = "1.0.103", features = ["derive"] }
+ciborium = "0.2.2"
 paste = "1.0"
 tempfile = "3.0"
-ciborium = "0.2.2"
 crc32fast = "1.4"
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.23.4", path = "hegel-macros" }

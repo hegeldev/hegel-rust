@@ -180,7 +180,7 @@ impl DataTreeNode {
     }
 }
 
-/// Walk `nodes` through `tree_root`, checking that the schema at every
+/// Walk `nodes` through `tree_root`, checking that the choice kind at every
 /// position matches what was observed on previous runs. Records the terminal
 /// `status` at the leaf (if the test concluded cleanly) and propagates
 /// exhaustion up the path so `generate_novel_prefix` can skip dead branches.
@@ -188,7 +188,8 @@ impl DataTreeNode {
 /// `kill_branch()`).
 ///
 /// Returns `Some(message)` if a non-determinism mismatch was detected (the
-/// schema at a position changed from a previous run), so the caller can fold
+/// choice kind at a position changed from a previous run), so the caller can
+/// fold
 /// it into a failing [`TestRunResult`] rather than panicking — keeping it from
 /// aborting an in-process engine driven over FFI. Returns `None` otherwise.
 /// Convenience wrapper for recording a path with only a status (no origin,
@@ -237,7 +238,7 @@ pub(crate) fn record_tree_full(
             Some(expected_kind) if *expected_kind != first.kind => {
                 return Some(format!(
                     "Your data generation is non-deterministic: at the same choice \
-                     position with the same prefix, the schema changed from {:?} to {:?}. \
+                     position with the same prefix, the choice kind changed from {:?} to {:?}. \
                      This usually means a generator depends on global mutable state.",
                     expected_kind, first.kind
                 ));

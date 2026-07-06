@@ -1,7 +1,7 @@
 use crate::common::utils::{assert_all_examples, check_can_generate_examples};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use hegel::extras::chrono as chrono_gs;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_naive_dates_default() {
@@ -45,13 +45,14 @@ fn test_naive_dates_property(tc: hegel::TestCase) {
     assert!(v >= min && v <= max);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_naive_dates_min_greater_than_max() {
-    let g = chrono_gs::naive_dates()
-        .min_value(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap())
-        .max_value(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
-    g.as_basic();
+fn test_naive_dates_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        chrono_gs::naive_dates()
+            .min_value(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap())
+            .max_value(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+    );
 }
 
 #[test]
@@ -95,13 +96,14 @@ fn test_naive_times_property(tc: hegel::TestCase) {
     assert!(v >= min && v <= max);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_naive_times_min_greater_than_max() {
-    let g = chrono_gs::naive_times()
-        .min_value(NaiveTime::from_hms_opt(20, 0, 0).unwrap())
-        .max_value(NaiveTime::from_hms_opt(8, 0, 0).unwrap());
-    g.as_basic();
+fn test_naive_times_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        chrono_gs::naive_times()
+            .min_value(NaiveTime::from_hms_opt(20, 0, 0).unwrap())
+            .max_value(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
+    );
 }
 
 #[test]

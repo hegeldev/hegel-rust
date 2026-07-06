@@ -1,4 +1,4 @@
-//! Embedded tests for the SRE-style matcher in `src/native/schema/regex.rs`.
+//! Embedded tests for the SRE-style matcher in `src/native/draws/regex.rs`.
 //!
 //! The matcher (`match_seq`) is internal: it's only exercised through
 //! negative-lookahead validation, where the body shape determines which
@@ -668,12 +668,8 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
 #[test]
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
-    let mut state = GenState {
-        groups: HashMap::new(),
-        flags: SRE_FLAG_IGNORECASE,
-        pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
-    };
+    let cache = Mutex::new(HashMap::new());
+    let mut state = ignorecase_state(&cache);
     let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
@@ -682,40 +678,29 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
 }
 
 #[test]
-fn interpret_regex_missing_pattern_is_invalid_argument() {
-    use crate::cbor_utils::cbor_map;
-    let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    let schema = cbor_map! { "type" => "regex" };
-    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
-    assert!(matches!(err, EngineError::InvalidArgument(_)));
-    assert!(err.to_string().contains("pattern"));
-}
-
-#[test]
-fn interpret_regex_unparseable_pattern_is_invalid_argument() {
-    use crate::cbor_utils::cbor_map;
-    let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    let schema = cbor_map! { "type" => "regex", "pattern" => "(unclosed" };
-    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+fn compile_rejects_unparseable_patterns() {
+    let err = CompiledRegex::compile("(unclosed", None).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
     assert!(err.to_string().contains("invalid regex pattern"));
+    assert!(CompiledRegex::compile("a+b?", None).is_ok());
 }
 
-fn ignorecase_state() -> GenState {
+fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> {
     GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,
         pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
+        in_cache: cache,
     }
 }
 
 #[test]
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     use crate::native::rng::EngineRng;
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
         assert_eq!(out, "ß", "seed {seed} emitted a non-matching case variant");
@@ -726,9 +711,10 @@ fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
 fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     use crate::native::rng::EngineRng;
     let mut seen = std::collections::HashSet::new();
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
         seen.insert(out);
@@ -746,9 +732,10 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
         (0x130, 0x130),
         (0x307, 0x307),
     ]));
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..100 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(
             &mut ntc,
@@ -763,20 +750,10 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 }
 
 #[test]
-fn interpret_regex_handles_huge_character_class_ranges() {
-    use crate::cbor_utils::cbor_map;
+fn generate_regex_handles_huge_character_class_ranges() {
     use crate::native::rng::EngineRng;
-    let schema = cbor_map! {
-        "type" => "regex",
-        "pattern" => "[\\x20-\\U0010FFFF]"
-    };
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let v = interpret_regex(&mut ntc, &schema).unwrap();
-    let Value::Tag(91, inner) = v else {
-        panic!("expected tag-91 string, got {v:?}")
-    };
-    let Value::Bytes(bytes) = *inner else {
-        panic!("expected byte payload")
-    };
-    assert!(!bytes.is_empty());
+    let re = CompiledRegex::compile("[\\x20-\\U0010FFFF]", None).unwrap();
+    let s = generate_regex(&mut ntc, &re, false).unwrap();
+    assert!(!s.is_empty());
 }

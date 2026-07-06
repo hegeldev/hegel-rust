@@ -103,6 +103,19 @@ fn assume_code_unwinds_as_assume_failed() {
     );
 }
 
+/// The typed uuid draw surfaces invalid arguments through
+/// [`raise_for_rc`], like every other draw.
+#[test]
+fn uuid_invalid_version_is_raised_as_a_usage_error() {
+    use std::panic::AssertUnwindSafe;
+    let (_run, tc) = emitting_test_case();
+
+    let err =
+        std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_uuid(Some(16)))).unwrap_err();
+    let msg = panic_payload_message(err);
+    assert!(msg.contains("hex nibble"), "{msg}");
+}
+
 /// Draw integers straight off `tc` until the engine's choice budget is
 /// exhausted, catching the resulting `StopTest` unwind so the underlying
 /// handle is left aborted (every subsequent primitive then reports STOP_TEST).
@@ -138,6 +151,26 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"
+    );
+}
+
+#[test]
+fn ip_draws_after_overrun_unwind_as_stop_test() {
+    use std::panic::AssertUnwindSafe;
+    let (_run, tc) = emitting_test_case();
+
+    drive_to_overrun(&tc);
+
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ipv4())).unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "generate_ipv4 after overrun should unwind as StopTest"
+    );
+
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ipv6())).unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "generate_ipv6 after overrun should unwind as StopTest"
     );
 }
 

@@ -19,7 +19,7 @@
  * Pointers you pass *into* a libhegel function are always yours. The library
  * reads them during the call and copies whatever it needs to keep, so you may
  * free or reuse the memory as soon as the call returns. This covers strings
- * (char*), CBOR byte buffers, and arrays of strings alike.
+ * (char*), byte buffers, and arrays of strings alike.
  *
  * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
  * written to an out-parameter otherwise), you own — and must release with the
@@ -33,6 +33,9 @@
  *     hegel_test_case_clone      ->  hegel_test_case_free
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
+ *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
+ *     hegel_generate_string      ->  hegel_generate_string_result_free
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
@@ -55,14 +58,15 @@
  * are independent of the run: they stay valid after hegel_run_free, so a
  * wrapper can free each object from its own finaliser in any order.
  *
- * Every *other* pointer libhegel hands back is a borrowed string or byte
- * buffer: libhegel still owns it, you must not free it, and it is valid only
- * until a point that the function documents. Strings read off a result or
- * failure snapshot (hegel_run_result_error, the hegel_failure_* getters)
- * live until that snapshot's free; the rest are transient —
- * hegel_generate's bytes are invalidated by the next call on that test
- * case, and hegel_context_last_error by the next call on that context. Copy
- * them to keep them.
+ * The buffers hegel_generate_bytes and hegel_generate_string fill in are
+ * yours too — release each with its matching result-free function above.
+ *
+ * Every *other* pointer libhegel hands back is a borrowed string: libhegel
+ * still owns it, you must not free it, and it is valid only until a point
+ * that the function documents. Strings read off a result or failure
+ * snapshot (hegel_run_result_error, the hegel_failure_* getters) live until
+ * that snapshot's free; hegel_context_last_error is invalidated by the next
+ * call on that context. Copy them to keep them.
  */
 
 #ifndef HEGEL_H
@@ -111,7 +115,7 @@ typedef enum {
     HEGEL_E_INVALID_HANDLE = -4,
     /*
      An argument other than a handle was invalid — NULL where a value was
-     required, malformed CBOR, non-UTF-8 string, etc. See
+     required, inverted bounds, a non-UTF-8 string, etc. See
      `hegel_context_last_error()` for specifics.
      */
     HEGEL_E_INVALID_ARG = -5,
@@ -128,9 +132,9 @@ typedef enum {
      */
     HEGEL_E_NOT_COMPLETE = -7,
     /*
-     An internal invariant failed inside libhegel (e.g. CBOR
-     re-serialisation). Should not happen in practice; please file a
-     bug. See `hegel_context_last_error()` for the diagnostic.
+     An internal invariant failed inside libhegel. Should not happen in
+     practice; please file a bug. See `hegel_context_last_error()` for the
+     diagnostic.
      */
     HEGEL_E_INTERNAL = -8,
     /*
@@ -210,7 +214,7 @@ typedef enum {
    draw; the engine should discard it without counting it against
    the test-cases budget.
  - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
-   test case (typically because `hegel_generate` returned
+   test case (typically because a `hegel_generate_*` draw returned
    `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
  - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
    a candidate counterexample. Pass a stable origin string to
@@ -388,6 +392,69 @@ typedef enum {
      span themselves.
      */
     HEGEL_LABEL_FEATURE_FLAG = 16,
+    /*
+     Span around one regex string draw. Emitted internally by
+     `hegel_generate_string`; callers normally never open this span
+     themselves. Likewise for the other engine-side compound draws below.
+     */
+    HEGEL_LABEL_REGEX = 17,
+    /*
+     Span around one email-address draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_EMAIL = 18,
+    /*
+     Span around one URL draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_URL = 19,
+    /*
+     Span around one domain-name draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_DOMAIN = 20,
+    /*
+     Span around one date draw (`hegel_generate_date`).
+     */
+    HEGEL_LABEL_DATE = 21,
+    /*
+     Span around one time draw (`hegel_generate_time`).
+     */
+    HEGEL_LABEL_TIME = 22,
+    /*
+     Span around one datetime draw (`hegel_generate_datetime`).
+     */
+    HEGEL_LABEL_DATETIME = 23,
+    /*
+     Span around one UUID draw (`hegel_generate_uuid`).
+     */
+    HEGEL_LABEL_UUID = 24,
+    /*
+     Span around one IP-address draw (`hegel_generate_ipv4` /
+     `hegel_generate_ipv6`).
+     */
+    HEGEL_LABEL_IP_ADDRESS = 25,
+    /*
+     Span around one integer draw (`hegel_generate_integer` /
+     `hegel_generate_integer_big`). Emitted internally, like every
+     per-draw label: same-label spans are what the engine's mutation
+     machinery duplicates to propose repeated values.
+     */
+    HEGEL_LABEL_INTEGER = 26,
+    /*
+     Span around one float draw (`hegel_generate_float`).
+     */
+    HEGEL_LABEL_FLOAT = 27,
+    /*
+     Span around one boolean draw (`hegel_generate_boolean`).
+     */
+    HEGEL_LABEL_BOOLEAN = 28,
+    /*
+     Span around one bytes draw (`hegel_generate_bytes`).
+     */
+    HEGEL_LABEL_BYTES = 29,
+    /*
+     Span around one text string draw (`hegel_generate_string` with a
+     text generator).
+     */
+    HEGEL_LABEL_STRING = 30,
 } hegel_label_t;
 
 /*
@@ -462,12 +529,25 @@ typedef struct hegel_run_result_t hegel_run_result_t;
 typedef struct hegel_settings_t hegel_settings_t;
 
 /*
+ Opaque specification of a string draw — the alphabet-and-shape half of
+ `hegel_generate_string`.
+
+ Build one with a `hegel_string_generator_*` constructor (text, regex,
+ email, url, domain); every parameter is validated at construction so a
+ bad alphabet or pattern is reported immediately rather than mid-draw.
+ A generator is immutable after construction and may be shared freely
+ across test cases and threads. Free it with
+ `hegel_string_generator_free` once no draws will use it again.
+ */
+typedef struct hegel_string_generator_t hegel_string_generator_t;
+
+/*
  One in-flight test-case handle handed to the caller by
  `hegel_next_test_case`, `hegel_test_case_from_blob`, or
  `hegel_test_case_clone`. The caller drives it with the per-test-case
- primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
- `hegel_target`, the collection primitives) and concludes it with
- `hegel_mark_complete`.
+ primitives (the `hegel_generate_*` draws, `hegel_start_span` /
+ `hegel_stop_span`, `hegel_target`, the collection primitives) and
+ concludes it with `hegel_mark_complete`.
 
  A single handle must be driven by at most one thread at a time: If
  multiple threads attempt to use the handle at the same time, operations
@@ -479,6 +559,64 @@ typedef struct hegel_settings_t hegel_settings_t;
  `hegel_test_case_free`
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
+
+/*
+ An engine-allocated byte buffer returned by `hegel_generate_bytes`.
+
+ The caller owns the buffer and must release it with
+ `hegel_generate_bytes_result_free` (freeing through any other allocator
+ is undefined behaviour). `data` is never NULL after a successful draw,
+ even for `len == 0`.
+ */
+typedef struct {
+    uint8_t *data;
+    size_t len;
+} hegel_generate_bytes_result_t;
+
+/*
+ An engine-allocated string buffer returned by `hegel_generate_string`.
+
+ `data` points to `len` bytes of UTF-8. The buffer is **not**
+ NUL-terminated and may contain interior NUL bytes (the drawn alphabet
+ can include U+0000), so it is not a C string — always use `len`. The
+ caller owns the buffer and must release it with
+ `hegel_generate_string_result_free` (freeing through any other allocator
+ is undefined behaviour). `data` is never NULL after a successful draw,
+ even for `len == 0`.
+ */
+typedef struct {
+    char *data;
+    size_t len;
+} hegel_generate_string_result_t;
+
+/*
+ A drawn Gregorian calendar date: `year` in `[1, 9999]`, `month` in
+ `[1, 12]`, `day` in `[1, days-in-month]`.
+ */
+typedef struct {
+    int32_t year;
+    uint8_t month;
+    uint8_t day;
+} hegel_date_t;
+
+/*
+ A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
+ `[0, 59]`, `microsecond` in `[0, 999999]`.
+ */
+typedef struct {
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+    uint32_t microsecond;
+} hegel_time_t;
+
+/*
+ A drawn naive datetime (a date plus a time of day, no timezone).
+ */
+typedef struct {
+    hegel_date_t date;
+    hegel_time_t time;
+} hegel_datetime_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -721,7 +859,7 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
 
  There is no run handle and no engine worker: the caller drives the
  returned test case with the usual per-test-case primitives
- (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+ (the `hegel_generate_*` draws, spans, …), concludes it with `hegel_mark_complete`,
  and decides for itself whether the blob reproduced the failure (the
  property failed again) or is stale (it passed). Replay several blobs by
  calling this once per blob. A blob whose choices no longer match the
@@ -797,31 +935,6 @@ hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc)
 hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
                                      const hegel_test_case_t *tc,
                                      hegel_test_case_t **out_test_case);
-
-/*
- Draw a value from the test case's data source, using the
- CBOR-encoded `schema_cbor` to describe its shape (type + bounds +
- optional category filters, depending on the type).
-
- On success returns `HEGEL_OK` and writes a borrowed pointer to the
- CBOR-encoded value into `*out_value_cbor` (length in
- `*out_value_len`). The pointer is invalidated by the next call into
- libhegel on this test case — copy the bytes if you need to keep
- them.
-
- Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
- exhausted for this test case (the caller should abort the body and
- call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
- Returns `HEGEL_E_INVALID_ARG` on malformed schema, NULL outputs, or
- other argument errors; the diagnostic is in
- `hegel_context_last_error`.
- */
-hegel_result_t hegel_generate(hegel_context_t *ctx,
-                              hegel_test_case_t *tc,
-                              const uint8_t *schema_cbor,
-                              size_t schema_len,
-                              const uint8_t **out_value_cbor,
-                              size_t *out_value_len);
 
 /*
  Open a labeled span around a group of draws so the shrinker can
@@ -990,12 +1103,335 @@ hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
  `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
  diagnostic is in `hegel_context_last_error`.
  */
-hegel_result_t hegel_primitive_boolean(hegel_context_t *ctx,
+hegel_result_t hegel_generate_boolean(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      double p,
+                                      bool forced,
+                                      bool has_forced,
+                                      bool *out_value);
+
+/*
+ Draw an integer in `[min_value, max_value]` (both inclusive, both
+ required). The engine biases toward boundary values and shrinks toward
+ zero. For bounds outside the `int64_t` range use
+ `hegel_generate_integer_big`.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case (the caller should abort the body and
+ call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_value` or `min_value > max_value`;
+ the diagnostic is in `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_integer(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      int64_t min_value,
+                                      int64_t max_value,
+                                      int64_t *out_value);
+
+/*
+ Draw an arbitrary-precision integer in `[min_value, max_value]`.
+
+ Bounds and result are two's-complement **little-endian** signed byte
+ buffers (the natural encoding of Go's `math/big` `FillBytes` reversed, or
+ Rust's `i128::to_le_bytes` for fixed-width values). Both bounds are
+ required and must be non-empty.
+
+ On success writes the drawn value's two's-complement little-endian bytes
+ into `out_value` (capacity `out_value_cap`), its minimal length into
+ `*out_value_len`, sign-fills the rest of the buffer up to
+ `out_value_cap` (so reading the whole buffer as a fixed-width
+ two's-complement integer also yields the drawn value, with no
+ sign-extension needed on the caller's side), and returns `HEGEL_OK`. A
+ value in range never needs more bytes than the longer of the two bound
+ encodings, so passing
+ `out_value_cap >= max(min_value_len, max_value_len)` always succeeds.
+ Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+ for this test case. Returns `HEGEL_E_INVALID_ARG` for NULL or empty
+ bounds, NULL out parameters, `min_value > max_value`, or an `out_value`
+ buffer too small for the drawn value; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_integer_big(hegel_context_t *ctx,
+                                          hegel_test_case_t *tc,
+                                          const uint8_t *min_value,
+                                          size_t min_value_len,
+                                          const uint8_t *max_value,
+                                          size_t max_value_len,
+                                          uint8_t *out_value,
+                                          size_t out_value_cap,
+                                          size_t *out_value_len);
+
+/*
+ Draw a float of the given `width` (32 or 64) in
+ `[min_value, max_value]`.
+
+ Pass `-INFINITY` / `INFINITY` for unbounded ends. NaN is drawn only when
+ `allow_nan` is set; infinities only when `allow_infinity` is set and the
+ relevant endpoint is unbounded. `exclude_min` / `exclude_max` make the
+ corresponding bound exclusive by stepping it to the next representable
+ value at the requested width. Nonzero magnitudes below
+ `smallest_nonzero_magnitude` are never drawn — it must be positive and
+ finite; pass `5e-324` (width 64) or the smallest `float` subnormal
+ (width 32) for no restriction. Width-32 bounds must be exactly
+ representable as `float`, and finite width-32 results are exactly
+ representable as `float`.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+ `out_value`, an unsupported width, NaN bounds, width-32 bounds that are
+ not exactly representable as `float`, an invalid
+ `smallest_nonzero_magnitude`, or an empty range; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_float(hegel_context_t *ctx,
+                                    hegel_test_case_t *tc,
+                                    uint32_t width,
+                                    double min_value,
+                                    double max_value,
+                                    bool allow_nan,
+                                    bool allow_infinity,
+                                    bool exclude_min,
+                                    bool exclude_max,
+                                    double smallest_nonzero_magnitude,
+                                    double *out_value);
+
+/*
+ Draw a byte string with length in `[min_size, max_size]` (both
+ inclusive).
+
+ On success fills `*out_result` with an engine-allocated buffer the caller
+ owns (release with `hegel_generate_bytes_result_free`) and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+ `out_result` or `min_size > max_size`; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_bytes(hegel_context_t *ctx,
+                                    hegel_test_case_t *tc,
+                                    uint64_t min_size,
+                                    uint64_t max_size,
+                                    hegel_generate_bytes_result_t *out_result);
+
+/*
+ Release a buffer returned by `hegel_generate_bytes` and reset the struct
+ to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+ (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+ */
+hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
+                                                hegel_generate_bytes_result_t *result);
+
+/*
+ Build a **text** string generator: strings with length in
+ `[min_size, max_size]` whose characters are drawn from the described
+ alphabet.
+
+ The alphabet starts from `codec`'s range — `"ascii"`, `"latin-1"` /
+ `"iso-8859-1"`, or `"utf-8"` / NULL for all of Unicode — intersected
+ with `[min_codepoint, max_codepoint]` (pass `0` and `UINT32_MAX` for no
+ constraint; surrogates are always removed). `categories` restricts to
+ the union of the named Unicode general categories (NULL for no
+ restriction; a non-NULL empty list means an empty alphabet), and
+ `exclude_categories` removes categories. `include_characters` /
+ `exclude_characters` are UTF-8 buffers (pointer + byte length; NULL for
+ none) of individual characters unioned in / removed last. They are
+ length-delimited rather than NUL-terminated because U+0000 is a valid
+ character to include or exclude.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator`, `min_size > max_size`, an unknown codec or
+ category, non-UTF-8 string arguments, include/exclude conflicts, or
+ constraints that leave no characters while `max_size > 0`.
+ */
+hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
+                                           uint64_t min_size,
+                                           uint64_t max_size,
+                                           const char *codec,
+                                           uint32_t min_codepoint,
+                                           uint32_t max_codepoint,
+                                           const char *const *categories,
+                                           size_t categories_len,
+                                           const char *const *exclude_categories,
+                                           size_t exclude_categories_len,
+                                           const uint8_t *include_characters,
+                                           size_t include_characters_len,
+                                           const uint8_t *exclude_characters,
+                                           size_t exclude_characters_len,
+                                           hegel_string_generator_t **out_generator);
+
+/*
+ Build a **regex** string generator: strings matching `pattern`
+ (Python-`re` syntax). When `fullmatch` is true the whole string matches
+ the pattern; otherwise the match may be padded on either side.
+ `alphabet` — optional (NULL for none) — must be a **text** generator; its
+ character set constrains the padding and wildcard characters.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator`, a NULL / non-UTF-8 / invalid `pattern`, or
+ an `alphabet` that is not a text generator.
+ */
+hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
+                                            const char *pattern,
+                                            bool fullmatch,
+                                            const hegel_string_generator_t *alphabet,
+                                            hegel_string_generator_t **out_generator);
+
+/*
+ Build an **email** string generator producing RFC 5321/5322 addresses
+ like `alice@example.com`.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+ */
+hegel_result_t hegel_string_generator_email(hegel_context_t *ctx,
+                                            hegel_string_generator_t **out_generator);
+
+/*
+ Build a **URL** string generator producing RFC 3986 `http`/`https` URLs.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+ */
+hegel_result_t hegel_string_generator_url(hegel_context_t *ctx,
+                                          hegel_string_generator_t **out_generator);
+
+/*
+ Build a **domain-name** string generator producing RFC 1035
+ fully-qualified domain names of total length at most `max_length`
+ (4..=255; RFC 1035 §2.3.4 allows 255).
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator` or a `max_length` that leaves no eligible
+ top-level domains.
+ */
+hegel_result_t hegel_string_generator_domain(hegel_context_t *ctx,
+                                             uint64_t max_length,
+                                             hegel_string_generator_t **out_generator);
+
+/*
+ Release a string generator built by a `hegel_string_generator_*`
+ constructor. Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+ Each generator must be freed exactly once, and only after every draw
+ using it has completed.
+ */
+hegel_result_t hegel_string_generator_free(hegel_context_t *ctx,
+                                           hegel_string_generator_t *generator);
+
+/*
+ Draw a string described by `generator` (built with a
+ `hegel_string_generator_*` constructor).
+
+ On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+ caller owns (release with `hegel_generate_string_result_free`) and
+ returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+ budget is exhausted for this test case (the caller should abort the body
+ and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+ `HEGEL_E_ASSUME` when the draw rejected itself (e.g. an email exceeding
+ the RFC length cap; discard the test case as invalid). Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `generator`, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_result`.
+ */
+hegel_result_t hegel_generate_string(hegel_context_t *ctx,
+                                     hegel_test_case_t *tc,
+                                     const hegel_string_generator_t *generator,
+                                     hegel_generate_string_result_t *out_result);
+
+/*
+ Release a buffer returned by `hegel_generate_string` and reset the
+ struct to `{NULL, 0}`. Safe to call with a NULL `result` or an
+ already-freed (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+ */
+hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
+                                                 hegel_generate_string_result_t *result);
+
+/*
+ Draw a Gregorian calendar date, shrinking toward 2000-01-01.
+
+ On success writes the drawn date into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case (the caller should abort the body and
+ call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_value`.
+ */
+hegel_result_t hegel_generate_date(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   hegel_date_t *out_value);
+
+/*
+ Draw a time of day, shrinking toward midnight.
+
+ On success writes the drawn time into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+ NULL `out_value`.
+ */
+hegel_result_t hegel_generate_time(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   hegel_time_t *out_value);
+
+/*
+ Draw a naive datetime (no timezone), shrinking toward 2000-01-01T00:00:00.
+
+ On success writes the drawn datetime into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+ NULL `out_value`.
+ */
+hegel_result_t hegel_generate_datetime(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
-                                       double p,
-                                       bool forced,
-                                       bool has_forced,
-                                       bool *out_value);
+                                       hegel_datetime_t *out_value);
+
+/*
+ Draw a UUID as 16 big-endian bytes written to `out_bytes` (which must
+ have room for 16 bytes).
+
+ When `has_version` is set, the RFC 4122 version nibble is forced to
+ `version` (a single hex nibble, 0..=15 — conventionally 1..=5) and the
+ variant nibble to the RFC 4122 variant. Without a version the 128 bits
+ are uniform, except that the nil UUID is never produced.
+
+ On success writes 16 bytes and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL `out_bytes` or
+ a `version > 15`.
+ */
+hegel_result_t hegel_generate_uuid(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   uint8_t version,
+                                   bool has_version,
+                                   uint8_t *out_bytes);
+
+/*
+ Draw an IPv4 address. Half the draws are uniform over the whole address
+ space and half are biased into the IANA special-purpose ranges
+ (loopback, private, documentation, …).
+
+ On success writes the address's 4 network-order bytes into `out_bytes`
+ (which must have room for 4 bytes) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+ */
+hegel_result_t hegel_generate_ipv4(hegel_context_t *ctx, hegel_test_case_t *tc, uint8_t *out_bytes);
+
+/*
+ Draw an IPv6 address, with the same special-range biasing as
+ `hegel_generate_ipv4`.
+
+ On success writes the address's 16 network-order bytes into `out_bytes`
+ (which must have room for 16 bytes) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+ */
+hegel_result_t hegel_generate_ipv6(hegel_context_t *ctx, hegel_test_case_t *tc, uint8_t *out_bytes);
 
 /*
  Record a numeric observation under `label` for the engine's

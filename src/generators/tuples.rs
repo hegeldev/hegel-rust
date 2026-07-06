@@ -1,6 +1,4 @@
-use super::{BasicGenerator, DefaultGenerator, Generator, TestCase, labels};
-use crate::cbor_utils::{cbor_array, cbor_map};
-use ciborium::Value;
+use super::{DefaultGenerator, Generator, TestCase, labels};
 use std::marker::PhantomData;
 
 /// Creates a tuple generator from 0–12 component generators.
@@ -80,35 +78,10 @@ macro_rules! impl_tuple {
             $($G: Generator<$T>,)+
         {
             fn do_draw(&self, tc: &TestCase) -> ($($T,)+) {
-                if let Some(basic) = self.as_basic() {
-                    basic.do_draw(tc)
-                } else {
-                    // nocov start
-                    tc.start_span(labels::TUPLE);
-                    let result = ($(self.$field.do_draw(tc),)+);
-                    tc.stop_span(false);
-                    result
-                    // nocov end
-                }
-            }
-
-            fn as_basic(&self) -> Option<BasicGenerator<'_, ($($T,)+)>> {
-                $(let $field = self.$field.as_basic()?;)+
-
-                let schema = cbor_map! {
-                    "type" => "tuple",
-                    "elements" => cbor_array![$($field.schema().clone()),+]
-                };
-
-                Some(BasicGenerator::new(schema, move |raw| {
-                    let arr = match raw {
-                        Value::Array(arr) => arr,
-                        _ => panic!("Expected array from tuple schema, got {:?}", raw), // nocov
-                    };
-                    let mut iter = arr.into_iter();
-
-                    ($($field.parse_raw(iter.next().expect(concat!("tuple missing element ", stringify!($idx)))),)+)
-                }))
+                tc.start_span(labels::TUPLE);
+                let result = ($(self.$field.do_draw(tc),)+);
+                tc.stop_span(false);
+                result
             }
         }
 

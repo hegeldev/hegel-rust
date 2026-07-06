@@ -28,32 +28,6 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
-/* CBOR-encoded {"type": "boolean"} — used to pick push vs pop. */
-static const uint8_t BOOLEAN_SCHEMA[] = {
-    0xA1,                                    /* map(1) */
-    0x64, 't', 'y', 'p', 'e',
-    0x67, 'b', 'o', 'o', 'l', 'e', 'a', 'n'
-};
-
-/* CBOR-encoded {"type": "integer", "min_value": 0, "max_value": 1000}. */
-static const uint8_t INTEGER_SCHEMA[] = {
-    0xA3,                                              /* map(3) */
-    0x64, 't', 'y', 'p', 'e',
-    0x67, 'i', 'n', 't', 'e', 'g', 'e', 'r',
-    0x69, 'm', 'i', 'n', '_', 'v', 'a', 'l', 'u', 'e',
-    0x00,                                              /* 0 */
-    0x69, 'm', 'a', 'x', '_', 'v', 'a', 'l', 'u', 'e',
-    0x19, 0x03, 0xE8                                   /* 1000 */
-};
-
-static bool decode_bool(const uint8_t *bytes, size_t len) {
-    if (len < 1) { fprintf(stderr, "decode_bool: empty\n"); exit(2); }
-    if (bytes[0] == 0xF5) return true;
-    if (bytes[0] == 0xF4) return false;
-    fprintf(stderr, "decode_bool: unexpected head 0x%02x\n", bytes[0]);
-    exit(2);
-}
-
 /* Shadow map of live variables: parallel arrays of id -> value. A real
  * caller would use a hash map; linear scan keeps the example dependency
  * free. */
@@ -119,21 +93,16 @@ int main(void) {
         bool overran = false;
         bool bad = false;
         for (int step = 0; step < STEPS && !overran; step++) {
-            const uint8_t *bytes;
-            size_t len;
-
             /* Decide push vs pop. */
-            hegel_result_t rc = hegel_generate(ctx, tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &bytes, &len);
+            bool push;
+            hegel_result_t rc = hegel_generate_boolean(ctx, tc, 0.5, false, false, &push);
             if (rc != HEGEL_OK) { overran = true; break; }
-            bool push = decode_bool(bytes, len);
 
             if (push || live.count == 0) {
                 /* Push: generate a value and register it in the pool. */
-                rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &bytes, &len);
+                int64_t value;
+                rc = hegel_generate_integer(ctx, tc, 0, 1000, &value);
                 if (rc != HEGEL_OK) { overran = true; break; }
-                /* The integer fits in one or two CBOR bytes for [0,1000];
-                 * we only need a representative value, so use the length. */
-                int64_t value = (int64_t)len;
 
                 int64_t var_id;
                 if (hegel_pool_add(ctx, tc, pool, &var_id) != HEGEL_OK) { overran = true; break; }

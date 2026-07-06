@@ -1,7 +1,7 @@
 use crate::common::utils::{assert_all_examples, check_can_generate_examples};
 use chrono::TimeDelta;
 use hegel::extras::chrono as chrono_gs;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_days_default_generator() {
@@ -58,13 +58,14 @@ fn test_time_deltas_property(tc: hegel::TestCase) {
     assert!(v >= min && v <= max);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_time_deltas_min_greater_than_max() {
-    let g = chrono_gs::time_deltas()
-        .min_value(TimeDelta::seconds(10))
-        .max_value(TimeDelta::seconds(5));
-    g.as_basic();
+fn test_time_deltas_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        chrono_gs::time_deltas()
+            .min_value(TimeDelta::seconds(10))
+            .max_value(TimeDelta::seconds(5)),
+    );
 }
 
 #[test]
