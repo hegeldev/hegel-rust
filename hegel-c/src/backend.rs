@@ -18,10 +18,11 @@ pub enum DataSourceError {
     /// The backend rejected the current draw (e.g. a generated float could
     /// not be represented at the requested width).
     Assume,
-    /// A caller-supplied argument (typically a schema) was semantically
-    /// invalid. The main library converts this to a panic at the API surface;
-    /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
-    /// `hegel_context_last_error`. Carries a human-readable diagnostic.
+    /// A caller-supplied draw argument (a bound, size, pattern, or similar)
+    /// was semantically invalid. The main library converts this to a panic
+    /// at the API surface; libhegel maps it to `HEGEL_E_INVALID_ARG` with
+    /// the message exposed via `hegel_context_last_error`. Carries a
+    /// human-readable diagnostic.
     InvalidArgument(String),
 }
 

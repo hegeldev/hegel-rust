@@ -97,11 +97,12 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
         let s = tc.generate_string(&text)?;
         assert!(s.chars().count() <= 5);
 
-        let d = tc.generate_date()?;
+        use crate::test_case::full_ranges;
+        let d = tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE)?;
         assert!((1..=9999).contains(&d.year));
-        let t = tc.generate_time()?;
+        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND)?;
         assert!(t.hour <= 23);
-        let dt = tc.generate_datetime()?;
+        let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME)?;
         assert!((1..=12).contains(&dt.date.month));
         let uuid = tc.generate_uuid(Some(4))?;
         assert_eq!(uuid[6] >> 4, 4);
