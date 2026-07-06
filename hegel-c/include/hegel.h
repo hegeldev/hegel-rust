@@ -388,6 +388,44 @@ typedef enum {
      span themselves.
      */
     HEGEL_LABEL_FEATURE_FLAG = 16,
+    /*
+     Span around one regex string draw. Emitted internally by
+     `hegel_generate_string`; callers normally never open this span
+     themselves. Likewise for the other engine-side compound draws below.
+     */
+    HEGEL_LABEL_REGEX = 17,
+    /*
+     Span around one email-address draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_EMAIL = 18,
+    /*
+     Span around one URL draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_URL = 19,
+    /*
+     Span around one domain-name draw (`hegel_generate_string`).
+     */
+    HEGEL_LABEL_DOMAIN = 20,
+    /*
+     Span around one date draw (`hegel_generate_date`).
+     */
+    HEGEL_LABEL_DATE = 21,
+    /*
+     Span around one time draw (`hegel_generate_time`).
+     */
+    HEGEL_LABEL_TIME = 22,
+    /*
+     Span around one datetime draw (`hegel_generate_datetime`).
+     */
+    HEGEL_LABEL_DATETIME = 23,
+    /*
+     Span around one UUID draw (`hegel_generate_uuid`).
+     */
+    HEGEL_LABEL_UUID = 24,
+    /*
+     Span around one IP-address draw (`hegel_generate_ip_address`).
+     */
+    HEGEL_LABEL_IP_ADDRESS = 25,
 } hegel_label_t;
 
 /*
@@ -462,6 +500,19 @@ typedef struct hegel_run_result_t hegel_run_result_t;
 typedef struct hegel_settings_t hegel_settings_t;
 
 /*
+ Opaque specification of a string draw — the alphabet-and-shape half of
+ `hegel_generate_string`.
+
+ Build one with a `hegel_string_generator_*` constructor (text, regex,
+ email, url, domain); every parameter is validated at construction so a
+ bad alphabet or pattern is reported immediately rather than mid-draw.
+ A generator is immutable after construction and may be shared freely
+ across test cases and threads. Free it with
+ `hegel_string_generator_free` once no draws will use it again.
+ */
+typedef struct HegelStringGenerator HegelStringGenerator;
+
+/*
  One in-flight test-case handle handed to the caller by
  `hegel_next_test_case`, `hegel_test_case_from_blob`, or
  `hegel_test_case_clone`. The caller drives it with the per-test-case
@@ -492,6 +543,22 @@ typedef struct {
     uint8_t *data;
     size_t len;
 } hegel_generate_bytes_result_t;
+
+/*
+ An engine-allocated string buffer returned by `hegel_generate_string`.
+
+ `data` points to `len` bytes of UTF-8. The buffer is **not**
+ NUL-terminated and may contain interior NUL bytes (the drawn alphabet
+ can include U+0000), so it is not a C string — always use `len`. The
+ caller owns the buffer and must release it with
+ `hegel_generate_string_result_free` (freeing through any other allocator
+ is undefined behaviour). `data` is never NULL after a successful draw,
+ even for `len == 0`.
+ */
+typedef struct {
+    char *data;
+    size_t len;
+} hegel_generate_string_result_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1115,6 +1182,132 @@ hegel_result_t hegel_generate_bytes(hegel_context_t *ctx,
  */
 hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
                                                 hegel_generate_bytes_result_t *result);
+
+/*
+ Build a **text** string generator: strings with length in
+ `[min_size, max_size]` whose characters are drawn from the described
+ alphabet.
+
+ The alphabet starts from `codec`'s range — `"ascii"`, `"latin-1"` /
+ `"iso-8859-1"`, or `"utf-8"` / NULL for all of Unicode — intersected
+ with `[min_codepoint, max_codepoint]` (pass `0` and `UINT32_MAX` for no
+ constraint; surrogates are always removed). `categories` restricts to
+ the union of the named Unicode general categories (NULL for no
+ restriction; a non-NULL empty list means an empty alphabet), and
+ `exclude_categories` removes categories. `include_characters` /
+ `exclude_characters` are NUL-terminated UTF-8 strings of individual
+ characters unioned in / removed last (NULL for none).
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator`, `min_size > max_size`, an unknown codec or
+ category, non-UTF-8 string arguments, include/exclude conflicts, or
+ constraints that leave no characters while `max_size > 0`.
+ */
+hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
+                                           uint64_t min_size,
+                                           uint64_t max_size,
+                                           const char *codec,
+                                           uint32_t min_codepoint,
+                                           uint32_t max_codepoint,
+                                           const char *const *categories,
+                                           size_t categories_len,
+                                           const char *const *exclude_categories,
+                                           size_t exclude_categories_len,
+                                           const char *include_characters,
+                                           const char *exclude_characters,
+                                           HegelStringGenerator **out_generator);
+
+/*
+ Build a **regex** string generator: strings matching `pattern`
+ (Python-`re` syntax). When `fullmatch` is true the whole string matches
+ the pattern; otherwise the match may be padded on either side.
+ `alphabet` — optional (NULL for none) — must be a **text** generator; its
+ character set constrains the padding and wildcard characters.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator`, a NULL / non-UTF-8 / invalid `pattern`, or
+ an `alphabet` that is not a text generator.
+ */
+hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
+                                            const char *pattern,
+                                            bool fullmatch,
+                                            const HegelStringGenerator *alphabet,
+                                            HegelStringGenerator **out_generator);
+
+/*
+ Build an **email** string generator producing RFC 5321/5322 addresses
+ like `alice@example.com`.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+ */
+hegel_result_t hegel_string_generator_email(hegel_context_t *ctx,
+                                            HegelStringGenerator **out_generator);
+
+/*
+ Build a **URL** string generator producing RFC 3986 `http`/`https` URLs.
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+ */
+hegel_result_t hegel_string_generator_url(hegel_context_t *ctx,
+                                          HegelStringGenerator **out_generator);
+
+/*
+ Build a **domain-name** string generator producing RFC 1035
+ fully-qualified domain names of total length at most `max_length`
+ (4..=255; RFC 1035 §2.3.4 allows 255).
+
+ On success writes a caller-owned handle into `*out_generator` (release
+ with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+ — for a NULL `out_generator` or a `max_length` that leaves no eligible
+ top-level domains.
+ */
+hegel_result_t hegel_string_generator_domain(hegel_context_t *ctx,
+                                             uint64_t max_length,
+                                             HegelStringGenerator **out_generator);
+
+/*
+ Release a string generator built by a `hegel_string_generator_*`
+ constructor. Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+ Each generator must be freed exactly once, and only after every draw
+ using it has completed.
+ */
+hegel_result_t hegel_string_generator_free(hegel_context_t *ctx, HegelStringGenerator *generator);
+
+/*
+ Draw a string described by `generator` (built with a
+ `hegel_string_generator_*` constructor).
+
+ On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+ caller owns (release with `hegel_generate_string_result_free`) and
+ returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+ budget is exhausted for this test case (the caller should abort the body
+ and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+ `HEGEL_E_ASSUME` when the draw rejected itself (e.g. an email exceeding
+ the RFC length cap; discard the test case as invalid). Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `generator`, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_result`.
+ */
+hegel_result_t hegel_generate_string(hegel_context_t *ctx,
+                                     hegel_test_case_t *tc,
+                                     const HegelStringGenerator *generator,
+                                     hegel_generate_string_result_t *out_result);
+
+/*
+ Release a buffer returned by `hegel_generate_string` and reset the
+ struct to `{NULL, 0}`. Safe to call with a NULL `result` or an
+ already-freed (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+ */
+hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
+                                                 hegel_generate_string_result_t *result);
 
 /*
  Record a numeric observation under `label` for the engine's

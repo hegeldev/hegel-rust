@@ -1,6 +1,6 @@
 use super::*;
 use crate::cbor_utils::cbor_map;
-use crate::native::core::NativeTestCase;
+use crate::native::core::{ManyState, NativeTestCase};
 use crate::native::rng::EngineRng;
 
 fn fresh_ntc() -> NativeTestCase {

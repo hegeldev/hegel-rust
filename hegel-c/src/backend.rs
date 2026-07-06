@@ -1,7 +1,7 @@
 use ciborium::Value;
 
 use crate::native::bignum::BigInt;
-use crate::native::draws::FloatSpec;
+use crate::native::draws::{FloatSpec, StringSpec};
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 ///
@@ -68,6 +68,10 @@ pub trait DataSource: Send + Sync {
     /// `InvalidArgument` when `min_size > max_size`.
     fn generate_bytes(&self, min_size: usize, max_size: usize)
     -> Result<Vec<u8>, DataSourceError>;
+
+    /// Draw a string according to a validated [`StringSpec`] (text, regex,
+    /// email, url, or domain).
+    fn generate_string(&self, spec: &StringSpec) -> Result<String, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;

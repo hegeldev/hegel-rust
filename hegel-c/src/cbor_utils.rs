@@ -16,17 +16,6 @@ macro_rules! cbor_map {
     };
 }
 
-/// Build a `ciborium::Value::Array`, e.g. `cbor_array![schema1, schema2]`.
-/// Test-only, for the same reason as [`cbor_map!`].
-#[cfg(test)]
-macro_rules! cbor_array {
-    ($($value:expr),* $(,)?) => {
-        ciborium::Value::Array(vec![$($value),*])
-    };
-}
-
-#[cfg(test)]
-pub(crate) use cbor_array;
 #[cfg(test)]
 pub(crate) use cbor_map;
 

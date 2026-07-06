@@ -8,11 +8,12 @@ mod special;
 mod text;
 
 use crate::cbor_utils::map_get;
-use crate::control::hegel_internal_assert;
 use crate::native::bignum::{BigInt, Sign, ToPrimitive};
 use crate::native::core::state::MAX_DEPTH;
-use crate::native::core::{EngineError, ManyState, NativeTestCase, Span, Status};
+use crate::native::core::{EngineError, NativeTestCase, Span, Status};
 use ciborium::Value;
+
+pub(crate) use crate::native::draws::{many_more, many_reject};
 
 /// Look up a required schema field, returning [`EngineError::InvalidArgument`]
 /// (rather than panicking) when it is absent. Used for fields whose presence
@@ -92,52 +93,6 @@ pub(crate) fn interpret_schema(
         span.end = ntc.nodes.len();
     }
     result
-}
-
-/// Advance the many state by one element.  Returns true if another
-/// element should be drawn.  Mirrors `Hypothesis`'s `many.more()`.
-pub(crate) fn many_more(
-    ntc: &mut NativeTestCase,
-    state: &mut ManyState,
-) -> Result<bool, EngineError> {
-    let should_continue = if state.min_size as f64 == state.max_size {
-        state.count < state.min_size
-    } else {
-        let forced = if state.force_stop {
-            Some(false)
-        } else if state.count < state.min_size {
-            Some(true)
-        } else if state.count as f64 >= state.max_size {
-            Some(false)
-        } else {
-            None
-        };
-        ntc.weighted(state.p_continue, forced)?
-    };
-
-    if should_continue {
-        state.count += 1;
-    }
-    Ok(should_continue)
-}
-
-/// Reject the last drawn element.  Mirrors Hypothesis's `many.reject()`.
-pub(crate) fn many_reject(
-    ntc: &mut NativeTestCase,
-    state: &mut ManyState,
-) -> Result<(), EngineError> {
-    hegel_internal_assert!(state.count > 0);
-    state.count -= 1;
-    state.rejections += 1;
-    if state.rejections > std::cmp::max(3, 2 * state.count) {
-        if state.count < state.min_size {
-            ntc.conclude(Status::Invalid, None);
-            return Err(EngineError::InvalidTestCase);
-        } else {
-            state.force_stop = true;
-        }
-    }
-    Ok(())
 }
 
 /// Convert a CBOR value to a [`BigInt`], handling bignum tags. Unlike the old

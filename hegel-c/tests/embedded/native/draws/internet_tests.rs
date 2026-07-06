@@ -1,24 +1,9 @@
 use super::*;
-use crate::cbor_utils::cbor_map;
 use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
 
 fn fresh_ntc(seed: u64) -> NativeTestCase {
     NativeTestCase::new_random(EngineRng::seeded(seed))
-}
-
-fn decode_string(v: ciborium::Value) -> String {
-    let ciborium::Value::Tag(91, inner) = v else {
-        panic!("expected tag-91 string, got {v:?}")
-    };
-    let ciborium::Value::Bytes(bytes) = *inner else {
-        panic!("expected bytes inside tag-91")
-    };
-    String::from_utf8(bytes).unwrap()
-}
-
-fn domain_schema(max_length: u64) -> ciborium::Value {
-    cbor_map! {"type" => "domain", "max_length" => max_length}
 }
 
 #[test]
@@ -47,11 +32,10 @@ fn top_level_domains_is_non_trivial() {
 }
 
 #[test]
-fn interpret_domain_default_max_length() {
+fn generate_domain_default_max_length() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let schema = cbor_map! {"type" => "domain"};
-        let s = decode_string(interpret_domain(&mut ntc, &schema).ok().unwrap());
+        let s = generate_domain(&mut ntc, 255).unwrap();
         assert!(s.len() <= 255, "default max_length is 255: got {s:?}");
         assert!(s.contains('.'), "domain must have ≥ 2 labels: {s:?}");
         for part in s.split('.') {
@@ -65,11 +49,11 @@ fn interpret_domain_default_max_length() {
 }
 
 #[test]
-fn interpret_domain_respects_max_length_4() {
+fn generate_domain_respects_max_length_4() {
     let mut saw_dotted = false;
     for seed in 0..500 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(interpret_domain(&mut ntc, &domain_schema(4)).ok().unwrap());
+        let s = generate_domain(&mut ntc, 4).unwrap();
         assert!(s.len() <= 4, "max_length=4 violated by {s:?}");
         if s.contains('.') {
             saw_dotted = true;
@@ -82,23 +66,19 @@ fn interpret_domain_respects_max_length_4() {
 }
 
 #[test]
-fn interpret_domain_respects_max_length_8() {
+fn generate_domain_respects_max_length_8() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(interpret_domain(&mut ntc, &domain_schema(8)).ok().unwrap());
+        let s = generate_domain(&mut ntc, 8).unwrap();
         assert!(s.len() <= 8, "max_length=8 violated by {s:?}");
     }
 }
 
 #[test]
-fn interpret_domain_labels_obey_rfc1035() {
+fn generate_domain_labels_obey_rfc1035() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(
-            interpret_domain(&mut ntc, &domain_schema(255))
-                .ok()
-                .unwrap(),
-        );
+        let s = generate_domain(&mut ntc, 255).unwrap();
         let labels: Vec<&str> = s.split('.').collect();
         for label in &labels[..labels.len() - 1] {
             assert!(!label.is_empty() && label.len() <= 63, "label {label:?}");
@@ -131,16 +111,12 @@ fn interpret_domain_labels_obey_rfc1035() {
 }
 
 #[test]
-fn interpret_domain_recases_tld() {
+fn generate_domain_recases_tld() {
     let mut saw_lower = false;
     let mut saw_upper = false;
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(
-            interpret_domain(&mut ntc, &domain_schema(255))
-                .ok()
-                .unwrap(),
-        );
+        let s = generate_domain(&mut ntc, 255).unwrap();
         let tld = s.rsplit('.').next().unwrap();
         if tld.chars().all(|c| c.is_ascii_lowercase()) {
             saw_lower = true;
@@ -154,13 +130,12 @@ fn interpret_domain_recases_tld() {
 }
 
 #[test]
-fn interpret_email_has_one_at_sign() {
+fn generate_email_has_one_at_sign() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let Ok(v) = interpret_email(&mut ntc) else {
+        let Ok(s) = generate_email(&mut ntc) else {
             continue;
         };
-        let s = decode_string(v);
         let parts: Vec<&str> = s.split('@').collect();
         assert_eq!(parts.len(), 2, "expected exactly one '@' in {s:?}");
         let (local, domain) = (parts[0], parts[1]);
@@ -171,13 +146,12 @@ fn interpret_email_has_one_at_sign() {
 }
 
 #[test]
-fn interpret_email_local_part_in_atext_set() {
+fn generate_email_local_part_in_atext_set() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let Ok(v) = interpret_email(&mut ntc) else {
+        let Ok(s) = generate_email(&mut ntc) else {
             continue;
         };
-        let s = decode_string(v);
         let (local, _) = s.split_once('@').unwrap();
         for c in local.chars() {
             let allowed = c.is_ascii_alphanumeric() || "!#$%&'*+-/=^_`{|}~".contains(c);
@@ -187,22 +161,21 @@ fn interpret_email_local_part_in_atext_set() {
 }
 
 #[test]
-fn interpret_email_never_ends_with_arpa() {
+fn generate_email_never_ends_with_arpa() {
     for seed in 0..500 {
         let mut ntc = fresh_ntc(seed);
-        let Ok(v) = interpret_email(&mut ntc) else {
+        let Ok(s) = generate_email(&mut ntc) else {
             continue;
         };
-        let s = decode_string(v);
         assert!(!s.to_lowercase().ends_with(".arpa"), "ARPA leaked in {s:?}");
     }
 }
 
 #[test]
-fn interpret_url_has_http_scheme_and_authority() {
+fn generate_url_has_http_scheme_and_authority() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(interpret_url(&mut ntc).ok().unwrap());
+        let s = generate_url(&mut ntc).unwrap();
         assert!(
             s.starts_with("http://") || s.starts_with("https://"),
             "wrong scheme in {s:?}"
@@ -213,7 +186,7 @@ fn interpret_url_has_http_scheme_and_authority() {
 }
 
 #[test]
-fn interpret_url_path_chars_url_safe() {
+fn generate_url_path_chars_url_safe() {
     let url_safe: std::collections::HashSet<char> = ('a'..='z')
         .chain('A'..='Z')
         .chain('0'..='9')
@@ -221,7 +194,7 @@ fn interpret_url_path_chars_url_safe() {
         .collect();
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(interpret_url(&mut ntc).ok().unwrap());
+        let s = generate_url(&mut ntc).unwrap();
         let after_scheme = s.split_once("://").unwrap().1;
         let domain_path = after_scheme.split_once('#').map_or(after_scheme, |x| x.0);
         let path = domain_path.split_once('/').map_or("", |x| x.1);
@@ -244,7 +217,7 @@ fn interpret_url_path_chars_url_safe() {
 }
 
 #[test]
-fn interpret_url_fragments_chars_in_safe_set() {
+fn generate_url_fragments_chars_in_safe_set() {
     let frag_safe: std::collections::HashSet<char> = ('a'..='z')
         .chain('A'..='Z')
         .chain('0'..='9')
@@ -252,7 +225,7 @@ fn interpret_url_fragments_chars_in_safe_set() {
         .collect();
     for seed in 0..300 {
         let mut ntc = fresh_ntc(seed);
-        let s = decode_string(interpret_url(&mut ntc).ok().unwrap());
+        let s = generate_url(&mut ntc).unwrap();
         let Some((_, fragment)) = s.split_once('#') else {
             continue;
         };
@@ -290,11 +263,15 @@ fn url_encode_path_encodes_high_latin1() {
 }
 
 #[test]
-fn interpret_domain_rejects_tiny_max_length_as_invalid_argument() {
-    use crate::cbor_utils::cbor_map;
-    use crate::native::rng::EngineRng;
-    let schema = cbor_map! { "type" => "domain", "max_length" => 3 };
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let err = interpret_domain(&mut ntc, &schema).unwrap_err();
+fn generate_domain_rejects_tiny_max_length_as_invalid_argument() {
+    let mut ntc = fresh_ntc(0);
+    let err = generate_domain(&mut ntc, 3).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
+}
+
+#[test]
+fn validate_domain_max_length_matches_generate() {
+    assert!(validate_domain_max_length(3).is_err());
+    assert!(validate_domain_max_length(4).is_ok());
+    assert!(validate_domain_max_length(255).is_ok());
 }

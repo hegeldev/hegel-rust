@@ -326,6 +326,26 @@ pub enum hegel_label_t {
     /// (`hegel_state_machine_next_rule`); callers normally never open this
     /// span themselves.
     HEGEL_LABEL_FEATURE_FLAG = 16,
+    /// Span around one regex string draw. Emitted internally by
+    /// `hegel_generate_string`; callers normally never open this span
+    /// themselves. Likewise for the other engine-side compound draws below.
+    HEGEL_LABEL_REGEX = 17,
+    /// Span around one email-address draw (`hegel_generate_string`).
+    HEGEL_LABEL_EMAIL = 18,
+    /// Span around one URL draw (`hegel_generate_string`).
+    HEGEL_LABEL_URL = 19,
+    /// Span around one domain-name draw (`hegel_generate_string`).
+    HEGEL_LABEL_DOMAIN = 20,
+    /// Span around one date draw (`hegel_generate_date`).
+    HEGEL_LABEL_DATE = 21,
+    /// Span around one time draw (`hegel_generate_time`).
+    HEGEL_LABEL_TIME = 22,
+    /// Span around one datetime draw (`hegel_generate_datetime`).
+    HEGEL_LABEL_DATETIME = 23,
+    /// Span around one UUID draw (`hegel_generate_uuid`).
+    HEGEL_LABEL_UUID = 24,
+    /// Span around one IP-address draw (`hegel_generate_ip_address`).
+    HEGEL_LABEL_IP_ADDRESS = 25,
 }
 
 /// Opaque error-reporting context.
@@ -2296,6 +2316,396 @@ pub unsafe extern "C" fn hegel_generate_bytes_result_free(
         // is zeroed below, making a second call a no-op).
         drop(unsafe {
             Box::from_raw(std::ptr::slice_from_raw_parts_mut(result.data, result.len))
+        });
+    }
+    result.data = ptr::null_mut();
+    result.len = 0;
+    HEGEL_OK
+}
+
+/// Opaque specification of a string draw — the alphabet-and-shape half of
+/// `hegel_generate_string`.
+///
+/// Build one with a `hegel_string_generator_*` constructor (text, regex,
+/// email, url, domain); every parameter is validated at construction so a
+/// bad alphabet or pattern is reported immediately rather than mid-draw.
+/// A generator is immutable after construction and may be shared freely
+/// across test cases and threads. Free it with
+/// `hegel_string_generator_free` once no draws will use it again.
+pub struct HegelStringGenerator {
+    spec: crate::native::draws::StringSpec,
+}
+
+/// Translate a constructor-time engine error onto `ctx`. Constructors
+/// perform no draws, so any error they report is by definition an invalid
+/// argument.
+fn translate_construct_error(
+    ctx: *mut HegelContext,
+    e: crate::native::core::EngineError,
+) -> hegel_result_t {
+    set_last_error(ctx, &e.to_string());
+    HEGEL_E_INVALID_ARG
+}
+
+/// Read an optional NUL-terminated UTF-8 string argument. `Err` carries the
+/// invalid-argument diagnostic already set on `ctx`.
+unsafe fn optional_utf8_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const c_char,
+) -> Result<Option<String>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    match unsafe { CStr::from_ptr(p) }.to_str() {
+        Ok(s) => Ok(Some(s.to_string())),
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
+            Err(HEGEL_E_INVALID_ARG)
+        }
+    }
+}
+
+/// Read an optional array of NUL-terminated UTF-8 strings. A NULL array
+/// means "absent"; a non-NULL array with `len == 0` means "present and
+/// empty" (for `categories`, an empty alphabet).
+unsafe fn optional_utf8_array_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const *const c_char,
+    len: usize,
+) -> Result<Option<Vec<String>>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        let entry = unsafe { *p.add(i) };
+        if entry.is_null() {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name}[{i}] is null"));
+            return Err(HEGEL_E_INVALID_ARG);
+        }
+        match unsafe { CStr::from_ptr(entry) }.to_str() {
+            Ok(s) => out.push(s.to_string()),
+            Err(_) => {
+                set_last_error(
+                    ctx,
+                    &format!("{fn_name}: {arg_name}[{i}] is not valid UTF-8"),
+                );
+                return Err(HEGEL_E_INVALID_ARG);
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Write a constructed string generator through `out_generator`, boxing it
+/// into a caller-owned handle.
+unsafe fn write_string_generator(
+    out_generator: *mut *mut HegelStringGenerator,
+    spec: crate::native::draws::StringSpec,
+) -> hegel_result_t {
+    let handle = Box::into_raw(Box::new(HegelStringGenerator { spec }));
+    unsafe { *out_generator = handle };
+    HEGEL_OK
+}
+
+/// Build a **text** string generator: strings with length in
+/// `[min_size, max_size]` whose characters are drawn from the described
+/// alphabet.
+///
+/// The alphabet starts from `codec`'s range — `"ascii"`, `"latin-1"` /
+/// `"iso-8859-1"`, or `"utf-8"` / NULL for all of Unicode — intersected
+/// with `[min_codepoint, max_codepoint]` (pass `0` and `UINT32_MAX` for no
+/// constraint; surrogates are always removed). `categories` restricts to
+/// the union of the named Unicode general categories (NULL for no
+/// restriction; a non-NULL empty list means an empty alphabet), and
+/// `exclude_categories` removes categories. `include_characters` /
+/// `exclude_characters` are NUL-terminated UTF-8 strings of individual
+/// characters unioned in / removed last (NULL for none).
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator`, `min_size > max_size`, an unknown codec or
+/// category, non-UTF-8 string arguments, include/exclude conflicts, or
+/// constraints that leave no characters while `max_size > 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_text(
+    ctx: *mut HegelContext,
+    min_size: u64,
+    max_size: u64,
+    codec: *const c_char,
+    min_codepoint: u32,
+    max_codepoint: u32,
+    categories: *const *const c_char,
+    categories_len: usize,
+    exclude_categories: *const *const c_char,
+    exclude_categories_len: usize,
+    include_characters: *const c_char,
+    exclude_characters: *const c_char,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_text: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    const FN: &str = "hegel_string_generator_text";
+    let codec = match unsafe { optional_utf8_arg(ctx, FN, "codec", codec) } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let categories =
+        match unsafe { optional_utf8_array_arg(ctx, FN, "categories", categories, categories_len) }
+        {
+            Ok(v) => v,
+            Err(rc) => return rc,
+        };
+    let exclude_categories = match unsafe {
+        optional_utf8_array_arg(
+            ctx,
+            FN,
+            "exclude_categories",
+            exclude_categories,
+            exclude_categories_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let include_characters =
+        match unsafe { optional_utf8_arg(ctx, FN, "include_characters", include_characters) } {
+            Ok(v) => v,
+            Err(rc) => return rc,
+        };
+    let exclude_characters =
+        match unsafe { optional_utf8_arg(ctx, FN, "exclude_characters", exclude_characters) } {
+            Ok(v) => v,
+            Err(rc) => return rc,
+        };
+    let alphabet = crate::native::draws::TextAlphabet {
+        codec,
+        min_codepoint,
+        max_codepoint: Some(max_codepoint),
+        categories,
+        exclude_categories,
+        include_characters,
+        exclude_characters,
+    };
+    match crate::native::draws::StringSpec::text(&alphabet, min_size as usize, max_size as usize)
+    {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Build a **regex** string generator: strings matching `pattern`
+/// (Python-`re` syntax). When `fullmatch` is true the whole string matches
+/// the pattern; otherwise the match may be padded on either side.
+/// `alphabet` — optional (NULL for none) — must be a **text** generator; its
+/// character set constrains the padding and wildcard characters.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator`, a NULL / non-UTF-8 / invalid `pattern`, or
+/// an `alphabet` that is not a text generator.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_regex(
+    ctx: *mut HegelContext,
+    pattern: *const c_char,
+    fullmatch: bool,
+    alphabet: *const HegelStringGenerator,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_regex: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    if pattern.is_null() {
+        set_last_error(ctx, "hegel_string_generator_regex: pattern is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Ok(pattern) = (unsafe { CStr::from_ptr(pattern) }).to_str() else {
+        set_last_error(ctx, "hegel_string_generator_regex: pattern is not valid UTF-8");
+        return HEGEL_E_INVALID_ARG;
+    };
+    let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &g.spec);
+    match crate::native::draws::StringSpec::regex(pattern, fullmatch, alphabet_spec) {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Build an **email** string generator producing RFC 5321/5322 addresses
+/// like `alice@example.com`.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_email(
+    ctx: *mut HegelContext,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_email: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::email()) }
+}
+
+/// Build a **URL** string generator producing RFC 3986 `http`/`https` URLs.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_url(
+    ctx: *mut HegelContext,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_url: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::url()) }
+}
+
+/// Build a **domain-name** string generator producing RFC 1035
+/// fully-qualified domain names of total length at most `max_length`
+/// (4..=255; RFC 1035 §2.3.4 allows 255).
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator` or a `max_length` that leaves no eligible
+/// top-level domains.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_domain(
+    ctx: *mut HegelContext,
+    max_length: u64,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_domain: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    match crate::native::draws::StringSpec::domain(max_length as usize) {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Release a string generator built by a `hegel_string_generator_*`
+/// constructor. Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+/// Each generator must be freed exactly once, and only after every draw
+/// using it has completed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_free(
+    ctx: *mut HegelContext,
+    generator: *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if generator.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `generator` came from `write_string_generator`'s Box::into_raw
+    // and is freed exactly once here.
+    drop(unsafe { Box::from_raw(generator) });
+    HEGEL_OK
+}
+
+/// An engine-allocated string buffer returned by `hegel_generate_string`.
+///
+/// `data` points to `len` bytes of UTF-8. The buffer is **not**
+/// NUL-terminated and may contain interior NUL bytes (the drawn alphabet
+/// can include U+0000), so it is not a C string — always use `len`. The
+/// caller owns the buffer and must release it with
+/// `hegel_generate_string_result_free` (freeing through any other allocator
+/// is undefined behaviour). `data` is never NULL after a successful draw,
+/// even for `len == 0`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_generate_string_result_t {
+    pub data: *mut c_char,
+    pub len: usize,
+}
+
+/// Draw a string described by `generator` (built with a
+/// `hegel_string_generator_*` constructor).
+///
+/// On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+/// caller owns (release with `hegel_generate_string_result_free`) and
+/// returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+/// budget is exhausted for this test case (the caller should abort the body
+/// and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+/// `HEGEL_E_ASSUME` when the draw rejected itself (e.g. an email exceeding
+/// the RFC length cap; discard the test case as invalid). Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `generator`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_result`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_string(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    generator: *const HegelStringGenerator,
+    out_result: *mut hegel_generate_string_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let Some(generator) = (unsafe { generator.as_ref() }) else {
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_result.is_null() {
+        set_last_error(ctx, "hegel_generate_string: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_string(&generator.spec) {
+        Ok(s) => {
+            let boxed = s.into_bytes().into_boxed_slice();
+            let len = boxed.len();
+            let data = Box::into_raw(boxed) as *mut c_char;
+            unsafe { *out_result = hegel_generate_string_result_t { data, len } };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Release a buffer returned by `hegel_generate_string` and reset the
+/// struct to `{NULL, 0}`. Safe to call with a NULL `result` or an
+/// already-freed (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_string_result_free(
+    ctx: *mut HegelContext,
+    result: *mut hegel_generate_string_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(result) = (unsafe { result.as_mut() }) else {
+        return HEGEL_OK;
+    };
+    if !result.data.is_null() {
+        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
+        // `hegel_generate_string` and are freed exactly once here (the
+        // struct is zeroed below, making a second call a no-op).
+        drop(unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                result.data as *mut u8,
+                result.len,
+            ))
         });
     }
     result.data = ptr::null_mut();

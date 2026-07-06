@@ -7,14 +7,19 @@
 
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelRun, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
-    hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_float,
-    hegel_generate_integer, hegel_generate_integer_big, hegel_mark_complete, hegel_next_test_case,
-    hegel_run_free, hegel_run_start, hegel_settings_free, hegel_settings_new,
-    hegel_settings_set_database, hegel_settings_set_test_cases, hegel_status_t,
+    HegelContext, HegelRun, HegelSettings, HegelStringGenerator, HegelTestCase,
+    hegel_context_free, hegel_context_last_error, hegel_context_new, hegel_generate_boolean,
+    hegel_generate_bytes, hegel_generate_bytes_result_free, hegel_generate_bytes_result_t,
+    hegel_generate_float, hegel_generate_integer, hegel_generate_integer_big,
+    hegel_generate_string, hegel_generate_string_result_free, hegel_generate_string_result_t,
+    hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_start,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_database,
+    hegel_settings_set_test_cases, hegel_status_t, hegel_string_generator_domain,
+    hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
+    hegel_string_generator_text, hegel_string_generator_url,
 };
 use std::ffi::CString;
+use std::os::raw::c_char;
 use std::ptr;
 
 fn ok(rc: hegel_c::hegel_result_t) {
@@ -612,6 +617,472 @@ fn bytes_draws_transfer_ownership_and_validate_arguments() {
         drain(ctx, run);
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+/// Build a default full-Unicode text generator with the given size bounds.
+unsafe fn text_generator(
+    ctx: *mut HegelContext,
+    min_size: u64,
+    max_size: u64,
+) -> *mut HegelStringGenerator {
+    let mut g: *mut HegelStringGenerator = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            hegel_string_generator_text(
+                ctx,
+                min_size,
+                max_size,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            )
+        },
+        HEGEL_OK
+    );
+    assert!(!g.is_null());
+    g
+}
+
+unsafe fn draw_string(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    g: *const HegelStringGenerator,
+) -> String {
+    let mut result = hegel_generate_string_result_t {
+        data: ptr::null_mut(),
+        len: 0,
+    };
+    assert_eq!(
+        unsafe { hegel_generate_string(ctx, tc, g, &mut result) },
+        HEGEL_OK
+    );
+    assert!(!result.data.is_null());
+    let s = String::from_utf8(
+        unsafe { std::slice::from_raw_parts(result.data as *const u8, result.len) }.to_vec(),
+    )
+    .unwrap();
+    unsafe { ok(hegel_generate_string_result_free(ctx, &mut result)) };
+    assert!(result.data.is_null());
+    s
+}
+
+#[test]
+fn text_generator_constructor_validates_and_draws() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                5,
+                4,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("min_size"));
+
+        let ebcdic = CString::new("ebcdic").unwrap();
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ebcdic.as_ptr(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invalid codec"));
+
+        let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                bad_utf8.as_ptr(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("codec is not valid UTF-8"));
+
+        let bad_include: [c_char; 2] = [0xFFu8 as c_char, 0];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                bad_include.as_ptr(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("include_characters is not valid UTF-8"));
+
+        let empty_cats: [*const c_char; 0] = [];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                empty_cats.as_ptr(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("No valid characters"));
+
+        let null_cat: [*const c_char; 1] = [ptr::null()];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                null_cat.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("categories[0] is null"));
+
+        let bad_cat: [*const c_char; 1] = [bad_utf8.as_ptr()];
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                bad_cat.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("categories[0] is not valid UTF-8"));
+
+        let ascii = CString::new("ascii").unwrap();
+        let nd = CString::new("Nd").unwrap();
+        let cats: [*const c_char; 1] = [nd.as_ptr()];
+        let exclude_zero = CString::new("0").unwrap();
+        let include_a = CString::new("a").unwrap();
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                1,
+                8,
+                ascii.as_ptr(),
+                0,
+                u32::MAX,
+                cats.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                include_a.as_ptr(),
+                exclude_zero.as_ptr(),
+                &mut g,
+            ),
+            HEGEL_OK
+        );
+
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 20));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let drawn = draw_string(ctx, tc, g);
+            let n = drawn.chars().count();
+            assert!((1..=8).contains(&n), "bad length: {drawn:?}");
+            for c in drawn.chars() {
+                assert!(
+                    c == 'a' || (c.is_ascii_digit() && c != '0'),
+                    "bad char {c:?} in {drawn:?}"
+                );
+            }
+            complete_valid(ctx, tc);
+        }
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_string_generator_free(ctx, g));
+        ok(hegel_string_generator_free(ctx, ptr::null_mut()));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn regex_email_url_domain_generators_draw_valid_values() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut regex_g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_regex(ctx, ptr::null(), false, ptr::null(), &mut regex_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("pattern is null"));
+        let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+        assert_eq!(
+            hegel_string_generator_regex(ctx, bad_utf8.as_ptr(), false, ptr::null(), &mut regex_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("pattern is not valid UTF-8"));
+        let unclosed = CString::new("(unclosed").unwrap();
+        assert_eq!(
+            hegel_string_generator_regex(ctx, unclosed.as_ptr(), false, ptr::null(), &mut regex_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invalid regex pattern"));
+        let pattern = CString::new("[ab]{2,4}").unwrap();
+        assert_eq!(
+            hegel_string_generator_regex(ctx, pattern.as_ptr(), false, ptr::null(), ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+
+        let mut email_g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_email(ctx, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(hegel_string_generator_email(ctx, &mut email_g), HEGEL_OK);
+
+        let mut url_g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_url(ctx, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(hegel_string_generator_url(ctx, &mut url_g), HEGEL_OK);
+
+        let mut domain_g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_domain(ctx, 255, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_string_generator_domain(ctx, 3, &mut domain_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("no eligible TLDs"));
+        assert_eq!(hegel_string_generator_domain(ctx, 255, &mut domain_g), HEGEL_OK);
+
+        assert_eq!(
+            hegel_string_generator_regex(ctx, pattern.as_ptr(), true, email_g, &mut regex_g),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("must be a text string generator"));
+        let alphabet = text_generator(ctx, 0, 10);
+        assert_eq!(
+            hegel_string_generator_regex(ctx, pattern.as_ptr(), true, alphabet, &mut regex_g),
+            HEGEL_OK
+        );
+
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 10));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let re = draw_string(ctx, tc, regex_g);
+            assert!(
+                (2..=4).contains(&re.len()) && re.chars().all(|c| c == 'a' || c == 'b'),
+                "regex draw {re:?} does not fullmatch [ab]{{2,4}}"
+            );
+
+            let url = draw_string(ctx, tc, url_g);
+            assert!(url.starts_with("http://") || url.starts_with("https://"));
+
+            let domain = draw_string(ctx, tc, domain_g);
+            assert!(domain.contains('.'));
+
+            let mut result = hegel_generate_string_result_t {
+                data: ptr::null_mut(),
+                len: 0,
+            };
+            match hegel_generate_string(ctx, tc, email_g, &mut result) {
+                HEGEL_OK => {
+                    let email = String::from_utf8(
+                        std::slice::from_raw_parts(result.data as *const u8, result.len).to_vec(),
+                    )
+                    .unwrap();
+                    assert!(email.contains('@'), "no @ in {email:?}");
+                    ok(hegel_generate_string_result_free(ctx, &mut result));
+                    ok(hegel_mark_complete(
+                        ctx,
+                        tc,
+                        hegel_status_t::HEGEL_STATUS_VALID,
+                        ptr::null(),
+                    ));
+                }
+                HEGEL_E_ASSUME => {
+                    ok(hegel_mark_complete(
+                        ctx,
+                        tc,
+                        hegel_status_t::HEGEL_STATUS_INVALID,
+                        ptr::null(),
+                    ));
+                }
+                other => panic!("unexpected rc from email draw: {other:?}"),
+            }
+            ok(hegel_c::hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+
+        ok(hegel_string_generator_free(ctx, regex_g));
+        ok(hegel_string_generator_free(ctx, email_g));
+        ok(hegel_string_generator_free(ctx, url_g));
+        ok(hegel_string_generator_free(ctx, domain_g));
+        ok(hegel_string_generator_free(ctx, alphabet));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn generate_string_validates_handles_and_reports_stop_test() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let g = text_generator(ctx, 0, 10);
+        let mut result = hegel_generate_string_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(
+            hegel_generate_string(ctx, ptr::null_mut(), g, &mut result),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 1));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert_eq!(
+            hegel_generate_string(ctx, tc, ptr::null(), &mut result),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_generate_string(ctx, tc, g, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        let mut bytes_result = hegel_generate_bytes_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        loop {
+            match hegel_generate_bytes(ctx, tc, 1000, 10000, &mut bytes_result) {
+                HEGEL_OK => ok(hegel_generate_bytes_result_free(ctx, &mut bytes_result)),
+                HEGEL_E_STOP_TEST => break,
+                other => panic!("unexpected rc: {other:?}"),
+            }
+        }
+        assert_eq!(
+            hegel_generate_string(ctx, tc, g, &mut result),
+            HEGEL_E_STOP_TEST
+        );
+
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            ptr::null(),
+        ));
+        ok(hegel_c::hegel_test_case_free(ctx, tc));
+        drain(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_string_generator_free(ctx, g));
+
+        ok(hegel_generate_string_result_free(ctx, ptr::null_mut()));
+        ok(hegel_generate_string_result_free(ctx, &mut result));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }

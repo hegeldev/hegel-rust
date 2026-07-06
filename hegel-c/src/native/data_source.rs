@@ -209,6 +209,13 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| crate::native::draws::generate_float(ntc, spec))
     }
 
+    fn generate_string(
+        &self,
+        spec: &crate::native::draws::StringSpec,
+    ) -> Result<String, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::generate_string(ntc, spec))
+    }
+
     fn generate_bytes(
         &self,
         min_size: usize,

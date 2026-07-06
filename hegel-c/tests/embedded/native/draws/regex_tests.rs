@@ -1,4 +1,4 @@
-//! Embedded tests for the SRE-style matcher in `src/native/schema/regex.rs`.
+//! Embedded tests for the SRE-style matcher in `src/native/draws/regex.rs`.
 //!
 //! The matcher (`match_seq`) is internal: it's only exercised through
 //! negative-lookahead validation, where the body shape determines which
@@ -682,23 +682,17 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
 }
 
 #[test]
-fn interpret_regex_missing_pattern_is_invalid_argument() {
-    use crate::cbor_utils::cbor_map;
+fn generate_regex_unparseable_pattern_is_invalid_argument() {
     let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    let schema = cbor_map! { "type" => "regex" };
-    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
+    let err = generate_regex(&mut ntc, "(unclosed", false, &None).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
-    assert!(err.to_string().contains("pattern"));
+    assert!(err.to_string().contains("invalid regex pattern"));
 }
 
 #[test]
-fn interpret_regex_unparseable_pattern_is_invalid_argument() {
-    use crate::cbor_utils::cbor_map;
-    let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    let schema = cbor_map! { "type" => "regex", "pattern" => "(unclosed" };
-    let err = interpret_regex(&mut ntc, &schema).unwrap_err();
-    assert!(matches!(err, EngineError::InvalidArgument(_)));
-    assert!(err.to_string().contains("invalid regex pattern"));
+fn validate_pattern_matches_generate() {
+    assert!(validate_pattern("(unclosed").is_err());
+    assert!(validate_pattern("a+b?").is_ok());
 }
 
 fn ignorecase_state() -> GenState {
@@ -763,20 +757,9 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 }
 
 #[test]
-fn interpret_regex_handles_huge_character_class_ranges() {
-    use crate::cbor_utils::cbor_map;
+fn generate_regex_handles_huge_character_class_ranges() {
     use crate::native::rng::EngineRng;
-    let schema = cbor_map! {
-        "type" => "regex",
-        "pattern" => "[\\x20-\\U0010FFFF]"
-    };
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let v = interpret_regex(&mut ntc, &schema).unwrap();
-    let Value::Tag(91, inner) = v else {
-        panic!("expected tag-91 string, got {v:?}")
-    };
-    let Value::Bytes(bytes) = *inner else {
-        panic!("expected byte payload")
-    };
-    assert!(!bytes.is_empty());
+    let s = generate_regex(&mut ntc, "[\\x20-\\U0010FFFF]", false, &None).unwrap();
+    assert!(!s.is_empty());
 }
