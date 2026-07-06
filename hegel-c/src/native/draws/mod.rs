@@ -46,10 +46,11 @@ pub struct FloatSpec {
 
 /// Draw a float according to `spec`, validating the spec first.
 ///
-/// Mirrors Hypothesis's float strategy handling: exclusive bounds step to
-/// the next representable value at the requested width, width-32 draws clamp
-/// finite bounds into the `f32` range when infinities are disallowed, and a
-/// finite width-32 result is rounded through `f32`.
+/// Mirrors Hypothesis's float strategy handling: width-32 bounds must be
+/// exactly representable as `f32`, exclusive bounds step to the next
+/// representable value at the requested width, width-32 draws clamp
+/// infinite bounds into the `f32` range when infinities are disallowed,
+/// and a finite width-32 result is rounded through `f32`.
 pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64, EngineError> {
     if spec.width != 32 && spec.width != 64 {
         return Err(EngineError::InvalidArgument(format!(
@@ -67,6 +68,15 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
         return Err(EngineError::InvalidArgument(
             "float bounds must not be NaN".to_string(),
         ));
+    }
+    if spec.width == 32 {
+        for (name, bound) in [("min_value", spec.min_value), ("max_value", spec.max_value)] {
+            if f64::from(bound as f32) != bound {
+                return Err(EngineError::InvalidArgument(format!(
+                    "{name} ({bound}) cannot be exactly represented as a float of width 32"
+                )));
+            }
+        }
     }
     let mut min_value = spec.min_value;
     let mut max_value = spec.max_value;

@@ -1169,13 +1169,15 @@ hegel_result_t hegel_generate_integer_big(hegel_context_t *ctx,
  value at the requested width. Nonzero magnitudes below
  `smallest_nonzero_magnitude` are never drawn — it must be positive and
  finite; pass `5e-324` (width 64) or the smallest `float` subnormal
- (width 32) for no restriction. Finite width-32 results are exactly
+ (width 32) for no restriction. Width-32 bounds must be exactly
+ representable as `float`, and finite width-32 results are exactly
  representable as `float`.
 
  On success writes the drawn value into `*out_value` and returns
  `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
  is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
- `out_value`, an unsupported width, NaN bounds, an invalid
+ `out_value`, an unsupported width, NaN bounds, width-32 bounds that are
+ not exactly representable as `float`, an invalid
  `smallest_nonzero_magnitude`, or an empty range; the diagnostic is in
  `hegel_context_last_error`.
  */
