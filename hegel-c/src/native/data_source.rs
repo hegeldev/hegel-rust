@@ -189,6 +189,42 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| schema::interpret_schema(ntc, schema))
     }
 
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError> {
+        self.with_ntc(|ntc| {
+            if min_value > max_value {
+                return Err(EngineError::InvalidArgument(format!(
+                    "generate_integer requires min_value <= max_value, \
+                     got [{min_value:?}, {max_value:?}]"
+                )));
+            }
+            ntc.draw_integer(min_value.clone(), max_value.clone())
+        })
+    }
+
+    fn generate_float(&self, spec: &crate::native::draws::FloatSpec) -> Result<f64, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::generate_float(ntc, spec))
+    }
+
+    fn generate_bytes(
+        &self,
+        min_size: usize,
+        max_size: usize,
+    ) -> Result<Vec<u8>, DataSourceError> {
+        self.with_ntc(|ntc| {
+            if min_size > max_size {
+                return Err(EngineError::InvalidArgument(format!(
+                    "generate_bytes requires min_size <= max_size, \
+                     got [{min_size}, {max_size}]"
+                )));
+            }
+            ntc.draw_bytes(min_size, max_size)
+        })
+    }
+
     fn start_span(&self, label: u64) -> Result<(), DataSourceError> {
         self.with_ntc(|ntc| {
             ntc.start_span(label);
@@ -284,21 +320,21 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| {
             if !(0.0..=1.0).contains(&p) {
                 return Err(EngineError::InvalidArgument(format!(
-                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
+                    "generate_boolean(p = {p}) requires a probability in [0.0, 1.0]"
                 )));
             }
             if forced == Some(true) && p == 0.0 {
                 return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
+                    "generate_boolean: cannot force true when p = 0.0".to_string(),
                 ));
             }
             if forced == Some(false) && p == 1.0 {
                 return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
+                    "generate_boolean: cannot force false when p = 1.0".to_string(),
                 ));
             }
             ntc.weighted_precise(p, forced)

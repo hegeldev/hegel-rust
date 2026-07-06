@@ -480,6 +480,19 @@ typedef struct hegel_settings_t hegel_settings_t;
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
 
+/*
+ An engine-allocated byte buffer returned by `hegel_generate_bytes`.
+
+ The caller owns the buffer and must release it with
+ `hegel_generate_bytes_result_free` (freeing through any other allocator
+ is undefined behaviour). `data` is never NULL after a successful draw,
+ even for `len == 0`.
+ */
+typedef struct {
+    uint8_t *data;
+    size_t len;
+} hegel_generate_bytes_result_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -990,12 +1003,118 @@ hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
  `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
  diagnostic is in `hegel_context_last_error`.
  */
-hegel_result_t hegel_primitive_boolean(hegel_context_t *ctx,
-                                       hegel_test_case_t *tc,
-                                       double p,
-                                       bool forced,
-                                       bool has_forced,
-                                       bool *out_value);
+hegel_result_t hegel_generate_boolean(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      double p,
+                                      bool forced,
+                                      bool has_forced,
+                                      bool *out_value);
+
+/*
+ Draw an integer in `[min_value, max_value]` (both inclusive, both
+ required). The engine biases toward boundary values and shrinks toward
+ zero. For bounds outside the `int64_t` range use
+ `hegel_generate_integer_big`.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case (the caller should abort the body and
+ call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_value` or `min_value > max_value`;
+ the diagnostic is in `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_integer(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      int64_t min_value,
+                                      int64_t max_value,
+                                      int64_t *out_value);
+
+/*
+ Draw an arbitrary-precision integer in `[min_value, max_value]`.
+
+ Bounds and result are two's-complement **little-endian** signed byte
+ buffers (the natural encoding of Go's `math/big` `FillBytes` reversed, or
+ Rust's `i128::to_le_bytes` for fixed-width values). Both bounds are
+ required and must be non-empty.
+
+ On success writes the drawn value's two's-complement little-endian bytes
+ into `out_value` (capacity `out_value_cap`), its length into
+ `*out_value_len`, and returns `HEGEL_OK`. A value in range never needs
+ more bytes than the longer of the two bound encodings, so passing
+ `out_value_cap >= max(min_value_len, max_value_len)` always succeeds.
+ Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+ for this test case. Returns `HEGEL_E_INVALID_ARG` for NULL or empty
+ bounds, NULL out parameters, `min_value > max_value`, or an `out_value`
+ buffer too small for the drawn value; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_integer_big(hegel_context_t *ctx,
+                                          hegel_test_case_t *tc,
+                                          const uint8_t *min_value,
+                                          size_t min_value_len,
+                                          const uint8_t *max_value,
+                                          size_t max_value_len,
+                                          uint8_t *out_value,
+                                          size_t out_value_cap,
+                                          size_t *out_value_len);
+
+/*
+ Draw a float of the given `width` (32 or 64) in
+ `[min_value, max_value]`.
+
+ Pass `-INFINITY` / `INFINITY` for unbounded ends. NaN is drawn only when
+ `allow_nan` is set; infinities only when `allow_infinity` is set and the
+ relevant endpoint is unbounded. `exclude_min` / `exclude_max` make the
+ corresponding bound exclusive by stepping it to the next representable
+ value at the requested width. Nonzero magnitudes below
+ `smallest_nonzero_magnitude` are never drawn — it must be positive and
+ finite; pass `5e-324` (width 64) or the smallest `float` subnormal
+ (width 32) for no restriction. Finite width-32 results are exactly
+ representable as `float`.
+
+ On success writes the drawn value into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+ `out_value`, an unsupported width, NaN bounds, an invalid
+ `smallest_nonzero_magnitude`, or an empty range; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_float(hegel_context_t *ctx,
+                                    hegel_test_case_t *tc,
+                                    uint32_t width,
+                                    double min_value,
+                                    double max_value,
+                                    bool allow_nan,
+                                    bool allow_infinity,
+                                    bool exclude_min,
+                                    bool exclude_max,
+                                    double smallest_nonzero_magnitude,
+                                    double *out_value);
+
+/*
+ Draw a byte string with length in `[min_size, max_size]` (both
+ inclusive).
+
+ On success fills `*out_result` with an engine-allocated buffer the caller
+ owns (release with `hegel_generate_bytes_result_free`) and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+ `out_result` or `min_size > max_size`; the diagnostic is in
+ `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_bytes(hegel_context_t *ctx,
+                                    hegel_test_case_t *tc,
+                                    uint64_t min_size,
+                                    uint64_t max_size,
+                                    hegel_generate_bytes_result_t *out_result);
+
+/*
+ Release a buffer returned by `hegel_generate_bytes` and reset the struct
+ to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+ (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+ */
+hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
+                                                hegel_generate_bytes_result_t *result);
 
 /*
  Record a numeric observation under `label` for the engine's

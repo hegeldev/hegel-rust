@@ -207,7 +207,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
-            primitive_boolean: lib.get(b"hegel_primitive_boolean\0").unwrap(),
+            primitive_boolean: lib.get(b"hegel_generate_boolean\0").unwrap(),
             target: lib.get(b"hegel_target\0").unwrap(),
             collection_more: lib.get(b"hegel_collection_more\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
@@ -1160,7 +1160,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
 }
 
 #[test]
-fn libhegel_primitive_boolean_draws_and_forces() {
+fn libhegel_generate_boolean_draws_and_forces() {
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -1235,7 +1235,7 @@ fn libhegel_primitive_boolean_draws_and_forces() {
 }
 
 #[test]
-fn libhegel_primitive_boolean_rejects_invalid_arguments() {
+fn libhegel_generate_boolean_rejects_invalid_arguments() {
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 

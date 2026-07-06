@@ -58,6 +58,7 @@ pub mod __bench {
 
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
+use crate::native::bignum::BigInt;
 use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call.
@@ -2012,7 +2013,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
 /// `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
 /// diagnostic is in `hegel_context_last_error`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_primitive_boolean(
+pub unsafe extern "C" fn hegel_generate_boolean(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     p: f64,
@@ -2026,20 +2027,280 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
         Err(rc) => return rc,
     };
     if out_value.is_null() {
-        set_last_error(ctx, "hegel_primitive_boolean: out parameter is null");
+        set_last_error(ctx, "hegel_generate_boolean: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc
-        .family
-        .ds
-        .primitive_boolean(p, has_forced.then_some(forced))
-    {
+    match tc.stream.generate_boolean(p, has_forced.then_some(forced)) {
         Ok(v) => {
             unsafe { *out_value = v };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
     }
+}
+
+/// Draw an integer in `[min_value, max_value]` (both inclusive, both
+/// required). The engine biases toward boundary values and shrinks toward
+/// zero. For bounds outside the `int64_t` range use
+/// `hegel_generate_integer_big`.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case (the caller should abort the body and
+/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_value` or `min_value > max_value`;
+/// the diagnostic is in `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_integer(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: i64,
+    max_value: i64,
+    out_value: *mut i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error(ctx, "hegel_generate_integer: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc
+        .stream
+        .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
+    {
+        Ok(v) => {
+            unsafe {
+                *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds")
+            };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw an arbitrary-precision integer in `[min_value, max_value]`.
+///
+/// Bounds and result are two's-complement **little-endian** signed byte
+/// buffers (the natural encoding of Go's `math/big` `FillBytes` reversed, or
+/// Rust's `i128::to_le_bytes` for fixed-width values). Both bounds are
+/// required and must be non-empty.
+///
+/// On success writes the drawn value's two's-complement little-endian bytes
+/// into `out_value` (capacity `out_value_cap`), its length into
+/// `*out_value_len`, and returns `HEGEL_OK`. A value in range never needs
+/// more bytes than the longer of the two bound encodings, so passing
+/// `out_value_cap >= max(min_value_len, max_value_len)` always succeeds.
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case. Returns `HEGEL_E_INVALID_ARG` for NULL or empty
+/// bounds, NULL out parameters, `min_value > max_value`, or an `out_value`
+/// buffer too small for the drawn value; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_integer_big(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: *const u8,
+    min_value_len: usize,
+    max_value: *const u8,
+    max_value_len: usize,
+    out_value: *mut u8,
+    out_value_cap: usize,
+    out_value_len: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if min_value.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: min_value pointer is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if max_value.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: max_value pointer is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if min_value_len == 0 || max_value_len == 0 {
+        set_last_error(
+            ctx,
+            "hegel_generate_integer_big: bound encodings must not be empty",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    if out_value.is_null() || out_value_len.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let min_bytes = unsafe { std::slice::from_raw_parts(min_value, min_value_len) };
+    let max_bytes = unsafe { std::slice::from_raw_parts(max_value, max_value_len) };
+    let min = BigInt::from_signed_bytes_le(min_bytes);
+    let max = BigInt::from_signed_bytes_le(max_bytes);
+    match tc.stream.generate_integer(&min, &max) {
+        Ok(v) => {
+            let bytes = v.to_signed_bytes_le();
+            if bytes.len() > out_value_cap {
+                set_last_error(
+                    ctx,
+                    &format!(
+                        "hegel_generate_integer_big: out buffer too small \
+                         (need {}, have {})",
+                        bytes.len(),
+                        out_value_cap
+                    ),
+                );
+                return HEGEL_E_INVALID_ARG;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_value, bytes.len());
+                *out_value_len = bytes.len();
+            }
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw a float of the given `width` (32 or 64) in
+/// `[min_value, max_value]`.
+///
+/// Pass `-INFINITY` / `INFINITY` for unbounded ends. NaN is drawn only when
+/// `allow_nan` is set; infinities only when `allow_infinity` is set and the
+/// relevant endpoint is unbounded. `exclude_min` / `exclude_max` make the
+/// corresponding bound exclusive by stepping it to the next representable
+/// value at the requested width. Nonzero magnitudes below
+/// `smallest_nonzero_magnitude` are never drawn — it must be positive and
+/// finite; pass `5e-324` (width 64) or the smallest `float` subnormal
+/// (width 32) for no restriction. Finite width-32 results are exactly
+/// representable as `float`.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_value`, an unsupported width, NaN bounds, an invalid
+/// `smallest_nonzero_magnitude`, or an empty range; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_float(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    width: u32,
+    min_value: f64,
+    max_value: f64,
+    allow_nan: bool,
+    allow_infinity: bool,
+    exclude_min: bool,
+    exclude_max: bool,
+    smallest_nonzero_magnitude: f64,
+    out_value: *mut f64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error(ctx, "hegel_generate_float: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let spec = crate::native::draws::FloatSpec {
+        width,
+        min_value,
+        max_value,
+        allow_nan,
+        allow_infinity,
+        exclude_min,
+        exclude_max,
+        smallest_nonzero_magnitude,
+    };
+    match tc.stream.generate_float(&spec) {
+        Ok(v) => {
+            unsafe { *out_value = v };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// An engine-allocated byte buffer returned by `hegel_generate_bytes`.
+///
+/// The caller owns the buffer and must release it with
+/// `hegel_generate_bytes_result_free` (freeing through any other allocator
+/// is undefined behaviour). `data` is never NULL after a successful draw,
+/// even for `len == 0`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_generate_bytes_result_t {
+    pub data: *mut u8,
+    pub len: usize,
+}
+
+/// Draw a byte string with length in `[min_size, max_size]` (both
+/// inclusive).
+///
+/// On success fills `*out_result` with an engine-allocated buffer the caller
+/// owns (release with `hegel_generate_bytes_result_free`) and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_result` or `min_size > max_size`; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_bytes(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_size: u64,
+    max_size: u64,
+    out_result: *mut hegel_generate_bytes_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_result.is_null() {
+        set_last_error(ctx, "hegel_generate_bytes: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc
+        .stream
+        .generate_bytes(min_size as usize, max_size as usize)
+    {
+        Ok(v) => {
+            let boxed = v.into_boxed_slice();
+            let len = boxed.len();
+            let data = Box::into_raw(boxed) as *mut u8;
+            unsafe { *out_result = hegel_generate_bytes_result_t { data, len } };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Release a buffer returned by `hegel_generate_bytes` and reset the struct
+/// to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+/// (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_bytes_result_free(
+    ctx: *mut HegelContext,
+    result: *mut hegel_generate_bytes_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(result) = (unsafe { result.as_mut() }) else {
+        return HEGEL_OK;
+    };
+    if !result.data.is_null() {
+        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
+        // `hegel_generate_bytes` and are freed exactly once here (the struct
+        // is zeroed below, making a second call a no-op).
+        drop(unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(result.data, result.len))
+        });
+    }
+    result.data = ptr::null_mut();
+    result.len = 0;
+    HEGEL_OK
 }
 
 /// Record a numeric observation under `label` for the engine's

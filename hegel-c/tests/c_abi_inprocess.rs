@@ -15,7 +15,7 @@ use hegel_c::{
     hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
     hegel_failure_reproduction_blob, hegel_generate, hegel_label_t, hegel_mark_complete,
     hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_primitive_boolean,
+    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_generate_boolean,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
     hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
@@ -1029,9 +1029,9 @@ fn primitives_after_overrun_all_report_stop_test() {
 
 /// Exercise the state-machine and weighted-boolean C-ABI entry points
 /// (`hegel_new_state_machine`, `hegel_state_machine_next_rule`,
-/// `hegel_primitive_boolean`) in-process: the invalid-handle and
+/// `hegel_generate_boolean`) in-process: the invalid-handle and
 /// argument-validation paths, plus the happy paths. hegeltest's frontend
-/// reaches booleans through schemas rather than `hegel_primitive_boolean`, and
+/// reaches booleans through schemas rather than `hegel_generate_boolean`, and
 /// the smoke test that drives these over dlopen doesn't contribute coverage,
 /// so they are measured here.
 #[test]
@@ -1053,7 +1053,7 @@ fn state_machine_and_primitive_boolean_paths() {
         );
         let mut bv = false;
         assert_eq!(
-            hegel_primitive_boolean(ctx, null_tc, 0.5, false, false, &mut bv),
+            hegel_generate_boolean(ctx, null_tc, 0.5, false, false, &mut bv),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -1109,15 +1109,15 @@ fn state_machine_and_primitive_boolean_paths() {
         assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
 
         assert_eq!(
-            hegel_primitive_boolean(ctx, tc, 0.5, false, false, &mut bv),
+            hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),
             HEGEL_OK
         );
         assert_eq!(
-            hegel_primitive_boolean(ctx, tc, 0.5, false, false, ptr::null_mut()),
+            hegel_generate_boolean(ctx, tc, 0.5, false, false, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_primitive_boolean(ctx, tc, 2.0, false, false, &mut bv),
+            hegel_generate_boolean(ctx, tc, 2.0, false, false, &mut bv),
             HEGEL_E_INVALID_ARG
         );
 

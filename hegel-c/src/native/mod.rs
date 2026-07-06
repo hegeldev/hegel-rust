@@ -5,6 +5,7 @@ pub mod core;
 pub mod data_source;
 pub mod data_tree;
 pub mod database;
+pub mod draws;
 pub mod floats;
 pub mod intervalsets;
 pub mod re;

@@ -1648,7 +1648,7 @@ impl NativeTestCase {
     /// Like [`Self::weighted`], but samples with the full-precision
     /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
     /// sampler's 1/256 floor (e.g. a stateful stop signal at `p = 2^-16`) are
-    /// honored. Routed here from `primitive_boolean`.
+    /// honored. Routed here from `generate_boolean`.
     pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         self.weighted_with(p, forced, weighted_boolean_sample_precise)
     }

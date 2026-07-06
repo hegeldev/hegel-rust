@@ -1,5 +1,8 @@
 use ciborium::Value;
 
+use crate::native::bignum::BigInt;
+use crate::native::draws::FloatSpec;
+
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 ///
 /// Not part of the public API: this is an implementation detail of the
@@ -46,6 +49,25 @@ impl std::error::Error for DataSourceError {}
 pub trait DataSource: Send + Sync {
     /// Send a CBOR schema and receive a generated CBOR value.
     fn generate(&self, schema: &Value) -> Result<Value, DataSourceError>;
+
+    /// Draw an integer uniformly-ish from `[min_value, max_value]`, biased
+    /// toward boundary values as the engine sees fit. Errors with
+    /// `InvalidArgument` when `min_value > max_value`.
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError>;
+
+    /// Draw a float according to `spec` (bounds, width, NaN/infinity policy,
+    /// exclusive-bound handling). Errors with `InvalidArgument` for an
+    /// invalid spec.
+    fn generate_float(&self, spec: &FloatSpec) -> Result<f64, DataSourceError>;
+
+    /// Draw a byte string with length in `[min_size, max_size]`. Errors with
+    /// `InvalidArgument` when `min_size > max_size`.
+    fn generate_bytes(&self, min_size: usize, max_size: usize)
+    -> Result<Vec<u8>, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;
@@ -94,7 +116,7 @@ pub trait DataSource: Send + Sync {
     /// If `forced` is `Some`, the choice is still recorded (so replay and
     /// shrinking stay aligned) but the value is forced and no entropy is
     /// consumed.
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;

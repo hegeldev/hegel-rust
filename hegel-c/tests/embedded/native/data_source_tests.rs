@@ -134,43 +134,43 @@ fn state_machine_next_rule_on_exhausted_source_stops_test() {
 }
 
 #[test]
-fn primitive_boolean_forced_returns_forced_value() {
+fn generate_boolean_forced_returns_forced_value() {
     let (ds, _handle) = random_source();
-    assert!(ds.primitive_boolean(0.5, Some(true)).unwrap());
-    assert!(!ds.primitive_boolean(0.5, Some(false)).unwrap());
+    assert!(ds.generate_boolean(0.5, Some(true)).unwrap());
+    assert!(!ds.generate_boolean(0.5, Some(false)).unwrap());
 }
 
 #[test]
-fn primitive_boolean_boundary_p_auto_forces() {
+fn generate_boolean_boundary_p_auto_forces() {
     let (ds, _handle) = random_source();
-    assert!(!ds.primitive_boolean(0.0, None).unwrap());
-    assert!(ds.primitive_boolean(1.0, None).unwrap());
+    assert!(!ds.generate_boolean(0.0, None).unwrap());
+    assert!(ds.generate_boolean(1.0, None).unwrap());
 }
 
 #[test]
-fn primitive_boolean_invalid_p_maps_to_invalid_argument_without_aborting() {
+fn generate_boolean_invalid_p_maps_to_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
     for p in [f64::NAN, -0.5, 1.5] {
-        let err = ds.primitive_boolean(p, None).unwrap_err();
+        let err = ds.generate_boolean(p, None).unwrap_err();
         assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     }
     assert!(!ds.test_aborted());
-    assert!(ds.primitive_boolean(0.5, None).is_ok());
+    assert!(ds.generate_boolean(0.5, None).is_ok());
 }
 
 #[test]
-fn primitive_boolean_forced_contradicting_boundary_is_invalid_argument() {
+fn generate_boolean_forced_contradicting_boundary_is_invalid_argument() {
     let (ds, _handle) = random_source();
     assert!(matches!(
-        ds.primitive_boolean(0.0, Some(true)),
+        ds.generate_boolean(0.0, Some(true)),
         Err(DataSourceError::InvalidArgument(_))
     ));
     assert!(matches!(
-        ds.primitive_boolean(1.0, Some(false)),
+        ds.generate_boolean(1.0, Some(false)),
         Err(DataSourceError::InvalidArgument(_))
     ));
-    assert!(ds.primitive_boolean(1.0, Some(true)).unwrap());
-    assert!(!ds.primitive_boolean(0.0, Some(false)).unwrap());
+    assert!(ds.generate_boolean(1.0, Some(true)).unwrap());
+    assert!(!ds.generate_boolean(0.0, Some(false)).unwrap());
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
     assert!(ds.new_collection(0, None).is_err());
     assert!(ds.collection_more(0).is_err());
     assert!(ds.collection_reject(0, None).is_err());
-    assert!(ds.primitive_boolean(0.5, None).is_err());
+    assert!(ds.generate_boolean(0.5, None).is_err());
     assert!(ds.new_pool().is_err());
     assert!(ds.pool_add(0).is_err());
     assert!(ds.pool_generate(0, false).is_err());
