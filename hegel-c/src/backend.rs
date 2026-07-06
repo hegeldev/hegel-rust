@@ -53,6 +53,17 @@ pub trait DataSource: Send + Sync {
     /// End the current span. If `discard` is true, the span's choices are discarded.
     fn stop_span(&self, discard: bool) -> Result<(), DataSourceError>;
 
+    /// Create an independent cloned stream of this test case and return a
+    /// data source for it.
+    ///
+    /// The clone occupies one choice position in this stream and then
+    /// generates from its own independent choice sequence, so the clone and
+    /// every other stream of the family can be driven concurrently from
+    /// different threads without perturbing each other, deterministically
+    /// under replay. Completion ([`Self::mark_complete`]) remains
+    /// family-wide.
+    fn clone_stream(&self) -> Result<Box<dyn DataSource + Send + Sync>, DataSourceError>;
+
     /// Create a new collection. Returns an opaque handle.
     fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError>;
 

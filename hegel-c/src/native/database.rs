@@ -163,7 +163,8 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 /// Format:
 /// - 4-byte little-endian u32: number of choices
 /// - For each choice:
-///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String
+///   - 1-byte type tag: 0=Integer, 1=Boolean, 2=Float, 3=Bytes, 4=String,
+///     5=Clone
 ///   - Value bytes:
 ///     - Integer: a 1-byte width sub-tag (always 10=BigInt for new writes;
 ///       sub-tags 0–9 are still accepted on read for backward compat)
@@ -175,15 +176,26 @@ pub(super) fn fnv_hex(s: &[u8]) -> String {
 ///     - Bytes: 4 bytes (u32 little-endian length) followed by the raw bytes
 ///     - String: 4 bytes (u32 little-endian codepoint count) followed by
 ///       4 bytes per codepoint (u32 little-endian)
+///     - Clone: the cloned stream's child choice values in this same
+///       count-then-entries layout, recursively. Only the values are
+///       persisted — spans and kinds are recreated on replay.
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
-    let count = choices.len() as u32;
-    buf.extend_from_slice(&count.to_le_bytes());
+    serialize_choice_list(&mut buf, choices.len(), choices.iter());
+    buf
+}
+
+fn serialize_choice_list<'a>(
+    buf: &mut Vec<u8>,
+    count: usize,
+    choices: impl Iterator<Item = &'a ChoiceValue>,
+) {
+    buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
         match choice {
             ChoiceValue::Integer(v) => {
                 buf.push(0);
-                serialize_any_integer(&mut buf, v);
+                serialize_any_integer(buf, v);
             }
             ChoiceValue::Boolean(v) => {
                 buf.push(1);
@@ -207,9 +219,12 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
                     buf.extend_from_slice(&cp.to_le_bytes());
                 }
             }
+            ChoiceValue::Clone(record) => {
+                buf.push(5);
+                serialize_choice_list(buf, record.len(), record.values());
+            }
         }
     }
-    buf
 }
 
 /// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
@@ -263,15 +278,29 @@ fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> 
 
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
-/// Returns `None` if the data is truncated, malformed, or contains an
-/// unknown type tag (defensive against filesystem corruption).
+/// Returns `None` if the data is truncated, malformed, contains an unknown
+/// type tag, or nests clone values deeper than
+/// [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH) (defensive
+/// against filesystem corruption).
 pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
-    if bytes.len() < 4 {
+    let (choices, _) = deserialize_choice_list(bytes, 0, 0)?;
+    Some(choices)
+}
+
+fn deserialize_choice_list(
+    bytes: &[u8],
+    start: usize,
+    depth: usize,
+) -> Option<(Vec<ChoiceValue>, usize)> {
+    if depth > crate::native::core::MAX_CLONE_DEPTH {
         return None;
     }
-    let count = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    if start + 4 > bytes.len() {
+        return None;
+    }
+    let count = u32::from_le_bytes(bytes[start..start + 4].try_into().ok()?) as usize;
     let mut choices = Vec::with_capacity(count.min(bytes.len()));
-    let mut pos = 4;
+    let mut pos = start + 4;
     for _ in 0..count {
         if pos >= bytes.len() {
             return None;
@@ -331,10 +360,18 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
                 }
                 choices.push(ChoiceValue::String(cps));
             }
+            5 => {
+                pos += 1;
+                let (children, new_pos) = deserialize_choice_list(bytes, pos, depth + 1)?;
+                pos = new_pos;
+                choices.push(ChoiceValue::Clone(std::sync::Arc::new(
+                    crate::native::core::CloneRecord::from_values(children),
+                )));
+            }
             _ => return None,
         }
     }
-    Some(choices)
+    Some((choices, pos))
 }
 
 #[cfg(test)]

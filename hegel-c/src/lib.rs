@@ -117,8 +117,9 @@ pub enum hegel_result_t {
     /// A single test-case handle was used from two threads at once. Each
     /// handle may be driven by at most one thread at a time; to generate from
     /// several threads, `hegel_test_case_clone` the handle and give each
-    /// thread its own clone. (Clones share the underlying test case but have
-    /// independent per-handle locks, so they may be driven concurrently.)
+    /// thread its own clone. (Clones share the underlying test case's
+    /// outcome and budgets but generate from independent streams, so they
+    /// may be driven concurrently and deterministically.)
     /// Returned by the draw primitives; `hegel_mark_complete` instead waits
     /// for the in-flight operation, because completion always succeeds under
     /// first-caller-wins.
@@ -432,21 +433,22 @@ enum WorkerMessage {
 /// `hegel_next_test_case` / `hegel_test_case_from_blob` and every
 /// `hegel_test_case_clone` descended from it.
 ///
-/// The data source, completion status, and run ack are family-wide: marking
-/// any handle complete marks the whole family, and the underlying
-/// `DataSource` is the single connection all handles draw from. Concurrent
-/// draws from two clones are memory-safe (the `NativeDataSource` serialises
-/// internally) but currently non-deterministic — making concurrent clone use
-/// robust is future work.
+/// The completion status and run ack are family-wide: marking any handle
+/// complete marks the whole family. Each handle draws from its own *stream*
+/// data source (see [`HegelTestCase::stream`]) — the root handle from the
+/// family's root stream, each clone from the independent stream
+/// `hegel_test_case_clone` created for it — so concurrent draws on
+/// different handles generate independently and deterministically.
 ///
 /// Every handle owns one `Arc<FamilyShared>` reference; the run keeps its own
 /// reference too. The `Arc` strong count is the family's reference count, so
-/// the data source is dropped only once every handle has been freed and the
+/// the engine state is dropped only once every handle has been freed and the
 /// run has released its reference.
 struct FamilyShared {
-    /// The single underlying data source, shared by every handle through the
-    /// family's own `Arc`.
-    ds: Box<dyn DataSource + Send + Sync>,
+    /// The family's root-stream data source. Every handle keeps the family
+    /// alive; the root handle also draws from this source, and completion
+    /// (which is family-wide in the engine) is reported through it.
+    ds: Arc<dyn DataSource + Send + Sync>,
     /// Family-wide completion status. Set once via `compare_exchange` in
     /// [`Self::complete`] so `ds.mark_complete` runs and the ack is sent
     /// exactly once, no matter which handle reports it.
@@ -511,6 +513,10 @@ struct LocalState {
 /// `hegel_test_case_free`
 pub struct HegelTestCase {
     family: Arc<FamilyShared>,
+    /// The independent stream this handle draws from: the family's root
+    /// stream for the root handle, a cloned stream for a
+    /// `hegel_test_case_clone` handle.
+    stream: Arc<dyn DataSource + Send + Sync>,
     local: Mutex<LocalState>,
 }
 
@@ -1385,21 +1391,26 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
-/// Clone a test-case handle, writing a new handle that shares the same
-/// underlying test case into `*out_test_case`.
+/// Clone a test-case handle, writing a new handle onto an *independent
+/// stream* of the same test case into `*out_test_case`.
 ///
-/// The clone is a *view onto the same test case*, not an independent one: it
-/// draws from the same data source, and `hegel_mark_complete` on any handle in
-/// the family marks them all complete. Clones exist so a test case can be
-/// driven from several threads — each handle has its own lock, so two clones
-/// may draw concurrently, whereas using a *single* handle from two threads
-/// returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
-/// currently non-deterministic; making them robust is future work.)
+/// The clone shares the test case's outcome — `hegel_mark_complete` on any
+/// handle in the family marks them all complete, and budgets are shared —
+/// but generates from its own independent choice sequence. The clone and
+/// the handle it came from can therefore be driven concurrently from
+/// different threads without perturbing each other, and the values each
+/// produces are deterministic under replay and shrink correctly. (Whereas
+/// using a *single* handle from two threads returns
+/// `HEGEL_E_CONCURRENT_USE`.) Collections, variable pools, and state
+/// machines remain shared across the family — ids from one handle work on
+/// any other — but *concurrent* use of one such object from two streams
+/// makes the affected values scheduling-dependent.
 ///
-/// Cloning is allowed on a clone (the result shares the same family) and
-/// after the family has completed (the clone simply reports
-/// `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
-/// lock, so a handle may be cloned while another thread is mid-draw on it.
+/// Cloning is a stream operation: it occupies one choice position on the
+/// source handle's stream, takes the source handle's lock like a draw
+/// (`HEGEL_E_CONCURRENT_USE` if another thread is mid-operation on it), and
+/// fails with `HEGEL_E_ALREADY_COMPLETE` once the family has completed.
+/// Cloning a clone creates a further independent stream.
 ///
 /// The new handle holds its own reference to the shared test case and must be
 /// released with `hegel_test_case_free`, like any other handle. The underlying
@@ -1420,11 +1431,15 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    let Some(src) = (unsafe { tc.as_ref() }) else {
-        set_last_error(ctx, "hegel_test_case_clone: test case pointer is null");
-        return HEGEL_E_INVALID_HANDLE;
+    let (src, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
     };
-    let clone = handle_from_family(Arc::clone(&src.family));
+    let stream = match src.stream.clone_stream() {
+        Ok(stream) => stream,
+        Err(e) => return translate_ds_error(ctx, e),
+    };
+    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream));
     unsafe { *out_test_case = clone };
     HEGEL_OK
 }
@@ -1437,18 +1452,29 @@ fn new_family(
     ack: Option<mpsc::Sender<()>>,
 ) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
-        ds,
+        ds: Arc::from(ds),
         completed: AtomicBool::new(false),
         ack,
     })
 }
 
-/// Allocate a handle holding one reference to `family`, and return its raw
-/// pointer. Each handle has its own `local` buffer so concurrent clones do not
-/// stomp each other's borrowed values.
+/// Allocate the root handle for `family` — drawing from the family's root
+/// stream — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
+    let stream = Arc::clone(&family.ds);
+    handle_from_stream(family, stream)
+}
+
+/// Allocate a handle holding one reference to `family` that draws from
+/// `stream`, and return its raw pointer. Each handle has its own `local`
+/// buffer so concurrent handles do not stomp each other's borrowed values.
+fn handle_from_stream(
+    family: Arc<FamilyShared>,
+    stream: Arc<dyn DataSource + Send + Sync>,
+) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
+        stream,
         local: Mutex::new(LocalState {
             last_value: Vec::new(),
             completed: false,
@@ -1555,7 +1581,7 @@ pub unsafe extern "C" fn hegel_generate(
         }
     };
 
-    let value = match tc.family.ds.generate(&schema) {
+    let value = match tc.stream.generate(&schema) {
         Ok(v) => v,
         Err(e) => return translate_ds_error(ctx, e),
     };
@@ -1595,7 +1621,7 @@ pub unsafe extern "C" fn hegel_start_span(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.family.ds.start_span(label) {
+    match tc.stream.start_span(label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1615,7 +1641,7 @@ pub unsafe extern "C" fn hegel_stop_span(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.family.ds.stop_span(discard) {
+    match tc.stream.stop_span(discard) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1651,7 +1677,7 @@ pub unsafe extern "C" fn hegel_new_collection(
     } else {
         Some(max_size)
     };
-    match tc.family.ds.new_collection(min_size, max) {
+    match tc.stream.new_collection(min_size, max) {
         Ok(id) => {
             unsafe { *out_collection_id = id };
             HEGEL_OK
@@ -1680,7 +1706,7 @@ pub unsafe extern "C" fn hegel_collection_more(
         set_last_error(ctx, "hegel_collection_more: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.collection_more(collection_id) {
+    match tc.stream.collection_more(collection_id) {
         Ok(m) => {
             unsafe { *out_more = m };
             HEGEL_OK
@@ -1716,7 +1742,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
             }
         }
     };
-    match tc.family.ds.collection_reject(collection_id, why_str) {
+    match tc.stream.collection_reject(collection_id, why_str) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1748,7 +1774,7 @@ pub unsafe extern "C" fn hegel_new_pool(
         set_last_error(ctx, "hegel_new_pool: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.new_pool() {
+    match tc.stream.new_pool() {
         Ok(id) => {
             unsafe { *out_pool_id = id };
             HEGEL_OK
@@ -1779,7 +1805,7 @@ pub unsafe extern "C" fn hegel_pool_add(
         set_last_error(ctx, "hegel_pool_add: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.pool_add(pool_id) {
+    match tc.stream.pool_add(pool_id) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1816,7 +1842,7 @@ pub unsafe extern "C" fn hegel_pool_generate(
         set_last_error(ctx, "hegel_pool_generate: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.pool_generate(pool_id, consume) {
+    match tc.stream.pool_generate(pool_id, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1921,7 +1947,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     };
     let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
     let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
-    match tc.family.ds.new_state_machine(&rule_refs, &invariant_refs) {
+    match tc.stream.new_state_machine(&rule_refs, &invariant_refs) {
         Ok(id) => {
             unsafe { *out_state_machine_id = id };
             HEGEL_OK
@@ -1959,7 +1985,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         set_last_error(ctx, "hegel_state_machine_next_rule: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.state_machine_next_rule(state_machine_id) {
+    match tc.stream.state_machine_next_rule(state_machine_id) {
         Ok(index) => {
             unsafe { *out_rule_index = index };
             HEGEL_OK
@@ -2050,7 +2076,7 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    match tc.family.ds.target_observation(value, label) {
+    match tc.stream.target_observation(value, label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }

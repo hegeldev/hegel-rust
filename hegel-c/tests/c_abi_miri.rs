@@ -74,7 +74,7 @@ unsafe fn one_case_run() -> (
     }
 }
 
-/// A span op proves a handle is live and reaches the shared data source without
+/// A span op proves a handle is live and reaches its stream without
 /// consuming the choice budget.
 unsafe fn alive(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
     unsafe {

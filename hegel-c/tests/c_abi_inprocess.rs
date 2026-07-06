@@ -1160,8 +1160,11 @@ fn integer_schema() -> Vec<u8> {
 }
 
 /// Run a small always-interesting property to completion and return an owned
-/// copy of its single shrunk failure's base64 reproduce blob.
-unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
+/// copy of its single shrunk failure's base64 reproduce blob. The property
+/// draws `draws` integers per test case (all must succeed for the case to be
+/// interesting), so the returned blob replays a choice sequence of exactly
+/// `draws` values.
+unsafe fn shrunk_failure_blob_with_draws(ctx: *mut HegelContext, draws: usize) -> CString {
     unsafe {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
@@ -1177,13 +1180,15 @@ unsafe fn shrunk_failure_blob(ctx: *mut HegelContext) -> CString {
             }
             let mut p: *const u8 = ptr::null();
             let mut n = 0usize;
-            let status = if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
-                == HEGEL_OK
-            {
-                hegel_status_t::HEGEL_STATUS_INTERESTING
-            } else {
-                hegel_status_t::HEGEL_STATUS_OVERRUN
-            };
+            let mut status = hegel_status_t::HEGEL_STATUS_INTERESTING;
+            for _ in 0..draws {
+                if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
+                    != HEGEL_OK
+                {
+                    status = hegel_status_t::HEGEL_STATUS_OVERRUN;
+                    break;
+                }
+            }
             ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
             ok(hegel_test_case_free(ctx, tc));
         }
@@ -1292,6 +1297,13 @@ fn clones_share_a_run_owned_family() {
             HEGEL_OK
         );
 
+        let mut c1a: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(hegel_test_case_clone(ctx, c1, &mut c1a), HEGEL_OK);
+        assert_eq!(
+            hegel_generate(ctx, c1a, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            HEGEL_OK
+        );
+
         // The first handle to complete the family wins and records the outcome.
         assert_eq!(
             hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
@@ -1315,19 +1327,14 @@ fn clones_share_a_run_owned_family() {
         );
 
         let mut c2: *mut HegelTestCase = ptr::null_mut();
-        assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
         assert_eq!(
-            hegel_generate(ctx, c2, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_test_case_clone(ctx, root, &mut c2),
             HEGEL_E_ALREADY_COMPLETE
         );
-        // A fresh clone completing the already-complete family is also a no-op.
-        assert_eq!(
-            hegel_mark_complete(ctx, c2, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
-            HEGEL_OK
-        );
+        assert!(c2.is_null());
 
         assert_eq!(hegel_test_case_free(ctx, c1), HEGEL_OK);
-        assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);
+        assert_eq!(hegel_test_case_free(ctx, c1a), HEGEL_OK);
         assert_eq!(hegel_test_case_free(ctx, root), HEGEL_OK);
 
         loop {
@@ -1350,17 +1357,17 @@ fn clones_share_a_run_owned_family() {
     }
 }
 
-/// Every handle in a standalone (`from_blob`) family — the root, a clone, and a
-/// clone of that clone — is freed independently, in any order. The underlying
-/// test case stays alive until its last handle is freed: a clone keeps drawing
-/// after the handle it was cloned from (and even the root) has been freed. Run
+/// Every handle in a standalone (`from_blob`) family — the root and two
+/// clones of it — is freed independently, in any order. The underlying
+/// test case stays alive until its last handle is freed: a clone keeps
+/// working after its sibling (and even the root) has been freed. Run
 /// under Miri this proves there is no leak, double-free, or use-after-free
 /// across the drop orders.
 #[test]
 fn standalone_handles_are_freed_independently() {
     let ctx = hegel_context_new();
     unsafe {
-        let blob = shrunk_failure_blob(ctx);
+        let blob = shrunk_failure_blob_with_draws(ctx, 2);
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
@@ -1375,11 +1382,11 @@ fn standalone_handles_are_freed_independently() {
         let mut c1: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
         let mut c2: *mut HegelTestCase = ptr::null_mut();
-        assert_eq!(hegel_test_case_clone(ctx, c1, &mut c2), HEGEL_OK);
+        assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
 
-        // A non-consuming span op proves a handle is live and reaches the
-        // (shared) data source; the blob's finite choice sequence means we
-        // can't keep drawing, so we don't draw here.
+        // A non-consuming span op proves a handle is live and reaches its
+        // stream; the blob's finite choice sequence means we can't keep
+        // drawing, so we don't draw here.
         let alive = |tc: *mut HegelTestCase| {
             assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_OK);
             assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_OK);
@@ -1405,10 +1412,9 @@ fn standalone_handles_are_freed_independently() {
 }
 
 /// Two clones drive the same test case from two threads at once. Because each
-/// handle has its own lock, neither draw is rejected with
-/// `HEGEL_E_CONCURRENT_USE` — that is reserved for using a *single* handle from
-/// two threads. (The shared engine state stays internally consistent; the
-/// outcomes are just non-deterministic, which is fine here.)
+/// handle has its own lock and its own independent stream, neither draw is
+/// rejected with `HEGEL_E_CONCURRENT_USE` — that is reserved for using a
+/// *single* handle from two threads.
 #[test]
 fn two_clones_draw_concurrently_without_concurrent_use_errors() {
     use std::sync::{Arc, Barrier};

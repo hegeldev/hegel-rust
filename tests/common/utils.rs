@@ -4,7 +4,7 @@ use std::panic::{UnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
-use hegel::{HealthCheck, Hegel, Phase, Settings};
+use hegel::{HealthCheck, Hegel, Phase, Settings, TestCase};
 use regex::Regex;
 use std::fmt::Debug;
 
@@ -307,14 +307,74 @@ where
     }
 
     pub fn run(self) -> T {
+        let generator = self.generator;
+        MinimalWith::new(move |tc: &TestCase| tc.draw(&generator), self.condition)
+            .test_cases(self.test_cases)
+            .run()
+    }
+}
+
+/// Find the minimal example produced by a test body that satisfies the given
+/// condition.
+///
+/// Like [`minimal`], but the body receives the [`TestCase`] directly instead
+/// of drawing from a single generator, so it can clone the test case or
+/// interleave draws in shapes a plain generator cannot express.
+#[allow(dead_code)]
+pub fn minimal_with<T, F, P>(body: F, condition: P) -> T
+where
+    F: Fn(&TestCase) -> T + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    MinimalWith::new(body, condition).run()
+}
+
+#[allow(dead_code)]
+pub struct MinimalWith<T, F, P>
+where
+    F: Fn(&TestCase) -> T + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    body: F,
+    condition: P,
+    test_cases: u64,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T, F, P> MinimalWith<T, F, P>
+where
+    F: Fn(&TestCase) -> T + 'static,
+    P: Fn(&T) -> bool + 'static,
+    T: Send + Debug + 'static,
+{
+    pub fn new(body: F, condition: P) -> Self {
+        Self {
+            body,
+            condition,
+            test_cases: 500,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn test_cases(mut self, n: u64) -> Self {
+        self.test_cases = n;
+        self
+    }
+
+    pub fn run(self) -> T {
         let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
         let found_clone = Arc::clone(&found);
         let test_cases = self.test_cases;
+        let body = self.body;
+        let condition = self.condition;
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
-                let value = tc.draw(&self.generator);
-                if (self.condition)(&value) {
+                let value = body(&tc);
+                if condition(&value) {
                     *found_clone.lock().unwrap() = Some(value);
                     panic!("HEGEL_MINIMAL_FOUND");
                 }

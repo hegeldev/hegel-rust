@@ -150,9 +150,12 @@ pub(crate) struct TestCaseLocalData {
 /// # Threading
 ///
 /// `TestCase` is `Send` but not `Sync`. To drive generation from another
-/// thread, clone the test case and move the clone. Clones share the same
-/// underlying backend connection — they are views onto one test case, not
-/// independent test cases.
+/// thread, clone the test case and move the clone. Each clone generates
+/// from its own *independent stream* of choices: draws on one clone never
+/// perturb the values any other clone (or the original) produces, so
+/// several threads can generate concurrently and the test stays fully
+/// deterministic — the same seed replays the same values on every stream,
+/// failures shrink normally, and the shrunk counterexample replays exactly.
 ///
 /// ```no_run
 /// use hegel::generators as gs;
@@ -163,46 +166,37 @@ pub(crate) struct TestCaseLocalData {
 ///     let handle = std::thread::spawn(move || {
 ///         tc_worker.draw(gs::integers::<i32>())
 ///     });
-///     let n = handle.join().unwrap();
 ///     let _b: bool = tc.draw(gs::booleans());
+///     let n = handle.join().unwrap();
 ///     let _ = n;
 /// }
 /// ```
 ///
 /// ## What is guaranteed
 ///
-/// Each clone owns its own backend handle, so a clone may be moved to and
-/// driven from another thread freely. A *single* handle (one clone) may only
-/// be driven by one thread at a time — the backend rejects concurrent use of
-/// one handle outright — which is why you `clone` to hand work to a thread
-/// rather than sharing one `TestCase` across threads (the type is `!Sync`, so
-/// the compiler enforces this too).
+/// Each clone owns its own stream, so a clone may be moved to and driven
+/// from another thread freely, concurrently with every other clone. A
+/// *single* clone may only be driven by one thread at a time — the backend
+/// rejects concurrent use of one handle outright — which is why you `clone`
+/// to hand work to a thread rather than sharing one `TestCase` across
+/// threads (the type is `!Sync`, so the compiler enforces this too).
 ///
-/// This covers patterns where threads do not race on generation — for example:
-///
-/// - Spawn a worker, let it draw, `join` it, then continue on the main
-///   thread.
-/// - Repeatedly spawn-and-join one worker at a time.
-/// - Any pattern where exactly one thread is drawing at a time, with a
-///   happens-before relationship (join, channel receive, barrier) between
-///   each thread's work.
+/// The clones share the test case's *outcome*: the whole family passes,
+/// fails, or is rejected as one test case, and the choice budget is shared
+/// across all streams. Everything else about generation is per-stream.
 ///
 /// ## What is not guaranteed
 ///
-/// Concurrent generation will get progressively better over time, but
-/// right now should be considered a borderline-internal feature. If
-/// you do not know exactly what you're doing it probably won't work.
+/// Determinism extends exactly as far as your own code's determinism. If
+/// threads race on *your* state — for example, which of two clones first
+/// consumes a value from a shared queue — Hegel replays each stream's
+/// values faithfully, but your test may still behave differently run to
+/// run, and such failures may not reproduce or shrink well.
 ///
-/// Two or more clones drawing *concurrently* is allowed (each has its own
-/// handle, and the backend keeps the shared engine state internally
-/// consistent), but it is **not deterministic**: the order in which draws
-/// interleave depends on thread scheduling, and the backend has no way to
-/// reproduce that order on replay. In practice this means such tests may:
-///
-/// - Produce different values on successive runs of the same seed.
-/// - Shrink poorly or not at all.
-/// - Surface backend errors (e.g. `StopTest`) in one thread caused by
-///   another thread's draws exhausting the budget.
+/// Variable pools and engine-managed collections are shared across clones
+/// (an id from one clone works on any other). Using one such object from
+/// two threads *at the same time* makes the affected draws depend on
+/// scheduling order, which brings back the same replay caveat.
 ///
 /// ## Panics inside spawned threads
 ///
@@ -221,8 +215,9 @@ pub struct TestCase {
     /// that is never joined) keeps the handle alive rather than dangling —
     /// its later draws fail cleanly because the case has finished.
     /// [`clone`](TestCase::clone) instead gets a fresh handle
-    /// (`hegel_test_case_clone`) with its own lock, so two clones can be
-    /// driven from different threads concurrently.
+    /// (`hegel_test_case_clone`) onto an independent stream of the same
+    /// test case, so two clones can be driven from different threads
+    /// concurrently without perturbing each other's values.
     handle: Arc<CTestCase>,
 }
 

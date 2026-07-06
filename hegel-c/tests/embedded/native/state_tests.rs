@@ -748,7 +748,7 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
         assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     }
     assert!(tc.draw_integer::<i128>(0, 100).is_err());
-    assert_eq!(tc.status, Some(Status::EarlyStop));
+    assert_eq!(tc.status(), Some(Status::EarlyStop));
 }
 
 #[test]
@@ -830,7 +830,7 @@ fn template_overrun_status_matches_max_size_overrun() {
     assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
     assert!(tc_count.draw_integer::<i128>(0, 100).is_err());
-    assert_eq!(tc_count.status, Some(Status::EarlyStop));
+    assert_eq!(tc_count.status(), Some(Status::EarlyStop));
 }
 
 #[test]

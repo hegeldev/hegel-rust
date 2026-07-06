@@ -137,8 +137,9 @@ typedef enum {
      A single test-case handle was used from two threads at once. Each
      handle may be driven by at most one thread at a time; to generate from
      several threads, `hegel_test_case_clone` the handle and give each
-     thread its own clone. (Clones share the underlying test case but have
-     independent per-handle locks, so they may be driven concurrently.)
+     thread its own clone. (Clones share the underlying test case's
+     outcome and budgets but generate from independent streams, so they
+     may be driven concurrently and deterministically.)
      Returned by the draw primitives; `hegel_mark_complete` instead waits
      for the in-flight operation, because completion always succeeds under
      first-caller-wins.
@@ -764,21 +765,26 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
- Clone a test-case handle, writing a new handle that shares the same
- underlying test case into `*out_test_case`.
+ Clone a test-case handle, writing a new handle onto an *independent
+ stream* of the same test case into `*out_test_case`.
 
- The clone is a *view onto the same test case*, not an independent one: it
- draws from the same data source, and `hegel_mark_complete` on any handle in
- the family marks them all complete. Clones exist so a test case can be
- driven from several threads — each handle has its own lock, so two clones
- may draw concurrently, whereas using a *single* handle from two threads
- returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
- currently non-deterministic; making them robust is future work.)
+ The clone shares the test case's outcome — `hegel_mark_complete` on any
+ handle in the family marks them all complete, and budgets are shared —
+ but generates from its own independent choice sequence. The clone and
+ the handle it came from can therefore be driven concurrently from
+ different threads without perturbing each other, and the values each
+ produces are deterministic under replay and shrink correctly. (Whereas
+ using a *single* handle from two threads returns
+ `HEGEL_E_CONCURRENT_USE`.) Collections, variable pools, and state
+ machines remain shared across the family — ids from one handle work on
+ any other — but *concurrent* use of one such object from two streams
+ makes the affected values scheduling-dependent.
 
- Cloning is allowed on a clone (the result shares the same family) and
- after the family has completed (the clone simply reports
- `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
- lock, so a handle may be cloned while another thread is mid-draw on it.
+ Cloning is a stream operation: it occupies one choice position on the
+ source handle's stream, takes the source handle's lock like a draw
+ (`HEGEL_E_CONCURRENT_USE` if another thread is mid-operation on it), and
+ fails with `HEGEL_E_ALREADY_COMPLETE` once the family has completed.
+ Cloning a clone creates a further independent stream.
 
  The new handle holds its own reference to the shared test case and must be
  released with `hegel_test_case_free`, like any other handle. The underlying
