@@ -2218,7 +2218,7 @@ pub unsafe extern "C" fn hegel_generate_bytes(
     }
     match tc
         .stream
-        .generate_bytes(min_size as usize, max_size as usize)
+        .generate_bytes(size_arg(min_size), size_arg(max_size))
     {
         Ok(v) => {
             let boxed = v.into_boxed_slice();
@@ -2276,6 +2276,14 @@ fn translate_construct_error(
 ) -> hegel_result_t {
     set_last_error(ctx, &e.to_string());
     HEGEL_E_INVALID_ARG
+}
+
+/// Convert a `u64` size argument to `usize`, saturating on 32-bit targets
+/// so an oversized request stays "absurdly large" (and fails at draw time
+/// like any other unsatisfiable size) instead of silently truncating to a
+/// small value.
+fn size_arg(v: u64) -> usize {
+    usize::try_from(v).unwrap_or(usize::MAX)
 }
 
 /// Read an optional NUL-terminated UTF-8 string argument. `Err` carries the
@@ -2468,7 +2476,8 @@ pub unsafe extern "C" fn hegel_string_generator_text(
         include_characters,
         exclude_characters,
     };
-    match crate::native::draws::StringSpec::text(&alphabet, min_size as usize, max_size as usize) {
+    match crate::native::draws::StringSpec::text(&alphabet, size_arg(min_size), size_arg(max_size))
+    {
         Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
         Err(e) => translate_construct_error(ctx, e),
     }
@@ -2575,7 +2584,7 @@ pub unsafe extern "C" fn hegel_string_generator_domain(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_generator = ptr::null_mut() };
-    match crate::native::draws::StringSpec::domain(max_length as usize) {
+    match crate::native::draws::StringSpec::domain(size_arg(max_length)) {
         Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
         Err(e) => translate_construct_error(ctx, e),
     }
