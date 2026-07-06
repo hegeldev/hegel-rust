@@ -391,7 +391,6 @@ name = "hegeltest"
 version = "0.23.5"
 dependencies = [
  "chrono",
- "ciborium",
  "crc32fast",
  "criterion",
  "ctor",
@@ -407,7 +406,6 @@ dependencies = [
  "rand",
  "regex",
  "rustc-hash",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
