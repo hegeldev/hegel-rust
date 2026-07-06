@@ -268,3 +268,13 @@ fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
     .join()
     .unwrap();
 }
+
+#[test]
+#[should_panic(expected = "was not marked complete")]
+fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
+    let settings = test_settings(1);
+    let sh = SettingsHandle::build(&settings, None);
+    let run = RunHandle::start(&sh).unwrap();
+    let _first = run.next_test_case().unwrap();
+    run.next_test_case();
+}

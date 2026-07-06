@@ -249,11 +249,8 @@ impl RunHandle {
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
-        if rc != hegel_result_t::HEGEL_OK || raw.is_null() {
-            None
-        } else {
-            Some(CTestCase { raw })
-        }
+        require_ok(rc);
+        if raw.is_null() { None } else { Some(CTestCase { raw }) }
     }
 
     /// Read the aggregate result as an owned snapshot, independent of the
