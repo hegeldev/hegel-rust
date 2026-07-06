@@ -1596,7 +1596,7 @@ impl NativeTestCase {
     /// codepoints lie in the given [`IntervalSet`] alphabet.
     pub fn draw_string(
         &mut self,
-        intervals: IntervalSet,
+        intervals: Arc<IntervalSet>,
         min_size: usize,
         max_size: usize,
     ) -> Result<String, EngineError> {

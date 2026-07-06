@@ -662,7 +662,7 @@ fn bytes_choice_kind_enumerate_positive_max_returns_none() {
 
 fn string_choice(intervals: Vec<(u32, u32)>, min_size: usize, max_size: usize) -> StringChoice {
     StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(intervals),
+        intervals: crate::native::intervalsets::IntervalSet::new(intervals).into(),
         min_size,
         max_size,
     }
@@ -957,7 +957,8 @@ fn bytes_max_index_and_max_children() {
 #[test]
 fn string_max_index_and_max_children() {
     let kind = ChoiceKind::String(StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)])
+            .into(),
         min_size: 0,
         max_size: 2,
     });
@@ -978,7 +979,8 @@ fn bytes_to_index_via_dispatch() {
 #[test]
 fn string_to_index_via_dispatch() {
     let kind = ChoiceKind::String(StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)])
+            .into(),
         min_size: 0,
         max_size: 4,
     });

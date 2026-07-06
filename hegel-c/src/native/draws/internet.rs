@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
@@ -33,8 +33,8 @@ static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 /// RFC 5322 atext set used by Hypothesis's `emails()` for the local part:
 /// `string.ascii_letters + string.digits + "!#$%&'*+-/=^_\`{|}~"`. Encoded
 /// here as merged codepoint intervals in ascending order.
-fn email_local_part_intervals() -> IntervalSet {
-    IntervalSet::new(vec![
+static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Arc<IntervalSet>> = LazyLock::new(|| {
+    Arc::new(IntervalSet::new(vec![
         (b'!' as u32, b'!' as u32),
         (b'#' as u32, b'\'' as u32),
         (b'*' as u32, b'+' as u32),
@@ -45,53 +45,66 @@ fn email_local_part_intervals() -> IntervalSet {
         (b'^' as u32, b'`' as u32),
         (b'a' as u32, b'z' as u32),
         (b'{' as u32, b'~' as u32),
-    ])
-}
+    ]))
+});
 
 /// `string.printable` from Python: ASCII 32..=126 plus the whitespace
 /// codepoints `\t \n \x0b \x0c \r` (9..=13). Used for URL path components
 /// before url-encoding.
-fn printable_ascii_intervals() -> IntervalSet {
-    IntervalSet::new(vec![(9, 13), (32, 126)])
-}
+static PRINTABLE_ASCII_INTERVALS: LazyLock<Arc<IntervalSet>> =
+    LazyLock::new(|| Arc::new(IntervalSet::new(vec![(9, 13), (32, 126)])));
 
 /// Latin-1 byte range used as the alphabet for URL fragment characters.
 /// Mirrors Hypothesis's `st.characters(min_codepoint=0, max_codepoint=255)`
 /// for `_url_fragments_strategy`. Surrogates `[0xD800, 0xDFFF]` aren't in
 /// range so the single interval is already surrogate-free.
-fn fragment_byte_intervals() -> IntervalSet {
-    IntervalSet::new(vec![(0, 0xFF)])
-}
+static FRAGMENT_BYTE_INTERVALS: LazyLock<Arc<IntervalSet>> =
+    LazyLock::new(|| Arc::new(IntervalSet::new(vec![(0, 0xFF)])));
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
     ntc.conclude(Status::Invalid, None);
     Err(EngineError::InvalidTestCase)
 }
 
-/// Validate a domain `max_length` without drawing, reporting the diagnostic
-/// a draw would produce. Used by the string-generator constructor so an
-/// unsatisfiable `max_length` surfaces at construction time.
-pub(crate) fn validate_domain_max_length(max_length: usize) -> Result<(), EngineError> {
-    if max_length > 255 {
-        return Err(EngineError::InvalidArgument(format!(
-            "domain max_length={max_length} exceeds the RFC 1035 limit of 255"
-        )));
-    }
-    if eligible_tlds(max_length).is_empty() {
-        return Err(EngineError::InvalidArgument(format!(
-            "domain max_length={max_length} leaves no eligible TLDs"
-        )));
-    }
-    Ok(())
+/// A validated domain-name draw: the RFC 1035 length cap plus the eligible
+/// TLD list it admits, both fixed at construction time so draws never
+/// re-filter the IANA list.
+#[derive(Debug)]
+pub(crate) struct DomainSpec {
+    max_length: usize,
+    eligible_tlds: Vec<&'static str>,
 }
 
-fn eligible_tlds(max_length: usize) -> Vec<&'static str> {
-    TOP_LEVEL_DOMAINS
-        .iter()
-        .copied()
-        .filter(|tld| tld.len() + 2 <= max_length)
-        .collect()
+impl DomainSpec {
+    /// Validate `max_length` against RFC 1035 §2.3.4 (a fully-qualified name
+    /// is at most 255 octets, and must fit at least one label plus a TLD)
+    /// and precompute the TLDs that fit within it.
+    pub(crate) fn new(max_length: usize) -> Result<Self, EngineError> {
+        if max_length > 255 {
+            return Err(EngineError::InvalidArgument(format!(
+                "domain max_length={max_length} exceeds the RFC 1035 limit of 255"
+            )));
+        }
+        let eligible_tlds: Vec<&'static str> = TOP_LEVEL_DOMAINS
+            .iter()
+            .copied()
+            .filter(|tld| tld.len() + 2 <= max_length)
+            .collect();
+        if eligible_tlds.is_empty() {
+            return Err(EngineError::InvalidArgument(format!(
+                "domain max_length={max_length} leaves no eligible TLDs"
+            )));
+        }
+        Ok(DomainSpec {
+            max_length,
+            eligible_tlds,
+        })
+    }
 }
+
+/// The full-length domain spec used by email and URL draws.
+static FULL_LENGTH_DOMAIN: LazyLock<DomainSpec> =
+    LazyLock::new(|| DomainSpec::new(255).expect("max_length 255 admits every TLD"));
 
 /// Draw an RFC 1035 fully-qualified domain name.
 ///
@@ -108,12 +121,12 @@ fn eligible_tlds(max_length: usize) -> Vec<&'static str> {
 /// `DomainNameStrategy.max_length` (RFC 1035 §2.3.4): 4..=255.
 pub(crate) fn generate_domain(
     ntc: &mut NativeTestCase,
-    max_length: usize,
+    spec: &DomainSpec,
 ) -> Result<String, EngineError> {
     const MAX_LABEL_LEN: usize = 63;
 
-    validate_domain_max_length(max_length)?;
-    let eligible = eligible_tlds(max_length);
+    let max_length = spec.max_length;
+    let eligible = &spec.eligible_tlds;
     let idx = ntc
         .draw_integer(BigInt::from(0), BigInt::from(eligible.len() as i64 - 1))?
         .to_i128()
@@ -226,8 +239,8 @@ fn draw_ascii_alnum_or_hyphen(ntc: &mut NativeTestCase) -> Result<char, EngineEr
 ///     marking the test case invalid when the filter fails — the engine
 ///     then retries with a different choice prefix.
 pub(crate) fn generate_email(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
-    let local = ntc.draw_string(email_local_part_intervals(), 1, 64)?;
-    let domain = generate_domain(ntc, 255)?;
+    let local = ntc.draw_string(Arc::clone(&EMAIL_LOCAL_PART_INTERVALS), 1, 64)?;
+    let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
     let address = format!("{local}@{domain}");
     if address.len() > 254 {
         return mark_invalid(ntc);
@@ -252,7 +265,7 @@ pub(crate) fn generate_url(ntc: &mut NativeTestCase) -> Result<String, EngineErr
         "http"
     };
 
-    let domain = generate_domain(ntc, 255)?;
+    let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
 
     let port = if ntc.weighted(0.5, None)? {
         format!(
@@ -265,20 +278,19 @@ pub(crate) fn generate_url(ntc: &mut NativeTestCase) -> Result<String, EngineErr
         String::new()
     };
 
-    let printable = printable_ascii_intervals();
     let mut state = ManyState::new(0, None);
     let mut components: Vec<String> = Vec::new();
     loop {
         if !many_more(ntc, &mut state)? {
             break;
         }
-        let raw = ntc.draw_string(printable.clone(), 0, 100)?;
+        let raw = ntc.draw_string(Arc::clone(&PRINTABLE_ASCII_INTERVALS), 0, 100)?;
         components.push(url_encode_path(&raw));
     }
     let path = components.join("/");
 
     let fragment = if ntc.weighted(0.5, None)? {
-        let raw = ntc.draw_string(fragment_byte_intervals(), 1, 100)?;
+        let raw = ntc.draw_string(Arc::clone(&FRAGMENT_BYTE_INTERVALS), 1, 100)?;
         format!("#{}", url_encode_fragment(ntc, &raw)?)
     } else {
         String::new()

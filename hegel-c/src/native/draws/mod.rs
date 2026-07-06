@@ -8,6 +8,7 @@ pub mod text;
 use crate::control::hegel_internal_assert;
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
+use std::sync::Arc;
 
 pub use text::TextAlphabet;
 
@@ -124,7 +125,7 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
 /// of times with [`generate_string`].
 pub enum StringSpec {
     Text {
-        intervals: IntervalSet,
+        intervals: Arc<IntervalSet>,
         min_size: usize,
         max_size: usize,
     },
@@ -134,9 +135,7 @@ pub enum StringSpec {
     },
     Email,
     Url,
-    Domain {
-        max_length: usize,
-    },
+    Domain(internet::DomainSpec),
 }
 
 impl StringSpec {
@@ -164,7 +163,7 @@ impl StringSpec {
             ));
         }
         Ok(StringSpec::Text {
-            intervals,
+            intervals: Arc::new(intervals),
             min_size,
             max_size,
         })
@@ -180,7 +179,7 @@ impl StringSpec {
     ) -> Result<StringSpec, EngineError> {
         let alphabet = match alphabet {
             None => None,
-            Some(StringSpec::Text { intervals, .. }) => Some(intervals.clone()),
+            Some(StringSpec::Text { intervals, .. }) => Some((**intervals).clone()),
             Some(_) => {
                 return Err(EngineError::InvalidArgument(
                     "regex alphabet must be a text string generator".to_string(),
@@ -204,10 +203,9 @@ impl StringSpec {
     }
 
     /// An RFC 1035 domain-name draw with total length at most `max_length`.
-    /// Errors when `max_length` leaves no eligible TLDs.
+    /// Errors when `max_length` is outside 4..=255.
     pub fn domain(max_length: usize) -> Result<StringSpec, EngineError> {
-        internet::validate_domain_max_length(max_length)?;
-        Ok(StringSpec::Domain { max_length })
+        Ok(StringSpec::Domain(internet::DomainSpec::new(max_length)?))
     }
 }
 
@@ -220,7 +218,7 @@ pub fn generate_string(ntc: &mut NativeTestCase, spec: &StringSpec) -> Result<St
             min_size,
             max_size,
         } => spanned(ntc, LABEL_STRING, |ntc| {
-            ntc.draw_string(intervals.clone(), *min_size, *max_size)
+            ntc.draw_string(Arc::clone(intervals), *min_size, *max_size)
         }),
         StringSpec::Regex {
             compiled,
@@ -230,8 +228,8 @@ pub fn generate_string(ntc: &mut NativeTestCase, spec: &StringSpec) -> Result<St
         }),
         StringSpec::Email => spanned(ntc, LABEL_EMAIL, internet::generate_email),
         StringSpec::Url => spanned(ntc, LABEL_URL, internet::generate_url),
-        StringSpec::Domain { max_length } => spanned(ntc, LABEL_DOMAIN, |ntc| {
-            internet::generate_domain(ntc, *max_length)
+        StringSpec::Domain(spec) => spanned(ntc, LABEL_DOMAIN, |ntc| {
+            internet::generate_domain(ntc, spec)
         }),
     }
 }

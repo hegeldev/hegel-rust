@@ -243,7 +243,7 @@ impl BytesChoice {
 /// reverse, then characters above `'Z'` in natural order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringChoice {
-    pub intervals: IntervalSet,
+    pub intervals: Arc<IntervalSet>,
     pub min_size: usize,
     pub max_size: usize,
 }

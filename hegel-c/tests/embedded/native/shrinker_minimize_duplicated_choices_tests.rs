@@ -57,7 +57,7 @@ fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
 fn string_node(value: Vec<u32>) -> ChoiceNode {
     ChoiceNode::new(
         ChoiceKind::String(StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]),
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
             min_size: 0,
             max_size: 16,
         }),

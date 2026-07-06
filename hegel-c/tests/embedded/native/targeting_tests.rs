@@ -138,7 +138,7 @@ fn is_climbable_rejects_strings() {
     use crate::native::core::StringChoice;
     use crate::native::intervalsets::IntervalSet;
     let sc = StringChoice {
-        intervals: IntervalSet::new(vec![(0x20, 0x7E)]),
+        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).into(),
         min_size: 0,
         max_size: 10,
     };

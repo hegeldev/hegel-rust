@@ -6,6 +6,10 @@ fn fresh_ntc(seed: u64) -> NativeTestCase {
     NativeTestCase::new_random(EngineRng::seeded(seed))
 }
 
+fn domain_draw(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, EngineError> {
+    generate_domain(ntc, &DomainSpec::new(max_length)?)
+}
+
 #[test]
 fn top_level_domains_excludes_arpa() {
     assert!(
@@ -35,7 +39,7 @@ fn top_level_domains_is_non_trivial() {
 fn generate_domain_default_max_length() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = generate_domain(&mut ntc, 255).unwrap();
+        let s = domain_draw(&mut ntc, 255).unwrap();
         assert!(s.len() <= 255, "default max_length is 255: got {s:?}");
         assert!(s.contains('.'), "domain must have ≥ 2 labels: {s:?}");
         for part in s.split('.') {
@@ -53,7 +57,7 @@ fn generate_domain_respects_max_length_4() {
     let mut saw_dotted = false;
     for seed in 0..500 {
         let mut ntc = fresh_ntc(seed);
-        let s = generate_domain(&mut ntc, 4).unwrap();
+        let s = domain_draw(&mut ntc, 4).unwrap();
         assert!(s.len() <= 4, "max_length=4 violated by {s:?}");
         if s.contains('.') {
             saw_dotted = true;
@@ -69,7 +73,7 @@ fn generate_domain_respects_max_length_4() {
 fn generate_domain_respects_max_length_8() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = generate_domain(&mut ntc, 8).unwrap();
+        let s = domain_draw(&mut ntc, 8).unwrap();
         assert!(s.len() <= 8, "max_length=8 violated by {s:?}");
     }
 }
@@ -78,7 +82,7 @@ fn generate_domain_respects_max_length_8() {
 fn generate_domain_labels_obey_rfc1035() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = generate_domain(&mut ntc, 255).unwrap();
+        let s = domain_draw(&mut ntc, 255).unwrap();
         let labels: Vec<&str> = s.split('.').collect();
         for label in &labels[..labels.len() - 1] {
             assert!(!label.is_empty() && label.len() <= 63, "label {label:?}");
@@ -116,7 +120,7 @@ fn generate_domain_recases_tld() {
     let mut saw_upper = false;
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let s = generate_domain(&mut ntc, 255).unwrap();
+        let s = domain_draw(&mut ntc, 255).unwrap();
         let tld = s.rsplit('.').next().unwrap();
         if tld.chars().all(|c| c.is_ascii_lowercase()) {
             saw_lower = true;
@@ -265,28 +269,24 @@ fn url_encode_path_encodes_high_latin1() {
 #[test]
 fn generate_domain_rejects_tiny_max_length_as_invalid_argument() {
     let mut ntc = fresh_ntc(0);
-    let err = generate_domain(&mut ntc, 3).unwrap_err();
+    let err = domain_draw(&mut ntc, 3).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
 }
 
 #[test]
-fn validate_domain_max_length_matches_generate() {
-    assert!(validate_domain_max_length(3).is_err());
-    assert!(validate_domain_max_length(4).is_ok());
-    assert!(validate_domain_max_length(255).is_ok());
+fn domain_spec_validates_max_length_range() {
+    assert!(DomainSpec::new(3).is_err());
+    assert!(DomainSpec::new(4).is_ok());
+    assert!(DomainSpec::new(255).is_ok());
 }
 
 #[test]
 fn domain_max_length_above_255_is_an_invalid_argument() {
     for max_length in [256, 100_000] {
-        let err = validate_domain_max_length(max_length).unwrap_err();
+        let err = DomainSpec::new(max_length).unwrap_err();
         let EngineError::InvalidArgument(msg) = err else {
             panic!("expected InvalidArgument, got {err:?}");
         };
         assert!(msg.contains("255"), "unexpected message: {msg}");
-
-        let mut ntc = fresh_ntc(0);
-        let err = generate_domain(&mut ntc, max_length).unwrap_err();
-        assert!(matches!(err, EngineError::InvalidArgument(_)));
     }
 }

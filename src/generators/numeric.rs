@@ -1,6 +1,7 @@
 use super::{Generator, TestCase};
 use crate::test_case::invalid_argument;
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 /// Trait bound for integer types usable with [`integers()`].
 pub trait Integer: Copy + Ord {
@@ -192,42 +193,49 @@ pub struct FloatGenerator<T> {
     allow_nan: Option<bool>,
     allow_infinity: Option<bool>,
     allow_subnormal: Option<bool>,
+    params: OnceLock<FloatDrawParams>,
 }
 
 impl<T> FloatGenerator<T> {
     /// Set the minimum value (inclusive by default).
     pub fn min_value(mut self, min_value: T) -> Self {
         self.min = Some(min_value);
+        self.params = OnceLock::new();
         self
     }
 
     /// Set the maximum value (inclusive by default).
     pub fn max_value(mut self, max_value: T) -> Self {
         self.max = Some(max_value);
+        self.params = OnceLock::new();
         self
     }
 
     /// Set whether to exclude the minimum value from the range.
     pub fn exclude_min(mut self, exclude_min: bool) -> Self {
         self.exclude_min = exclude_min;
+        self.params = OnceLock::new();
         self
     }
 
     /// Set whether to exclude the maximum value from the range.
     pub fn exclude_max(mut self, exclude_max: bool) -> Self {
         self.exclude_max = exclude_max;
+        self.params = OnceLock::new();
         self
     }
 
     /// Whether NaN values are allowed. Cannot be used with bounds.
     pub fn allow_nan(mut self, allow: bool) -> Self {
         self.allow_nan = Some(allow);
+        self.params = OnceLock::new();
         self
     }
 
     /// Whether infinite values are allowed. Cannot be used with both bounds set.
     pub fn allow_infinity(mut self, allow: bool) -> Self {
         self.allow_infinity = Some(allow);
+        self.params = OnceLock::new();
         self
     }
 
@@ -238,6 +246,7 @@ impl<T> FloatGenerator<T> {
     /// zero.
     pub fn allow_subnormal(mut self, allow: bool) -> Self {
         self.allow_subnormal = Some(allow);
+        self.params = OnceLock::new();
         self
     }
 }
@@ -385,7 +394,7 @@ impl<T: Float> FloatGenerator<T> {
 
 impl<T: Float> Generator<T> for FloatGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        let params = self.draw_params();
+        let params = self.params.get_or_init(|| self.draw_params());
         let v = tc.generate_float(
             params.width,
             params.min_value,
@@ -427,6 +436,7 @@ pub fn floats<T: Float>() -> FloatGenerator<T> {
         allow_nan: None,
         allow_infinity: None,
         allow_subnormal: None,
+        params: OnceLock::new(),
     }
 }
 
