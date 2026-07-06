@@ -1481,3 +1481,127 @@ fn health_check_surfaces_as_run_error() {
         (a.context_free)(ctx);
     }
 }
+
+/// Drive a `n >= 1_000_000` property through libhegel's C API across a
+/// sweep of derandomized seeds. Reproduces the experiment in the
+/// hegel-go shrinker-flake report, but at the libhegel boundary
+/// (libloading) rather than from Go. If the engine reaches
+/// `1_000_000` exactly through Rust's `embed::run_native` path (50/50
+/// seeds, verified in the embed tests) but not through the C path,
+/// the channel/worker shim in `hegel-c` is doing something measurable.
+///
+/// Run with `--ignored` because it's a 50-seed loop and adds ~10s to
+/// the smoke suite.
+#[test]
+#[ignore = "shrinker sweep — slow; run via --ignored for diagnostics"]
+fn shrinker_sweep() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (hits, observed) = run_shrinker_sweep(&a, OriginStyle::Constant, 1..=100);
+    eprintln!("C-API shrinker boundary hit rate: {hits}/100");
+    eprintln!("values: {observed:?}");
+    assert!(
+        hits >= 50,
+        "C-API shrinker only reached boundary {hits}/100; values: {observed:?}"
+    );
+}
+
+/// Characterization test for the origin contract: when the caller
+/// passes a *unique origin per failing draw* (e.g. when a binding
+/// uses `panic(fmt.Sprintf("n=%d", n))` and forwards the panic
+/// message as origin), the engine treats each as a distinct bug and
+/// partitions its shrink budget across them. This test exists so a
+/// future change to that partitioning behavior is loud — and so a
+/// binding-author searching the codebase for `unique origins` finds
+/// the explanation in one place.
+///
+/// Concretely: holding the generator and seed range constant, switching
+/// from a stable per-bug origin to a per-value origin drops the
+/// boundary hit rate from ~100/100 to ~16/100. The Rust-side embed
+/// API (`hegel::embed::run_native`) does not have this problem
+/// because hegel-rust's panic handler derives origin from panic
+/// *location*, not value (`format!("Panic at {}", location)` in
+/// `src/run_lifecycle.rs`).
+///
+/// Bindings that want hegel-rust-like behavior should derive origin
+/// from the panic source location (file:line) rather than the panic
+/// message.
+#[test]
+#[ignore = "shrinker characterization — slow; run via --ignored for diagnostics"]
+fn shrinker_partitions_budget_across_unique_origins() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (hits, _) = run_shrinker_sweep(&a, OriginStyle::PerDrawValue, 1..=100);
+    eprintln!("[unique-origins] boundary hit rate: {hits}/100");
+    assert!(
+        hits < 70,
+        "expected partitioned-budget hit rate to be well below stable-origin's 100/100, got {hits}/100"
+    );
+}
+
+#[derive(Copy, Clone)]
+enum OriginStyle {
+    Constant,
+    PerDrawValue,
+}
+
+fn run_shrinker_sweep(
+    a: &Api<'_>,
+    origin_style: OriginStyle,
+    seeds: std::ops::RangeInclusive<u64>,
+) -> (u32, Vec<i64>) {
+    let empty = CString::new("").unwrap();
+    let constant_origin = CString::new("n >= 1_000_000").unwrap();
+
+    let mut hits = 0u32;
+    let mut observed = Vec::<i64>::new();
+    for seed in seeds {
+        let mut last_failing: Option<i64> = None;
+        unsafe {
+            let ctx = (a.context_new)();
+            let s = a.settings_new(ctx);
+            a.settings_test_cases(ctx, s, 100);
+            (a.settings_database)(ctx, s, empty.as_ptr());
+            a.settings_derandomize(ctx, s, true);
+            a.settings_seed(ctx, s, seed, true);
+
+            let run = a.run_start(ctx, s);
+            loop {
+                let tc = a.next_test_case(ctx, run);
+                if tc.is_null() {
+                    break;
+                }
+                let mut n: i64 = 0;
+                let rc = (a.generate_integer)(ctx, tc, i64::MIN, i64::MAX, &mut n);
+                if rc == HEGEL_E_STOP_TEST {
+                    a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
+                    continue;
+                }
+                assert_eq!(rc, HEGEL_OK);
+                if n >= 1_000_000 {
+                    last_failing = Some(n);
+                    let origin_cs: CString;
+                    let origin_ptr = match origin_style {
+                        OriginStyle::Constant => constant_origin.as_ptr(),
+                        OriginStyle::PerDrawValue => {
+                            origin_cs = CString::new(format!("n={n}")).unwrap();
+                            origin_cs.as_ptr()
+                        }
+                    };
+                    a.complete_and_free(ctx, tc, CStatus::Interesting, origin_ptr);
+                } else {
+                    a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
+                }
+            }
+            a.run_free(ctx, run);
+            a.settings_free(ctx, s);
+            (a.context_free)(ctx);
+        }
+        let final_value = last_failing.unwrap_or(i64::MIN);
+        observed.push(final_value);
+        if final_value == 1_000_000 {
+            hits += 1;
+        }
+    }
+    (hits, observed)
+}
