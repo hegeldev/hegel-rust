@@ -2708,6 +2708,7 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
 /// `[1, 12]`, `day` in `[1, days-in-month]`.
 #[repr(C)]
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
 pub struct hegel_date_t {
     pub year: i32,
     pub month: u8,
@@ -2718,6 +2719,7 @@ pub struct hegel_date_t {
 /// `[0, 59]`, `microsecond` in `[0, 999999]`.
 #[repr(C)]
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
 pub struct hegel_time_t {
     pub hour: u8,
     pub minute: u8,
@@ -2728,9 +2730,34 @@ pub struct hegel_time_t {
 /// A drawn naive datetime (a date plus a time of day, no timezone).
 #[repr(C)]
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
 pub struct hegel_datetime_t {
     pub date: hegel_date_t,
     pub time: hegel_time_t,
+}
+
+fn rust_date(d: &hegel_date_t) -> crate::native::draws::special::Date {
+    crate::native::draws::special::Date {
+        year: d.year,
+        month: d.month,
+        day: d.day,
+    }
+}
+
+fn rust_time(t: &hegel_time_t) -> crate::native::draws::special::Time {
+    crate::native::draws::special::Time {
+        hour: t.hour,
+        minute: t.minute,
+        second: t.second,
+        microsecond: t.microsecond,
+    }
+}
+
+fn rust_datetime(dt: &hegel_datetime_t) -> crate::native::draws::special::DateTime {
+    crate::native::draws::special::DateTime {
+        date: rust_date(&dt.date),
+        time: rust_time(&dt.time),
+    }
 }
 
 fn c_date(d: crate::native::draws::special::Date) -> hegel_date_t {
@@ -2750,17 +2777,24 @@ fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
     }
 }
 
-/// Draw a Gregorian calendar date, shrinking toward 2000-01-01.
+/// Draw a Gregorian calendar date in `[min_value, max_value]` (both
+/// inclusive), shrinking toward 2000-01-01, or the nearest bound when that
+/// is out of range. Bounds are proleptic Gregorian dates with `year` in
+/// `[-999999, 999999]`; pass `{1, 1, 1}` and `{9999, 12, 31}` for the
+/// conventional full range.
 ///
 /// On success writes the drawn date into `*out_value` and returns
 /// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
 /// is exhausted for this test case (the caller should abort the body and
 /// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_value`.
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_value`, an invalid calendar date
+/// in either bound, or `min_value > max_value`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_generate_date(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
+    min_value: hegel_date_t,
+    max_value: hegel_date_t,
     out_value: *mut hegel_date_t,
 ) -> hegel_result_t {
     unsafe {
@@ -2769,22 +2803,30 @@ pub unsafe extern "C" fn hegel_generate_date(
             tc,
             "hegel_generate_date",
             out_value.is_null(),
-            |tc| tc.stream.generate_date(),
+            |tc| {
+                tc.stream
+                    .generate_date(rust_date(&min_value), rust_date(&max_value))
+            },
             |d| *out_value = c_date(d),
         )
     }
 }
 
-/// Draw a time of day, shrinking toward midnight.
+/// Draw a time of day in `[min_value, max_value]` (both inclusive),
+/// shrinking toward `min_value` (the representable time closest to
+/// midnight). Pass all-zeros and `{23, 59, 59, 999999}` for the full day.
 ///
 /// On success writes the drawn time into `*out_value` and returns
 /// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
 /// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
-/// NULL `out_value`.
+/// NULL `out_value`, an out-of-range field in either bound, or
+/// `min_value > max_value`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_generate_time(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
+    min_value: hegel_time_t,
+    max_value: hegel_time_t,
     out_value: *mut hegel_time_t,
 ) -> hegel_result_t {
     unsafe {
@@ -2793,22 +2835,31 @@ pub unsafe extern "C" fn hegel_generate_time(
             tc,
             "hegel_generate_time",
             out_value.is_null(),
-            |tc| tc.stream.generate_time(),
+            |tc| {
+                tc.stream
+                    .generate_time(rust_time(&min_value), rust_time(&max_value))
+            },
             |t| *out_value = c_time(t),
         )
     }
 }
 
-/// Draw a naive datetime (no timezone), shrinking toward 2000-01-01T00:00:00.
+/// Draw a naive datetime (no timezone) in `[min_value, max_value]` (both
+/// inclusive), shrinking toward 2000-01-01T00:00:00 clamped into range: a
+/// bounded date draw, then a time draw whose bounds tighten to the endpoint
+/// times when the drawn date lands on a boundary date.
 ///
 /// On success writes the drawn datetime into `*out_value` and returns
 /// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
 /// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
-/// NULL `out_value`.
+/// NULL `out_value`, an invalid date or time in either bound, or
+/// `min_value > max_value`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_generate_datetime(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
+    min_value: hegel_datetime_t,
+    max_value: hegel_datetime_t,
     out_value: *mut hegel_datetime_t,
 ) -> hegel_result_t {
     unsafe {
@@ -2817,7 +2868,10 @@ pub unsafe extern "C" fn hegel_generate_datetime(
             tc,
             "hegel_generate_datetime",
             out_value.is_null(),
-            |tc| tc.stream.generate_datetime(),
+            |tc| {
+                tc.stream
+                    .generate_datetime(rust_datetime(&min_value), rust_datetime(&max_value))
+            },
             |dt| {
                 *out_value = hegel_datetime_t {
                     date: c_date(dt.date),

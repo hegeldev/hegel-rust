@@ -205,18 +205,28 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| draws::generate_string(ntc, spec))
     }
 
-    fn generate_date(&self) -> Result<crate::native::draws::special::Date, DataSourceError> {
-        self.with_ntc(crate::native::draws::special::generate_date)
+    fn generate_date(
+        &self,
+        min: crate::native::draws::special::Date,
+        max: crate::native::draws::special::Date,
+    ) -> Result<crate::native::draws::special::Date, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_date(ntc, min, max))
     }
 
-    fn generate_time(&self) -> Result<crate::native::draws::special::Time, DataSourceError> {
-        self.with_ntc(crate::native::draws::special::generate_time)
+    fn generate_time(
+        &self,
+        min: crate::native::draws::special::Time,
+        max: crate::native::draws::special::Time,
+    ) -> Result<crate::native::draws::special::Time, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_time(ntc, min, max))
     }
 
     fn generate_datetime(
         &self,
+        min: crate::native::draws::special::DateTime,
+        max: crate::native::draws::special::DateTime,
     ) -> Result<crate::native::draws::special::DateTime, DataSourceError> {
-        self.with_ntc(crate::native::draws::special::generate_datetime)
+        self.with_ntc(|ntc| crate::native::draws::special::generate_datetime(ntc, min, max))
     }
 
     fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError> {

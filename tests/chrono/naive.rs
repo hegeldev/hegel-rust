@@ -239,3 +239,18 @@ fn test_naive_weeks_in_vec() {
 fn test_naive_week_default_generator() {
     check_can_generate_examples(gs::default::<chrono::NaiveWeek>());
 }
+
+#[test]
+fn test_naive_dates_shrink_toward_2000_01_01() {
+    use crate::common::utils::minimal;
+    let d: NaiveDate = minimal(chrono_gs::naive_dates(), |_| true);
+    assert_eq!(d, NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+
+    let min = NaiveDate::from_ymd_opt(2005, 3, 2).unwrap();
+    let d: NaiveDate = minimal(chrono_gs::naive_dates().min_value(min), |_| true);
+    assert_eq!(d, min);
+
+    let max = NaiveDate::from_ymd_opt(1990, 6, 6).unwrap();
+    let d: NaiveDate = minimal(chrono_gs::naive_dates().max_value(max), |_| true);
+    assert_eq!(d, max);
+}

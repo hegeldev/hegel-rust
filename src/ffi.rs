@@ -250,7 +250,11 @@ impl RunHandle {
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
         require_ok(rc);
-        if raw.is_null() { None } else { Some(CTestCase { raw }) }
+        if raw.is_null() {
+            None
+        } else {
+            Some(CTestCase { raw })
+        }
     }
 
     /// Read the aggregate result as an owned snapshot, independent of the
@@ -464,48 +468,41 @@ impl CTestCase {
         Ok(string_from_engine_bytes(bytes))
     }
 
-    /// Draw a Gregorian calendar date.
-    pub(crate) fn generate_date(&self) -> Result<hegel_c::hegel_date_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_date_t {
-            year: 0,
-            month: 0,
-            day: 0,
-        };
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_generate_date(ctx, self.raw, &mut out) });
-        rc_to_value(rc, out)
-    }
-
-    /// Draw a time of day.
-    pub(crate) fn generate_time(&self) -> Result<hegel_c::hegel_time_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_time_t {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            microsecond: 0,
-        };
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_generate_time(ctx, self.raw, &mut out) });
-        rc_to_value(rc, out)
-    }
-
-    /// Draw a naive datetime.
-    pub(crate) fn generate_datetime(&self) -> Result<hegel_c::hegel_datetime_t, hegel_result_t> {
-        let mut out = hegel_c::hegel_datetime_t {
-            date: hegel_c::hegel_date_t {
-                year: 0,
-                month: 0,
-                day: 0,
-            },
-            time: hegel_c::hegel_time_t {
-                hour: 0,
-                minute: 0,
-                second: 0,
-                microsecond: 0,
-            },
-        };
+    /// Draw a Gregorian calendar date in `[min, max]`.
+    pub(crate) fn generate_date(
+        &self,
+        min: hegel_c::hegel_date_t,
+        max: hegel_c::hegel_date_t,
+    ) -> Result<hegel_c::hegel_date_t, hegel_result_t> {
+        let mut out = min;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_generate_datetime(ctx, self.raw, &mut out)
+            hegel_c::hegel_generate_date(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a time of day in `[min, max]`.
+    pub(crate) fn generate_time(
+        &self,
+        min: hegel_c::hegel_time_t,
+        max: hegel_c::hegel_time_t,
+    ) -> Result<hegel_c::hegel_time_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_time(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a naive datetime in `[min, max]`.
+    pub(crate) fn generate_datetime(
+        &self,
+        min: hegel_c::hegel_datetime_t,
+        max: hegel_c::hegel_datetime_t,
+    ) -> Result<hegel_c::hegel_datetime_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_datetime(ctx, self.raw, min, max, &mut out)
         });
         rc_to_value(rc, out)
     }

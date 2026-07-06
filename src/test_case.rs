@@ -751,19 +751,31 @@ impl TestCase {
         self.draw_or_raise(|ctc| ctc.generate_string(generator))
     }
 
-    /// Draw a Gregorian calendar date.
-    pub(crate) fn generate_date(&self) -> hegel_c::hegel_date_t {
-        self.draw_or_raise(|ctc| ctc.generate_date())
+    /// Draw a Gregorian calendar date in `[min, max]`.
+    pub(crate) fn generate_date(
+        &self,
+        min: hegel_c::hegel_date_t,
+        max: hegel_c::hegel_date_t,
+    ) -> hegel_c::hegel_date_t {
+        self.draw_or_raise(|ctc| ctc.generate_date(min, max))
     }
 
-    /// Draw a time of day.
-    pub(crate) fn generate_time(&self) -> hegel_c::hegel_time_t {
-        self.draw_or_raise(|ctc| ctc.generate_time())
+    /// Draw a time of day in `[min, max]`.
+    pub(crate) fn generate_time(
+        &self,
+        min: hegel_c::hegel_time_t,
+        max: hegel_c::hegel_time_t,
+    ) -> hegel_c::hegel_time_t {
+        self.draw_or_raise(|ctc| ctc.generate_time(min, max))
     }
 
-    /// Draw a naive datetime.
-    pub(crate) fn generate_datetime(&self) -> hegel_c::hegel_datetime_t {
-        self.draw_or_raise(|ctc| ctc.generate_datetime())
+    /// Draw a naive datetime in `[min, max]`.
+    pub(crate) fn generate_datetime(
+        &self,
+        min: hegel_c::hegel_datetime_t,
+        max: hegel_c::hegel_datetime_t,
+    ) -> hegel_c::hegel_datetime_t {
+        self.draw_or_raise(|ctc| ctc.generate_datetime(min, max))
     }
 
     /// Draw a UUID's 16 big-endian bytes, optionally forcing the version.
@@ -876,3 +888,39 @@ pub mod labels {
 #[cfg(test)]
 #[path = "../tests/embedded/test_case_tests.rs"]
 mod tests;
+
+/// The conventional full ranges for the structured draws: years 1..=9999
+/// (what Hypothesis's `dates()` spans) and the whole microsecond-resolution
+/// day.
+pub(crate) mod full_ranges {
+    pub(crate) const MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+        year: 1,
+        month: 1,
+        day: 1,
+    };
+    pub(crate) const MAX_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+        year: 9999,
+        month: 12,
+        day: 31,
+    };
+    pub(crate) const MIDNIGHT: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+        hour: 0,
+        minute: 0,
+        second: 0,
+        microsecond: 0,
+    };
+    pub(crate) const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+        hour: 23,
+        minute: 59,
+        second: 59,
+        microsecond: 999_999,
+    };
+    pub(crate) const MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+        date: MIN_DATE,
+        time: MIDNIGHT,
+    };
+    pub(crate) const MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+        date: MAX_DATE,
+        time: LAST_MICROSECOND,
+    };
+}
