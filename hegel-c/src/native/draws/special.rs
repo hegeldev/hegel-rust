@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::control::hegel_internal_assert;
@@ -273,26 +273,17 @@ fn parse_v6_cidr(s: &str) -> V6Network {
     V6Network { base, size_minus_1 }
 }
 
-/// The unspanned IP draw shared by [`generate_ip_address`] and the schema
-/// interpreter. Half the draws are uniform over the whole address space and
-/// half are biased into the IANA special-purpose ranges, mirroring
-/// `st.ip_addresses()`.
-pub(crate) fn draw_ip_address(
-    ntc: &mut NativeTestCase,
-    version: u8,
-) -> Result<IpAddr, EngineError> {
-    match version {
-        4 => Ok(IpAddr::V4(draw_ipv4(ntc)?)),
-        6 => Ok(IpAddr::V6(draw_ipv6(ntc)?)),
-        other => Err(EngineError::InvalidArgument(format!(
-            "ip_address: unsupported version {other}; expected 4 or 6"
-        ))),
-    }
+/// Draw an IPv4 address, wrapped in a span. Half the draws are uniform over
+/// the whole address space and half are biased into the IANA
+/// special-purpose ranges, mirroring `st.ip_addresses(v=4)`.
+pub fn generate_ipv4(ntc: &mut NativeTestCase) -> Result<Ipv4Addr, EngineError> {
+    spanned(ntc, LABEL_IP_ADDRESS, draw_ipv4)
 }
 
-/// Draw an IP address of the given `version` (4 or 6), wrapped in a span.
-pub fn generate_ip_address(ntc: &mut NativeTestCase, version: u8) -> Result<IpAddr, EngineError> {
-    spanned(ntc, LABEL_IP_ADDRESS, |ntc| draw_ip_address(ntc, version))
+/// Draw an IPv6 address, wrapped in a span, with the same special-range
+/// biasing as [`generate_ipv4`].
+pub fn generate_ipv6(ntc: &mut NativeTestCase) -> Result<Ipv6Addr, EngineError> {
+    spanned(ntc, LABEL_IP_ADDRESS, draw_ipv6)
 }
 
 fn draw_ipv4(ntc: &mut NativeTestCase) -> Result<Ipv4Addr, EngineError> {

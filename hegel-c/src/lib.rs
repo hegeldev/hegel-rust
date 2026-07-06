@@ -341,7 +341,8 @@ pub enum hegel_label_t {
     HEGEL_LABEL_DATETIME = 23,
     /// Span around one UUID draw (`hegel_generate_uuid`).
     HEGEL_LABEL_UUID = 24,
-    /// Span around one IP-address draw (`hegel_generate_ip_address`).
+    /// Span around one IP-address draw (`hegel_generate_ipv4` /
+    /// `hegel_generate_ipv6`).
     HEGEL_LABEL_IP_ADDRESS = 25,
     /// Span around one integer draw (`hegel_generate_integer` /
     /// `hegel_generate_integer_big`). Emitted internally, like every
@@ -2864,48 +2865,65 @@ pub unsafe extern "C" fn hegel_generate_uuid(
     }
 }
 
-/// Draw an IP address of the given `version` (4 or 6). Half the draws are
-/// uniform over the whole address space and half are biased into the IANA
-/// special-purpose ranges (loopback, private, documentation, …).
+/// Draw an IPv4 address. Half the draws are uniform over the whole address
+/// space and half are biased into the IANA special-purpose ranges
+/// (loopback, private, documentation, …).
 ///
-/// On success writes the address's network-order bytes into `out_bytes`
-/// (which must have room for 16 bytes), the byte count — 4 or 16 — into
-/// `*out_len`, and returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the
-/// engine's choice budget is exhausted for this test case. Returns
-/// `HEGEL_E_INVALID_ARG` for NULL out parameters or a version other than 4
-/// or 6.
+/// On success writes the address's 4 network-order bytes into `out_bytes`
+/// (which must have room for 4 bytes) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_generate_ip_address(
+pub unsafe extern "C" fn hegel_generate_ipv4(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    version: u8,
     out_bytes: *mut u8,
-    out_len: *mut usize,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_bytes.is_null() || out_len.is_null() {
-        set_last_error(ctx, "hegel_generate_ip_address: out parameter is null");
+    if out_bytes.is_null() {
+        set_last_error(ctx, "hegel_generate_ipv4: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.stream.generate_ip_address(version) {
-        Ok(std::net::IpAddr::V4(a)) => {
+    match tc.stream.generate_ipv4() {
+        Ok(a) => {
             let octets = a.octets();
-            unsafe {
-                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
-                *out_len = 4;
-            }
+            unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4) };
             HEGEL_OK
         }
-        Ok(std::net::IpAddr::V6(a)) => {
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw an IPv6 address, with the same special-range biasing as
+/// `hegel_generate_ipv4`.
+///
+/// On success writes the address's 16 network-order bytes into `out_bytes`
+/// (which must have room for 16 bytes) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_ipv6(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_bytes: *mut u8,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_bytes.is_null() {
+        set_last_error(ctx, "hegel_generate_ipv6: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_ipv6() {
+        Ok(a) => {
             let octets = a.octets();
-            unsafe {
-                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
-                *out_len = 16;
-            }
+            unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16) };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),

@@ -105,10 +105,8 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
         assert!((1..=12).contains(&dt.date.month));
         let uuid = tc.generate_uuid(Some(4))?;
         assert_eq!(uuid[6] >> 4, 4);
-        let addr = tc.generate_ip_address(4)?;
-        assert!(matches!(addr, std::net::IpAddr::V4(_)));
-        let addr6 = tc.generate_ip_address(6)?;
-        assert!(matches!(addr6, std::net::IpAddr::V6(_)));
+        tc.generate_ipv4()?;
+        tc.generate_ipv6()?;
 
         Ok(())
     });

@@ -427,7 +427,8 @@ typedef enum {
      */
     HEGEL_LABEL_UUID = 24,
     /*
-     Span around one IP-address draw (`hegel_generate_ip_address`).
+     Span around one IP-address draw (`hegel_generate_ipv4` /
+     `hegel_generate_ipv6`).
      */
     HEGEL_LABEL_IP_ADDRESS = 25,
     /*
@@ -1404,22 +1405,27 @@ hegel_result_t hegel_generate_uuid(hegel_context_t *ctx,
                                    uint8_t *out_bytes);
 
 /*
- Draw an IP address of the given `version` (4 or 6). Half the draws are
- uniform over the whole address space and half are biased into the IANA
- special-purpose ranges (loopback, private, documentation, …).
+ Draw an IPv4 address. Half the draws are uniform over the whole address
+ space and half are biased into the IANA special-purpose ranges
+ (loopback, private, documentation, …).
 
- On success writes the address's network-order bytes into `out_bytes`
- (which must have room for 16 bytes), the byte count — 4 or 16 — into
- `*out_len`, and returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the
- engine's choice budget is exhausted for this test case. Returns
- `HEGEL_E_INVALID_ARG` for NULL out parameters or a version other than 4
- or 6.
+ On success writes the address's 4 network-order bytes into `out_bytes`
+ (which must have room for 4 bytes) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
  */
-hegel_result_t hegel_generate_ip_address(hegel_context_t *ctx,
-                                         hegel_test_case_t *tc,
-                                         uint8_t version,
-                                         uint8_t *out_bytes,
-                                         size_t *out_len);
+hegel_result_t hegel_generate_ipv4(hegel_context_t *ctx, hegel_test_case_t *tc, uint8_t *out_bytes);
+
+/*
+ Draw an IPv6 address, with the same special-range biasing as
+ `hegel_generate_ipv4`.
+
+ On success writes the address's 16 network-order bytes into `out_bytes`
+ (which must have room for 16 bytes) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+ */
+hegel_result_t hegel_generate_ipv6(hegel_context_t *ctx, hegel_test_case_t *tc, uint8_t *out_bytes);
 
 /*
  Record a numeric observation under `label` for the engine's

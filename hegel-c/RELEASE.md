@@ -37,8 +37,9 @@ In its place the ABI now exposes one function per foundational generator:
   `hegel_generate_datetime` return structured values (`hegel_date_t`,
   `hegel_time_t`, `hegel_datetime_t`) instead of ISO-formatted strings;
   `hegel_generate_uuid` writes the UUID's 16 big-endian bytes (with an
-  optional forced RFC 4122 version nibble) and
-  `hegel_generate_ip_address` writes the address's network-order bytes.
+  optional forced RFC 4122 version nibble) and `hegel_generate_ipv4` /
+  `hegel_generate_ipv6` write the address's network-order bytes (4 and
+  16 respectively).
 
 To migrate a binding, replace each schema construction + `hegel_generate`
 call with the corresponding typed call. For example, a bounded integer

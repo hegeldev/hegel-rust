@@ -11,7 +11,7 @@ use hegel_c::{
     hegel_context_last_error, hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
     hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_date,
     hegel_generate_datetime, hegel_generate_float, hegel_generate_integer,
-    hegel_generate_integer_big, hegel_generate_ip_address, hegel_generate_string,
+    hegel_generate_integer_big, hegel_generate_ipv4, hegel_generate_ipv6, hegel_generate_string,
     hegel_generate_string_result_free, hegel_generate_string_result_t, hegel_generate_time,
     hegel_generate_uuid, hegel_mark_complete, hegel_next_test_case, hegel_run_free,
     hegel_run_start, hegel_settings_free, hegel_settings_new, hegel_settings_set_database,
@@ -1224,15 +1224,12 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             HEGEL_E_INVALID_HANDLE
         );
         let mut null_ip = [0u8; 16];
-        let mut null_ip_len = 0usize;
         assert_eq!(
-            hegel_generate_ip_address(
-                ctx,
-                ptr::null_mut(),
-                4,
-                null_ip.as_mut_ptr(),
-                &mut null_ip_len,
-            ),
+            hegel_generate_ipv4(ctx, ptr::null_mut(), null_ip.as_mut_ptr()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_generate_ipv6(ctx, ptr::null_mut(), null_ip.as_mut_ptr()),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -1267,20 +1264,14 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             );
             assert!(last_error(ctx).contains("hex nibble"));
             let mut ip = [0u8; 16];
-            let mut ip_len = 0usize;
             assert_eq!(
-                hegel_generate_ip_address(ctx, tc, 4, ptr::null_mut(), &mut ip_len),
+                hegel_generate_ipv4(ctx, tc, ptr::null_mut()),
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
-                hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), ptr::null_mut()),
+                hegel_generate_ipv6(ctx, tc, ptr::null_mut()),
                 HEGEL_E_INVALID_ARG
             );
-            assert_eq!(
-                hegel_generate_ip_address(ctx, tc, 5, ip.as_mut_ptr(), &mut ip_len),
-                HEGEL_E_INVALID_ARG
-            );
-            assert!(last_error(ctx).contains("unsupported version 5"));
 
             let overran = 'draws: {
                 let check = |rc: hegel_c::hegel_result_t| match rc {
@@ -1336,26 +1327,12 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                 }
                 assert_ne!(uuid, [0u8; 16], "nil UUID must never be produced");
 
-                if check(hegel_generate_ip_address(
-                    ctx,
-                    tc,
-                    4,
-                    ip.as_mut_ptr(),
-                    &mut ip_len,
-                )) {
+                if check(hegel_generate_ipv4(ctx, tc, ip.as_mut_ptr())) {
                     break 'draws true;
                 }
-                assert_eq!(ip_len, 4);
-                if check(hegel_generate_ip_address(
-                    ctx,
-                    tc,
-                    6,
-                    ip.as_mut_ptr(),
-                    &mut ip_len,
-                )) {
+                if check(hegel_generate_ipv6(ctx, tc, ip.as_mut_ptr())) {
                     break 'draws true;
                 }
-                assert_eq!(ip_len, 16);
                 false
             };
 
@@ -1429,9 +1406,12 @@ fn structured_draws_after_overrun_report_stop_test() {
             HEGEL_E_STOP_TEST
         );
         let mut ip = [0u8; 16];
-        let mut ip_len = 0usize;
         assert_eq!(
-            hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), &mut ip_len),
+            hegel_generate_ipv4(ctx, tc, ip.as_mut_ptr()),
+            HEGEL_E_STOP_TEST
+        );
+        assert_eq!(
+            hegel_generate_ipv6(ctx, tc, ip.as_mut_ptr()),
             HEGEL_E_STOP_TEST
         );
 

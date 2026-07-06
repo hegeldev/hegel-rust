@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::*;
 use crate::native::core::NativeTestCase;
@@ -128,10 +128,7 @@ fn generate_ipv4_addresses_are_valid_and_hit_special_ranges() {
     let addrs: Vec<Ipv4Addr> = (0..200)
         .map(|seed| {
             let mut ntc = fresh_ntc(seed);
-            match generate_ip_address(&mut ntc, 4).unwrap() {
-                IpAddr::V4(a) => a,
-                other => panic!("expected v4, got {other:?}"),
-            }
+            generate_ipv4(&mut ntc).unwrap()
         })
         .collect();
 
@@ -154,10 +151,7 @@ fn generate_ipv6_addresses_are_valid_and_hit_special_ranges() {
     let addrs: Vec<Ipv6Addr> = (0..200)
         .map(|seed| {
             let mut ntc = fresh_ntc(seed);
-            match generate_ip_address(&mut ntc, 6).unwrap() {
-                IpAddr::V6(a) => a,
-                other => panic!("expected v6, got {other:?}"),
-            }
+            generate_ipv6(&mut ntc).unwrap()
         })
         .collect();
 
@@ -173,12 +167,4 @@ fn generate_ipv6_addresses_are_valid_and_hit_special_ranges() {
         "no ::1 / :: in 200 draws — special-range biasing missing"
     );
     assert!(saw_doc, "no 2001:db8::/32 address in 200 draws");
-}
-
-#[test]
-fn generate_ip_address_unknown_version_is_invalid_argument() {
-    let mut ntc = fresh_ntc(0);
-    let err = generate_ip_address(&mut ntc, 5).unwrap_err();
-    assert!(matches!(err, EngineError::InvalidArgument(_)));
-    assert!(err.to_string().contains("unsupported version 5"));
 }

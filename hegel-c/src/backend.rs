@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
 use crate::native::draws::special::{Date, DateTime, Time};
@@ -84,9 +84,11 @@ pub trait DataSource: Send + Sync {
     /// `InvalidArgument` when `version > 15`.
     fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError>;
 
-    /// Draw an IP address of the given `version`. Errors with
-    /// `InvalidArgument` for versions other than 4 and 6.
-    fn generate_ip_address(&self, version: u8) -> Result<IpAddr, DataSourceError>;
+    /// Draw an IPv4 address.
+    fn generate_ipv4(&self) -> Result<Ipv4Addr, DataSourceError>;
+
+    /// Draw an IPv6 address.
+    fn generate_ipv6(&self) -> Result<Ipv6Addr, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;

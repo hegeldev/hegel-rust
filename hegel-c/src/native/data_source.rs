@@ -237,8 +237,12 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| crate::native::draws::special::generate_uuid(ntc, version))
     }
 
-    fn generate_ip_address(&self, version: u8) -> Result<std::net::IpAddr, DataSourceError> {
-        self.with_ntc(|ntc| crate::native::draws::special::generate_ip_address(ntc, version))
+    fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv4)
+    }
+
+    fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv6)
     }
 
     fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError> {

@@ -492,12 +492,11 @@ impl IpAddressGenerator {
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
         tc.start_span(labels::ONE_OF);
-        let version = if tc.generate_integer_i64(0, 1) == 0 {
-            4
+        let addr = if tc.generate_integer_i64(0, 1) == 0 {
+            std::net::IpAddr::V4(tc.generate_ipv4())
         } else {
-            6
+            std::net::IpAddr::V6(tc.generate_ipv6())
         };
-        let addr = tc.generate_ip_address(version);
         tc.stop_span(false);
         addr
     }
@@ -508,10 +507,7 @@ pub struct Ipv4AddressGenerator {}
 
 impl Generator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::Ipv4Addr {
-        match tc.generate_ip_address(4) {
-            std::net::IpAddr::V4(a) => a,
-            std::net::IpAddr::V6(_) => unreachable!("engine returned v6 for a v4 draw"),
-        }
+        tc.generate_ipv4()
     }
 }
 
@@ -520,10 +516,7 @@ pub struct Ipv6AddressGenerator {}
 
 impl Generator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::Ipv6Addr {
-        match tc.generate_ip_address(6) {
-            std::net::IpAddr::V6(a) => a,
-            std::net::IpAddr::V4(_) => unreachable!("engine returned v4 for a v6 draw"),
-        }
+        tc.generate_ipv6()
     }
 }
 

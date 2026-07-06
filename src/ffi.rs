@@ -520,30 +520,22 @@ impl CTestCase {
         rc_to_value(rc, out)
     }
 
-    /// Draw an IP address of the given version (4 or 6).
-    pub(crate) fn generate_ip_address(
-        &self,
-        version: u8,
-    ) -> Result<std::net::IpAddr, hegel_result_t> {
-        let mut out = [0u8; 16];
-        let mut out_len: usize = 0;
+    /// Draw an IPv4 address.
+    pub(crate) fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, hegel_result_t> {
+        let mut out = [0u8; 4];
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_generate_ip_address(
-                ctx,
-                self.raw,
-                version,
-                out.as_mut_ptr(),
-                &mut out_len,
-            )
+            hegel_c::hegel_generate_ipv4(ctx, self.raw, out.as_mut_ptr())
         });
-        if rc != hegel_result_t::HEGEL_OK {
-            return Err(rc);
-        }
-        Ok(if out_len == 4 {
-            std::net::IpAddr::V4(std::net::Ipv4Addr::from([out[0], out[1], out[2], out[3]]))
-        } else {
-            std::net::IpAddr::V6(std::net::Ipv6Addr::from(out))
-        })
+        rc_to_value(rc, std::net::Ipv4Addr::from(out))
+    }
+
+    /// Draw an IPv6 address.
+    pub(crate) fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, hegel_result_t> {
+        let mut out = [0u8; 16];
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_ipv6(ctx, self.raw, out.as_mut_ptr())
+        });
+        rc_to_value(rc, std::net::Ipv6Addr::from(out))
     }
 
     pub(crate) fn start_span(&self, label: u64) -> Result<(), hegel_result_t> {

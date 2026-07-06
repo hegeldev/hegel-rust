@@ -793,9 +793,17 @@ impl TestCase {
         }
     }
 
-    /// Draw an IP address of the given version (4 or 6).
-    pub(crate) fn generate_ip_address(&self, version: u8) -> std::net::IpAddr {
-        match self.with_ctc(|ctc| ctc.generate_ip_address(version)) {
+    /// Draw an IPv4 address.
+    pub(crate) fn generate_ipv4(&self) -> std::net::Ipv4Addr {
+        match self.with_ctc(|ctc| ctc.generate_ipv4()) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw an IPv6 address.
+    pub(crate) fn generate_ipv6(&self) -> std::net::Ipv6Addr {
+        match self.with_ctc(|ctc| ctc.generate_ipv6()) {
             Ok(v) => v,
             Err(rc) => raise_for_rc(rc),
         }

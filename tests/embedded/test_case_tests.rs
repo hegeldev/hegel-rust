@@ -103,10 +103,10 @@ fn assume_code_unwinds_as_assume_failed() {
     );
 }
 
-/// The typed uuid/ip draws surface invalid arguments through
+/// The typed uuid draw surfaces invalid arguments through
 /// [`raise_for_rc`], like every other draw.
 #[test]
-fn uuid_and_ip_invalid_arguments_are_raised_as_usage_errors() {
+fn uuid_invalid_version_is_raised_as_a_usage_error() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
@@ -114,10 +114,6 @@ fn uuid_and_ip_invalid_arguments_are_raised_as_usage_errors() {
         std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_uuid(Some(16)))).unwrap_err();
     let msg = panic_payload_message(err);
     assert!(msg.contains("hex nibble"), "{msg}");
-
-    let err = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ip_address(5))).unwrap_err();
-    let msg = panic_payload_message(err);
-    assert!(msg.contains("unsupported version 5"), "{msg}");
 }
 
 /// Draw integers straight off `tc` until the engine's choice budget is
@@ -155,6 +151,26 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"
+    );
+}
+
+#[test]
+fn ip_draws_after_overrun_unwind_as_stop_test() {
+    use std::panic::AssertUnwindSafe;
+    let (_run, tc) = emitting_test_case();
+
+    drive_to_overrun(&tc);
+
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ipv4())).unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "generate_ipv4 after overrun should unwind as StopTest"
+    );
+
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.generate_ipv6())).unwrap_err();
+    assert!(
+        payload.downcast_ref::<crate::control::StopTest>().is_some(),
+        "generate_ipv6 after overrun should unwind as StopTest"
     );
 }
 
