@@ -71,6 +71,24 @@ fn signed_bytes_le_roundtrip() {
 }
 
 #[test]
+fn signed_bytes_le_is_minimal_at_negative_boundaries() {
+    assert_eq!(i(-128).to_signed_bytes_le(), vec![0x80]);
+    assert_eq!(i(-32768).to_signed_bytes_le(), vec![0x00, 0x80]);
+    assert_eq!(
+        BigInt::from(i64::MIN).to_signed_bytes_le(),
+        i64::MIN.to_le_bytes().to_vec()
+    );
+    assert_eq!(
+        BigInt::from(i128::MIN).to_signed_bytes_le(),
+        i128::MIN.to_le_bytes().to_vec()
+    );
+    assert_eq!(i(-127).to_signed_bytes_le(), vec![0x81]);
+    assert_eq!(i(-129).to_signed_bytes_le(), vec![0x7F, 0xFF]);
+    assert_eq!(i(-255).to_signed_bytes_le(), vec![0x01, 0xFF]);
+    assert_eq!(i(-256).to_signed_bytes_le(), vec![0x00, 0xFF]);
+}
+
+#[test]
 fn bits_counts_magnitude_bits() {
     assert_eq!(i(0).bits(), 0);
     assert_eq!(u(0).bits(), 0);

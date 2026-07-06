@@ -334,6 +334,47 @@ fn big_integer_draws_round_trip_and_validate_arguments() {
 }
 
 #[test]
+fn big_integer_boundary_values_fit_documented_buffer_size() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 5));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            for bound in [
+                i64::MIN.to_le_bytes().to_vec(),
+                (-128i8).to_le_bytes().to_vec(),
+                (-32768i16).to_le_bytes().to_vec(),
+            ] {
+                let mut out_buf = [0u8; 8];
+                let mut out_len = 0usize;
+                ok(hegel_generate_integer_big(
+                    ctx,
+                    tc,
+                    bound.as_ptr(),
+                    bound.len(),
+                    bound.as_ptr(),
+                    bound.len(),
+                    out_buf.as_mut_ptr(),
+                    bound.len(),
+                    &mut out_len,
+                ));
+                assert_eq!(out_len, bound.len());
+                assert_eq!(&out_buf[..out_len], &bound[..]);
+            }
+            complete_valid(ctx, tc);
+        }
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
 fn float_draws_respect_spec_and_validate_arguments() {
     let ctx = hegel_context_new();
     unsafe {

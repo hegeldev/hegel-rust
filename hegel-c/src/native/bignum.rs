@@ -120,6 +120,12 @@ impl BigInt {
         }
         if sign == DashuSign::Negative {
             twos_complement_le(&mut bytes);
+            while bytes.len() > 1
+                && *bytes.last().unwrap() == 0xFF
+                && bytes[bytes.len() - 2] & 0x80 != 0
+            {
+                bytes.pop();
+            }
         }
         bytes
     }
