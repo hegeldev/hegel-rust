@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::native::bignum::{BigInt, ToPrimitive};
@@ -17,50 +16,73 @@ fn is_surrogate_cp(cp: u32) -> bool {
     (0xD800..=0xDFFF).contains(&cp)
 }
 
-/// Validate `pattern` as a generatable regex, reporting the diagnostic a
-/// draw would produce. Used by the string-generator constructor so a bad
-/// pattern surfaces at construction time rather than mid-draw.
-pub(crate) fn validate_pattern(pattern: &str) -> Result<(), EngineError> {
-    parse_pattern(pattern, 0).map(|_| ()).map_err(|e| {
-        EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
-    })
+/// Cache key for a `(IN, items)` node's character set: the `SetItem` slice's
+/// address and length (stable because the AST is owned by the enclosing
+/// [`CompiledRegex`]) plus the active flags (which affect IGNORECASE swaps
+/// and ASCII-only filtering).
+type InKey = (usize, usize, u32);
+
+/// A regex pattern compiled once at string-generator construction time:
+/// the parsed AST, the optional user alphabet, and a cross-draw cache of
+/// the alphabet-constrained `IN`-node character sets (category classes like
+/// `\w` cost a full alphabet scan to materialise).
+#[derive(Debug)]
+pub(crate) struct CompiledRegex {
+    parsed: ParsedPattern,
+    alphabet: Option<IntervalSet>,
+    in_cache: Mutex<HashMap<InKey, Arc<[char]>>>,
 }
 
-/// Draw a string matching `pattern`, anchored at both ends when `fullmatch`
-/// and otherwise padded with draws from `alphabet` (or the full codespace
-/// when `alphabet` is `None`).
+impl CompiledRegex {
+    /// Parse `pattern`, reporting an invalid-argument diagnostic so a bad
+    /// pattern surfaces at construction time rather than mid-draw.
+    pub(crate) fn compile(
+        pattern: &str,
+        alphabet: Option<IntervalSet>,
+    ) -> Result<Self, EngineError> {
+        let parsed = parse_pattern(pattern, 0).map_err(|e| {
+            EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
+        })?;
+        Ok(CompiledRegex {
+            parsed,
+            alphabet,
+            in_cache: Mutex::new(HashMap::new()),
+        })
+    }
+}
+
+/// Draw a string matching `re`, anchored at both ends when `fullmatch`
+/// and otherwise padded with draws from the compiled alphabet (or the full
+/// codespace when it has none).
 pub(crate) fn generate_regex(
     ntc: &mut NativeTestCase,
-    pattern: &str,
+    re: &CompiledRegex,
     fullmatch: bool,
-    alphabet: &Option<IntervalSet>,
 ) -> Result<String, EngineError> {
-    let alphabet = alphabet.clone();
-    let parsed = parse_pattern(pattern, 0).map_err(|e| {
-        EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
-    })?;
+    let parsed = &re.parsed;
+    let alphabet = &re.alphabet;
 
     let mut state = GenState {
         groups: HashMap::new(),
         flags: parsed.flags,
         pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
+        in_cache: &re.in_cache,
     };
     let mut result = String::new();
 
     if parsed.pattern.is_empty() {
         if !fullmatch {
-            draw_pad(ntc, &alphabet, &mut result)?;
+            draw_pad(ntc, alphabet, &mut result)?;
         }
         return Ok(result);
     }
 
     if !fullmatch {
-        draw_prefix(ntc, &parsed, &alphabet, &mut result)?;
+        draw_prefix(ntc, parsed, alphabet, &mut result)?;
     }
-    generate_subpattern(ntc, &parsed.pattern, &mut state, &alphabet, &mut result)?;
+    generate_subpattern(ntc, &parsed.pattern, &mut state, alphabet, &mut result)?;
     if !fullmatch {
-        draw_suffix(ntc, &parsed, &alphabet, &mut result)?;
+        draw_suffix(ntc, parsed, alphabet, &mut result)?;
     }
 
     if !state.pending_lookaheads.is_empty() {
@@ -86,7 +108,7 @@ pub(crate) fn generate_regex(
 /// Mutable state threaded through generation: captured groups (for
 /// back-references) and the active regex flags (which change as we descend
 /// into `SUBPATTERN` nodes with inline flag modifiers).
-struct GenState {
+struct GenState<'a> {
     groups: HashMap<u32, String>,
     flags: u32,
     /// Negative-lookahead assertions recorded during generation. Each entry
@@ -94,13 +116,9 @@ struct GenState {
     /// groups at the point of the assertion. We check them against the final
     /// output string in [`generate_regex`].
     pending_lookaheads: Vec<PendingAssertNot>,
-    /// Memoised character sets for `OpCode::In` nodes. Categories like `\w`
-    /// require a full BMP scan; without caching, a `\w+` match would redo
-    /// that work for every emitted character. Keyed by the slice pointer
-    /// of the SetItem list (stable across one walk of the parsed AST) plus
-    /// the active flags (which affect IGNORECASE swaps and ASCII-only
-    /// filtering).
-    in_cache: HashMap<(*const SetItem, usize, u32), Rc<[char]>>,
+    /// The enclosing [`CompiledRegex`]'s cross-draw cache of
+    /// alphabet-constrained `IN`-node character sets.
+    in_cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
 }
 
 #[derive(Clone)]
@@ -282,13 +300,18 @@ fn generate_op(
                 let chars = cached_default_in_set(items, state.flags);
                 emit_from_chars(ntc, &chars, out)?;
             } else {
-                let key = (items.as_ptr(), items.len(), state.flags);
-                let chars = match state.in_cache.get(&key) {
-                    Some(cached) => Rc::clone(cached),
+                let key = (items.as_ptr() as usize, items.len(), state.flags);
+                let cached = state.in_cache.lock().unwrap().get(&key).cloned();
+                let chars = match cached {
+                    Some(cached) => cached,
                     None => {
-                        let computed: Rc<[char]> =
+                        let computed: Arc<[char]> =
                             build_in_set(items, state.flags, alphabet).into();
-                        state.in_cache.insert(key, Rc::clone(&computed));
+                        state
+                            .in_cache
+                            .lock()
+                            .unwrap()
+                            .insert(key, Arc::clone(&computed));
                         computed
                     }
                 };

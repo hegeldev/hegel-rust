@@ -129,9 +129,8 @@ pub enum StringSpec {
         max_size: usize,
     },
     Regex {
-        pattern: String,
+        compiled: regex::CompiledRegex,
         fullmatch: bool,
-        alphabet: Option<IntervalSet>,
     },
     Email,
     Url,
@@ -179,7 +178,6 @@ impl StringSpec {
         fullmatch: bool,
         alphabet: Option<&StringSpec>,
     ) -> Result<StringSpec, EngineError> {
-        regex::validate_pattern(pattern)?;
         let alphabet = match alphabet {
             None => None,
             Some(StringSpec::Text { intervals, .. }) => Some(intervals.clone()),
@@ -190,9 +188,8 @@ impl StringSpec {
             }
         };
         Ok(StringSpec::Regex {
-            pattern: pattern.to_string(),
+            compiled: regex::CompiledRegex::compile(pattern, alphabet)?,
             fullmatch,
-            alphabet,
         })
     }
 
@@ -226,11 +223,10 @@ pub fn generate_string(ntc: &mut NativeTestCase, spec: &StringSpec) -> Result<St
             ntc.draw_string(intervals.clone(), *min_size, *max_size)
         }),
         StringSpec::Regex {
-            pattern,
+            compiled,
             fullmatch,
-            alphabet,
         } => spanned(ntc, LABEL_REGEX, |ntc| {
-            regex::generate_regex(ntc, pattern, *fullmatch, alphabet)
+            regex::generate_regex(ntc, compiled, *fullmatch)
         }),
         StringSpec::Email => spanned(ntc, LABEL_EMAIL, internet::generate_email),
         StringSpec::Url => spanned(ntc, LABEL_URL, internet::generate_url),

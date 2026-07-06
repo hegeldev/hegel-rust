@@ -668,12 +668,8 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
 #[test]
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
-    let mut state = GenState {
-        groups: HashMap::new(),
-        flags: SRE_FLAG_IGNORECASE,
-        pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
-    };
+    let cache = Mutex::new(HashMap::new());
+    let mut state = ignorecase_state(&cache);
     let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
@@ -682,34 +678,29 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
 }
 
 #[test]
-fn generate_regex_unparseable_pattern_is_invalid_argument() {
-    let mut ntc = NativeTestCase::for_choices(&[], None, None);
-    let err = generate_regex(&mut ntc, "(unclosed", false, &None).unwrap_err();
+fn compile_rejects_unparseable_patterns() {
+    let err = CompiledRegex::compile("(unclosed", None).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
     assert!(err.to_string().contains("invalid regex pattern"));
+    assert!(CompiledRegex::compile("a+b?", None).is_ok());
 }
 
-#[test]
-fn validate_pattern_matches_generate() {
-    assert!(validate_pattern("(unclosed").is_err());
-    assert!(validate_pattern("a+b?").is_ok());
-}
-
-fn ignorecase_state() -> GenState {
+fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> {
     GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,
         pending_lookaheads: Vec::new(),
-        in_cache: HashMap::new(),
+        in_cache: cache,
     }
 }
 
 #[test]
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     use crate::native::rng::EngineRng;
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
         assert_eq!(out, "ß", "seed {seed} emitted a non-matching case variant");
@@ -720,9 +711,10 @@ fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
 fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     use crate::native::rng::EngineRng;
     let mut seen = std::collections::HashSet::new();
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
         seen.insert(out);
@@ -740,9 +732,10 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
         (0x130, 0x130),
         (0x307, 0x307),
     ]));
+    let cache = Mutex::new(HashMap::new());
     for seed in 0..100 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state();
+        let mut state = ignorecase_state(&cache);
         let mut out = String::new();
         generate_op(
             &mut ntc,
@@ -760,6 +753,7 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 fn generate_regex_handles_huge_character_class_ranges() {
     use crate::native::rng::EngineRng;
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let s = generate_regex(&mut ntc, "[\\x20-\\U0010FFFF]", false, &None).unwrap();
+    let re = CompiledRegex::compile("[\\x20-\\U0010FFFF]", None).unwrap();
+    let s = generate_regex(&mut ntc, &re, false).unwrap();
     assert!(!s.is_empty());
 }
