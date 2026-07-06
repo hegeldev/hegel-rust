@@ -11,12 +11,13 @@ use hegel_c::{
     hegel_context_free, hegel_context_last_error, hegel_context_new, hegel_generate_boolean,
     hegel_generate_bytes, hegel_generate_bytes_result_free, hegel_generate_bytes_result_t,
     hegel_generate_float, hegel_generate_integer, hegel_generate_integer_big,
+    hegel_generate_date, hegel_generate_datetime, hegel_generate_ip_address,
     hegel_generate_string, hegel_generate_string_result_free, hegel_generate_string_result_t,
-    hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_start,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_database,
-    hegel_settings_set_test_cases, hegel_status_t, hegel_string_generator_domain,
-    hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
-    hegel_string_generator_text, hegel_string_generator_url,
+    hegel_generate_time, hegel_generate_uuid, hegel_mark_complete, hegel_next_test_case,
+    hegel_run_free, hegel_run_start, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_database, hegel_settings_set_test_cases, hegel_status_t,
+    hegel_string_generator_domain, hegel_string_generator_email, hegel_string_generator_free,
+    hegel_string_generator_regex, hegel_string_generator_text, hegel_string_generator_url,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -1083,6 +1084,221 @@ fn generate_string_validates_handles_and_reports_stop_test() {
 
         ok(hegel_generate_string_result_free(ctx, ptr::null_mut()));
         ok(hegel_generate_string_result_free(ctx, &mut result));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn structured_draws_produce_valid_values_and_validate_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut date = hegel_c::hegel_date_t {
+            year: 0,
+            month: 0,
+            day: 0,
+        };
+        assert_eq!(
+            hegel_generate_date(ctx, ptr::null_mut(), &mut date),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 20));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            assert_eq!(
+                hegel_generate_date(ctx, tc, ptr::null_mut()),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                hegel_generate_time(ctx, tc, ptr::null_mut()),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                hegel_generate_datetime(ctx, tc, ptr::null_mut()),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                hegel_generate_uuid(ctx, tc, 4, true, ptr::null_mut()),
+                HEGEL_E_INVALID_ARG
+            );
+            let mut uuid = [0u8; 16];
+            assert_eq!(
+                hegel_generate_uuid(ctx, tc, 16, true, uuid.as_mut_ptr()),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("hex nibble"));
+            let mut ip = [0u8; 16];
+            let mut ip_len = 0usize;
+            assert_eq!(
+                hegel_generate_ip_address(ctx, tc, 4, ptr::null_mut(), &mut ip_len),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), ptr::null_mut()),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                hegel_generate_ip_address(ctx, tc, 5, ip.as_mut_ptr(), &mut ip_len),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("unsupported version 5"));
+
+            let overran = 'draws: {
+                let check = |rc: hegel_c::hegel_result_t| match rc {
+                    HEGEL_OK => false,
+                    HEGEL_E_STOP_TEST => true,
+                    other => panic!("unexpected rc: {other:?}"),
+                };
+                if check(hegel_generate_date(ctx, tc, &mut date)) {
+                    break 'draws true;
+                }
+                assert!((1..=9999).contains(&date.year));
+                assert!((1..=12).contains(&date.month));
+                assert!((1..=31).contains(&date.day));
+
+                let mut time = hegel_c::hegel_time_t {
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    microsecond: 0,
+                };
+                if check(hegel_generate_time(ctx, tc, &mut time)) {
+                    break 'draws true;
+                }
+                assert!(time.hour <= 23 && time.minute <= 59 && time.second <= 59);
+                assert!(time.microsecond <= 999_999);
+
+                let mut dt = hegel_c::hegel_datetime_t {
+                    date: hegel_c::hegel_date_t {
+                        year: 0,
+                        month: 0,
+                        day: 0,
+                    },
+                    time: hegel_c::hegel_time_t {
+                        hour: 0,
+                        minute: 0,
+                        second: 0,
+                        microsecond: 0,
+                    },
+                };
+                if check(hegel_generate_datetime(ctx, tc, &mut dt)) {
+                    break 'draws true;
+                }
+                assert!((1..=9999).contains(&dt.date.year));
+                assert!(dt.time.hour <= 23);
+
+                if check(hegel_generate_uuid(ctx, tc, 4, true, uuid.as_mut_ptr())) {
+                    break 'draws true;
+                }
+                assert_eq!(uuid[6] >> 4, 4, "version nibble");
+                assert!(matches!(uuid[8] >> 4, 0x8..=0xb), "variant nibble");
+                if check(hegel_generate_uuid(ctx, tc, 0, false, uuid.as_mut_ptr())) {
+                    break 'draws true;
+                }
+                assert_ne!(uuid, [0u8; 16], "nil UUID must never be produced");
+
+                if check(hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), &mut ip_len)) {
+                    break 'draws true;
+                }
+                assert_eq!(ip_len, 4);
+                if check(hegel_generate_ip_address(ctx, tc, 6, ip.as_mut_ptr(), &mut ip_len)) {
+                    break 'draws true;
+                }
+                assert_eq!(ip_len, 16);
+                false
+            };
+
+            if overran {
+                ok(hegel_mark_complete(
+                    ctx,
+                    tc,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN,
+                    ptr::null(),
+                ));
+                ok(hegel_c::hegel_test_case_free(ctx, tc));
+            } else {
+                complete_valid(ctx, tc);
+            }
+        }
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn structured_draws_after_overrun_report_stop_test() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 1));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        let mut result = hegel_generate_bytes_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        loop {
+            match hegel_generate_bytes(ctx, tc, 1000, 10000, &mut result) {
+                HEGEL_OK => ok(hegel_generate_bytes_result_free(ctx, &mut result)),
+                HEGEL_E_STOP_TEST => break,
+                other => panic!("unexpected rc: {other:?}"),
+            }
+        }
+        let mut date = hegel_c::hegel_date_t {
+            year: 0,
+            month: 0,
+            day: 0,
+        };
+        assert_eq!(hegel_generate_date(ctx, tc, &mut date), HEGEL_E_STOP_TEST);
+        let mut time = hegel_c::hegel_time_t {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+        };
+        assert_eq!(hegel_generate_time(ctx, tc, &mut time), HEGEL_E_STOP_TEST);
+        let mut dt = hegel_c::hegel_datetime_t {
+            date: hegel_c::hegel_date_t {
+                year: 0,
+                month: 0,
+                day: 0,
+            },
+            time: hegel_c::hegel_time_t {
+                hour: 0,
+                minute: 0,
+                second: 0,
+                microsecond: 0,
+            },
+        };
+        assert_eq!(hegel_generate_datetime(ctx, tc, &mut dt), HEGEL_E_STOP_TEST);
+        let mut uuid = [0u8; 16];
+        assert_eq!(
+            hegel_generate_uuid(ctx, tc, 0, false, uuid.as_mut_ptr()),
+            HEGEL_E_STOP_TEST
+        );
+        let mut ip = [0u8; 16];
+        let mut ip_len = 0usize;
+        assert_eq!(
+            hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), &mut ip_len),
+            HEGEL_E_STOP_TEST
+        );
+
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            ptr::null(),
+        ));
+        ok(hegel_c::hegel_test_case_free(ctx, tc));
+        drain(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }

@@ -560,6 +560,35 @@ typedef struct {
     size_t len;
 } hegel_generate_string_result_t;
 
+/*
+ A drawn Gregorian calendar date: `year` in `[1, 9999]`, `month` in
+ `[1, 12]`, `day` in `[1, days-in-month]`.
+ */
+typedef struct {
+    int32_t year;
+    uint8_t month;
+    uint8_t day;
+} hegel_date_t;
+
+/*
+ A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
+ `[0, 59]`, `microsecond` in `[0, 999999]`.
+ */
+typedef struct {
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+    uint32_t microsecond;
+} hegel_time_t;
+
+/*
+ A drawn naive datetime (a date plus a time of day, no timezone).
+ */
+typedef struct {
+    hegel_date_t date;
+    hegel_time_t time;
+} hegel_datetime_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -1308,6 +1337,81 @@ hegel_result_t hegel_generate_string(hegel_context_t *ctx,
  */
 hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
                                                  hegel_generate_string_result_t *result);
+
+/*
+ Draw a Gregorian calendar date, shrinking toward 2000-01-01.
+
+ On success writes the drawn date into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case (the caller should abort the body and
+ call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_value`.
+ */
+hegel_result_t hegel_generate_date(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   hegel_date_t *out_value);
+
+/*
+ Draw a time of day, shrinking toward midnight.
+
+ On success writes the drawn time into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+ NULL `out_value`.
+ */
+hegel_result_t hegel_generate_time(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   hegel_time_t *out_value);
+
+/*
+ Draw a naive datetime (no timezone), shrinking toward 2000-01-01T00:00:00.
+
+ On success writes the drawn datetime into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+ is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+ NULL `out_value`.
+ */
+hegel_result_t hegel_generate_datetime(hegel_context_t *ctx,
+                                       hegel_test_case_t *tc,
+                                       hegel_datetime_t *out_value);
+
+/*
+ Draw a UUID as 16 big-endian bytes written to `out_bytes` (which must
+ have room for 16 bytes).
+
+ When `has_version` is set, the RFC 4122 version nibble is forced to
+ `version` (a single hex nibble, 0..=15 — conventionally 1..=5) and the
+ variant nibble to the RFC 4122 variant. Without a version the 128 bits
+ are uniform, except that the nil UUID is never produced.
+
+ On success writes 16 bytes and returns `HEGEL_OK`. Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+ this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL `out_bytes` or
+ a `version > 15`.
+ */
+hegel_result_t hegel_generate_uuid(hegel_context_t *ctx,
+                                   hegel_test_case_t *tc,
+                                   uint8_t version,
+                                   bool has_version,
+                                   uint8_t *out_bytes);
+
+/*
+ Draw an IP address of the given `version` (4 or 6). Half the draws are
+ uniform over the whole address space and half are biased into the IANA
+ special-purpose ranges (loopback, private, documentation, …).
+
+ On success writes the address's network-order bytes into `out_bytes`
+ (which must have room for 16 bytes), the byte count — 4 or 16 — into
+ `*out_len`, and returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the
+ engine's choice budget is exhausted for this test case. Returns
+ `HEGEL_E_INVALID_ARG` for NULL out parameters or a version other than 4
+ or 6.
+ */
+hegel_result_t hegel_generate_ip_address(hegel_context_t *ctx,
+                                         hegel_test_case_t *tc,
+                                         uint8_t version,
+                                         uint8_t *out_bytes,
+                                         size_t *out_len);
 
 /*
  Record a numeric observation under `label` for the engine's

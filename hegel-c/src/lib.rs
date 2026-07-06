@@ -2713,6 +2713,234 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
     HEGEL_OK
 }
 
+/// A drawn Gregorian calendar date: `year` in `[1, 9999]`, `month` in
+/// `[1, 12]`, `day` in `[1, days-in-month]`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_date_t {
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+}
+
+/// A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
+/// `[0, 59]`, `microsecond` in `[0, 999999]`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_time_t {
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub microsecond: u32,
+}
+
+/// A drawn naive datetime (a date plus a time of day, no timezone).
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_datetime_t {
+    pub date: hegel_date_t,
+    pub time: hegel_time_t,
+}
+
+fn c_date(d: crate::native::draws::special::Date) -> hegel_date_t {
+    hegel_date_t {
+        year: d.year,
+        month: d.month,
+        day: d.day,
+    }
+}
+
+fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
+    hegel_time_t {
+        hour: t.hour,
+        minute: t.minute,
+        second: t.second,
+        microsecond: t.microsecond,
+    }
+}
+
+/// Draw a Gregorian calendar date, shrinking toward 2000-01-01.
+///
+/// On success writes the drawn date into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case (the caller should abort the body and
+/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_date(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_value: *mut hegel_date_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error(ctx, "hegel_generate_date: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_date() {
+        Ok(d) => {
+            unsafe { *out_value = c_date(d) };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw a time of day, shrinking toward midnight.
+///
+/// On success writes the drawn time into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_time(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_value: *mut hegel_time_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error(ctx, "hegel_generate_time: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_time() {
+        Ok(t) => {
+            unsafe { *out_value = c_time(t) };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw a naive datetime (no timezone), shrinking toward 2000-01-01T00:00:00.
+///
+/// On success writes the drawn datetime into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_datetime(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_value: *mut hegel_datetime_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_value.is_null() {
+        set_last_error(ctx, "hegel_generate_datetime: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_datetime() {
+        Ok(dt) => {
+            unsafe {
+                *out_value = hegel_datetime_t {
+                    date: c_date(dt.date),
+                    time: c_time(dt.time),
+                }
+            };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw a UUID as 16 big-endian bytes written to `out_bytes` (which must
+/// have room for 16 bytes).
+///
+/// When `has_version` is set, the RFC 4122 version nibble is forced to
+/// `version` (a single hex nibble, 0..=15 — conventionally 1..=5) and the
+/// variant nibble to the RFC 4122 variant. Without a version the 128 bits
+/// are uniform, except that the nil UUID is never produced.
+///
+/// On success writes 16 bytes and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL `out_bytes` or
+/// a `version > 15`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_uuid(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    version: u8,
+    has_version: bool,
+    out_bytes: *mut u8,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_bytes.is_null() {
+        set_last_error(ctx, "hegel_generate_uuid: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_uuid(has_version.then_some(version)) {
+        Ok(bytes) => {
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16) };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw an IP address of the given `version` (4 or 6). Half the draws are
+/// uniform over the whole address space and half are biased into the IANA
+/// special-purpose ranges (loopback, private, documentation, …).
+///
+/// On success writes the address's network-order bytes into `out_bytes`
+/// (which must have room for 16 bytes), the byte count — 4 or 16 — into
+/// `*out_len`, and returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the
+/// engine's choice budget is exhausted for this test case. Returns
+/// `HEGEL_E_INVALID_ARG` for NULL out parameters or a version other than 4
+/// or 6.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_ip_address(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    version: u8,
+    out_bytes: *mut u8,
+    out_len: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if out_bytes.is_null() || out_len.is_null() {
+        set_last_error(ctx, "hegel_generate_ip_address: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_ip_address(version) {
+        Ok(std::net::IpAddr::V4(a)) => {
+            let octets = a.octets();
+            unsafe {
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
+                *out_len = 4;
+            }
+            HEGEL_OK
+        }
+        Ok(std::net::IpAddr::V6(a)) => {
+            let octets = a.octets();
+            unsafe {
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
+                *out_len = 16;
+            }
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
 /// Record a numeric observation under `label` for the engine's
 /// targeting phase to hill-climb toward. Higher values are "more
 /// interesting"; the engine biases later test cases toward inputs that

@@ -1,6 +1,9 @@
 use ciborium::Value;
 
+use std::net::IpAddr;
+
 use crate::native::bignum::BigInt;
+use crate::native::draws::special::{Date, DateTime, Time};
 use crate::native::draws::{FloatSpec, StringSpec};
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
@@ -72,6 +75,24 @@ pub trait DataSource: Send + Sync {
     /// Draw a string according to a validated [`StringSpec`] (text, regex,
     /// email, url, or domain).
     fn generate_string(&self, spec: &StringSpec) -> Result<String, DataSourceError>;
+
+    /// Draw a Gregorian calendar [`Date`].
+    fn generate_date(&self) -> Result<Date, DataSourceError>;
+
+    /// Draw a [`Time`] of day.
+    fn generate_time(&self) -> Result<Time, DataSourceError>;
+
+    /// Draw a naive [`DateTime`].
+    fn generate_datetime(&self) -> Result<DateTime, DataSourceError>;
+
+    /// Draw a UUID's 16 big-endian bytes. When `version` is set, the RFC
+    /// 4122 version and variant nibbles are forced accordingly; errors with
+    /// `InvalidArgument` when `version > 15`.
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError>;
+
+    /// Draw an IP address of the given `version`. Errors with
+    /// `InvalidArgument` for versions other than 4 and 6.
+    fn generate_ip_address(&self, version: u8) -> Result<IpAddr, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;

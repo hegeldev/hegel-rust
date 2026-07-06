@@ -216,6 +216,28 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| crate::native::draws::generate_string(ntc, spec))
     }
 
+    fn generate_date(&self) -> Result<crate::native::draws::special::Date, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_date)
+    }
+
+    fn generate_time(&self) -> Result<crate::native::draws::special::Time, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_time)
+    }
+
+    fn generate_datetime(
+        &self,
+    ) -> Result<crate::native::draws::special::DateTime, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_datetime)
+    }
+
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_uuid(ntc, version))
+    }
+
+    fn generate_ip_address(&self, version: u8) -> Result<std::net::IpAddr, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_ip_address(ntc, version))
+    }
+
     fn generate_bytes(
         &self,
         min_size: usize,

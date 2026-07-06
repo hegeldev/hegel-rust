@@ -2,6 +2,7 @@
 
 pub mod internet;
 pub mod regex;
+pub mod special;
 pub mod text;
 
 use crate::control::hegel_internal_assert;
@@ -17,6 +18,11 @@ pub(crate) const LABEL_REGEX: u64 = 17;
 pub(crate) const LABEL_EMAIL: u64 = 18;
 pub(crate) const LABEL_URL: u64 = 19;
 pub(crate) const LABEL_DOMAIN: u64 = 20;
+pub(crate) const LABEL_DATE: u64 = 21;
+pub(crate) const LABEL_TIME: u64 = 22;
+pub(crate) const LABEL_DATETIME: u64 = 23;
+pub(crate) const LABEL_UUID: u64 = 24;
+pub(crate) const LABEL_IP_ADDRESS: u64 = 25;
 
 /// Parameters of a float draw as accepted at the `hegel_generate_float` API
 /// surface. Width-32 handling (bound clamping, result rounding) and the
