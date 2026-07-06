@@ -7,7 +7,10 @@ In its place the ABI now exposes one function per foundational generator:
 
 - `hegel_generate_integer` draws an integer in `[min, max]`, and
   `hegel_generate_integer_big` does the same for bounds beyond `int64_t`
-  (two's-complement little-endian byte encodings in and out).
+  (two's-complement little-endian byte encodings in and out). The big
+  variant sign-fills the output buffer beyond the value's minimal
+  encoding, so a caller can read the whole buffer as a fixed-width
+  two's-complement integer without doing its own sign extension.
 - `hegel_generate_float` takes the full float specification directly:
   width (32 or 64), bounds, NaN/infinity policy, exclusive-bound flags,
   and the smallest nonzero magnitude.

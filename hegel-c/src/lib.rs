@@ -2018,7 +2018,7 @@ pub unsafe extern "C" fn hegel_generate_boolean(
             "hegel_generate_boolean",
             out_value.is_null(),
             |tc| tc.stream.generate_boolean(p, has_forced.then_some(forced)),
-            |v| unsafe { *out_value = v },
+            |v| *out_value = v,
         )
     }
 }
@@ -2052,9 +2052,7 @@ pub unsafe extern "C" fn hegel_generate_integer(
                 tc.stream
                     .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
             },
-            |v| unsafe {
-                *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds")
-            },
+            |v| *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds"),
         )
     }
 }
@@ -2207,7 +2205,7 @@ pub unsafe extern "C" fn hegel_generate_float(
             "hegel_generate_float",
             out_value.is_null(),
             |tc| tc.stream.generate_float(&spec),
-            |v| unsafe { *out_value = v },
+            |v| *out_value = v,
         )
     }
 }
@@ -2256,7 +2254,7 @@ pub unsafe extern "C" fn hegel_generate_bytes(
                 let boxed = v.into_boxed_slice();
                 let len = boxed.len();
                 let data = Box::into_raw(boxed) as *mut u8;
-                unsafe { *out_result = hegel_generate_bytes_result_t { data, len } };
+                *out_result = hegel_generate_bytes_result_t { data, len };
             },
         )
     }
@@ -2772,7 +2770,7 @@ pub unsafe extern "C" fn hegel_generate_date(
             "hegel_generate_date",
             out_value.is_null(),
             |tc| tc.stream.generate_date(),
-            |d| unsafe { *out_value = c_date(d) },
+            |d| *out_value = c_date(d),
         )
     }
 }
@@ -2796,7 +2794,7 @@ pub unsafe extern "C" fn hegel_generate_time(
             "hegel_generate_time",
             out_value.is_null(),
             |tc| tc.stream.generate_time(),
-            |t| unsafe { *out_value = c_time(t) },
+            |t| *out_value = c_time(t),
         )
     }
 }
@@ -2820,7 +2818,7 @@ pub unsafe extern "C" fn hegel_generate_datetime(
             "hegel_generate_datetime",
             out_value.is_null(),
             |tc| tc.stream.generate_datetime(),
-            |dt| unsafe {
+            |dt| {
                 *out_value = hegel_datetime_t {
                     date: c_date(dt.date),
                     time: c_time(dt.time),
@@ -2857,7 +2855,7 @@ pub unsafe extern "C" fn hegel_generate_uuid(
             "hegel_generate_uuid",
             out_bytes.is_null(),
             |tc| tc.stream.generate_uuid(has_version.then_some(version)),
-            |bytes| unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16) },
+            |bytes| std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16),
         )
     }
 }
@@ -2885,7 +2883,7 @@ pub unsafe extern "C" fn hegel_generate_ipv4(
             |tc| tc.stream.generate_ipv4(),
             |a| {
                 let octets = a.octets();
-                unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4) };
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
             },
         )
     }
@@ -2913,7 +2911,7 @@ pub unsafe extern "C" fn hegel_generate_ipv6(
             |tc| tc.stream.generate_ipv6(),
             |a| {
                 let octets = a.octets();
-                unsafe { std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16) };
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
             },
         )
     }
