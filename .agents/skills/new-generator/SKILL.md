@@ -9,11 +9,11 @@ A reference + checklist for implementing a single new generator. The pattern is 
 
 This skill covers writing the generator itself. To make `gs::default::<T>()` work for the new type, also run the **new-default-generator** skill after this one.
 
-## When server-side schema work would be required
+## When engine-side schema work would be required
 
-Server-side schema mods (in `hegel-core`) are **out of scope** for this skill. Do not modify the server.
+Engine-side schema mods (the interpreters in `hegel-c/src/native/schema/`) are **out of scope** for this skill.
 
-If you find that the generator would *dramatically and fundamentally* benefit from a new or extended server schema (e.g. the type cannot reasonably be expressed via existing schemas, or every interesting builder method would need a new schema field), stop and surface that to the user. Do not start the server-side work yourself. Otherwise, compose existing schemas — `{"type": "integer"}`, `{"type": "string"}`, `{"type": "date"}`, etc. — even if the result is slightly less ergonomic on the wire.
+If you find that the generator would *dramatically and fundamentally* benefit from a new or extended engine schema (e.g. the type cannot reasonably be expressed via existing schemas, or every interesting builder method would need a new schema field), stop and surface that to the user. Do not start the engine-side work yourself. Otherwise, compose existing schemas — `{"type": "integer"}`, `{"type": "string"}`, `{"type": "date"}`, etc. — even if the result is slightly less ergonomic on the wire.
 
 ## File placement
 
