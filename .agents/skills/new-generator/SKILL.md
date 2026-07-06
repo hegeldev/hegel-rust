@@ -1,6 +1,6 @@
 ---
 name: new-generator
-description: "How to add a new generator to hegel-rust. Use when the user asks to implement, add, or write a generator for a type — e.g. 'add a generator for Url', 'implement a UUID generator', 'write a generator for jiff::civil::Date'. Covers the generator struct, builder methods, Generate trait impl, schema asserts, mod.rs wiring, rustdoc, and the required test set. Pair with the new-default-generator skill to also wire up gs::default::<T>()."
+description: "How to add a new generator to hegel-rust. Use when the user asks to implement, add, or write a generator for a type — e.g. 'add a generator for Url', 'implement a UUID generator', 'write a generator for jiff::civil::Date'. Covers the generator struct, builder methods, Generator trait impl, schema asserts, mod.rs wiring, rustdoc, and the required test set. Pair with the new-default-generator skill to also wire up gs::default::<T>()."
 ---
 
 # Adding a New Generator
@@ -73,7 +73,7 @@ impl Generator<T> for FooGenerator {
 }
 ```
 
-**Always implement `as_basic` returning `Some` when the generator can be expressed as a single server schema.** This is the central optimization of the crate — `map()` on a basic generator preserves the schema. The only time `as_basic` returns `None` (or is omitted) is when generation fundamentally requires multiple draws or runtime decisions that can't be encoded as one schema.
+**Always implement `as_basic` returning `Some` when the generator can be expressed as a single engine schema.** This is the central optimization of the crate — `map()` on a basic generator preserves the schema. The only time `as_basic` returns `None` (or is omitted) is when generation fundamentally requires multiple draws or runtime decisions that can't be encoded as one schema.
 
 ### 5. Factory function + module export
 
@@ -93,7 +93,7 @@ Required on every new generator:
 
 - `///` on the generator struct, including a `Created by [`foos()`].` cross-reference.
 - `///` on every builder method describing what it constrains.
-- `///` on the factory function with a runnable `#[hegel::test]` example wrapped in ` ```no_run ` (use `no_run` because doctests don't have a hegel server available).
+- `///` on the factory function with a runnable `#[hegel::test]` example wrapped in ` ```no_run ` (use `no_run` so the example compiles but doctests don't execute a full property run).
 
 The example block in the factory function is a *requirement*, not aspirational — see the `durations()` factory in `src/generators/time.rs` for the canonical shape.
 
@@ -171,7 +171,7 @@ For **feature-gated generators**, panic tests live alongside the rest of the lib
 
 The `expected` substring must match a stable part of the panic message — keep it short and free of formatting.
 
-### Test 7 — Randomized-bound property test (recommended)
+### Test 6 — Randomized-bound property test (recommended)
 
 A single `#[hegel::test]` per generator that itself draws values for any/all builder options, applies them, draws a value from the configured generator, and asserts the value is within the expected range. This is a strictly more powerful version of test #2 — it catches bugs at parameter combinations a fixed-bound test wouldn't reach.
 
@@ -189,9 +189,9 @@ Model on `tests/test_strings.rs:test_text_codepoint_range` and `test_characters_
 
 When the generator's options interact in nontrivial ways (e.g. `floats()` with `allow_nan` × `min_value`), use `tc.assume(...)` to filter out combinations the generator rejects rather than picking them apart by hand.
 
-### Test 6 / 8 — Skip
+### Tests not to add
 
-Conformance binaries (`tests/conformance/rust/src/bin/`) and explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
+Explicit edge-case tests are **not** part of the standard test set for new generators. Don't add them.
 
 ## Final checklist
 
@@ -207,7 +207,7 @@ Before declaring the generator done:
 - [ ] Test 2 (one test per builder method)
 - [ ] Test 3 (composition in `vecs`)
 - [ ] Test 5 (one panic test per assert; first-party → `tests/test_validation.rs`, feature-gated → `tests/<lib>/`)
-- [ ] Test 7 (randomized-bound property test, recommended)
+- [ ] Test 6 (randomized-bound property test, recommended)
 - [ ] `just check` passes (formatting, lint, tests, docs)
 - [ ] Coverage is 100% on the new code (see the `coverage` skill if anything is uncovered)
 

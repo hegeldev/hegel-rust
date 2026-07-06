@@ -112,9 +112,9 @@ pub fn datetimes() -> impl Generator<lib::DateTime> {
 
 Prefer composition — do not re-derive a schema if one of the leaf generators already has it.
 
-### Server-side schemas are out of scope
+### Engine-side schemas are out of scope
 
-If you find a type that would *dramatically and fundamentally* benefit from a new server schema (e.g. would otherwise need a wildly contorted `flat_map` or post-hoc filter), stop and surface it to the user. Do not modify the server. See the new-generator skill for more on this gate.
+If you find a type that would *dramatically and fundamentally* benefit from a new engine schema (e.g. would otherwise need a wildly contorted `flat_map` or post-hoc filter), stop and surface it to the user. Do not modify the engine's schema interpreters (`hegel-c/src/native/schema/`) yourself. See the new-generator skill for more on this gate.
 
 ## Step 5 — Tests
 
