@@ -236,6 +236,8 @@ pub use generators::Generator;
 pub use test_case::TestCase;
 
 #[doc(hidden)]
+pub use ciborium;
+#[doc(hidden)]
 pub use paste;
 #[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};

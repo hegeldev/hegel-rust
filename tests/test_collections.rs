@@ -282,6 +282,7 @@ mod simple_collections {
     //! but drop the `frozenset` row (no `gs::frozensets()`).
 
     use super::common::utils::{assert_all_examples, find_any, minimal};
+    use ciborium::Value;
     use hegel::generators::{self as gs, Generator};
     use std::collections::{HashMap, HashSet};
 
@@ -300,6 +301,41 @@ mod simple_collections {
     fn test_find_empty_set_gives_empty() {
         let xs: HashSet<()> = minimal(gs::hashsets(gs::unit()).max_size(0), |_| true);
         assert!(xs.is_empty());
+    }
+
+    #[test]
+    fn test_find_empty_fixed_dict_gives_empty() {
+        let v: Value = minimal(gs::fixed_dicts().build(), |_| true);
+        let Value::Map(entries) = v else {
+            panic!("expected Value::Map");
+        };
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_fixed_dicts_preserve_field_order() {
+        let keys: Vec<String> = ["k7", "k2", "k0", "k3", "k9", "k1", "k5", "k8", "k4", "k6"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut builder = gs::fixed_dicts();
+        for k in &keys {
+            builder = builder.field(k, gs::booleans());
+        }
+        let expected = keys.clone();
+        assert_all_examples(builder.build(), move |v: &Value| {
+            let Value::Map(entries) = v else {
+                return false;
+            };
+            let got: Vec<String> = entries
+                .iter()
+                .map(|(k, _)| match k {
+                    Value::Text(s) => s.clone(),
+                    _ => panic!("expected text key, got {:?}", k),
+                })
+                .collect();
+            got == expected
+        });
     }
 
     #[test]

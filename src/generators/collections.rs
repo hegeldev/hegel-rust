@@ -1,9 +1,11 @@
-use super::{Collection, Generator, TestCase, labels};
+use super::{BoxedGenerator, Collection, Generator, TestCase, labels};
 use crate::control::hegel_internal_assert;
 use crate::test_case::invalid_argument;
+use ciborium::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// Generator for `Vec<T>`. Created by [`vecs()`].
 pub struct VecGenerator<G, T> {
@@ -303,6 +305,90 @@ pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
         max_size: None,
         _phantom: PhantomData,
     }
+}
+
+fn cbor_serialize<T: serde::Serialize>(value: &T) -> Value {
+    Value::serialized(value).expect("CBOR serialization failed")
+}
+
+pub(crate) struct MappedToValue<T, G> {
+    inner: G,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: serde::Serialize, G: Generator<T>> Generator<Value> for MappedToValue<T, G> {
+    fn do_draw(&self, tc: &TestCase) -> Value {
+        cbor_serialize(&self.inner.do_draw(tc))
+    }
+}
+
+/// Builder for fixed-key dictionary generators. Created by [`fixed_dicts()`].
+///
+/// Add fields with [`field()`](Self::field), then call [`build()`](Self::build)
+/// to get the generator.
+pub struct FixedDictBuilder<'a> {
+    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
+}
+
+impl<'a> FixedDictBuilder<'a> {
+    /// Add a field with a name and generator.
+    pub fn field<T, G>(mut self, name: &str, generator: G) -> Self
+    where
+        G: Generator<T> + Send + Sync + 'a,
+        T: serde::Serialize + 'a,
+    {
+        let boxed = BoxedGenerator {
+            inner: Arc::new(MappedToValue {
+                inner: generator,
+                _phantom: PhantomData,
+            }),
+        };
+        self.fields.push((name.to_string(), boxed));
+        self
+    }
+
+    /// Build the generator.
+    pub fn build(self) -> FixedDictGenerator<'a> {
+        FixedDictGenerator {
+            fields: self.fields,
+        }
+    }
+}
+
+/// Generator for CBOR maps with fixed keys. Created via [`FixedDictBuilder`].
+pub struct FixedDictGenerator<'a> {
+    fields: Vec<(String, BoxedGenerator<'a, Value>)>,
+}
+
+impl Generator<Value> for FixedDictGenerator<'_> {
+    fn do_draw(&self, tc: &TestCase) -> Value {
+        tc.start_span(labels::FIXED_DICT);
+        let entries: Vec<(Value, Value)> = self
+            .fields
+            .iter()
+            .map(|(name, g)| (Value::Text(name.clone()), g.do_draw(tc)))
+            .collect();
+        tc.stop_span(false);
+        Value::Map(entries)
+    }
+}
+
+/// Create a generator for dictionaries with fixed keys.
+///
+/// See [`FixedDictBuilder`] for builder methods.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators::{self as gs, Generator};
+///
+/// let generator = gs::fixed_dicts()
+///     .field("name", gs::text())
+///     .field("age", gs::integers::<u32>())
+///     .build();
+/// ```
+pub fn fixed_dicts<'a>() -> FixedDictBuilder<'a> {
+    FixedDictBuilder { fields: Vec::new() }
 }
 
 /// Generator for fixed-size arrays `[T; N]`. Created by [`arrays()`].

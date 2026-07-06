@@ -391,6 +391,7 @@ name = "hegeltest"
 version = "0.23.4"
 dependencies = [
  "chrono",
+ "ciborium",
  "crc32fast",
  "criterion",
  "ctor",
