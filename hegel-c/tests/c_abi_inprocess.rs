@@ -13,9 +13,9 @@ use hegel_c::{
     HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelSettings, HegelTestCase,
     hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
     hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
-    hegel_failure_reproduction_blob, hegel_generate, hegel_label_t, hegel_mark_complete,
-    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_generate_boolean,
+    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
     hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
@@ -249,18 +249,9 @@ fn null_handles_are_rejected_without_crashing() {
         assert!(clone_out.is_null());
 
         let tc: *mut HegelTestCase = ptr::null_mut();
-        let mut out_ptr: *const u8 = ptr::null();
-        let mut out_len = 0usize;
-        let schema = [0u8];
+        let mut value = 0i64;
         assert_eq!(
-            hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut out_ptr,
-                &mut out_len
-            ),
+            hegel_generate_integer(ctx, tc, 0, 100, &mut value),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_INVALID_HANDLE);
@@ -336,15 +327,13 @@ fn out_parameters_are_rejected_when_null() {
 
         assert_eq!(hegel_version(ctx, ptr::null_mut()), HEGEL_E_INVALID_ARG);
 
-        let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut nlen = 0usize;
-            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut nlen);
+            let mut value = 0i64;
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
             ok(hegel_mark_complete(
                 ctx,
                 tc,
@@ -459,7 +448,6 @@ fn explicit_backend_run_and_lifecycle_misuse() {
         assert_eq!(hegel_run_result(ctx, run, &mut res), HEGEL_E_NOT_COMPLETE);
         assert!(res.is_null());
 
-        let schema = integer_schema();
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
@@ -471,17 +459,9 @@ fn explicit_backend_run_and_lifecycle_misuse() {
         assert!(tc2.is_null());
         assert!(last_error(ctx).contains("not marked complete"));
 
-        let mut out_ptr: *const u8 = ptr::null();
-        let mut out_len = 0usize;
+        let mut value = 0i64;
         assert_eq!(
-            hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut out_ptr,
-                &mut out_len
-            ),
+            hegel_generate_integer(ctx, tc, 0, 100, &mut value),
             HEGEL_OK
         );
         assert_eq!(
@@ -495,10 +475,9 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
+            let mut value = 0i64;
             assert_eq!(
-                hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
+                hegel_generate_integer(ctx, tc, 0, 100, &mut value),
                 HEGEL_OK
             );
             ok(hegel_mark_complete(
@@ -600,15 +579,13 @@ fn next_after_drain_returns_null() {
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 3));
         let run = start(ctx, s);
-        let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
-            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            let mut value = 0i64;
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
             ok(hegel_mark_complete(
                 ctx,
                 tc,
@@ -626,7 +603,7 @@ fn next_after_drain_returns_null() {
 }
 
 /// Exercise the per-primitive argument-validation paths on a *live*,
-/// run-owned test case: null/malformed schema, null out-parameters, non-UTF-8
+/// run-owned test case: null out-parameters, inverted bounds, non-UTF-8
 /// string arguments, completing twice, drawing after completion, and releasing
 /// a run-owned handle with `hegel_test_case_free` (the caller owns its handle
 /// even though the run keeps its own reference). The case is marked
@@ -647,40 +624,18 @@ fn live_test_case_argument_validation() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        let schema = integer_schema();
-        let mut out_ptr: *const u8 = ptr::null();
-        let mut out_len = 0usize;
+        let mut value = 0i64;
 
         assert_eq!(
-            hegel_generate(ctx, tc, ptr::null(), 4, &mut out_ptr, &mut out_len),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("schema pointer is null"));
-        assert_eq!(
-            hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                ptr::null_mut(),
-                &mut out_len
-            ),
+            hegel_generate_integer(ctx, tc, 0, 100, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
-        let garbage = [0x82u8, 0x01];
         assert_eq!(
-            hegel_generate(
-                ctx,
-                tc,
-                garbage.as_ptr(),
-                garbage.len(),
-                &mut out_ptr,
-                &mut out_len
-            ),
+            hegel_generate_integer(ctx, tc, 100, 0, &mut value),
             HEGEL_E_INVALID_ARG
         );
-        assert!(last_error(ctx).contains("malformed CBOR"));
+        assert!(last_error(ctx).contains("min_value"));
 
         let mut id = 0i64;
         assert_eq!(
@@ -703,14 +658,7 @@ fn live_test_case_argument_validation() {
         );
         let mut more = false;
         if hegel_collection_more(ctx, tc, id, &mut more) == HEGEL_OK && more {
-            let _ = hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut out_ptr,
-                &mut out_len,
-            );
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
             assert_eq!(hegel_collection_reject(ctx, tc, id, ptr::null()), HEGEL_OK);
         }
 
@@ -760,14 +708,7 @@ fn live_test_case_argument_validation() {
         );
 
         assert_eq!(
-            hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut out_ptr,
-                &mut out_len
-            ),
+            hegel_generate_integer(ctx, tc, 0, 100, &mut value),
             HEGEL_E_ALREADY_COMPLETE
         );
         assert_eq!(
@@ -781,9 +722,8 @@ fn live_test_case_argument_validation() {
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
-            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            let mut value = 0i64;
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
             ok(hegel_mark_complete(
                 ctx,
                 tc,
@@ -815,15 +755,13 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
-        let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
-            match hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n) {
+            let mut value = 0i64;
+            match hegel_generate_integer(ctx, tc, 0, 100, &mut value) {
                 HEGEL_OK => {
                     ok(hegel_mark_complete(
                         ctx,
@@ -901,15 +839,13 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE,
         ));
         let run = start(ctx, s);
-        let schema = integer_schema();
         let origin = CString::new("single-case bug").unwrap();
 
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
-        let mut p: *const u8 = ptr::null();
-        let mut n = 0usize;
+        let mut value = 0i64;
         assert_eq!(
-            hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_generate_integer(ctx, tc, 0, 100, &mut value),
             HEGEL_OK
         );
         ok(hegel_mark_complete(
@@ -957,24 +893,14 @@ fn primitives_after_overrun_all_report_stop_test() {
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         let run = start(ctx, s);
-        let schema = integer_schema();
 
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        let mut out_ptr: *const u8 = ptr::null();
-        let mut out_len = 0usize;
+        let mut value = 0i64;
         let mut overran = false;
         for _ in 0..1_000_000 {
-            if hegel_generate(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut out_ptr,
-                &mut out_len,
-            ) == HEGEL_E_STOP_TEST
-            {
+            if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_E_STOP_TEST {
                 overran = true;
                 break;
             }
@@ -1010,9 +936,8 @@ fn primitives_after_overrun_all_report_stop_test() {
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
-            let _ = hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n);
+            let mut value = 0i64;
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
             ok(hegel_mark_complete(
                 ctx,
                 tc,
@@ -1030,10 +955,9 @@ fn primitives_after_overrun_all_report_stop_test() {
 /// Exercise the state-machine and weighted-boolean C-ABI entry points
 /// (`hegel_new_state_machine`, `hegel_state_machine_next_rule`,
 /// `hegel_generate_boolean`) in-process: the invalid-handle and
-/// argument-validation paths, plus the happy paths. hegeltest's frontend
-/// reaches booleans through schemas rather than `hegel_generate_boolean`, and
-/// the smoke test that drives these over dlopen doesn't contribute coverage,
-/// so they are measured here.
+/// argument-validation paths, plus the happy paths. The smoke test that
+/// drives these over dlopen doesn't contribute coverage, so they are
+/// measured here.
 #[test]
 fn state_machine_and_primitive_boolean_paths() {
     let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
@@ -1147,18 +1071,6 @@ fn state_machine_and_primitive_boolean_paths() {
     }
 }
 
-fn integer_schema() -> Vec<u8> {
-    use ciborium::value::Value;
-    let v = Value::Map(vec![
-        (Value::Text("type".into()), Value::Text("integer".into())),
-        (Value::Text("min_value".into()), Value::Integer(0.into())),
-        (Value::Text("max_value".into()), Value::Integer(100.into())),
-    ]);
-    let mut buf = Vec::new();
-    ciborium::ser::into_writer(&v, &mut buf).unwrap();
-    buf
-}
-
 /// Run a small always-interesting property to completion and return an owned
 /// copy of its single shrunk failure's base64 reproduce blob. The property
 /// draws `draws` integers per test case (all must succeed for the case to be
@@ -1172,19 +1084,15 @@ unsafe fn shrunk_failure_blob_with_draws(ctx: *mut HegelContext, draws: usize) -
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
-        let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
+            let mut value = 0i64;
             let mut status = hegel_status_t::HEGEL_STATUS_INTERESTING;
             for _ in 0..draws {
-                if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
-                    != HEGEL_OK
-                {
+                if hegel_generate_integer(ctx, tc, 0, 100, &mut value) != HEGEL_OK {
                     status = hegel_status_t::HEGEL_STATUS_OVERRUN;
                     break;
                 }
@@ -1221,17 +1129,13 @@ fn result_and_failure_snapshots_outlive_the_run() {
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
         ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
         let run = start(ctx, s);
-        let schema = integer_schema();
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
-            let status = if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
-                == HEGEL_OK
-            {
+            let mut value = 0i64;
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
                 hegel_status_t::HEGEL_STATUS_INTERESTING
             } else {
                 hegel_status_t::HEGEL_STATUS_OVERRUN
@@ -1285,22 +1189,20 @@ fn clones_share_a_run_owned_family() {
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
         assert!(!c1.is_null());
 
-        let schema = integer_schema();
-        let mut p: *const u8 = ptr::null();
-        let mut n = 0usize;
+        let mut value = 0i64;
         assert_eq!(
-            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_generate_integer(ctx, root, 0, 100, &mut value),
             HEGEL_OK
         );
         assert_eq!(
-            hegel_generate(ctx, c1, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_generate_integer(ctx, c1, 0, 100, &mut value),
             HEGEL_OK
         );
 
         let mut c1a: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, c1, &mut c1a), HEGEL_OK);
         assert_eq!(
-            hegel_generate(ctx, c1a, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_generate_integer(ctx, c1a, 0, 100, &mut value),
             HEGEL_OK
         );
 
@@ -1322,7 +1224,7 @@ fn clones_share_a_run_owned_family() {
         );
         // Primitives on any family handle still report the family complete.
         assert_eq!(
-            hegel_generate(ctx, root, schema.as_ptr(), schema.len(), &mut p, &mut n),
+            hegel_generate_integer(ctx, root, 0, 100, &mut value),
             HEGEL_E_ALREADY_COMPLETE
         );
 
@@ -1445,17 +1347,14 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
             .into_iter()
             .map(|cp| {
                 let b = Arc::clone(&barrier);
-                let schema = integer_schema();
                 std::thread::spawn(move || {
                     // Capture the whole `SendPtr` (disjoint closure capture
                     // would otherwise grab the non-`Send` raw pointer field).
                     let cp = cp;
                     let tctx = hegel_context_new();
-                    let mut p: *const u8 = ptr::null();
-                    let mut n = 0usize;
+                    let mut value = 0i64;
                     b.wait();
-                    let rc =
-                        hegel_generate(tctx, cp.0, schema.as_ptr(), schema.len(), &mut p, &mut n);
+                    let rc = hegel_generate_integer(tctx, cp.0, 0, 100, &mut value);
                     ok(hegel_context_free(tctx));
                     rc
                 })

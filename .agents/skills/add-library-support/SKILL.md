@@ -17,7 +17,7 @@ Read both before starting — the per-type pattern is theirs, not this skill's.
 
 Spawn a sub-agent (general-purpose) to enumerate the crate's full public API and produce a research dossier. The sub-agent's job is **research only** — it gathers and reports information, it does not make implementation choices. You (the parent agent) decide how to map each type to a generator using the **new-generator** skill; the sub-agent's output is the raw material for those decisions.
 
-Err on the side of returning more information rather than less. The parent has full agency over schema choice, builder methods, composition strategy, and whether to skip a type — the sub-agent should not pre-decide any of that.
+Err on the side of returning more information rather than less. The parent has full agency over generation strategy, builder methods, composition, and whether to skip a type — the sub-agent should not pre-decide any of that.
 
 Brief the sub-agent to:
 
@@ -32,7 +32,7 @@ Brief the sub-agent to:
   - Anything else the sub-agent thinks the parent will want before deciding how to generate this type. Be generous.
 - Return the dossier as markdown, one section per type. Do not rank, recommend, or filter — just report.
 
-Once the dossier is back, you decide which types to implement, in what order, and how to map each to a schema. Default to implementing every type the sub-agent returned. Skip a type only if:
+Once the dossier is back, you decide which types to implement, in what order, and how to generate each. Default to implementing every type the sub-agent returned. Skip a type only if:
 
 - the dossier reveals it's clearly not generatable (errors, traits, marker types that slipped through), or
 - **its only sensible generator would be `sampled_from(&ALL_VARIANTS)`.** This applies regardless of whether the variants are domain values (`Weekday`, `Era`) or configuration knobs (`RoundMode`, `Disambiguation`) — the deciding factor is whether the generator is doing anything beyond enumerating variants.
@@ -100,7 +100,7 @@ For each type from Step 1, in dependency order (leaf types first, composite type
 1. Apply the **new-generator** skill to add the generator to `src/extras/<lib>/generators.rs`.
 2. Apply the **new-default-generator** skill to add the `DefaultGenerator` impl. For feature-gated types the impl goes in `src/extras/<lib>/default.rs` — `src/generators/default.rs` stays first-party only. See the new-default-generator skill for the rationale.
 
-Composite types should typically delegate to the leaf generators rather than building their own schema from scratch. Example sketch:
+Composite types should typically delegate to the leaf generators rather than drawing raw values themselves. Example sketch:
 
 ```rust
 // in src/extras/<lib>/generators.rs
@@ -110,11 +110,11 @@ pub fn datetimes() -> impl Generator<lib::DateTime> {
 }
 ```
 
-Prefer composition — do not re-derive a schema if one of the leaf generators already has it.
+Prefer composition — do not re-derive a draw sequence a leaf generator already implements.
 
-### Engine-side schemas are out of scope
+### Engine-side draws are out of scope
 
-If you find a type that would *dramatically and fundamentally* benefit from a new engine schema (e.g. would otherwise need a wildly contorted `flat_map` or post-hoc filter), stop and surface it to the user. Do not modify the engine's schema interpreters (`hegel-c/src/native/schema/`) yourself. See the new-generator skill for more on this gate.
+If you find a type that would *dramatically and fundamentally* benefit from a new engine-side draw (e.g. would otherwise need a wildly contorted `flat_map` or post-hoc filter), stop and surface it to the user. Do not modify the engine's typed draws (`hegel-c/src/native/draws/`) or the C ABI yourself. See the new-generator skill for more on this gate.
 
 ## Step 5 — Tests
 

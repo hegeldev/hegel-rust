@@ -33,9 +33,8 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, the `Collection` helper, and the span `labels` module
 - `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Mode`, `Backend`, `Verbosity`
 - `src/cli.rs` — CLI argument parsing for standalone `#[hegel::main]` binaries
-- `src/generators/` — All first-party generator implementations (the `Generator` trait + `BasicGenerator` live in `generators.rs`)
+- `src/generators/` — All first-party generator implementations (the `Generator` trait lives in `generators.rs`)
 - `src/extras/` — Feature-gated third-party integrations (`chrono`, `jiff`, `serde_json`, `rand`)
-- `src/cbor_utils.rs` — `cbor_map!`/`cbor_array!` macros for building generator schemas
 - `src/stateful.rs` — Stateful (model-based) testing via `#[state_machine]`
 - `src/explicit_test_case.rs` — Explicit test-case support (`#[explicit_test_case]`)
 - `src/control.rs` — Control-flow unwind payloads (`AssumeFailed`, `StopTest`) and their handling
@@ -46,7 +45,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 - `src/lib.rs` — The exported `hegel_*` C functions: settings, run lifecycle, test-case handles (including clones), draws, spans, collections, pools, state machines, targeting, results/failures. The checked-in header `hegel-c/include/hegel.h` is generated from this file by cbindgen (`just c-header`)
 - `src/backend.rs` — The `DataSource` trait the engine implements and the C ABI drives
-- `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `schema/` (the CBOR schema interpreters), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
+- `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
 - Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` mostly to reserve the name
 
@@ -64,21 +63,15 @@ The engine owns a test run. `hegel_run_start` starts an engine worker; the front
 
 ### The C ABI
 
-The frontend and engine communicate exclusively through the `hegel_*` functions wrapped by `src/ffi.rs`. Per-test-case operations: `hegel_generate(schema)` produces a CBOR value for a generator's schema, `hegel_start_span`/`hegel_stop_span` group related draws for the shrinker, `hegel_new_collection`/`hegel_collection_more`/`hegel_collection_reject` drive dynamically-sized collections, `hegel_target` records targeting scores, and `hegel_mark_complete` reports the outcome (VALID, INVALID, OVERRUN, or INTERESTING). Failed calls report diagnostics on an explicit `HegelContext` handle rather than thread-local state.
+The frontend and engine communicate exclusively through the `hegel_*` functions wrapped by `src/ffi.rs`. Draws are typed: `hegel_generate_integer` / `hegel_generate_integer_big`, `hegel_generate_float`, `hegel_generate_boolean`, `hegel_generate_bytes`, `hegel_generate_string` (through an opaque `hegel_string_generator_t` handle built by typed constructors for text/regex/email/url/domain), and structured `hegel_generate_date`/`_time`/`_datetime`/`_uuid`/`_ip_address`. Alongside the draws: `hegel_start_span`/`hegel_stop_span` group related draws for the shrinker, `hegel_new_collection`/`hegel_collection_more`/`hegel_collection_reject` drive dynamically-sized collections, `hegel_target` records targeting scores, and `hegel_mark_complete` reports the outcome (VALID, INVALID, OVERRUN, or INTERESTING). Failed calls report diagnostics on an explicit `HegelContext` handle rather than thread-local state.
 
-### Generator Trait and BasicGenerator
+### Generator Trait
 
-Generators implement `Generator<T>` (`src/generators/generators.rs`):
-- `do_draw(&self, tc: &TestCase) -> T` — Produce a value
-- `as_basic()` — Optionally return a `BasicGenerator<T>` bundling a CBOR schema + parse function
-
-When `as_basic()` returns `Some`, generation is a single `hegel_generate(schema)` call the engine interprets directly. When `None` (`flat_map`, `filter` without enumerable values, collections of non-basic elements, …), `do_draw` falls back to multiple draws wrapped in spans for shrinking.
-
-Key insight: `map()` on a `BasicGenerator` preserves the schema by composing the transform function, rather than losing it. This keeps composite generators basic whenever their children are.
+Generators implement `Generator<T>` (`src/generators/generators.rs`) with one required method, `do_draw(&self, tc: &TestCase) -> T`. Leaf generators call the typed draw methods on `TestCase` (`generate_integer_i64`, `generate_float`, `generate_string`, …), which wrap the C ABI; composite generators (tuples, collections, `one_of`, `map`/`filter`/`flat_map`) compose other generators' `do_draw` inside labeled spans. String-shaped generators cache a validated `ffi::StringGenerator` handle in a `OnceLock` so the alphabet/pattern work happens once, not per draw.
 
 ### Span System
 
-Spans (`start_span`/`stop_span`) group related generation calls so the shrinker can shrink effectively. Labels in `test_case::labels` identify span types (LIST, TUPLE, ONE_OF, FILTER, etc.); the label space is open — any stable `u64` works.
+Spans (`start_span`/`stop_span`) group related generation calls so the shrinker can shrink effectively. Labels in `test_case::labels` identify span types (LIST, TUPLE, ONE_OF, FILTER, etc.); the label space is open — any stable `u64` works. The engine also emits its own spans around every draw (see `hegel_label_t` values 17–30): same-label spans are what the engine's mutation machinery duplicates to propose repeated values, so leaf draws each get a kind-specific span.
 
 ### Collections
 

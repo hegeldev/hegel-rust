@@ -1,5 +1,3 @@
-use ciborium::Value;
-
 use std::net::IpAddr;
 
 use crate::native::bignum::BigInt;
@@ -50,9 +48,6 @@ impl std::error::Error for DataSourceError {}
 /// Implementations must be `Send + Sync` so a `TestCase` clone can be moved to
 /// another thread.
 pub trait DataSource: Send + Sync {
-    /// Send a CBOR schema and receive a generated CBOR value.
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError>;
-
     /// Draw an integer uniformly-ish from `[min_value, max_value]`, biased
     /// toward boundary values as the engine sees fit. Errors with
     /// `InvalidArgument` when `min_value > max_value`.
@@ -69,8 +64,7 @@ pub trait DataSource: Send + Sync {
 
     /// Draw a byte string with length in `[min_size, max_size]`. Errors with
     /// `InvalidArgument` when `min_size > max_size`.
-    fn generate_bytes(&self, min_size: usize, max_size: usize)
-    -> Result<Vec<u8>, DataSourceError>;
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError>;
 
     /// Draw a string according to a validated [`StringSpec`] (text, regex,
     /// email, url, or domain).

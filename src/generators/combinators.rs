@@ -1,7 +1,5 @@
-use super::{BasicGenerator, BoxedGenerator, Generator, TestCase, integers, labels};
-use crate::cbor_utils::{cbor_array, cbor_map};
+use super::{BoxedGenerator, Generator, TestCase, integers, labels};
 use crate::test_case::invalid_argument;
-use ciborium::Value;
 use std::borrow::Cow;
 use std::marker::PhantomData;
 
@@ -12,34 +10,11 @@ pub struct SampledFromGenerator<'a, T: Clone> {
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(basic) = self.as_basic() {
-            return basic.do_draw(tc);
-        }
-
-        // nocov start
         let indices = integers::<usize>()
             .min_value(0)
             .max_value(self.elements.len() - 1);
         let index = indices.do_draw(tc);
         self.elements[index].clone()
-        // nocov end
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        if self.elements.is_empty() {
-            return None; // nocov
-        }
-
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => 0u64,
-            "max_value" => (self.elements.len() - 1) as u64
-        };
-        let elements: &[T] = &self.elements;
-        Some(BasicGenerator::new(schema, move |raw| {
-            let index: usize = super::deserialize_value(raw);
-            elements[index].clone()
-        }))
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
@@ -74,35 +49,14 @@ pub struct OneOfGenerator<'a, T> {
 
 impl<T> Generator<T> for OneOfGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(basic) = self.as_basic() {
-            basic.do_draw(tc)
-        } else {
-            tc.start_span(labels::ONE_OF);
-            let index = integers::<usize>()
-                .min_value(0)
-                .max_value(self.generators.len() - 1)
-                .do_draw(tc);
-            let result = self.generators[index].do_draw(tc);
-            tc.stop_span(false);
-            result
-        }
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        let basics: Vec<BasicGenerator<'_, T>> = self
-            .generators
-            .iter()
-            .map(|g| g.as_basic())
-            .collect::<Option<Vec<_>>>()?;
-
-        let schemas: Vec<Value> = basics.iter().map(|b| b.schema().clone()).collect();
-        let schema = cbor_map! {"type" => "one_of", "generators" => Value::Array(schemas)};
-
-        Some(BasicGenerator::new(schema, move |raw| {
-            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
-            let index = i128::from(idx.into_integer().unwrap()) as usize;
-            basics[index].parse_raw(value)
-        }))
+        tc.start_span(labels::ONE_OF);
+        let index = integers::<usize>()
+            .min_value(0)
+            .max_value(self.generators.len() - 1)
+            .do_draw(tc);
+        let result = self.generators[index].do_draw(tc);
+        tc.stop_span(false);
+        result
     }
 }
 
@@ -160,39 +114,14 @@ where
     G: Generator<T>,
 {
     fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        if let Some(basic) = self.as_basic() {
-            basic.do_draw(tc)
+        tc.start_span(labels::OPTIONAL);
+        let result = if tc.generate_boolean(0.5) {
+            Some(self.inner.do_draw(tc))
         } else {
-            // nocov start
-            tc.start_span(labels::OPTIONAL);
-            let is_some: bool = super::generate_from_schema(tc, &cbor_map! {"type" => "boolean"});
-            let result = if is_some {
-                Some(self.inner.do_draw(tc))
-            } else {
-                None
-            };
-            tc.stop_span(false);
-            result
-            // nocov end
-        }
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Option<T>>> {
-        let inner_basic = self.inner.as_basic()?;
-        let inner_schema = inner_basic.schema().clone();
-
-        let null_schema = cbor_map! {"type" => "constant", "value" => Value::Null};
-        let schema =
-            cbor_map! {"type" => "one_of", "generators" => cbor_array![null_schema, inner_schema]};
-
-        Some(BasicGenerator::new(schema, move |raw| {
-            let [idx, value]: [Value; 2] = raw.into_array().unwrap().try_into().unwrap();
-            if i128::from(idx.into_integer().unwrap()) == 0 {
-                None
-            } else {
-                Some(inner_basic.parse_raw(value))
-            }
-        }))
+            None
+        };
+        tc.stop_span(false);
+        result
     }
 }
 

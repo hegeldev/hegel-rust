@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ciborium::Value;
-
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, NativeTestCaseHandle,
     Span, SpanEvent, Status,
 };
-use crate::native::schema;
+use crate::native::draws;
 
 pub struct NativeDataSource {
     inner: NativeTestCaseHandle,
@@ -185,10 +183,6 @@ fn checked_id(kind: &str, id: i64, len: usize) -> Result<usize, EngineError> {
 }
 
 impl DataSource for NativeDataSource {
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError> {
-        self.with_ntc(|ntc| schema::interpret_schema(ntc, schema))
-    }
-
     fn generate_integer(
         &self,
         min_value: &BigInt,
@@ -201,19 +195,28 @@ impl DataSource for NativeDataSource {
                      got [{min_value:?}, {max_value:?}]"
                 )));
             }
-            ntc.draw_integer(min_value.clone(), max_value.clone())
+            draws::spanned(ntc, draws::LABEL_INTEGER, |ntc| {
+                ntc.draw_integer(min_value.clone(), max_value.clone())
+            })
         })
     }
 
-    fn generate_float(&self, spec: &crate::native::draws::FloatSpec) -> Result<f64, DataSourceError> {
-        self.with_ntc(|ntc| crate::native::draws::generate_float(ntc, spec))
+    fn generate_float(
+        &self,
+        spec: &crate::native::draws::FloatSpec,
+    ) -> Result<f64, DataSourceError> {
+        self.with_ntc(|ntc| {
+            draws::spanned(ntc, draws::LABEL_FLOAT, |ntc| {
+                draws::generate_float(ntc, spec)
+            })
+        })
     }
 
     fn generate_string(
         &self,
         spec: &crate::native::draws::StringSpec,
     ) -> Result<String, DataSourceError> {
-        self.with_ntc(|ntc| crate::native::draws::generate_string(ntc, spec))
+        self.with_ntc(|ntc| draws::generate_string(ntc, spec))
     }
 
     fn generate_date(&self) -> Result<crate::native::draws::special::Date, DataSourceError> {
@@ -238,11 +241,7 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| crate::native::draws::special::generate_ip_address(ntc, version))
     }
 
-    fn generate_bytes(
-        &self,
-        min_size: usize,
-        max_size: usize,
-    ) -> Result<Vec<u8>, DataSourceError> {
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError> {
         self.with_ntc(|ntc| {
             if min_size > max_size {
                 return Err(EngineError::InvalidArgument(format!(
@@ -250,7 +249,9 @@ impl DataSource for NativeDataSource {
                      got [{min_size}, {max_size}]"
                 )));
             }
-            ntc.draw_bytes(min_size, max_size)
+            draws::spanned(ntc, draws::LABEL_BYTES, |ntc| {
+                ntc.draw_bytes(min_size, max_size)
+            })
         })
     }
 
@@ -288,7 +289,7 @@ impl DataSource for NativeDataSource {
             let state = collections
                 .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            schema::many_more(ntc, state)
+            draws::many_more(ntc, state)
         })
     }
 
@@ -303,7 +304,7 @@ impl DataSource for NativeDataSource {
             let state = collections
                 .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            schema::many_reject(ntc, state)
+            draws::many_reject(ntc, state)
         })
     }
 
@@ -366,7 +367,9 @@ impl DataSource for NativeDataSource {
                     "generate_boolean: cannot force false when p = 1.0".to_string(),
                 ));
             }
-            ntc.weighted_precise(p, forced)
+            draws::spanned(ntc, draws::LABEL_BOOLEAN, |ntc| {
+                ntc.weighted_precise(p, forced)
+            })
         })
     }
 

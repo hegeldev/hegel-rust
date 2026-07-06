@@ -217,7 +217,6 @@
 pub(crate) mod antithesis;
 #[doc(hidden)]
 pub mod backend;
-pub(crate) mod cbor_utils;
 pub(crate) mod cli;
 pub(crate) mod control;
 #[doc(hidden)]
@@ -237,13 +236,9 @@ pub use generators::Generator;
 pub use test_case::TestCase;
 
 #[doc(hidden)]
-pub use ciborium;
-#[doc(hidden)]
 pub use paste;
 #[doc(hidden)]
-pub use test_case::{
-    __IsTestCase, __assert_is_test_case, generate_from_schema, generate_raw, with_output_override,
-};
+pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
 pub use antithesis::TestLocation;

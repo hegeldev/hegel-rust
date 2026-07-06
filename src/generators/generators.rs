@@ -1,86 +1,17 @@
 use crate::test_case::{TestCase, invalid_argument, labels};
-use ciborium::Value;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// A bundled schema + parse function for schema-based generation.
-///
-/// The lifetime `'a` ties the BasicGenerator to the generator that created it.
-/// `T: 'a` is required because the parse closure returns `T`.
-#[doc(hidden)]
-pub struct BasicGenerator<'a, T> {
-    schema: Value,
-    parse: Box<dyn Fn(Value) -> T + Send + Sync + 'a>,
-    _phantom: PhantomData<fn() -> T>,
-}
-
-impl<'a, T: 'a> BasicGenerator<'a, T> {
-    pub fn new<F: Fn(Value) -> T + Send + Sync + 'a>(schema: Value, f: F) -> Self {
-        BasicGenerator {
-            schema,
-            parse: Box::new(f),
-            _phantom: PhantomData,
-        }
-    }
-
-    pub fn schema(&self) -> &Value {
-        &self.schema
-    }
-
-    pub fn parse_raw(&self, raw: Value) -> T {
-        (self.parse)(raw)
-    }
-
-    /// Generate a value by handing the schema to the engine and parsing the result.
-    pub fn do_draw(&self, tc: &TestCase) -> T {
-        self.parse_raw(super::generate_raw(tc, self.schema()))
-    }
-
-    /// Transform the output type by composing a function with the parse.
-    pub fn map<U: 'a, F: Fn(T) -> U + Send + Sync + 'a>(self, f: F) -> BasicGenerator<'a, U> {
-        let old_parse = self.parse;
-        BasicGenerator {
-            schema: self.schema,
-            parse: Box::new(move |raw| f(old_parse(raw))),
-            _phantom: PhantomData,
-        }
-    }
-}
-
 /// The core trait for all generators.
 ///
-/// Generators produce values of type `T` and optionally provide a
-/// [`BasicGenerator`] for single-request schema-based generation via `as_basic()`.
-///
-/// Implementors override one or both of [`as_basic`](Self::as_basic) and
-/// [`do_draw`](Self::do_draw):
-/// - "Always basic" leaf generators override only `as_basic`. The default
-///   `do_draw` delegates to it.
-/// - Generators with a client-side fallback (filter, flat_map, lists with
-///   non-basic elements, …) override `do_draw`. They may also override
-///   `as_basic` to opt into schema generation when their inputs allow it.
+/// Generators produce values of type `T` by drawing from the engine through
+/// the [`TestCase`] passed to [`do_draw`](Self::do_draw).
 pub trait Generator<T> {
     /// Produce a value.
-    ///
-    /// The default delegates to [`as_basic`](Self::as_basic). Generators
-    /// without a basic form must override this.
     #[doc(hidden)]
-    fn do_draw(&self, tc: &TestCase) -> T {
-        self.as_basic()
-            .expect("non-basic generator must override do_draw")
-            .do_draw(tc)
-    }
-
-    /// Return a BasicGenerator for schema-based generation, if possible.
-    #[doc(hidden)]
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        None
-    }
+    fn do_draw(&self, tc: &TestCase) -> T;
 
     /// Transform generated values using a function.
-    ///
-    /// When the source generator has a schema (i.e. `as_basic()` returns `Some`),
-    /// the schema is preserved and the function is composed into the parse step.
     ///
     /// # Example
     ///
@@ -156,9 +87,9 @@ pub trait Generator<T> {
 
     /// Return all possible values if this generator has a known finite value set.
     ///
-    /// Used by [`Filtered`] as a fallback when random sampling fails: instead of
-    /// calling `assume(false)`, enumerate valid elements and pick one.
-    /// Mirrors Hypothesis's `SampledFromStrategy.do_filtered_draw` optimization.
+    /// Used by [`Filtered`]: instead of rejection sampling, enumerate the
+    /// valid elements and pick one directly. Mirrors Hypothesis's
+    /// `SampledFromStrategy.do_filtered_draw` optimization.
     #[doc(hidden)]
     fn enumerate_values(&self) -> Option<Vec<T>> {
         None
@@ -198,14 +129,12 @@ impl<T, G: Generator<T>> Generator<T> for &G {
         (*self).do_draw(tc)
     }
 
-    // nocov start
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        (*self).as_basic()
-        // nocov end
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        (*self).enumerate_values()
     }
 }
 
-/// Result of [`Generator::map`]. Preserves the schema when possible.
+/// Result of [`Generator::map`].
 pub struct Mapped<T, U, F, G> {
     source: G,
     f: Arc<F>,
@@ -218,20 +147,10 @@ where
     F: Fn(T) -> U + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> U {
-        if let Some(basic) = self.as_basic() {
-            basic.do_draw(tc)
-        } else {
-            tc.start_span(labels::MAPPED);
-            let result = (self.f)(self.source.do_draw(tc));
-            tc.stop_span(false);
-            result
-        }
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, U>> {
-        let source_basic = self.source.as_basic()?;
-        let f = Arc::clone(&self.f);
-        Some(source_basic.map(move |t| f(t)))
+        tc.start_span(labels::MAPPED);
+        let result = (self.f)(self.source.do_draw(tc));
+        tc.stop_span(false);
+        result
     }
 
     fn enumerate_values(&self) -> Option<Vec<U>> {
@@ -278,8 +197,15 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(basic) = self.as_basic() {
-            return basic.do_draw(tc);
+        if let Some(valid) = self.enumerate_values() {
+            if valid.is_empty() {
+                invalid_argument!(
+                    "Unsatisfiable filter: all values from the source generator \
+                     are rejected by the filter predicate"
+                );
+            }
+            let index = tc.generate_integer_i64(0, valid.len() as i64 - 1) as usize;
+            return valid[index].clone();
         }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
@@ -290,34 +216,8 @@ where
             }
             tc.stop_span(true);
         }
-        if self
-            .enumerate_values()
-            .is_some_and(|valid| valid.is_empty())
-        {
-            invalid_argument!(
-                "Unsatisfiable filter: all values from the source generator \
-                 are rejected by the filter predicate"
-            );
-        }
         tc.assume(false);
         unreachable!()
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        let valid = self.enumerate_values()?;
-        if valid.is_empty() {
-            return None;
-        }
-        use crate::cbor_utils::cbor_map;
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => 0u64,
-            "max_value" => (valid.len() - 1) as u64
-        };
-        Some(BasicGenerator::new(schema, move |raw| {
-            let index: usize = super::deserialize_value(raw);
-            valid[index].clone()
-        }))
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
@@ -343,10 +243,6 @@ impl<T> Clone for BoxedGenerator<'_, T> {
 impl<T> Generator<T> for BoxedGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
-    }
-
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        self.inner.as_basic()
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {

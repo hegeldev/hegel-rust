@@ -1,7 +1,5 @@
-use super::{BasicGenerator, Generator};
-use crate::cbor_utils::{cbor_map, cbor_serialize, map_insert};
+use super::{Generator, TestCase};
 use crate::test_case::invalid_argument;
-use ciborium::Value;
 use std::marker::PhantomData;
 
 /// Trait bound for integer types usable with [`integers()`].
@@ -10,20 +8,75 @@ pub trait Integer: Copy + Ord {
     const MIN: Self;
     /// The maximum value of this type.
     const MAX: Self;
+    /// This value as an `i64`, when it fits.
+    #[doc(hidden)]
+    fn to_i64_checked(self) -> Option<i64>;
+    /// This value's two's-complement little-endian encoding, sign-extended
+    /// to 17 bytes (wide enough for any `i128` or `u128`).
+    #[doc(hidden)]
+    fn to_le17(self) -> [u8; 17];
+    /// Decode a 17-byte sign-extended two's-complement little-endian
+    /// encoding. The value is guaranteed by the caller to be in this type's
+    /// range.
+    #[doc(hidden)]
+    fn from_le17(bytes: [u8; 17]) -> Self;
+    /// Convert from an `i64` guaranteed by the caller to be in this type's
+    /// range.
+    #[doc(hidden)]
+    fn from_i64(v: i64) -> Self;
 }
 
-macro_rules! impl_integer_type {
+macro_rules! impl_signed_integer_type {
     ($($t:ty),*) => { $(
         impl Integer for $t {
             const MIN: Self = <$t>::MIN;
             const MAX: Self = <$t>::MAX;
+            fn to_i64_checked(self) -> Option<i64> {
+                i64::try_from(self).ok()
+            }
+            fn to_le17(self) -> [u8; 17] {
+                let v = self as i128;
+                let fill = if v < 0 { 0xFF } else { 0x00 };
+                let mut bytes = [fill; 17];
+                bytes[..16].copy_from_slice(&v.to_le_bytes());
+                bytes
+            }
+            fn from_le17(bytes: [u8; 17]) -> Self {
+                i128::from_le_bytes(bytes[..16].try_into().unwrap()) as $t
+            }
+            fn from_i64(v: i64) -> Self {
+                v as $t
+            }
         }
     )* };
 }
 
-impl_integer_type!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
+macro_rules! impl_unsigned_integer_type {
+    ($($t:ty),*) => { $(
+        impl Integer for $t {
+            const MIN: Self = <$t>::MIN;
+            const MAX: Self = <$t>::MAX;
+            fn to_i64_checked(self) -> Option<i64> {
+                i64::try_from(self).ok()
+            }
+            fn to_le17(self) -> [u8; 17] {
+                let v = self as u128;
+                let mut bytes = [0u8; 17];
+                bytes[..16].copy_from_slice(&v.to_le_bytes());
+                bytes
+            }
+            fn from_le17(bytes: [u8; 17]) -> Self {
+                u128::from_le_bytes(bytes[..16].try_into().unwrap()) as $t
+            }
+            fn from_i64(v: i64) -> Self {
+                v as $t
+            }
+        }
+    )* };
+}
+
+impl_signed_integer_type!(i8, i16, i32, i64, i128, isize);
+impl_unsigned_integer_type!(u8, u16, u32, u64, u128, usize);
 
 /// Trait bound for float types usable with [`floats()`].
 pub trait Float: Copy + PartialOrd {
@@ -33,6 +86,10 @@ pub trait Float: Copy + PartialOrd {
     const MAX: Self;
     /// Widen to f64 for cross-width comparisons (bound validation).
     fn to_f64(self) -> f64;
+    /// Narrow from the engine's f64 result. The value is guaranteed to be
+    /// exactly representable at this type's width.
+    #[doc(hidden)]
+    fn from_f64(v: f64) -> Self;
 }
 
 impl Float for f32 {
@@ -41,6 +98,9 @@ impl Float for f32 {
     fn to_f64(self) -> f64 {
         self as f64
     }
+    fn from_f64(v: f64) -> Self {
+        v as f32
+    }
 }
 
 impl Float for f64 {
@@ -48,6 +108,9 @@ impl Float for f64 {
     const MAX: Self = f64::MAX;
     fn to_f64(self) -> f64 {
         self
+    }
+    fn from_f64(v: f64) -> Self {
+        v
     }
 }
 
@@ -90,29 +153,17 @@ impl<T> IntegerGenerator<T> {
     }
 }
 
-impl<T: Integer + serde::Serialize> IntegerGenerator<T> {
-    fn build_schema(&self) -> Value {
+impl<T: Integer> Generator<T> for IntegerGenerator<T> {
+    fn do_draw(&self, tc: &TestCase) -> T {
         let min = self.min.unwrap_or(T::MIN);
         let max = self.max.unwrap_or(T::MAX);
         if min > max {
             invalid_argument!("Cannot have max_value < min_value");
         }
-
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => cbor_serialize(&min),
-            "max_value" => cbor_serialize(&max)
+        match (min.to_i64_checked(), max.to_i64_checked()) {
+            (Some(lo), Some(hi)) => T::from_i64(tc.generate_integer_i64(lo, hi)),
+            _ => T::from_le17(tc.generate_integer_le17(&min.to_le17(), &max.to_le17())),
         }
-    }
-}
-
-impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>
-    Generator<T> for IntegerGenerator<T>
-{
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
-        }))
     }
 }
 
@@ -121,9 +172,7 @@ impl<T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync +
 /// Bounds default to the full range of `T`. Use the builder methods `min_value`
 /// and `max_value` to constrain the range. See [`IntegerGenerator`] for more
 /// details.
-pub fn integers<
-    T: Integer + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static,
->() -> IntegerGenerator<T> {
+pub fn integers<T: Integer>() -> IntegerGenerator<T> {
     IntegerGenerator {
         min: None,
         max: None,
@@ -193,9 +242,20 @@ impl<T> FloatGenerator<T> {
     }
 }
 
-impl<T: Float + serde::Serialize> FloatGenerator<T> {
-    fn build_schema(&self) -> Value {
-        let width = (std::mem::size_of::<T>() * 8) as u64;
+/// The validated parameters of a float draw, in the form
+/// `TestCase::generate_float` accepts.
+struct FloatDrawParams {
+    width: u32,
+    min_value: f64,
+    max_value: f64,
+    allow_nan: bool,
+    allow_infinity: bool,
+    smallest_nonzero_magnitude: f64,
+}
+
+impl<T: Float> FloatGenerator<T> {
+    fn draw_params(&self) -> FloatDrawParams {
+        let width = (std::mem::size_of::<T>() * 8) as u32;
         let has_min = self.min.is_some();
         let has_max = self.max.is_some();
 
@@ -290,49 +350,53 @@ impl<T: Float + serde::Serialize> FloatGenerator<T> {
             }
         }
 
-        let mut schema = cbor_map! {
-            "type" => "float",
-            "exclude_min" => self.exclude_min,
-            "exclude_max" => self.exclude_max,
-            "allow_nan" => allow_nan,
-            "allow_infinity" => allow_infinity,
-            "width" => width
+        let bounded_default = !allow_nan && !allow_infinity;
+        let min_value = match min_f {
+            Some(lo) => lo,
+            None if bounded_default => T::MIN.to_f64(),
+            None => f64::NEG_INFINITY,
+        };
+        let max_value = match max_f {
+            Some(hi) => hi,
+            None if bounded_default => T::MAX.to_f64(),
+            None => f64::INFINITY,
         };
 
-        if let Some(ref min) = self.min {
-            map_insert(&mut schema, "min_value", cbor_serialize(min));
-        }
-        if let Some(ref max) = self.max {
-            map_insert(&mut schema, "max_value", cbor_serialize(max));
-        }
-        if !allow_subnormal {
-            map_insert(
-                &mut schema,
-                "smallest_nonzero_magnitude",
-                Value::Float(smallest_normal),
-            );
-        }
-
-        if !allow_nan && !allow_infinity {
-            if self.min.is_none() {
-                map_insert(&mut schema, "min_value", cbor_serialize(&T::MIN));
+        let smallest_nonzero_magnitude = if allow_subnormal {
+            if width == 32 {
+                f64::from(f32::from_bits(1))
+            } else {
+                f64::from_bits(1)
             }
-            if self.max.is_none() {
-                map_insert(&mut schema, "max_value", cbor_serialize(&T::MAX));
-            }
-        }
+        } else {
+            smallest_normal
+        };
 
-        schema
+        FloatDrawParams {
+            width,
+            min_value,
+            max_value,
+            allow_nan,
+            allow_infinity,
+            smallest_nonzero_magnitude,
+        }
     }
 }
 
-impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static> Generator<T>
-    for FloatGenerator<T>
-{
-    fn as_basic(&self) -> Option<BasicGenerator<'_, T>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            super::deserialize_value(raw)
-        }))
+impl<T: Float> Generator<T> for FloatGenerator<T> {
+    fn do_draw(&self, tc: &TestCase) -> T {
+        let params = self.draw_params();
+        let v = tc.generate_float(
+            params.width,
+            params.min_value,
+            params.max_value,
+            params.allow_nan,
+            params.allow_infinity,
+            self.exclude_min,
+            self.exclude_max,
+            params.smallest_nonzero_magnitude,
+        );
+        T::from_f64(v)
     }
 }
 
@@ -354,8 +418,7 @@ impl<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + '
 ///     assert!((0.0..=1.0).contains(&x));
 /// }
 /// ```
-pub fn floats<T: Float + serde::de::DeserializeOwned + serde::Serialize + Send + Sync + 'static>()
--> FloatGenerator<T> {
+pub fn floats<T: Float>() -> FloatGenerator<T> {
     FloatGenerator {
         min: None,
         max: None,

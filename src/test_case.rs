@@ -5,14 +5,11 @@ use crate::control::{
 use crate::ffi::CTestCase;
 use crate::generators::Generator;
 use crate::runner::Mode;
-use ciborium::Value;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-
-use crate::generators::value;
 
 #[diagnostic::on_unimplemented(
     message = "The first parameter in a #[composite] generator must have type TestCase.",
@@ -690,41 +687,119 @@ impl TestCase {
     }
 }
 
-/// Send a schema to the engine and return the raw CBOR response.
-///
-/// The schema `Value` is serialized to CBOR bytes, handed to `hegel_generate`,
-/// and the borrowed result bytes are deserialized back into a `Value`. This
-/// extra serialize/parse per draw is the cost of going through the literal C
-/// ABI (the same bytes-level path every other language binding pays).
-#[doc(hidden)]
-pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
-    let mut schema_bytes = Vec::new();
-    ciborium::ser::into_writer(schema, &mut schema_bytes).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to serialize schema: {}", e) // nocov
-    });
-    let value_bytes = match tc.with_ctc(|ctc| ctc.generate(&schema_bytes)) {
-        Ok(bytes) => bytes,
-        Err(rc) => raise_for_rc(rc),
-    };
-    ciborium::de::from_reader(value_bytes.as_slice()).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to deserialize value: {}", e) // nocov
-    })
-}
+impl TestCase {
+    /// Draw an integer in `[min_value, max_value]` (both within `i64`).
+    pub(crate) fn generate_integer_i64(&self, min_value: i64, max_value: i64) -> i64 {
+        match self.with_ctc(|ctc| ctc.generate_integer(min_value, max_value)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
 
-#[doc(hidden)]
-pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schema: &Value) -> T {
-    deserialize_value(generate_raw(tc, schema))
-}
+    /// Draw an integer with bounds given as two's-complement little-endian
+    /// byte encodings, returning the value's encoding sign-extended to 17
+    /// bytes.
+    pub(crate) fn generate_integer_le17(&self, min_value: &[u8], max_value: &[u8]) -> [u8; 17] {
+        match self.with_ctc(|ctc| ctc.generate_integer_big(min_value, max_value)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
 
-/// Deserialize a raw CBOR value into a Rust type.
-///
-/// This is a public helper for use by derived generators (proc macros)
-/// that need to deserialize individual field values from CBOR.
-pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
-    let hv = value::HegelValue::from(raw.clone());
-    value::from_hegel_value(hv).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
-    })
+    /// Draw a float according to the full libhegel spec.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generate_float(
+        &self,
+        width: u32,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+        exclude_min: bool,
+        exclude_max: bool,
+        smallest_nonzero_magnitude: f64,
+    ) -> f64 {
+        let outcome = self.with_ctc(|ctc| {
+            ctc.generate_float(
+                width,
+                min_value,
+                max_value,
+                allow_nan,
+                allow_infinity,
+                exclude_min,
+                exclude_max,
+                smallest_nonzero_magnitude,
+            )
+        });
+        match outcome {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a boolean that is `true` with probability `p`.
+    pub(crate) fn generate_boolean(&self, p: f64) -> bool {
+        match self.with_ctc(|ctc| ctc.generate_boolean(p)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a byte string with length in `[min_size, max_size]`.
+    pub(crate) fn generate_bytes(&self, min_size: usize, max_size: usize) -> Vec<u8> {
+        match self.with_ctc(|ctc| ctc.generate_bytes(min_size as u64, max_size as u64)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a string described by a prebuilt libhegel string generator.
+    pub(crate) fn generate_string(&self, generator: &crate::ffi::StringGenerator) -> String {
+        match self.with_ctc(|ctc| ctc.generate_string(generator)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a Gregorian calendar date.
+    pub(crate) fn generate_date(&self) -> hegel_c::hegel_date_t {
+        match self.with_ctc(|ctc| ctc.generate_date()) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a time of day.
+    pub(crate) fn generate_time(&self) -> hegel_c::hegel_time_t {
+        match self.with_ctc(|ctc| ctc.generate_time()) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a naive datetime.
+    pub(crate) fn generate_datetime(&self) -> hegel_c::hegel_datetime_t {
+        match self.with_ctc(|ctc| ctc.generate_datetime()) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw a UUID's 16 big-endian bytes, optionally forcing the version.
+    pub(crate) fn generate_uuid(&self, version: Option<u8>) -> [u8; 16] {
+        match self.with_ctc(|ctc| ctc.generate_uuid(version)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
+
+    /// Draw an IP address of the given version (4 or 6).
+    pub(crate) fn generate_ip_address(&self, version: u8) -> std::net::IpAddr {
+        match self.with_ctc(|ctc| ctc.generate_ip_address(version)) {
+            Ok(v) => v,
+            Err(rc) => raise_for_rc(rc),
+        }
+    }
 }
 
 /// Uses the backend to determine collection sizing.

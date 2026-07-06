@@ -8,15 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
-use ciborium::Value;
 use parking_lot::Mutex;
 
 /// cbindgen:ignore
 mod antithesis_detect;
 /// cbindgen:ignore
 mod backend;
-/// cbindgen:ignore
-mod cbor_utils;
 /// cbindgen:ignore
 mod control;
 /// cbindgen:ignore
@@ -137,7 +134,7 @@ use hegel_result_t::*;
 ///   draw; the engine should discard it without counting it against
 ///   the test-cases budget.
 /// - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
-///   test case (typically because `hegel_generate` returned
+///   test case (typically because a `hegel_generate_*` draw returned
 ///   `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
 /// - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
 ///   a candidate counterexample. Pass a stable origin string to
@@ -346,6 +343,20 @@ pub enum hegel_label_t {
     HEGEL_LABEL_UUID = 24,
     /// Span around one IP-address draw (`hegel_generate_ip_address`).
     HEGEL_LABEL_IP_ADDRESS = 25,
+    /// Span around one integer draw (`hegel_generate_integer` /
+    /// `hegel_generate_integer_big`). Emitted internally, like every
+    /// per-draw label: same-label spans are what the engine's mutation
+    /// machinery duplicates to propose repeated values.
+    HEGEL_LABEL_INTEGER = 26,
+    /// Span around one float draw (`hegel_generate_float`).
+    HEGEL_LABEL_FLOAT = 27,
+    /// Span around one boolean draw (`hegel_generate_boolean`).
+    HEGEL_LABEL_BOOLEAN = 28,
+    /// Span around one bytes draw (`hegel_generate_bytes`).
+    HEGEL_LABEL_BYTES = 29,
+    /// Span around one text string draw (`hegel_generate_string` with a
+    /// text generator).
+    HEGEL_LABEL_STRING = 30,
 }
 
 /// Opaque error-reporting context.
@@ -503,12 +514,6 @@ impl FamilyShared {
 
 /// Per-handle state guarded by the handle's own lock.
 struct LocalState {
-    /// Backing buffer for the borrowed `out_value_cbor` pointer returned from
-    /// `hegel_generate`. Re-allocated per call; the previous draw's bytes are
-    /// invalidated on the next `hegel_generate` *on this handle*. Per-handle
-    /// (not family-wide) so two clones drawing at once don't stomp each
-    /// other's returned buffers.
-    last_value: Vec<u8>,
     /// Whether `hegel_mark_complete` has already been called on *this* handle.
     /// Completing the family is first-caller-wins and family-wide (see
     /// `FamilyShared::completed`), so a second handle completing is a safe
@@ -520,9 +525,9 @@ struct LocalState {
 /// One in-flight test-case handle handed to the caller by
 /// `hegel_next_test_case`, `hegel_test_case_from_blob`, or
 /// `hegel_test_case_clone`. The caller drives it with the per-test-case
-/// primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
-/// `hegel_target`, the collection primitives) and concludes it with
-/// `hegel_mark_complete`.
+/// primitives (the `hegel_generate_*` draws, `hegel_start_span` /
+/// `hegel_stop_span`, `hegel_target`, the collection primitives) and
+/// concludes it with `hegel_mark_complete`.
 ///
 /// A single handle must be driven by at most one thread at a time: If
 /// multiple threads attempt to use the handle at the same time, operations
@@ -1325,7 +1330,7 @@ pub unsafe extern "C" fn hegel_run_free(
 ///
 /// There is no run handle and no engine worker: the caller drives the
 /// returned test case with the usual per-test-case primitives
-/// (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+/// (the `hegel_generate_*` draws, spans, …), concludes it with `hegel_mark_complete`,
 /// and decides for itself whether the blob reproduced the failure (the
 /// property failed again) or is stale (it passed). Replay several blobs by
 /// calling this once per blob. A blob whose choices no longer match the
@@ -1496,10 +1501,7 @@ fn handle_from_stream(
     into_raw_send_sync(HegelTestCase {
         family,
         stream,
-        local: Mutex::new(LocalState {
-            last_value: Vec::new(),
-            completed: false,
-        }),
+        local: Mutex::new(LocalState { completed: false }),
     })
 }
 
@@ -1549,78 +1551,6 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
             HEGEL_E_INVALID_ARG
         }
     }
-}
-
-/// Draw a value from the test case's data source, using the
-/// CBOR-encoded `schema_cbor` to describe its shape (type + bounds +
-/// optional category filters, depending on the type).
-///
-/// On success returns `HEGEL_OK` and writes a borrowed pointer to the
-/// CBOR-encoded value into `*out_value_cbor` (length in
-/// `*out_value_len`). The pointer is invalidated by the next call into
-/// libhegel on this test case — copy the bytes if you need to keep
-/// them.
-///
-/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
-/// exhausted for this test case (the caller should abort the body and
-/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
-/// Returns `HEGEL_E_INVALID_ARG` on malformed schema, NULL outputs, or
-/// other argument errors; the diagnostic is in
-/// `hegel_context_last_error`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_generate(
-    ctx: *mut HegelContext,
-    tc: *mut HegelTestCase,
-    schema_cbor: *const u8,
-    schema_len: usize,
-    out_value_cbor: *mut *const u8,
-    out_value_len: *mut usize,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let (tc, mut local) = match unsafe { tc_guard(tc) } {
-        Ok(t) => t,
-        Err(rc) => return rc,
-    };
-    if schema_cbor.is_null() && schema_len > 0 {
-        set_last_error(ctx, "hegel_generate: schema pointer is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-    if out_value_cbor.is_null() || out_value_len.is_null() {
-        set_last_error(ctx, "hegel_generate: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-
-    let schema_bytes = unsafe { std::slice::from_raw_parts(schema_cbor, schema_len) };
-    let schema: Value = match ciborium::de::from_reader(schema_bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            set_last_error(
-                ctx,
-                &format!("hegel_generate: malformed CBOR schema: {}", e),
-            );
-            return HEGEL_E_INVALID_ARG;
-        }
-    };
-
-    let value = match tc.stream.generate(&schema) {
-        Ok(v) => v,
-        Err(e) => return translate_ds_error(ctx, e),
-    };
-
-    local.last_value.clear();
-    if let Err(e) = ciborium::ser::into_writer(&value, &mut local.last_value) {
-        // nocov start
-        set_last_error(
-            ctx,
-            &format!("hegel_generate: failed to re-serialize value: {}", e),
-        ); // nocov end
-        return HEGEL_E_INTERNAL; // nocov
-    }
-    unsafe {
-        *out_value_cbor = local.last_value.as_ptr();
-        *out_value_len = local.last_value.len();
-    }
-    HEGEL_OK
 }
 
 /// Open a labeled span around a group of draws so the shrinker can
@@ -2314,9 +2244,7 @@ pub unsafe extern "C" fn hegel_generate_bytes_result_free(
         // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
         // `hegel_generate_bytes` and are freed exactly once here (the struct
         // is zeroed below, making a second call a no-op).
-        drop(unsafe {
-            Box::from_raw(std::ptr::slice_from_raw_parts_mut(result.data, result.len))
-        });
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(result.data, result.len)) });
     }
     result.data = ptr::null_mut();
     result.len = 0;
@@ -2359,6 +2287,29 @@ unsafe fn optional_utf8_arg(
         return Ok(None);
     }
     match unsafe { CStr::from_ptr(p) }.to_str() {
+        Ok(s) => Ok(Some(s.to_string())),
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
+            Err(HEGEL_E_INVALID_ARG)
+        }
+    }
+}
+
+/// Read an optional length-delimited UTF-8 buffer argument. A NULL pointer
+/// means "absent". Length-delimited so the buffer may contain NUL bytes
+/// (U+0000 is a valid character to include or exclude).
+unsafe fn optional_utf8_buffer_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const u8,
+    len: usize,
+) -> Result<Option<String>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(p, len) };
+    match std::str::from_utf8(bytes) {
         Ok(s) => Ok(Some(s.to_string())),
         Err(_) => {
             set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
@@ -2423,8 +2374,10 @@ unsafe fn write_string_generator(
 /// the union of the named Unicode general categories (NULL for no
 /// restriction; a non-NULL empty list means an empty alphabet), and
 /// `exclude_categories` removes categories. `include_characters` /
-/// `exclude_characters` are NUL-terminated UTF-8 strings of individual
-/// characters unioned in / removed last (NULL for none).
+/// `exclude_characters` are UTF-8 buffers (pointer + byte length; NULL for
+/// none) of individual characters unioned in / removed last. They are
+/// length-delimited rather than NUL-terminated because U+0000 is a valid
+/// character to include or exclude.
 ///
 /// On success writes a caller-owned handle into `*out_generator` (release
 /// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
@@ -2444,8 +2397,10 @@ pub unsafe extern "C" fn hegel_string_generator_text(
     categories_len: usize,
     exclude_categories: *const *const c_char,
     exclude_categories_len: usize,
-    include_characters: *const c_char,
-    exclude_characters: *const c_char,
+    include_characters: *const u8,
+    include_characters_len: usize,
+    exclude_characters: *const u8,
+    exclude_characters_len: usize,
     out_generator: *mut *mut HegelStringGenerator,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -2477,16 +2432,30 @@ pub unsafe extern "C" fn hegel_string_generator_text(
         Ok(v) => v,
         Err(rc) => return rc,
     };
-    let include_characters =
-        match unsafe { optional_utf8_arg(ctx, FN, "include_characters", include_characters) } {
-            Ok(v) => v,
-            Err(rc) => return rc,
-        };
-    let exclude_characters =
-        match unsafe { optional_utf8_arg(ctx, FN, "exclude_characters", exclude_characters) } {
-            Ok(v) => v,
-            Err(rc) => return rc,
-        };
+    let include_characters = match unsafe {
+        optional_utf8_buffer_arg(
+            ctx,
+            FN,
+            "include_characters",
+            include_characters,
+            include_characters_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let exclude_characters = match unsafe {
+        optional_utf8_buffer_arg(
+            ctx,
+            FN,
+            "exclude_characters",
+            exclude_characters,
+            exclude_characters_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
     let alphabet = crate::native::draws::TextAlphabet {
         codec,
         min_codepoint,
@@ -2496,8 +2465,7 @@ pub unsafe extern "C" fn hegel_string_generator_text(
         include_characters,
         exclude_characters,
     };
-    match crate::native::draws::StringSpec::text(&alphabet, min_size as usize, max_size as usize)
-    {
+    match crate::native::draws::StringSpec::text(&alphabet, min_size as usize, max_size as usize) {
         Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
         Err(e) => translate_construct_error(ctx, e),
     }
@@ -2533,7 +2501,10 @@ pub unsafe extern "C" fn hegel_string_generator_regex(
         return HEGEL_E_INVALID_ARG;
     }
     let Ok(pattern) = (unsafe { CStr::from_ptr(pattern) }).to_str() else {
-        set_last_error(ctx, "hegel_string_generator_regex: pattern is not valid UTF-8");
+        set_last_error(
+            ctx,
+            "hegel_string_generator_regex: pattern is not valid UTF-8",
+        );
         return HEGEL_E_INVALID_ARG;
     };
     let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &g.spec);
@@ -2677,7 +2648,7 @@ pub unsafe extern "C" fn hegel_generate_string(
         Ok(s) => {
             let boxed = s.into_bytes().into_boxed_slice();
             let len = boxed.len();
-            let data = Box::into_raw(boxed) as *mut c_char;
+            let data = Box::into_raw(boxed).cast::<c_char>();
             unsafe { *out_result = hegel_generate_string_result_t { data, len } };
             HEGEL_OK
         }
@@ -2703,7 +2674,7 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
         // struct is zeroed below, making a second call a no-op).
         drop(unsafe {
             Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                result.data as *mut u8,
+                result.data.cast::<u8>(),
                 result.len,
             ))
         });

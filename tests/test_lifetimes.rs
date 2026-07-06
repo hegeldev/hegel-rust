@@ -1,7 +1,8 @@
 //! Tests that generators work correctly with non-'static (borrowed) types.
 //!
-//! These tests exercise the lifetime logic in BasicGenerator<'a, T> and
-//! the phantom type parameters on composite generators.
+//! These tests exercise the lifetime parameters on borrowing generators
+//! (`sampled_from` over references) and the phantom type parameters on
+//! composite generators.
 
 mod common;
 

@@ -20,7 +20,6 @@ name = "hegel_c"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-ciborium = "0.2.2"
 serde = { version = "1.0.103", features = ["derive"] }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }

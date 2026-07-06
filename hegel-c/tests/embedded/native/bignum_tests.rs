@@ -106,7 +106,6 @@ fn to_primitive_bigint() {
     let v = i(100);
     assert_eq!(v.to_i64(), Some(100));
     assert_eq!(v.to_i128(), Some(100));
-    assert_eq!(v.to_u32(), Some(100));
     assert_eq!(v.to_u64(), Some(100));
     assert_eq!(v.to_u128(), Some(100));
     assert_eq!(v.to_f64(), Some(100.0));
@@ -117,7 +116,6 @@ fn to_primitive_biguint() {
     let v = u(100);
     assert_eq!(v.to_i64(), Some(100));
     assert_eq!(v.to_i128(), Some(100));
-    assert_eq!(v.to_u32(), Some(100));
     assert_eq!(v.to_u64(), Some(100));
     assert_eq!(v.to_u128(), Some(100));
     assert_eq!(v.to_f64(), Some(100.0));

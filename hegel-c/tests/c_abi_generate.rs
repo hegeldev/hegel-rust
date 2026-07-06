@@ -7,17 +7,17 @@
 
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelRun, HegelSettings, HegelStringGenerator, HegelTestCase,
-    hegel_context_free, hegel_context_last_error, hegel_context_new, hegel_generate_boolean,
-    hegel_generate_bytes, hegel_generate_bytes_result_free, hegel_generate_bytes_result_t,
-    hegel_generate_float, hegel_generate_integer, hegel_generate_integer_big,
-    hegel_generate_date, hegel_generate_datetime, hegel_generate_ip_address,
-    hegel_generate_string, hegel_generate_string_result_free, hegel_generate_string_result_t,
-    hegel_generate_time, hegel_generate_uuid, hegel_mark_complete, hegel_next_test_case,
-    hegel_run_free, hegel_run_start, hegel_settings_free, hegel_settings_new,
-    hegel_settings_set_database, hegel_settings_set_test_cases, hegel_status_t,
-    hegel_string_generator_domain, hegel_string_generator_email, hegel_string_generator_free,
-    hegel_string_generator_regex, hegel_string_generator_text, hegel_string_generator_url,
+    HegelContext, HegelRun, HegelSettings, HegelStringGenerator, HegelTestCase, hegel_context_free,
+    hegel_context_last_error, hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
+    hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_date,
+    hegel_generate_datetime, hegel_generate_float, hegel_generate_integer,
+    hegel_generate_integer_big, hegel_generate_ip_address, hegel_generate_string,
+    hegel_generate_string_result_free, hegel_generate_string_result_t, hegel_generate_time,
+    hegel_generate_uuid, hegel_mark_complete, hegel_next_test_case, hegel_run_free,
+    hegel_run_start, hegel_settings_free, hegel_settings_new, hegel_settings_set_database,
+    hegel_settings_set_test_cases, hegel_status_t, hegel_string_generator_domain,
+    hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
+    hegel_string_generator_text, hegel_string_generator_url,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -131,7 +131,13 @@ fn integer_draws_respect_bounds_and_validate_arguments() {
             assert!((-5..=10).contains(&out));
             ok(hegel_generate_integer(ctx, tc, 7, 7, &mut out));
             assert_eq!(out, 7);
-            ok(hegel_generate_integer(ctx, tc, i64::MIN, i64::MAX, &mut out));
+            ok(hegel_generate_integer(
+                ctx,
+                tc,
+                i64::MIN,
+                i64::MAX,
+                &mut out,
+            ));
             complete_valid(ctx, tc);
         }
         ok(hegel_run_free(ctx, run));
@@ -303,7 +309,7 @@ fn big_integer_draws_round_trip_and_validate_arguments() {
                 17,
                 &mut out_len,
             ));
-            assert!(out_len >= 1 && out_len <= 17);
+            assert!((1..=17).contains(&out_len));
             decode_unsigned_le(&out_buf[..out_len]);
 
             let seven = [7u8];
@@ -393,17 +399,7 @@ fn float_draws_respect_spec_and_validate_arguments() {
             assert!(last_error(ctx).contains("width"));
             assert_eq!(
                 hegel_generate_float(
-                    ctx,
-                    tc,
-                    64,
-                    0.0,
-                    1.0,
-                    false,
-                    false,
-                    false,
-                    false,
-                    0.0,
-                    &mut out,
+                    ctx, tc, 64, 0.0, 1.0, false, false, false, false, 0.0, &mut out,
                 ),
                 HEGEL_E_INVALID_ARG
             );
@@ -459,66 +455,92 @@ fn float_draws_respect_spec_and_validate_arguments() {
                 HEGEL_E_INVALID_ARG
             );
 
-            ok(hegel_generate_float(
-                ctx,
-                tc,
-                64,
-                0.0,
-                1.0,
-                false,
-                false,
-                false,
-                false,
-                f64::from_bits(1),
-                &mut out,
-            ));
-            assert!((0.0..=1.0).contains(&out));
+            let overran = 'draws: {
+                let check = |rc: hegel_c::hegel_result_t| match rc {
+                    HEGEL_OK => false,
+                    HEGEL_E_STOP_TEST => true,
+                    other => panic!("unexpected rc: {other:?}"),
+                };
+                if check(hegel_generate_float(
+                    ctx,
+                    tc,
+                    64,
+                    0.0,
+                    1.0,
+                    false,
+                    false,
+                    false,
+                    false,
+                    f64::from_bits(1),
+                    &mut out,
+                )) {
+                    break 'draws true;
+                }
+                assert!((0.0..=1.0).contains(&out));
 
-            ok(hegel_generate_float(
-                ctx,
-                tc,
-                32,
-                0.0,
-                1.0,
-                false,
-                false,
-                false,
-                false,
-                f64::from(f32::from_bits(1)),
-                &mut out,
-            ));
-            assert!((0.0..=1.0).contains(&out));
-            assert_eq!(out, f64::from(out as f32));
+                if check(hegel_generate_float(
+                    ctx,
+                    tc,
+                    32,
+                    0.0,
+                    1.0,
+                    false,
+                    false,
+                    false,
+                    false,
+                    f64::from(f32::from_bits(1)),
+                    &mut out,
+                )) {
+                    break 'draws true;
+                }
+                assert!((0.0..=1.0).contains(&out));
+                assert_eq!(out, f64::from(out as f32));
 
-            ok(hegel_generate_float(
-                ctx,
-                tc,
-                64,
-                0.0,
-                1.0,
-                false,
-                false,
-                true,
-                true,
-                f64::from_bits(1),
-                &mut out,
-            ));
-            assert!(out > 0.0 && out < 1.0);
+                if check(hegel_generate_float(
+                    ctx,
+                    tc,
+                    64,
+                    0.0,
+                    1.0,
+                    false,
+                    false,
+                    true,
+                    true,
+                    f64::from_bits(1),
+                    &mut out,
+                )) {
+                    break 'draws true;
+                }
+                assert!(out > 0.0 && out < 1.0);
 
-            ok(hegel_generate_float(
-                ctx,
-                tc,
-                32,
-                f64::NEG_INFINITY,
-                f64::INFINITY,
-                true,
-                false,
-                false,
-                false,
-                f64::from(f32::from_bits(1)),
-                &mut out,
-            ));
-            assert!(out.is_nan() || (f64::from(f32::MIN)..=f64::from(f32::MAX)).contains(&out));
+                if check(hegel_generate_float(
+                    ctx,
+                    tc,
+                    32,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    true,
+                    false,
+                    false,
+                    false,
+                    f64::from(f32::from_bits(1)),
+                    &mut out,
+                )) {
+                    break 'draws true;
+                }
+                assert!(out.is_nan() || (f64::from(f32::MIN)..=f64::from(f32::MAX)).contains(&out));
+                false
+            };
+            if overran {
+                ok(hegel_mark_complete(
+                    ctx,
+                    tc,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN,
+                    ptr::null(),
+                ));
+                ok(hegel_c::hegel_test_case_free(ctx, tc));
+                continue;
+            }
             complete_valid(ctx, tc);
         }
         ok(hegel_run_free(ctx, run));
@@ -643,7 +665,9 @@ unsafe fn text_generator(
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             )
         },
@@ -668,7 +692,7 @@ unsafe fn draw_string(
     );
     assert!(!result.data.is_null());
     let s = String::from_utf8(
-        unsafe { std::slice::from_raw_parts(result.data as *const u8, result.len) }.to_vec(),
+        unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec(),
     )
     .unwrap();
     unsafe { ok(hegel_generate_string_result_free(ctx, &mut result)) };
@@ -694,7 +718,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 ptr::null_mut(),
             ),
             HEGEL_E_INVALID_ARG
@@ -714,7 +740,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -735,7 +763,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -756,14 +786,16 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("codec is not valid UTF-8"));
 
-        let bad_include: [c_char; 2] = [0xFFu8 as c_char, 0];
+        let bad_include: [u8; 1] = [0xFF];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -777,7 +809,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 bad_include.as_ptr(),
+                1,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -798,7 +832,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -819,7 +855,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -840,7 +878,9 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 ptr::null(),
+                0,
                 ptr::null(),
+                0,
                 &mut g,
             ),
             HEGEL_E_INVALID_ARG
@@ -850,8 +890,6 @@ fn text_generator_constructor_validates_and_draws() {
         let ascii = CString::new("ascii").unwrap();
         let nd = CString::new("Nd").unwrap();
         let cats: [*const c_char; 1] = [nd.as_ptr()];
-        let exclude_zero = CString::new("0").unwrap();
-        let include_a = CString::new("a").unwrap();
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -864,8 +902,10 @@ fn text_generator_constructor_validates_and_draws() {
                 1,
                 ptr::null(),
                 0,
-                include_a.as_ptr(),
-                exclude_zero.as_ptr(),
+                b"a".as_ptr(),
+                1,
+                b"0".as_ptr(),
+                1,
                 &mut g,
             ),
             HEGEL_OK
@@ -922,7 +962,13 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         assert!(last_error(ctx).contains("invalid regex pattern"));
         let pattern = CString::new("[ab]{2,4}").unwrap();
         assert_eq!(
-            hegel_string_generator_regex(ctx, pattern.as_ptr(), false, ptr::null(), ptr::null_mut()),
+            hegel_string_generator_regex(
+                ctx,
+                pattern.as_ptr(),
+                false,
+                ptr::null(),
+                ptr::null_mut()
+            ),
             HEGEL_E_INVALID_ARG
         );
 
@@ -950,7 +996,10 @@ fn regex_email_url_domain_generators_draw_valid_values() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("no eligible TLDs"));
-        assert_eq!(hegel_string_generator_domain(ctx, 255, &mut domain_g), HEGEL_OK);
+        assert_eq!(
+            hegel_string_generator_domain(ctx, 255, &mut domain_g),
+            HEGEL_OK
+        );
 
         assert_eq!(
             hegel_string_generator_regex(ctx, pattern.as_ptr(), true, email_g, &mut regex_g),
@@ -990,7 +1039,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
             match hegel_generate_string(ctx, tc, email_g, &mut result) {
                 HEGEL_OK => {
                     let email = String::from_utf8(
-                        std::slice::from_raw_parts(result.data as *const u8, result.len).to_vec(),
+                        std::slice::from_raw_parts(result.data.cast::<u8>(), result.len).to_vec(),
                     )
                     .unwrap();
                     assert!(email.contains('@'), "no @ in {email:?}");
@@ -1202,11 +1251,23 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                 }
                 assert_ne!(uuid, [0u8; 16], "nil UUID must never be produced");
 
-                if check(hegel_generate_ip_address(ctx, tc, 4, ip.as_mut_ptr(), &mut ip_len)) {
+                if check(hegel_generate_ip_address(
+                    ctx,
+                    tc,
+                    4,
+                    ip.as_mut_ptr(),
+                    &mut ip_len,
+                )) {
                     break 'draws true;
                 }
                 assert_eq!(ip_len, 4);
-                if check(hegel_generate_ip_address(ctx, tc, 6, ip.as_mut_ptr(), &mut ip_len)) {
+                if check(hegel_generate_ip_address(
+                    ctx,
+                    tc,
+                    6,
+                    ip.as_mut_ptr(),
+                    &mut ip_len,
+                )) {
                     break 'draws true;
                 }
                 assert_eq!(ip_len, 16);

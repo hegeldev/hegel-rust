@@ -1,5 +1,4 @@
-use super::{BasicGenerator, Generator};
-use crate::cbor_utils::cbor_map;
+use super::{Generator, TestCase, integers};
 use crate::test_case::invalid_argument;
 use std::time::Duration;
 
@@ -24,25 +23,18 @@ impl DurationGenerator {
         self.max_nanos = duration_to_nanos(max);
         self
     }
-
-    fn build_schema(&self) -> ciborium::Value {
-        if self.min_nanos > self.max_nanos {
-            invalid_argument!("Cannot have max_value < min_value");
-        }
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => self.min_nanos,
-            "max_value" => self.max_nanos
-        }
-    }
 }
 
 impl Generator<Duration> for DurationGenerator {
-    fn as_basic(&self) -> Option<BasicGenerator<'_, Duration>> {
-        Some(BasicGenerator::new(self.build_schema(), |raw| {
-            let nanos: u64 = super::deserialize_value(raw);
-            Duration::from_nanos(nanos)
-        }))
+    fn do_draw(&self, tc: &TestCase) -> Duration {
+        if self.min_nanos > self.max_nanos {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let nanos = integers::<u64>()
+            .min_value(self.min_nanos)
+            .max_value(self.max_nanos)
+            .do_draw(tc);
+        Duration::from_nanos(nanos)
     }
 }
 

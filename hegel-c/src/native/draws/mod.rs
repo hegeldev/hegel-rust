@@ -23,6 +23,11 @@ pub(crate) const LABEL_TIME: u64 = 22;
 pub(crate) const LABEL_DATETIME: u64 = 23;
 pub(crate) const LABEL_UUID: u64 = 24;
 pub(crate) const LABEL_IP_ADDRESS: u64 = 25;
+pub(crate) const LABEL_INTEGER: u64 = 26;
+pub(crate) const LABEL_FLOAT: u64 = 27;
+pub(crate) const LABEL_BOOLEAN: u64 = 28;
+pub(crate) const LABEL_BYTES: u64 = 29;
+pub(crate) const LABEL_STRING: u64 = 30;
 
 /// Parameters of a float draw as accepted at the `hegel_generate_float` API
 /// surface. Width-32 handling (bound clamping, result rounding) and the
@@ -143,9 +148,9 @@ impl StringSpec {
         let intervals = text::build_intervals(alphabet)?;
         if intervals.is_empty() && max_size > 0 {
             return Err(EngineError::InvalidArgument(
-                "No valid characters in the specified range. The alphabet's \
-                 codec/codepoint/category/include/exclude constraints leave \
-                 no characters available."
+                "InvalidArgument: No valid characters in the specified range. \
+                 The alphabet's codec/codepoint/category/include/exclude \
+                 constraints leave no characters available."
                     .to_string(),
             ));
         }
@@ -199,19 +204,17 @@ impl StringSpec {
     }
 }
 
-/// Draw a string according to `spec`. Compound draws (everything except
-/// `Text`, which is a single choice) are wrapped in a labeled span so the
-/// shrinker treats each drawn string as a unit.
-pub fn generate_string(
-    ntc: &mut NativeTestCase,
-    spec: &StringSpec,
-) -> Result<String, EngineError> {
+/// Draw a string according to `spec`, wrapped in a span labeled by the
+/// spec's kind so the shrinker treats each drawn string as a unit.
+pub fn generate_string(ntc: &mut NativeTestCase, spec: &StringSpec) -> Result<String, EngineError> {
     match spec {
         StringSpec::Text {
             intervals,
             min_size,
             max_size,
-        } => ntc.draw_string(intervals.clone(), *min_size, *max_size),
+        } => spanned(ntc, LABEL_STRING, |ntc| {
+            ntc.draw_string(intervals.clone(), *min_size, *max_size)
+        }),
         StringSpec::Regex {
             pattern,
             fullmatch,
@@ -230,7 +233,14 @@ pub fn generate_string(
 /// Run `f` inside a `label`ed span. The span is closed whether or not `f`
 /// succeeds (closing after a freeze is a no-op — `freeze` already closed
 /// every open span).
-fn spanned<R>(
+///
+/// Every draw exposed at the API surface — the primitives included — is
+/// wrapped in one of these, mirroring how the old schema interpreter wrapped
+/// every schema dispatch: the shrinker's span-mutation machinery duplicates
+/// same-label spans to propose values that already appear elsewhere in the
+/// test case, which is how "find a list containing this integer"-shaped
+/// examples are discovered.
+pub(crate) fn spanned<R>(
     ntc: &mut NativeTestCase,
     label: u64,
     f: impl FnOnce(&mut NativeTestCase) -> Result<R, EngineError>,
@@ -286,3 +296,7 @@ pub(crate) fn many_reject(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/draws/mod_tests.rs"]
+mod tests;

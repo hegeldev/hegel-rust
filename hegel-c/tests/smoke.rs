@@ -2,7 +2,6 @@ use std::ffi::{CStr, CString, c_char, c_int};
 use std::path::PathBuf;
 use std::ptr;
 
-use ciborium::Value;
 use libloading::{Library, Symbol};
 
 /// HEGEL_OK from hegel.h.
@@ -114,8 +113,7 @@ type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int
 type FnRunResultFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnFailureFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnRunFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
-type FnGenerate =
-    unsafe extern "C" fn(*mut u8, *mut u8, *const u8, usize, *mut *const u8, *mut usize) -> c_int;
+type FnGenerateInteger = unsafe extern "C" fn(*mut u8, *mut u8, i64, i64, *mut i64) -> c_int;
 type FnMarkComplete = unsafe extern "C" fn(*mut u8, *mut u8, CStatus, *const c_char) -> c_int;
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut u8, *mut i64) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
@@ -132,6 +130,23 @@ type FnNewStateMachine = unsafe extern "C" fn(
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut u64) -> c_int;
 type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
+type FnStringGeneratorText = unsafe extern "C" fn(
+    *mut u8,
+    u64,
+    u64,
+    *const c_char,
+    u32,
+    u32,
+    *const *const c_char,
+    usize,
+    *const *const c_char,
+    usize,
+    *const u8,
+    usize,
+    *const u8,
+    usize,
+    *mut *mut u8,
+) -> c_int;
 type FnTarget = unsafe extern "C" fn(*mut u8, *mut u8, f64, *const c_char) -> c_int;
 type FnCollectionMore = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut bool) -> c_int;
 type FnRunResultStatus = unsafe extern "C" fn(*mut u8, *const u8, *mut CRunStatus) -> c_int;
@@ -160,7 +175,7 @@ struct Api<'a> {
     next_test_case: Symbol<'a, FnNextTestCase>,
     run_result: Symbol<'a, FnRunResult>,
     run_free: Symbol<'a, FnRunFree>,
-    generate: Symbol<'a, FnGenerate>,
+    generate_integer: Symbol<'a, FnGenerateInteger>,
     mark_complete: Symbol<'a, FnMarkComplete>,
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
@@ -168,6 +183,7 @@ struct Api<'a> {
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
+    string_generator_text: Symbol<'a, FnStringGeneratorText>,
     target: Symbol<'a, FnTarget>,
     collection_more: Symbol<'a, FnCollectionMore>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
@@ -200,7 +216,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             next_test_case: lib.get(b"hegel_next_test_case\0").unwrap(),
             run_result: lib.get(b"hegel_run_result\0").unwrap(),
             run_free: lib.get(b"hegel_run_free\0").unwrap(),
-            generate: lib.get(b"hegel_generate\0").unwrap(),
+            generate_integer: lib.get(b"hegel_generate_integer\0").unwrap(),
             mark_complete: lib.get(b"hegel_mark_complete\0").unwrap(),
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
@@ -208,6 +224,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_generate_boolean\0").unwrap(),
+            string_generator_text: lib.get(b"hegel_string_generator_text\0").unwrap(),
             target: lib.get(b"hegel_target\0").unwrap(),
             collection_more: lib.get(b"hegel_collection_more\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
@@ -377,41 +394,6 @@ impl Api<'_> {
     }
 }
 
-fn encode(value: &Value) -> Vec<u8> {
-    let mut buf = Vec::new();
-    ciborium::ser::into_writer(value, &mut buf).unwrap();
-    buf
-}
-
-fn decode(bytes: &[u8]) -> Value {
-    ciborium::de::from_reader(bytes).unwrap()
-}
-
-fn integer_schema(min: i64, max: i64) -> Vec<u8> {
-    integer_schema_with_order(min, max, &["type", "min_value", "max_value"])
-}
-
-/// Build the integer schema with a caller-chosen CBOR key order. Go's
-/// map iteration is intentionally randomised, so a Go-emitted schema
-/// hits libhegel with `max_value, type, min_value` (or any other
-/// permutation) — semantically equivalent to Rust's
-/// declaration-ordered emission but with different bytes. Used to
-/// regression-check that the engine's schema deserializer is truly
-/// order-agnostic.
-fn integer_schema_with_order(min: i64, max: i64, order: &[&str]) -> Vec<u8> {
-    let mut entries: Vec<(Value, Value)> = Vec::new();
-    for key in order {
-        let v = match *key {
-            "type" => Value::Text("integer".into()),
-            "min_value" => Value::Integer(min.into()),
-            "max_value" => Value::Integer(max.into()),
-            other => panic!("unknown schema key {other}"),
-        };
-        entries.push((Value::Text((*key).into()), v));
-    }
-    encode(&Value::Map(entries))
-}
-
 #[test]
 fn libhegel_runs_passing_property() {
     let lib = unsafe { load() };
@@ -430,7 +412,6 @@ fn libhegel_runs_passing_property() {
         let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
-        let schema = integer_schema(0, 100);
         let mut cases = 0usize;
         loop {
             let tc = a.next_test_case(ctx, run);
@@ -441,26 +422,10 @@ fn libhegel_runs_passing_property() {
             }
             cases += 1;
 
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 100, &mut n);
             assert_eq!(rc, HEGEL_OK, "generate failed: rc={}", rc);
-
-            let val_bytes = std::slice::from_raw_parts(val_ptr, val_len);
-            let v = decode(val_bytes);
-            if let Value::Integer(i) = v {
-                let n: i128 = i.into();
-                assert!((0..=100).contains(&n), "got out-of-range value {}", n);
-            } else {
-                panic!("expected integer, got {:?}", v);
-            }
+            assert!((0..=100).contains(&n), "got out-of-range value {}", n);
 
             a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
         }
@@ -507,7 +472,6 @@ fn libhegel_runs_with_urandom_backend() {
         let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
-        let schema = integer_schema(0, 100);
         let mut cases = 0usize;
         loop {
             let tc = a.next_test_case(ctx, run);
@@ -518,23 +482,9 @@ fn libhegel_runs_with_urandom_backend() {
             }
             cases += 1;
 
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 100, &mut n);
             assert_eq!(rc, 0, "generate failed: rc={}", rc);
-
-            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
-            let Value::Integer(i) = v else {
-                panic!("expected integer, got {:?}", v)
-            };
-            let n: i128 = i.into();
             assert!((0..=100).contains(&n), "got out-of-range value {}", n);
 
             a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
@@ -554,7 +504,7 @@ fn libhegel_runs_with_urandom_backend() {
 }
 
 #[test]
-fn invalid_schema_returns_error_not_abort() {
+fn invalid_arguments_return_error_not_abort() {
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
 
@@ -573,28 +523,47 @@ fn invalid_schema_returns_error_not_abort() {
         let tc = a.next_test_case(ctx, run);
         assert!(!tc.is_null(), "expected a test case");
 
-        let unknown_type = encode(&Value::Map(vec![(
-            Value::Text("type".into()),
-            Value::Text("ipv4".into()),
-        )]));
-        let bad_codec = encode(&Value::Map(vec![
-            (Value::Text("type".into()), Value::Text("string".into())),
-            (Value::Text("codec".into()), Value::Text("ebcdic".into())),
-        ]));
-        for bad in [unknown_type, bad_codec] {
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(ctx, tc, bad.as_ptr(), bad.len(), &mut val_ptr, &mut val_len);
-            assert_eq!(
-                rc, HEGEL_E_INVALID_ARG,
-                "invalid schema should return HEGEL_E_INVALID_ARG, got rc={rc}"
-            );
-            let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
-            assert!(
-                !err.is_empty(),
-                "expected a diagnostic message for the invalid schema"
-            );
-        }
+        let mut n: i64 = 0;
+        let rc = (a.generate_integer)(ctx, tc, 10, -5, &mut n);
+        assert_eq!(
+            rc, HEGEL_E_INVALID_ARG,
+            "min > max should return HEGEL_E_INVALID_ARG, got rc={rc}"
+        );
+        let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
+        assert!(
+            !err.is_empty(),
+            "expected a diagnostic message for the inverted bounds"
+        );
+
+        let bad_codec = CString::new("ebcdic").unwrap();
+        let mut g: *mut u8 = ptr::null_mut();
+        let rc = (a.string_generator_text)(
+            ctx,
+            0,
+            10,
+            bad_codec.as_ptr(),
+            0,
+            u32::MAX,
+            ptr::null(),
+            0,
+            ptr::null(),
+            0,
+            ptr::null(),
+            0,
+            ptr::null(),
+            0,
+            &mut g,
+        );
+        assert_eq!(
+            rc, HEGEL_E_INVALID_ARG,
+            "unknown codec should return HEGEL_E_INVALID_ARG, got rc={rc}"
+        );
+        assert!(g.is_null());
+        let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
+        assert!(
+            !err.is_empty(),
+            "expected a diagnostic message for the unknown codec"
+        );
 
         a.complete_and_free(ctx, tc, CStatus::Invalid, ptr::null());
         a.run_free(ctx, run);
@@ -675,7 +644,6 @@ fn libhegel_reports_shrunk_failure() {
         a.settings_seed(ctx, s, 0xc0ffee, true);
 
         let run = a.run_start(ctx, s);
-        let schema = integer_schema(0, 100);
         let origin = CString::new("n >= 5 failed").unwrap();
 
         loop {
@@ -686,27 +654,13 @@ fn libhegel_reports_shrunk_failure() {
                 break;
             }
 
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 100, &mut n);
             if rc == HEGEL_E_STOP_TEST {
                 a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
                 continue;
             }
             assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
-
-            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
-            let Value::Integer(i) = v else {
-                panic!("expected int")
-            };
-            let n: i128 = i.into();
 
             let status = if n < 5 {
                 CStatus::Valid
@@ -751,35 +705,19 @@ fn libhegel_reports_shrunk_failure() {
 /// Drive the `n < 5` failing property to completion. Shared by the
 /// blob tests below, which read the reproduce blob off the run result.
 unsafe fn drive_failing_property(a: &Api, ctx: *mut u8, run: *mut u8) {
-    let schema = integer_schema(0, 100);
     let origin = CString::new("n >= 5 failed").unwrap();
     loop {
         let tc = unsafe { a.next_test_case(ctx, run) };
         if tc.is_null() {
             break;
         }
-        let mut val_ptr: *const u8 = ptr::null();
-        let mut val_len: usize = 0;
-        let rc = unsafe {
-            (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            )
-        };
+        let mut n: i64 = 0;
+        let rc = unsafe { (a.generate_integer)(ctx, tc, 0, 100, &mut n) };
         if rc == HEGEL_E_STOP_TEST {
             unsafe { a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null()) };
             continue;
         }
         assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
-        let v = decode(unsafe { std::slice::from_raw_parts(val_ptr, val_len) });
-        let Value::Integer(i) = v else {
-            panic!("expected int")
-        };
-        let n: i128 = i.into();
         if n < 5 {
             unsafe { a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null()) };
         } else {
@@ -827,7 +765,7 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
 /// Replay `blob` as one standalone test case and return the single drawn
 /// integer of the `n < 5` property, marking the case Interesting/Valid as
 /// the property dictates and freeing the handle.
-unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> i128 {
+unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> i64 {
     unsafe {
         let tc = a.test_case_from_blob(ctx, s, blob.as_ptr());
         assert!(
@@ -836,22 +774,9 @@ unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> 
             CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy()
         );
 
-        let schema = integer_schema(0, 100);
-        let mut val_ptr: *const u8 = ptr::null();
-        let mut val_len: usize = 0;
-        let rc = (a.generate)(
-            ctx,
-            tc,
-            schema.as_ptr(),
-            schema.len(),
-            &mut val_ptr,
-            &mut val_len,
-        );
+        let mut n: i64 = 0;
+        let rc = (a.generate_integer)(ctx, tc, 0, 100, &mut n);
         assert_eq!(rc, HEGEL_OK, "unexpected generate rc={}", rc);
-        let Value::Integer(i) = decode(std::slice::from_raw_parts(val_ptr, val_len)) else {
-            panic!("expected int")
-        };
-        let n: i128 = i.into();
         if n < 5 {
             a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
         } else {
@@ -1395,11 +1320,10 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
     let key = CString::new("replay-smoke").unwrap();
-    let schema = integer_schema(0, 2_000_000);
 
-    let predicate = |n: i128| n >= 1_000_000;
+    let predicate = |n: i64| n >= 1_000_000;
 
-    let mut last_failure: Option<i128> = None;
+    let mut last_failure: Option<i64> = None;
     unsafe {
         let ctx = (a.context_new)();
         let s = a.settings_new(ctx);
@@ -1415,26 +1339,13 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
             if tc.is_null() {
                 break;
             }
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 2_000_000, &mut n);
             if rc == HEGEL_E_STOP_TEST {
                 a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
                 continue;
             }
             assert_eq!(rc, HEGEL_OK);
-            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
-            let Value::Integer(i) = v else {
-                panic!("expected integer")
-            };
-            let n: i128 = i.into();
             if predicate(n) {
                 last_failure = Some(n);
                 let origin = CString::new("n >= 1_000_000").unwrap();
@@ -1449,7 +1360,7 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
     }
     assert!(last_failure.is_some(), "run 1 never observed the failure");
 
-    let mut first_seen: Option<i128> = None;
+    let mut first_seen: Option<i64> = None;
     unsafe {
         let ctx = (a.context_new)();
         let s = a.settings_new(ctx);
@@ -1465,26 +1376,13 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
             if tc.is_null() {
                 break;
             }
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 2_000_000, &mut n);
             if rc == HEGEL_E_STOP_TEST {
                 a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
                 continue;
             }
             assert_eq!(rc, HEGEL_OK);
-            let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
-            let Value::Integer(i) = v else {
-                panic!("expected integer")
-            };
-            let n: i128 = i.into();
             if first_seen.is_none() {
                 first_seen = Some(n);
             }
@@ -1523,24 +1421,14 @@ fn health_check_surfaces_as_run_error() {
         a.settings_seed(ctx, s, 1, true);
 
         let run = a.run_start(ctx, s);
-        let schema = integer_schema(0, 1_000_000);
 
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            let mut val_ptr: *const u8 = ptr::null();
-            let mut val_len: usize = 0;
-            let rc = (a.generate)(
-                ctx,
-                tc,
-                schema.as_ptr(),
-                schema.len(),
-                &mut val_ptr,
-                &mut val_len,
-            );
-            let _ = (val_ptr, val_len);
+            let mut n: i64 = 0;
+            let rc = (a.generate_integer)(ctx, tc, 0, 1_000_000, &mut n);
             if rc == HEGEL_E_STOP_TEST {
                 a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
             } else {
@@ -1606,17 +1494,16 @@ fn health_check_surfaces_as_run_error() {
 /// the smoke suite.
 #[test]
 #[ignore = "shrinker sweep — slow; run via --ignored for diagnostics"]
-fn shrinker_reaches_boundary_via_c_api_sweep() {
-    shrinker_sweep_with_schema_order(&["type", "min_value", "max_value"], "rust-order");
-}
-
-/// Same sweep with Go's map-iteration-style key ordering. If hit rate
-/// differs from the Rust-order sweep, schema deserialization in the
-/// engine is order-sensitive somewhere.
-#[test]
-#[ignore = "shrinker sweep — slow; run via --ignored for diagnostics"]
-fn shrinker_reaches_boundary_via_c_api_sweep_go_key_order() {
-    shrinker_sweep_with_schema_order(&["max_value", "type", "min_value"], "go-order");
+fn shrinker_sweep() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (hits, observed) = run_shrinker_sweep(&a, OriginStyle::Constant, 1..=100);
+    eprintln!("C-API shrinker boundary hit rate: {hits}/100");
+    eprintln!("values: {observed:?}");
+    assert!(
+        hits >= 50,
+        "C-API shrinker only reached boundary {hits}/100; values: {observed:?}"
+    );
 }
 
 /// Characterization test for the origin contract: when the caller
@@ -1628,7 +1515,7 @@ fn shrinker_reaches_boundary_via_c_api_sweep_go_key_order() {
 /// binding-author searching the codebase for `unique origins` finds
 /// the explanation in one place.
 ///
-/// Concretely: holding the schema and seed range constant, switching
+/// Concretely: holding the generator and seed range constant, switching
 /// from a stable per-bug origin to a per-value origin drops the
 /// boundary hit rate from ~100/100 to ~16/100. The Rust-side embed
 /// API (`hegel::embed::run_native`) does not have this problem
@@ -1644,12 +1531,7 @@ fn shrinker_reaches_boundary_via_c_api_sweep_go_key_order() {
 fn shrinker_partitions_budget_across_unique_origins() {
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };
-    let (hits, _) = run_shrinker_sweep(
-        &a,
-        &["type", "min_value", "max_value"],
-        OriginStyle::PerDrawValue,
-        1..=100,
-    );
+    let (hits, _) = run_shrinker_sweep(&a, OriginStyle::PerDrawValue, 1..=100);
     eprintln!("[unique-origins] boundary hit rate: {hits}/100");
     assert!(
         hits < 70,
@@ -1663,32 +1545,18 @@ enum OriginStyle {
     PerDrawValue,
 }
 
-fn shrinker_sweep_with_schema_order(order: &[&str], label: &str) {
-    let lib = unsafe { load() };
-    let a = unsafe { bind(&lib) };
-    let (hits, observed) = run_shrinker_sweep(&a, order, OriginStyle::Constant, 1..=100);
-    eprintln!("[{label}] C-API shrinker boundary hit rate: {hits}/100");
-    eprintln!("[{label}] values: {observed:?}");
-    assert!(
-        hits >= 50,
-        "[{label}] C-API shrinker only reached boundary {hits}/100; values: {observed:?}"
-    );
-}
-
 fn run_shrinker_sweep(
     a: &Api<'_>,
-    order: &[&str],
     origin_style: OriginStyle,
     seeds: std::ops::RangeInclusive<u64>,
-) -> (u32, Vec<i128>) {
-    let schema = integer_schema_with_order(i64::MIN, i64::MAX, order);
+) -> (u32, Vec<i64>) {
     let empty = CString::new("").unwrap();
     let constant_origin = CString::new("n >= 1_000_000").unwrap();
 
     let mut hits = 0u32;
-    let mut observed = Vec::<i128>::new();
+    let mut observed = Vec::<i64>::new();
     for seed in seeds {
-        let mut last_failing: Option<i128> = None;
+        let mut last_failing: Option<i64> = None;
         unsafe {
             let ctx = (a.context_new)();
             let s = a.settings_new(ctx);
@@ -1703,26 +1571,13 @@ fn run_shrinker_sweep(
                 if tc.is_null() {
                     break;
                 }
-                let mut val_ptr: *const u8 = ptr::null();
-                let mut val_len: usize = 0;
-                let rc = (a.generate)(
-                    ctx,
-                    tc,
-                    schema.as_ptr(),
-                    schema.len(),
-                    &mut val_ptr,
-                    &mut val_len,
-                );
+                let mut n: i64 = 0;
+                let rc = (a.generate_integer)(ctx, tc, i64::MIN, i64::MAX, &mut n);
                 if rc == HEGEL_E_STOP_TEST {
                     a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
                     continue;
                 }
                 assert_eq!(rc, HEGEL_OK);
-                let v = decode(std::slice::from_raw_parts(val_ptr, val_len));
-                let Value::Integer(i) = v else {
-                    panic!("expected integer")
-                };
-                let n: i128 = i.into();
                 if n >= 1_000_000 {
                     last_failing = Some(n);
                     let origin_cs: CString;
@@ -1742,7 +1597,7 @@ fn run_shrinker_sweep(
             a.settings_free(ctx, s);
             (a.context_free)(ctx);
         }
-        let final_value = last_failing.unwrap_or(i128::MIN);
+        let final_value = last_failing.unwrap_or(i64::MIN);
         observed.push(final_value);
         if final_value == 1_000_000 {
             hits += 1;

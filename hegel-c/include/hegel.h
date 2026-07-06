@@ -210,7 +210,7 @@ typedef enum {
    draw; the engine should discard it without counting it against
    the test-cases budget.
  - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
-   test case (typically because `hegel_generate` returned
+   test case (typically because a `hegel_generate_*` draw returned
    `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
  - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
    a candidate counterexample. Pass a stable origin string to
@@ -426,6 +426,30 @@ typedef enum {
      Span around one IP-address draw (`hegel_generate_ip_address`).
      */
     HEGEL_LABEL_IP_ADDRESS = 25,
+    /*
+     Span around one integer draw (`hegel_generate_integer` /
+     `hegel_generate_integer_big`). Emitted internally, like every
+     per-draw label: same-label spans are what the engine's mutation
+     machinery duplicates to propose repeated values.
+     */
+    HEGEL_LABEL_INTEGER = 26,
+    /*
+     Span around one float draw (`hegel_generate_float`).
+     */
+    HEGEL_LABEL_FLOAT = 27,
+    /*
+     Span around one boolean draw (`hegel_generate_boolean`).
+     */
+    HEGEL_LABEL_BOOLEAN = 28,
+    /*
+     Span around one bytes draw (`hegel_generate_bytes`).
+     */
+    HEGEL_LABEL_BYTES = 29,
+    /*
+     Span around one text string draw (`hegel_generate_string` with a
+     text generator).
+     */
+    HEGEL_LABEL_STRING = 30,
 } hegel_label_t;
 
 /*
@@ -516,9 +540,9 @@ typedef struct HegelStringGenerator HegelStringGenerator;
  One in-flight test-case handle handed to the caller by
  `hegel_next_test_case`, `hegel_test_case_from_blob`, or
  `hegel_test_case_clone`. The caller drives it with the per-test-case
- primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
- `hegel_target`, the collection primitives) and concludes it with
- `hegel_mark_complete`.
+ primitives (the `hegel_generate_*` draws, `hegel_start_span` /
+ `hegel_stop_span`, `hegel_target`, the collection primitives) and
+ concludes it with `hegel_mark_complete`.
 
  A single handle must be driven by at most one thread at a time: If
  multiple threads attempt to use the handle at the same time, operations
@@ -830,7 +854,7 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
 
  There is no run handle and no engine worker: the caller drives the
  returned test case with the usual per-test-case primitives
- (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+ (the `hegel_generate_*` draws, spans, …), concludes it with `hegel_mark_complete`,
  and decides for itself whether the blob reproduced the failure (the
  property failed again) or is stale (it passed). Replay several blobs by
  calling this once per blob. A blob whose choices no longer match the
@@ -906,31 +930,6 @@ hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc)
 hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
                                      const hegel_test_case_t *tc,
                                      hegel_test_case_t **out_test_case);
-
-/*
- Draw a value from the test case's data source, using the
- CBOR-encoded `schema_cbor` to describe its shape (type + bounds +
- optional category filters, depending on the type).
-
- On success returns `HEGEL_OK` and writes a borrowed pointer to the
- CBOR-encoded value into `*out_value_cbor` (length in
- `*out_value_len`). The pointer is invalidated by the next call into
- libhegel on this test case — copy the bytes if you need to keep
- them.
-
- Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
- exhausted for this test case (the caller should abort the body and
- call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
- Returns `HEGEL_E_INVALID_ARG` on malformed schema, NULL outputs, or
- other argument errors; the diagnostic is in
- `hegel_context_last_error`.
- */
-hegel_result_t hegel_generate(hegel_context_t *ctx,
-                              hegel_test_case_t *tc,
-                              const uint8_t *schema_cbor,
-                              size_t schema_len,
-                              const uint8_t **out_value_cbor,
-                              size_t *out_value_len);
 
 /*
  Open a labeled span around a group of draws so the shrinker can
@@ -1224,8 +1223,10 @@ hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
  the union of the named Unicode general categories (NULL for no
  restriction; a non-NULL empty list means an empty alphabet), and
  `exclude_categories` removes categories. `include_characters` /
- `exclude_characters` are NUL-terminated UTF-8 strings of individual
- characters unioned in / removed last (NULL for none).
+ `exclude_characters` are UTF-8 buffers (pointer + byte length; NULL for
+ none) of individual characters unioned in / removed last. They are
+ length-delimited rather than NUL-terminated because U+0000 is a valid
+ character to include or exclude.
 
  On success writes a caller-owned handle into `*out_generator` (release
  with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
@@ -1244,8 +1245,10 @@ hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
                                            size_t categories_len,
                                            const char *const *exclude_categories,
                                            size_t exclude_categories_len,
-                                           const char *include_characters,
-                                           const char *exclude_characters,
+                                           const uint8_t *include_characters,
+                                           size_t include_characters_len,
+                                           const uint8_t *exclude_characters,
+                                           size_t exclude_characters_len,
                                            HegelStringGenerator **out_generator);
 
 /*

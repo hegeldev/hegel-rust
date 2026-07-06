@@ -1,6 +1,6 @@
 use crate::common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::extras::jiff as jiff_gs;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 use jiff::tz::{AmbiguousOffset, Offset, TimeZone};
 use jiff::{Timestamp, Zoned};
 
@@ -47,13 +47,14 @@ fn test_jiff_offsets_property(tc: hegel::TestCase) {
     assert!(v.seconds() >= lo && v.seconds() <= hi);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_jiff_offsets_min_greater_than_max() {
-    let g = jiff_gs::offsets()
-        .min_value(Offset::from_seconds(10).unwrap())
-        .max_value(Offset::from_seconds(5).unwrap());
-    g.as_basic();
+fn test_jiff_offsets_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        jiff_gs::offsets()
+            .min_value(Offset::from_seconds(10).unwrap())
+            .max_value(Offset::from_seconds(5).unwrap()),
+    );
 }
 
 #[test]

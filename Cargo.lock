@@ -391,7 +391,6 @@ name = "hegeltest"
 version = "0.23.4"
 dependencies = [
  "chrono",
- "ciborium",
  "crc32fast",
  "criterion",
  "ctor",
@@ -418,7 +417,6 @@ name = "hegeltest-c"
 version = "0.25.0"
 dependencies = [
  "cbindgen",
- "ciborium",
  "crc32fast",
  "ctor",
  "dashu-int",

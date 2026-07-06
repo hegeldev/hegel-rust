@@ -291,10 +291,7 @@ pub(crate) fn draw_ip_address(
 }
 
 /// Draw an IP address of the given `version` (4 or 6), wrapped in a span.
-pub fn generate_ip_address(
-    ntc: &mut NativeTestCase,
-    version: u8,
-) -> Result<IpAddr, EngineError> {
+pub fn generate_ip_address(ntc: &mut NativeTestCase, version: u8) -> Result<IpAddr, EngineError> {
     spanned(ntc, LABEL_IP_ADDRESS, |ntc| draw_ip_address(ntc, version))
 }
 
