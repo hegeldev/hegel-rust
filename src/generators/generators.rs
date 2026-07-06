@@ -1,4 +1,4 @@
-use crate::test_case::{TestCase, labels};
+use crate::test_case::{TestCase, invalid_argument, labels};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -85,6 +85,16 @@ pub trait Generator<T> {
         }
     }
 
+    /// Return all possible values if this generator has a known finite value set.
+    ///
+    /// Used by [`Filtered`]: instead of rejection sampling, enumerate the
+    /// valid elements and pick one directly. Mirrors Hypothesis's
+    /// `SampledFromStrategy.do_filtered_draw` optimization.
+    #[doc(hidden)]
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        None
+    }
+
     /// Convert this generator into a type-erased boxed generator.
     ///
     /// This is needed when you have generators of different concrete types
@@ -118,6 +128,10 @@ impl<T, G: Generator<T>> Generator<T> for &G {
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        (*self).enumerate_values()
+    }
 }
 
 /// Result of [`Generator::map`].
@@ -137,6 +151,12 @@ where
         let result = (self.f)(self.source.do_draw(tc));
         tc.stop_span(false);
         result
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<U>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
     }
 }
 
@@ -172,10 +192,21 @@ pub struct Filtered<T, F, G> {
 
 impl<T, F, G> Generator<T> for Filtered<T, F, G>
 where
+    T: Clone + Send + Sync,
     G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
+        if let Some(valid) = self.enumerate_values() {
+            if valid.is_empty() {
+                invalid_argument!(
+                    "Unsatisfiable filter: all values from the source generator \
+                     are rejected by the filter predicate"
+                );
+            }
+            let index = tc.generate_integer_i64(0, valid.len() as i64 - 1) as usize;
+            return valid[index].clone();
+        }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let value = self.source.do_draw(tc);
@@ -187,6 +218,12 @@ where
         }
         tc.assume(false);
         unreachable!()
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.source
+            .enumerate_values()
+            .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
     }
 }
 
@@ -206,6 +243,10 @@ impl<T> Clone for BoxedGenerator<'_, T> {
 impl<T> Generator<T> for BoxedGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.inner.enumerate_values()
     }
 
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>

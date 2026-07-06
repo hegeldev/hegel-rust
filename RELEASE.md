@@ -1,12 +1,13 @@
 RELEASE_TYPE: patch
 
-This release should have minimal user-facing impact. However, in
-some rare cases you may see generation get work. Specifically,
-some special handling for generators with small domains has been
-removed. This can show up when generating unique collections
-such as sets from e.g. `gs::booleans` or `gs::sampled_from`,
-or when filtering from such. These will now sometimes error
-with a `FilterTooMuch` health check in cases they previously
-would have worked.
+This release replaces the CBOR schema layer between the frontend and the
+engine with typed draw calls. This should have no user-facing API impact.
 
-If you run into this problem in practice, please file a bug report.
+The `#[doc(hidden)]` schema machinery (`Generator::as_basic`,
+`BasicGenerator`, the `hegel::ciborium` re-export, `generate_raw`,
+`generate_from_schema`, `deserialize_value`) is removed; it was internal
+API and not covered by stability guarantees.
+
+Failure databases and reproduce blobs written by earlier versions will
+not replay against this release (the database has never been stable
+across upgrades).

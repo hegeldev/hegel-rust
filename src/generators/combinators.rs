@@ -16,6 +16,10 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
         let index = indices.do_draw(tc);
         self.elements[index].clone()
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        Some(self.elements.to_vec())
+    }
 }
 
 /// Pick from a fixed list of values.

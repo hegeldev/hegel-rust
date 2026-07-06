@@ -136,7 +136,6 @@ fn duration_max_below_min_is_a_clean_usage_error() {
 }
 
 #[test]
-#[ignore = "expected failure: needs value-enumeration support (removed with the CBOR port); revisit via engine support if this bites in practice"]
 fn unsatisfiable_filter_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
         let _: i64 = tc.draw(gs::sampled_from(vec![0_i64, 1]).filter(|x: &i64| *x < 0));
