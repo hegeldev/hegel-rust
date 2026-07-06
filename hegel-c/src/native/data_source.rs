@@ -188,28 +188,14 @@ impl DataSource for NativeDataSource {
         min_value: &BigInt,
         max_value: &BigInt,
     ) -> Result<BigInt, DataSourceError> {
-        self.with_ntc(|ntc| {
-            if min_value > max_value {
-                return Err(EngineError::InvalidArgument(format!(
-                    "generate_integer requires min_value <= max_value, \
-                     got [{min_value}, {max_value}]"
-                )));
-            }
-            draws::spanned(ntc, draws::LABEL_INTEGER, |ntc| {
-                ntc.draw_integer(min_value.clone(), max_value.clone())
-            })
-        })
+        self.with_ntc(|ntc| draws::generate_integer(ntc, min_value, max_value))
     }
 
     fn generate_float(
         &self,
         spec: &crate::native::draws::FloatSpec,
     ) -> Result<f64, DataSourceError> {
-        self.with_ntc(|ntc| {
-            draws::spanned(ntc, draws::LABEL_FLOAT, |ntc| {
-                draws::generate_float(ntc, spec)
-            })
-        })
+        self.with_ntc(|ntc| draws::generate_float(ntc, spec))
     }
 
     fn generate_string(
@@ -246,17 +232,7 @@ impl DataSource for NativeDataSource {
     }
 
     fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError> {
-        self.with_ntc(|ntc| {
-            if min_size > max_size {
-                return Err(EngineError::InvalidArgument(format!(
-                    "generate_bytes requires min_size <= max_size, \
-                     got [{min_size}, {max_size}]"
-                )));
-            }
-            draws::spanned(ntc, draws::LABEL_BYTES, |ntc| {
-                ntc.draw_bytes(min_size, max_size)
-            })
-        })
+        self.with_ntc(|ntc| draws::generate_bytes(ntc, min_size, max_size))
     }
 
     fn start_span(&self, label: u64) -> Result<(), DataSourceError> {
@@ -355,26 +331,7 @@ impl DataSource for NativeDataSource {
     }
 
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
-        self.with_ntc(|ntc| {
-            if !(0.0..=1.0).contains(&p) {
-                return Err(EngineError::InvalidArgument(format!(
-                    "generate_boolean(p = {p}) requires a probability in [0.0, 1.0]"
-                )));
-            }
-            if forced == Some(true) && p == 0.0 {
-                return Err(EngineError::InvalidArgument(
-                    "generate_boolean: cannot force true when p = 0.0".to_string(),
-                ));
-            }
-            if forced == Some(false) && p == 1.0 {
-                return Err(EngineError::InvalidArgument(
-                    "generate_boolean: cannot force false when p = 1.0".to_string(),
-                ));
-            }
-            draws::spanned(ntc, draws::LABEL_BOOLEAN, |ntc| {
-                ntc.weighted_precise(p, forced)
-            })
-        })
+        self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }
 
     fn new_pool(&self) -> Result<i64, DataSourceError> {

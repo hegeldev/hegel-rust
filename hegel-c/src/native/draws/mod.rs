@@ -6,6 +6,7 @@ pub mod special;
 pub mod text;
 
 use crate::control::hegel_internal_assert;
+use crate::native::bignum::BigInt;
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 use std::sync::Arc;
@@ -105,18 +106,77 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
              after exclusive-bound adjustment"
         )));
     }
-    let v = ntc.draw_float(
-        min_value,
-        max_value,
-        spec.allow_nan,
-        spec.allow_infinity,
-        snm,
-    )?;
+    let v = spanned(ntc, LABEL_FLOAT, |ntc| {
+        ntc.draw_float(
+            min_value,
+            max_value,
+            spec.allow_nan,
+            spec.allow_infinity,
+            snm,
+        )
+    })?;
     Ok(if spec.width == 32 && v.is_finite() {
         f64::from(v as f32)
     } else {
         v
     })
+}
+
+/// Draw an integer in `[min_value, max_value]`, validating the bounds.
+pub fn generate_integer(
+    ntc: &mut NativeTestCase,
+    min_value: &BigInt,
+    max_value: &BigInt,
+) -> Result<BigInt, EngineError> {
+    if min_value > max_value {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_integer requires min_value <= max_value, \
+             got [{min_value}, {max_value}]"
+        )));
+    }
+    spanned(ntc, LABEL_INTEGER, |ntc| {
+        ntc.draw_integer(min_value.clone(), max_value.clone())
+    })
+}
+
+/// Draw a byte string with length in `[min_size, max_size]`, validating the
+/// sizes.
+pub fn generate_bytes(
+    ntc: &mut NativeTestCase,
+    min_size: usize,
+    max_size: usize,
+) -> Result<Vec<u8>, EngineError> {
+    if min_size > max_size {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_bytes requires min_size <= max_size, \
+             got [{min_size}, {max_size}]"
+        )));
+    }
+    spanned(ntc, LABEL_BYTES, |ntc| ntc.draw_bytes(min_size, max_size))
+}
+
+/// Draw a weighted boolean, validating the probability and any forced value.
+pub fn generate_boolean(
+    ntc: &mut NativeTestCase,
+    p: f64,
+    forced: Option<bool>,
+) -> Result<bool, EngineError> {
+    if !(0.0..=1.0).contains(&p) {
+        return Err(EngineError::InvalidArgument(format!(
+            "generate_boolean(p = {p}) requires a probability in [0.0, 1.0]"
+        )));
+    }
+    if forced == Some(true) && p == 0.0 {
+        return Err(EngineError::InvalidArgument(
+            "generate_boolean: cannot force true when p = 0.0".to_string(),
+        ));
+    }
+    if forced == Some(false) && p == 1.0 {
+        return Err(EngineError::InvalidArgument(
+            "generate_boolean: cannot force false when p = 1.0".to_string(),
+        ));
+    }
+    spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, forced))
 }
 
 /// A validated string-draw specification, the payload of a
