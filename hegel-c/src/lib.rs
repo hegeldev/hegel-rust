@@ -93,7 +93,7 @@ pub enum hegel_result_t {
     HEGEL_E_INVALID_HANDLE = -4,
 
     /// An argument other than a handle was invalid — NULL where a value was
-    /// required, malformed CBOR, non-UTF-8 string, etc. See
+    /// required, inverted bounds, a non-UTF-8 string, etc. See
     /// `hegel_context_last_error()` for specifics.
     HEGEL_E_INVALID_ARG = -5,
 
@@ -107,9 +107,9 @@ pub enum hegel_result_t {
     /// finished (`hegel_next_test_case` has not yet reported completion).
     HEGEL_E_NOT_COMPLETE = -7,
 
-    /// An internal invariant failed inside libhegel (e.g. CBOR
-    /// re-serialisation). Should not happen in practice; please file a
-    /// bug. See `hegel_context_last_error()` for the diagnostic.
+    /// An internal invariant failed inside libhegel. Should not happen in
+    /// practice; please file a bug. See `hegel_context_last_error()` for the
+    /// diagnostic.
     HEGEL_E_INTERNAL = -8,
 
     /// A single test-case handle was used from two threads at once. Each

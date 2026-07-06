@@ -68,7 +68,7 @@ int main(void) {
         printf("min > max correctly rejected: rc=%d, message=\"%s\"\n", rc, err);
     }
 
-    HegelStringGenerator *gen;
+    hegel_string_generator_t *gen;
     rc = hegel_string_generator_text(ctx, 0, 10, "ebcdic", 0, UINT32_MAX,
                                      NULL, 0, NULL, 0, NULL, 0, NULL, 0, &gen);
     if (rc != HEGEL_E_INVALID_ARG) {

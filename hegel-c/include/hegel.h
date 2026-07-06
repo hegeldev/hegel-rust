@@ -19,7 +19,7 @@
  * Pointers you pass *into* a libhegel function are always yours. The library
  * reads them during the call and copies whatever it needs to keep, so you may
  * free or reuse the memory as soon as the call returns. This covers strings
- * (char*), CBOR byte buffers, and arrays of strings alike.
+ * (char*), byte buffers, and arrays of strings alike.
  *
  * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
  * written to an out-parameter otherwise), you own — and must release with the
@@ -33,6 +33,9 @@
  *     hegel_test_case_clone      ->  hegel_test_case_free
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
+ *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
+ *     hegel_generate_string      ->  hegel_generate_string_result_free
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
@@ -55,14 +58,15 @@
  * are independent of the run: they stay valid after hegel_run_free, so a
  * wrapper can free each object from its own finaliser in any order.
  *
- * Every *other* pointer libhegel hands back is a borrowed string or byte
- * buffer: libhegel still owns it, you must not free it, and it is valid only
- * until a point that the function documents. Strings read off a result or
- * failure snapshot (hegel_run_result_error, the hegel_failure_* getters)
- * live until that snapshot's free; the rest are transient —
- * hegel_generate's bytes are invalidated by the next call on that test
- * case, and hegel_context_last_error by the next call on that context. Copy
- * them to keep them.
+ * The buffers hegel_generate_bytes and hegel_generate_string fill in are
+ * yours too — release each with its matching result-free function above.
+ *
+ * Every *other* pointer libhegel hands back is a borrowed string: libhegel
+ * still owns it, you must not free it, and it is valid only until a point
+ * that the function documents. Strings read off a result or failure
+ * snapshot (hegel_run_result_error, the hegel_failure_* getters) live until
+ * that snapshot's free; hegel_context_last_error is invalidated by the next
+ * call on that context. Copy them to keep them.
  */
 
 #ifndef HEGEL_H
@@ -111,7 +115,7 @@ typedef enum {
     HEGEL_E_INVALID_HANDLE = -4,
     /*
      An argument other than a handle was invalid — NULL where a value was
-     required, malformed CBOR, non-UTF-8 string, etc. See
+     required, inverted bounds, a non-UTF-8 string, etc. See
      `hegel_context_last_error()` for specifics.
      */
     HEGEL_E_INVALID_ARG = -5,
@@ -128,9 +132,9 @@ typedef enum {
      */
     HEGEL_E_NOT_COMPLETE = -7,
     /*
-     An internal invariant failed inside libhegel (e.g. CBOR
-     re-serialisation). Should not happen in practice; please file a
-     bug. See `hegel_context_last_error()` for the diagnostic.
+     An internal invariant failed inside libhegel. Should not happen in
+     practice; please file a bug. See `hegel_context_last_error()` for the
+     diagnostic.
      */
     HEGEL_E_INTERNAL = -8,
     /*
@@ -534,7 +538,7 @@ typedef struct hegel_settings_t hegel_settings_t;
  across test cases and threads. Free it with
  `hegel_string_generator_free` once no draws will use it again.
  */
-typedef struct HegelStringGenerator HegelStringGenerator;
+typedef struct hegel_string_generator_t hegel_string_generator_t;
 
 /*
  One in-flight test-case handle handed to the caller by
@@ -1249,7 +1253,7 @@ hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
                                            size_t include_characters_len,
                                            const uint8_t *exclude_characters,
                                            size_t exclude_characters_len,
-                                           HegelStringGenerator **out_generator);
+                                           hegel_string_generator_t **out_generator);
 
 /*
  Build a **regex** string generator: strings matching `pattern`
@@ -1267,8 +1271,8 @@ hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
 hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
                                             const char *pattern,
                                             bool fullmatch,
-                                            const HegelStringGenerator *alphabet,
-                                            HegelStringGenerator **out_generator);
+                                            const hegel_string_generator_t *alphabet,
+                                            hegel_string_generator_t **out_generator);
 
 /*
  Build an **email** string generator producing RFC 5321/5322 addresses
@@ -1279,7 +1283,7 @@ hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
  `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
  */
 hegel_result_t hegel_string_generator_email(hegel_context_t *ctx,
-                                            HegelStringGenerator **out_generator);
+                                            hegel_string_generator_t **out_generator);
 
 /*
  Build a **URL** string generator producing RFC 3986 `http`/`https` URLs.
@@ -1289,7 +1293,7 @@ hegel_result_t hegel_string_generator_email(hegel_context_t *ctx,
  `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
  */
 hegel_result_t hegel_string_generator_url(hegel_context_t *ctx,
-                                          HegelStringGenerator **out_generator);
+                                          hegel_string_generator_t **out_generator);
 
 /*
  Build a **domain-name** string generator producing RFC 1035
@@ -1304,7 +1308,7 @@ hegel_result_t hegel_string_generator_url(hegel_context_t *ctx,
  */
 hegel_result_t hegel_string_generator_domain(hegel_context_t *ctx,
                                              uint64_t max_length,
-                                             HegelStringGenerator **out_generator);
+                                             hegel_string_generator_t **out_generator);
 
 /*
  Release a string generator built by a `hegel_string_generator_*`
@@ -1312,7 +1316,8 @@ hegel_result_t hegel_string_generator_domain(hegel_context_t *ctx,
  Each generator must be freed exactly once, and only after every draw
  using it has completed.
  */
-hegel_result_t hegel_string_generator_free(hegel_context_t *ctx, HegelStringGenerator *generator);
+hegel_result_t hegel_string_generator_free(hegel_context_t *ctx,
+                                           hegel_string_generator_t *generator);
 
 /*
  Draw a string described by `generator` (built with a
@@ -1330,7 +1335,7 @@ hegel_result_t hegel_string_generator_free(hegel_context_t *ctx, HegelStringGene
  */
 hegel_result_t hegel_generate_string(hegel_context_t *ctx,
                                      hegel_test_case_t *tc,
-                                     const HegelStringGenerator *generator,
+                                     const hegel_string_generator_t *generator,
                                      hegel_generate_string_result_t *out_result);
 
 /*

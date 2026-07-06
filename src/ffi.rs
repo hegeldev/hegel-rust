@@ -2,7 +2,7 @@
 //!
 //! hegeltest drives the engine the same way every other language binding
 //! does: through the `hegel_*` C functions exported by the `hegel-c` crate
-//! (lib name `hegel_c`), passing CBOR bytes and opaque handles and reading
+//! (lib name `hegel_c`), passing typed values and opaque handles and reading
 //! back `hegel_result_t` codes. This module is the single place that touches
 //! those raw functions; the rest of the frontend works against the safe
 //! wrappers here.
