@@ -117,11 +117,6 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-/// The largest enumerated value pool [`HashSetGenerator`] will draw
-/// without replacement from. Mirrors the bound the engine's old
-/// unique-sampled-list strategy used.
-const MAX_UNIQUE_POOL: usize = 10_000;
-
 impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
 where
     G: Generator<T>,
@@ -134,62 +129,6 @@ where
             }
         }
         tc.start_span(labels::SET);
-        let set = match self.enumerated_pool() {
-            Some(pool) => self.draw_from_pool(tc, pool),
-            None => self.draw_by_rejection(tc),
-        };
-        tc.stop_span(false);
-        set
-    }
-}
-
-impl<T, G> HashSetGenerator<G, T>
-where
-    G: Generator<T>,
-    T: Eq + Hash,
-{
-    /// The distinct values of an enumerable element generator, in first
-    /// occurrence order (which the shrinker treats as simplest-first), when
-    /// there are few enough of them to draw without replacement.
-    fn enumerated_pool(&self) -> Option<Vec<T>> {
-        let values = self.elements.enumerate_values()?;
-        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
-            return None;
-        }
-        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut pool: Vec<T> = Vec::new();
-        for v in values {
-            let bucket = by_hash.entry(fingerprint(&v)).or_default();
-            if bucket.iter().any(|&i| pool[i] == v) {
-                continue;
-            }
-            bucket.push(pool.len());
-            pool.push(v);
-        }
-        Some(pool)
-    }
-
-    /// Draw set elements as indices into a shrinking pool of the remaining
-    /// values, avoiding the coupon-collector problem when the set must
-    /// contain most of a small alphabet. Port of Hypothesis's
-    /// `UniqueSampledListStrategy`.
-    fn draw_from_pool(&self, tc: &TestCase, mut remaining: Vec<T>) -> HashSet<T> {
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut set = HashSet::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            set.insert(remaining.remove(j));
-        }
-        set
-    }
-
-    fn draw_by_rejection(&self, tc: &TestCase) -> HashSet<T> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
         while collection.more() {
@@ -199,17 +138,9 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
+        tc.stop_span(false);
         set
     }
-}
-
-/// A hashable stand-in for a value that is only `Eq + Hash`, used to dedup
-/// the enumerated pool.
-fn fingerprint<T: Eq + Hash>(v: &T) -> u64 {
-    use std::hash::{DefaultHasher, Hasher};
-    let mut h = DefaultHasher::new();
-    v.hash(&mut h);
-    h.finish()
 }
 
 /// Generate hash sets with elements from the given generator.

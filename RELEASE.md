@@ -17,6 +17,17 @@ unchanged — but some API surface is gone:
 - The `hegel::ciborium` re-export and the hidden schema helpers
   (`generate_raw`, `generate_from_schema`, `deserialize_value`) are
   removed, and `hegeltest` no longer depends on `ciborium` at all.
+- Value enumeration over finite generators is gone: `filter` on a
+  `sampled_from` no longer enumerates the surviving values to draw one
+  directly, and sets over small sampled alphabets no longer draw without
+  replacement. Both now use plain rejection sampling, so a filter that
+  rejects most of a small value set — or a set that must contain most of
+  its alphabet — can trip the `FilterTooMuch` health check where it
+  previously succeeded, and an unsatisfiable filter surfaces as
+  `FilterTooMuch` rather than a dedicated "Unsatisfiable filter" error.
+  This logic would otherwise need reimplementing in every Hegel binding;
+  if it proves necessary in practice it will come back as engine
+  support.
 
 Failure databases and reproduce blobs written by earlier versions will
 not replay against this release (the database has never been stable
