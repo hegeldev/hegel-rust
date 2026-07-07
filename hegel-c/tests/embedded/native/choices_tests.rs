@@ -662,7 +662,7 @@ fn bytes_choice_kind_enumerate_positive_max_returns_none() {
 
 fn string_choice(intervals: Vec<(u32, u32)>, min_size: usize, max_size: usize) -> StringChoice {
     StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(intervals),
+        intervals: crate::native::intervalsets::IntervalSet::new(intervals).into(),
         min_size,
         max_size,
     }
@@ -957,7 +957,8 @@ fn bytes_max_index_and_max_children() {
 #[test]
 fn string_max_index_and_max_children() {
     let kind = ChoiceKind::String(StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)])
+            .into(),
         min_size: 0,
         max_size: 2,
     });
@@ -978,7 +979,8 @@ fn bytes_to_index_via_dispatch() {
 #[test]
 fn string_to_index_via_dispatch() {
     let kind = ChoiceKind::String(StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)]),
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![(b'a' as u32, b'c' as u32)])
+            .into(),
         min_size: 0,
         max_size: 4,
     });
@@ -1038,4 +1040,255 @@ fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
     let msg = payload.downcast_ref::<String>().unwrap();
     assert!(msg.contains("empty alphabet"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+fn boolean_node(value: bool) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Boolean(BooleanChoice),
+        ChoiceValue::Boolean(value),
+        false,
+    )
+}
+
+fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
+    ChoiceNode::new(
+        ChoiceKind::Clone,
+        ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
+            children,
+            Vec::new(),
+            Vec::new(),
+        ))),
+        false,
+    )
+}
+
+fn values_clone_value(values: Vec<ChoiceValue>) -> ChoiceValue {
+    ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_values(values)))
+}
+
+fn value_hash(v: &ChoiceValue) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
+#[test]
+fn clone_kind_validate_accepts_only_clone_values() {
+    let kind = ChoiceKind::Clone;
+    assert!(kind.validate(&clone_node(Vec::new()).value));
+    assert!(kind.validate(&values_clone_value(Vec::new())));
+    assert!(!kind.validate(&ChoiceValue::Integer(BigInt::from(0))));
+    assert!(!kind.validate(&ChoiceValue::Boolean(false)));
+    assert!(!ChoiceKind::Boolean(BooleanChoice).validate(&clone_node(Vec::new()).value));
+    assert!(
+        !ChoiceKind::Integer(IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
+        })
+        .validate(&clone_node(Vec::new()).value)
+    );
+}
+
+#[test]
+fn clone_kind_simplest_and_unit_are_the_empty_clone() {
+    let empty = values_clone_value(Vec::new());
+    assert_eq!(ChoiceKind::Clone.simplest(), empty);
+    assert_eq!(ChoiceKind::Clone.unit(), empty);
+}
+
+#[test]
+fn simplest_clone_value_sort_key_compares_equal_to_an_executed_empty_stream() {
+    let punned = ChoiceNode::new(ChoiceKind::Clone, ChoiceKind::Clone.simplest(), false);
+    let executed = clone_node(Vec::new());
+    assert!(punned.sort_key_ref() == executed.sort_key_ref());
+    assert!(executed.sort_key_ref() == punned.sort_key_ref());
+}
+
+#[test]
+fn clone_kind_max_children_saturating_is_cap() {
+    assert_eq!(ChoiceKind::Clone.max_children_saturating(17), 17);
+    assert_eq!(
+        ChoiceKind::Clone.max_children_saturating(u128::MAX),
+        u128::MAX
+    );
+}
+
+#[test]
+fn clone_kind_enumerate_returns_none() {
+    assert!(ChoiceKind::Clone.enumerate(1024).is_none());
+}
+
+#[test]
+fn clone_value_equality_ignores_realized_info() {
+    let children = vec![boolean_node(true), integer_node(0, 10, 3)];
+    let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
+        children.clone(),
+        vec![Span {
+            start: 0,
+            end: 2,
+            label: "17".to_string(),
+            depth: 0,
+            parent: None,
+            discarded: false,
+        }],
+        vec![(0, SpanEvent::Open { label: 17 })],
+    )));
+    let values_only = values_clone_value(children.iter().map(|n| n.value.clone()).collect());
+    assert_eq!(realized, values_only);
+    assert_eq!(value_hash(&realized), value_hash(&values_only));
+}
+
+#[test]
+fn clone_value_equality_compares_child_values_recursively() {
+    let a = clone_node(vec![
+        boolean_node(true),
+        clone_node(vec![integer_node(0, 10, 3)]),
+    ])
+    .value;
+    let same = clone_node(vec![
+        boolean_node(true),
+        clone_node(vec![integer_node(0, 10, 3)]),
+    ])
+    .value;
+    let different = clone_node(vec![
+        boolean_node(true),
+        clone_node(vec![integer_node(0, 10, 4)]),
+    ])
+    .value;
+    let shorter = clone_node(vec![boolean_node(true)]).value;
+    assert_eq!(a, same);
+    assert_eq!(value_hash(&a), value_hash(&same));
+    assert_ne!(a, different);
+    assert_ne!(a, shorter);
+    assert_ne!(a, ChoiceValue::Boolean(true));
+}
+
+#[test]
+fn flattened_len_counts_clone_children_recursively() {
+    let nodes = vec![
+        boolean_node(false),
+        clone_node(vec![
+            boolean_node(true),
+            clone_node(vec![integer_node(0, 10, 1)]),
+        ]),
+    ];
+    assert_eq!(flattened_len(&nodes), 5);
+    assert_eq!(flattened_len(&[boolean_node(true)]), 1);
+    assert_eq!(flattened_len(&[clone_node(Vec::new())]), 1);
+    assert_eq!(flattened_len(&[]), 0);
+}
+
+#[test]
+fn clone_record_flat_len_agrees_across_representations() {
+    let children = vec![boolean_node(true), clone_node(vec![boolean_node(false)])];
+    let from_values = CloneRecord::from_values(children.iter().map(|n| n.value.clone()).collect());
+    let from_run = CloneRecord::from_run(children, Vec::new(), Vec::new());
+    assert_eq!(from_values.flat_len(), 3);
+    assert_eq!(from_run.flat_len(), 3);
+}
+
+#[test]
+fn nodes_sort_key_orders_by_flattened_count_first() {
+    use crate::native::core::sort_key;
+    let wrapped = vec![clone_node(vec![boolean_node(false), boolean_node(false)])];
+    let flat = vec![boolean_node(true), boolean_node(true)];
+    assert!(sort_key(&flat) < sort_key(&wrapped));
+}
+
+#[test]
+fn nodes_sort_key_shrinking_inside_clone_is_smaller() {
+    use crate::native::core::sort_key;
+    let big = vec![clone_node(vec![integer_node(0, 10, 5)])];
+    let small = vec![clone_node(vec![integer_node(0, 10, 2)])];
+    assert!(sort_key(&small) < sort_key(&big));
+    let fewer = vec![clone_node(vec![boolean_node(true)])];
+    let more = vec![clone_node(vec![boolean_node(false), boolean_node(false)])];
+    assert!(sort_key(&fewer) < sort_key(&more));
+}
+
+#[test]
+fn nodes_sort_key_equal_flat_count_shorter_top_level_wins() {
+    use crate::native::core::sort_key;
+    let nested = vec![clone_node(vec![boolean_node(true)]), boolean_node(true)];
+    let flat = vec![
+        boolean_node(false),
+        boolean_node(false),
+        boolean_node(false),
+    ];
+    assert_eq!(flattened_len(&nested), flattened_len(&flat));
+    assert!(sort_key(&nested) < sort_key(&flat));
+}
+
+#[test]
+fn node_sort_key_ref_clone_category_above_scalars_and_sequences() {
+    let scalar = boolean_node(true);
+    let bytes = bytes_node(0, 4, vec![1, 2]);
+    let clone = clone_node(vec![boolean_node(true)]);
+    assert!(scalar.sort_key_ref() < clone.sort_key_ref());
+    assert!(bytes.sort_key_ref() < clone.sort_key_ref());
+    assert!(clone.sort_key_ref() == clone_node(vec![boolean_node(true)]).sort_key_ref());
+}
+
+#[test]
+fn clone_record_accessors_expose_children_and_realized_info() {
+    let span = Span {
+        start: 0,
+        end: 1,
+        label: "42".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    };
+    let record = CloneRecord::from_run(
+        vec![boolean_node(true)],
+        vec![span.clone()],
+        vec![(0, SpanEvent::Open { label: 42 })],
+    );
+    assert_eq!(record.len(), 1);
+    assert!(!record.is_empty());
+    assert_eq!(record.value_at(0), &ChoiceValue::Boolean(true));
+    assert_eq!(
+        record.values().cloned().collect::<Vec<_>>(),
+        vec![ChoiceValue::Boolean(true)]
+    );
+    assert_eq!(record.realized_nodes().unwrap().len(), 1);
+    assert_eq!(record.spans(), &[span]);
+    assert_eq!(record.span_events(), &[(0, SpanEvent::Open { label: 42 })]);
+
+    let values_only = CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]);
+    assert_eq!(values_only.len(), 1);
+    assert_eq!(values_only.value_at(0), &ChoiceValue::Boolean(true));
+    assert_eq!(
+        values_only.values().cloned().collect::<Vec<_>>(),
+        vec![ChoiceValue::Boolean(true)]
+    );
+    assert!(values_only.realized_nodes().is_none());
+    assert!(values_only.spans().is_empty());
+    assert!(values_only.span_events().is_empty());
+
+    let empty = CloneRecord::empty();
+    assert!(empty.is_empty());
+    assert_eq!(empty.flat_len(), 0);
+}
+
+#[test]
+fn clone_vs_clone_ordering_compares_flat_len_then_child_count() {
+    use crate::native::core::sort_key;
+    let a = vec![
+        clone_node(vec![boolean_node(false)]),
+        clone_node(vec![boolean_node(false), boolean_node(false)]),
+    ];
+    let b = vec![
+        clone_node(vec![boolean_node(false), boolean_node(false)]),
+        clone_node(vec![boolean_node(false)]),
+    ];
+    assert_eq!(flattened_len(&a), flattened_len(&b));
+    assert!(sort_key(&a) < sort_key(&b));
+
+    let shallow = vec![clone_node(vec![boolean_node(true), boolean_node(true)])];
+    let deep = vec![clone_node(vec![clone_node(vec![boolean_node(true)])])];
+    assert_eq!(flattened_len(&deep), flattened_len(&shallow));
+    assert!(sort_key(&deep) < sort_key(&shallow));
 }

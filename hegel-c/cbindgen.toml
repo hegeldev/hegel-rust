@@ -21,7 +21,7 @@ header = """
  * Pointers you pass *into* a libhegel function are always yours. The library
  * reads them during the call and copies whatever it needs to keep, so you may
  * free or reuse the memory as soon as the call returns. This covers strings
- * (char*), CBOR byte buffers, and arrays of strings alike.
+ * (char*), byte buffers, and arrays of strings alike.
  *
  * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
  * written to an out-parameter otherwise), you own — and must release with the
@@ -35,6 +35,9 @@ header = """
  *     hegel_test_case_clone      ->  hegel_test_case_free
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
+ *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
+ *     hegel_generate_string      ->  hegel_generate_string_result_free
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
@@ -57,14 +60,15 @@ header = """
  * are independent of the run: they stay valid after hegel_run_free, so a
  * wrapper can free each object from its own finaliser in any order.
  *
- * Every *other* pointer libhegel hands back is a borrowed string or byte
- * buffer: libhegel still owns it, you must not free it, and it is valid only
- * until a point that the function documents. Strings read off a result or
- * failure snapshot (hegel_run_result_error, the hegel_failure_* getters)
- * live until that snapshot's free; the rest are transient —
- * hegel_generate's bytes are invalidated by the next call on that test
- * case, and hegel_context_last_error by the next call on that context. Copy
- * them to keep them.
+ * The buffers hegel_generate_bytes and hegel_generate_string fill in are
+ * yours too — release each with its matching result-free function above.
+ *
+ * Every *other* pointer libhegel hands back is a borrowed string: libhegel
+ * still owns it, you must not free it, and it is valid only until a point
+ * that the function documents. Strings read off a result or failure
+ * snapshot (hegel_run_result_error, the hegel_failure_* getters) live until
+ * that snapshot's free; hegel_context_last_error is invalidated by the next
+ * call on that context. Copy them to keep them.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
@@ -94,6 +98,7 @@ include = ["hegel_phase_t", "hegel_health_check_t", "hegel_label_t"]
 "HegelTestCase" = "hegel_test_case_t"
 "HegelRunResult" = "hegel_run_result_t"
 "HegelFailure" = "hegel_failure_t"
+"HegelStringGenerator" = "hegel_string_generator_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic

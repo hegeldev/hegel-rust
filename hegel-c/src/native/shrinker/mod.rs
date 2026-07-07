@@ -1,4 +1,5 @@
 mod bytes;
+mod clones;
 mod coarse;
 mod deletion;
 mod floats;
@@ -344,7 +345,7 @@ impl<'a> Shrinker<'a> {
     /// an Integer value no longer fits the (now Boolean) node. Treating both
     /// as a failed replacement (rather than panicking later in `sort_key`)
     /// matches the semantic invariant: a value that doesn't fit the node's
-    /// schema can't be assigned to it.
+    /// kind can't be assigned to it.
     pub fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> ShrinkResult<bool> {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
@@ -503,6 +504,10 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "try_shortening_via_increment",
                 Box::new(|sh| sh.try_shortening_via_increment()),
+            ),
+            ShrinkPass::new(
+                "shrink_clone_streams",
+                Box::new(|sh| sh.shrink_clone_streams()),
             ),
             ShrinkPass::new("mutate_and_shrink", Box::new(|sh| sh.mutate_and_shrink())),
         ];

@@ -6,6 +6,7 @@
 mod common;
 
 mod bytes;
+mod clones;
 mod collections;
 mod composite;
 mod flatmap;

@@ -8,15 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
-use ciborium::Value;
 use parking_lot::Mutex;
 
 /// cbindgen:ignore
 mod antithesis_detect;
 /// cbindgen:ignore
 mod backend;
-/// cbindgen:ignore
-mod cbor_utils;
 /// cbindgen:ignore
 mod control;
 /// cbindgen:ignore
@@ -58,6 +55,7 @@ pub mod __bench {
 
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
+use crate::native::bignum::BigInt;
 use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call.
@@ -95,7 +93,7 @@ pub enum hegel_result_t {
     HEGEL_E_INVALID_HANDLE = -4,
 
     /// An argument other than a handle was invalid — NULL where a value was
-    /// required, malformed CBOR, non-UTF-8 string, etc. See
+    /// required, inverted bounds, a non-UTF-8 string, etc. See
     /// `hegel_context_last_error()` for specifics.
     HEGEL_E_INVALID_ARG = -5,
 
@@ -109,16 +107,17 @@ pub enum hegel_result_t {
     /// finished (`hegel_next_test_case` has not yet reported completion).
     HEGEL_E_NOT_COMPLETE = -7,
 
-    /// An internal invariant failed inside libhegel (e.g. CBOR
-    /// re-serialisation). Should not happen in practice; please file a
-    /// bug. See `hegel_context_last_error()` for the diagnostic.
+    /// An internal invariant failed inside libhegel. Should not happen in
+    /// practice; please file a bug. See `hegel_context_last_error()` for the
+    /// diagnostic.
     HEGEL_E_INTERNAL = -8,
 
     /// A single test-case handle was used from two threads at once. Each
     /// handle may be driven by at most one thread at a time; to generate from
     /// several threads, `hegel_test_case_clone` the handle and give each
-    /// thread its own clone. (Clones share the underlying test case but have
-    /// independent per-handle locks, so they may be driven concurrently.)
+    /// thread its own clone. (Clones share the underlying test case's
+    /// outcome and budgets but generate from independent streams, so they
+    /// may be driven concurrently and deterministically.)
     /// Returned by the draw primitives; `hegel_mark_complete` instead waits
     /// for the in-flight operation, because completion always succeeds under
     /// first-caller-wins.
@@ -135,7 +134,7 @@ use hegel_result_t::*;
 ///   draw; the engine should discard it without counting it against
 ///   the test-cases budget.
 /// - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
-///   test case (typically because `hegel_generate` returned
+///   test case (typically because a `hegel_generate_*` draw returned
 ///   `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
 /// - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
 ///   a candidate counterexample. Pass a stable origin string to
@@ -324,6 +323,41 @@ pub enum hegel_label_t {
     /// (`hegel_state_machine_next_rule`); callers normally never open this
     /// span themselves.
     HEGEL_LABEL_FEATURE_FLAG = 16,
+    /// Span around one regex string draw. Emitted internally by
+    /// `hegel_generate_string`; callers normally never open this span
+    /// themselves. Likewise for the other engine-side compound draws below.
+    HEGEL_LABEL_REGEX = 17,
+    /// Span around one email-address draw (`hegel_generate_string`).
+    HEGEL_LABEL_EMAIL = 18,
+    /// Span around one URL draw (`hegel_generate_string`).
+    HEGEL_LABEL_URL = 19,
+    /// Span around one domain-name draw (`hegel_generate_string`).
+    HEGEL_LABEL_DOMAIN = 20,
+    /// Span around one date draw (`hegel_generate_date`).
+    HEGEL_LABEL_DATE = 21,
+    /// Span around one time draw (`hegel_generate_time`).
+    HEGEL_LABEL_TIME = 22,
+    /// Span around one datetime draw (`hegel_generate_datetime`).
+    HEGEL_LABEL_DATETIME = 23,
+    /// Span around one UUID draw (`hegel_generate_uuid`).
+    HEGEL_LABEL_UUID = 24,
+    /// Span around one IP-address draw (`hegel_generate_ipv4` /
+    /// `hegel_generate_ipv6`).
+    HEGEL_LABEL_IP_ADDRESS = 25,
+    /// Span around one integer draw (`hegel_generate_integer` /
+    /// `hegel_generate_integer_big`). Emitted internally, like every
+    /// per-draw label: same-label spans are what the engine's mutation
+    /// machinery duplicates to propose repeated values.
+    HEGEL_LABEL_INTEGER = 26,
+    /// Span around one float draw (`hegel_generate_float`).
+    HEGEL_LABEL_FLOAT = 27,
+    /// Span around one boolean draw (`hegel_generate_boolean`).
+    HEGEL_LABEL_BOOLEAN = 28,
+    /// Span around one bytes draw (`hegel_generate_bytes`).
+    HEGEL_LABEL_BYTES = 29,
+    /// Span around one text string draw (`hegel_generate_string` with a
+    /// text generator).
+    HEGEL_LABEL_STRING = 30,
 }
 
 /// Opaque error-reporting context.
@@ -432,21 +466,22 @@ enum WorkerMessage {
 /// `hegel_next_test_case` / `hegel_test_case_from_blob` and every
 /// `hegel_test_case_clone` descended from it.
 ///
-/// The data source, completion status, and run ack are family-wide: marking
-/// any handle complete marks the whole family, and the underlying
-/// `DataSource` is the single connection all handles draw from. Concurrent
-/// draws from two clones are memory-safe (the `NativeDataSource` serialises
-/// internally) but currently non-deterministic — making concurrent clone use
-/// robust is future work.
+/// The completion status and run ack are family-wide: marking any handle
+/// complete marks the whole family. Each handle draws from its own *stream*
+/// data source (see [`HegelTestCase::stream`]) — the root handle from the
+/// family's root stream, each clone from the independent stream
+/// `hegel_test_case_clone` created for it — so concurrent draws on
+/// different handles generate independently and deterministically.
 ///
 /// Every handle owns one `Arc<FamilyShared>` reference; the run keeps its own
 /// reference too. The `Arc` strong count is the family's reference count, so
-/// the data source is dropped only once every handle has been freed and the
+/// the engine state is dropped only once every handle has been freed and the
 /// run has released its reference.
 struct FamilyShared {
-    /// The single underlying data source, shared by every handle through the
-    /// family's own `Arc`.
-    ds: Box<dyn DataSource + Send + Sync>,
+    /// The family's root-stream data source. Every handle keeps the family
+    /// alive; the root handle also draws from this source, and completion
+    /// (which is family-wide in the engine) is reported through it.
+    ds: Arc<dyn DataSource + Send + Sync>,
     /// Family-wide completion status. Set once via `compare_exchange` in
     /// [`Self::complete`] so `ds.mark_complete` runs and the ack is sent
     /// exactly once, no matter which handle reports it.
@@ -480,12 +515,6 @@ impl FamilyShared {
 
 /// Per-handle state guarded by the handle's own lock.
 struct LocalState {
-    /// Backing buffer for the borrowed `out_value_cbor` pointer returned from
-    /// `hegel_generate`. Re-allocated per call; the previous draw's bytes are
-    /// invalidated on the next `hegel_generate` *on this handle*. Per-handle
-    /// (not family-wide) so two clones drawing at once don't stomp each
-    /// other's returned buffers.
-    last_value: Vec<u8>,
     /// Whether `hegel_mark_complete` has already been called on *this* handle.
     /// Completing the family is first-caller-wins and family-wide (see
     /// `FamilyShared::completed`), so a second handle completing is a safe
@@ -497,9 +526,9 @@ struct LocalState {
 /// One in-flight test-case handle handed to the caller by
 /// `hegel_next_test_case`, `hegel_test_case_from_blob`, or
 /// `hegel_test_case_clone`. The caller drives it with the per-test-case
-/// primitives (`hegel_generate`, `hegel_start_span` / `hegel_stop_span`,
-/// `hegel_target`, the collection primitives) and concludes it with
-/// `hegel_mark_complete`.
+/// primitives (the `hegel_generate_*` draws, `hegel_start_span` /
+/// `hegel_stop_span`, `hegel_target`, the collection primitives) and
+/// concludes it with `hegel_mark_complete`.
 ///
 /// A single handle must be driven by at most one thread at a time: If
 /// multiple threads attempt to use the handle at the same time, operations
@@ -511,6 +540,10 @@ struct LocalState {
 /// `hegel_test_case_free`
 pub struct HegelTestCase {
     family: Arc<FamilyShared>,
+    /// The independent stream this handle draws from: the family's root
+    /// stream for the root handle, a cloned stream for a
+    /// `hegel_test_case_clone` handle.
+    stream: Arc<dyn DataSource + Send + Sync>,
     local: Mutex<LocalState>,
 }
 
@@ -1298,7 +1331,7 @@ pub unsafe extern "C" fn hegel_run_free(
 ///
 /// There is no run handle and no engine worker: the caller drives the
 /// returned test case with the usual per-test-case primitives
-/// (`hegel_generate`, spans, …), concludes it with `hegel_mark_complete`,
+/// (the `hegel_generate_*` draws, spans, …), concludes it with `hegel_mark_complete`,
 /// and decides for itself whether the blob reproduced the failure (the
 /// property failed again) or is stale (it passed). Replay several blobs by
 /// calling this once per blob. A blob whose choices no longer match the
@@ -1385,21 +1418,26 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
-/// Clone a test-case handle, writing a new handle that shares the same
-/// underlying test case into `*out_test_case`.
+/// Clone a test-case handle, writing a new handle onto an *independent
+/// stream* of the same test case into `*out_test_case`.
 ///
-/// The clone is a *view onto the same test case*, not an independent one: it
-/// draws from the same data source, and `hegel_mark_complete` on any handle in
-/// the family marks them all complete. Clones exist so a test case can be
-/// driven from several threads — each handle has its own lock, so two clones
-/// may draw concurrently, whereas using a *single* handle from two threads
-/// returns `HEGEL_E_CONCURRENT_USE`. (Concurrent draws across clones are
-/// currently non-deterministic; making them robust is future work.)
+/// The clone shares the test case's outcome — `hegel_mark_complete` on any
+/// handle in the family marks them all complete, and budgets are shared —
+/// but generates from its own independent choice sequence. The clone and
+/// the handle it came from can therefore be driven concurrently from
+/// different threads without perturbing each other, and the values each
+/// produces are deterministic under replay and shrink correctly. (Whereas
+/// using a *single* handle from two threads returns
+/// `HEGEL_E_CONCURRENT_USE`.) Collections, variable pools, and state
+/// machines remain shared across the family — ids from one handle work on
+/// any other — but *concurrent* use of one such object from two streams
+/// makes the affected values scheduling-dependent.
 ///
-/// Cloning is allowed on a clone (the result shares the same family) and
-/// after the family has completed (the clone simply reports
-/// `HEGEL_E_ALREADY_COMPLETE` on use). It does not take the source handle's
-/// lock, so a handle may be cloned while another thread is mid-draw on it.
+/// Cloning is a stream operation: it occupies one choice position on the
+/// source handle's stream, takes the source handle's lock like a draw
+/// (`HEGEL_E_CONCURRENT_USE` if another thread is mid-operation on it), and
+/// fails with `HEGEL_E_ALREADY_COMPLETE` once the family has completed.
+/// Cloning a clone creates a further independent stream.
 ///
 /// The new handle holds its own reference to the shared test case and must be
 /// released with `hegel_test_case_free`, like any other handle. The underlying
@@ -1420,11 +1458,15 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    let Some(src) = (unsafe { tc.as_ref() }) else {
-        set_last_error(ctx, "hegel_test_case_clone: test case pointer is null");
-        return HEGEL_E_INVALID_HANDLE;
+    let (src, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
     };
-    let clone = handle_from_family(Arc::clone(&src.family));
+    let stream = match src.stream.clone_stream() {
+        Ok(stream) => stream,
+        Err(e) => return translate_ds_error(ctx, e),
+    };
+    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream));
     unsafe { *out_test_case = clone };
     HEGEL_OK
 }
@@ -1437,22 +1479,30 @@ fn new_family(
     ack: Option<mpsc::Sender<()>>,
 ) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
-        ds,
+        ds: Arc::from(ds),
         completed: AtomicBool::new(false),
         ack,
     })
 }
 
-/// Allocate a handle holding one reference to `family`, and return its raw
-/// pointer. Each handle has its own `local` buffer so concurrent clones do not
-/// stomp each other's borrowed values.
+/// Allocate the root handle for `family` — drawing from the family's root
+/// stream — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
+    let stream = Arc::clone(&family.ds);
+    handle_from_stream(family, stream)
+}
+
+/// Allocate a handle holding one reference to `family` that draws from
+/// `stream`, and return its raw pointer. Each handle has its own `local`
+/// buffer so concurrent handles do not stomp each other's borrowed values.
+fn handle_from_stream(
+    family: Arc<FamilyShared>,
+    stream: Arc<dyn DataSource + Send + Sync>,
+) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
-        local: Mutex::new(LocalState {
-            last_value: Vec::new(),
-            completed: false,
-        }),
+        stream,
+        local: Mutex::new(LocalState { completed: false }),
     })
 }
 
@@ -1504,76 +1554,43 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
     }
 }
 
-/// Draw a value from the test case's data source, using the
-/// CBOR-encoded `schema_cbor` to describe its shape (type + bounds +
-/// optional category filters, depending on the type).
-///
-/// On success returns `HEGEL_OK` and writes a borrowed pointer to the
-/// CBOR-encoded value into `*out_value_cbor` (length in
-/// `*out_value_len`). The pointer is invalidated by the next call into
-/// libhegel on this test case — copy the bytes if you need to keep
-/// them.
-///
-/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
-/// exhausted for this test case (the caller should abort the body and
-/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
-/// Returns `HEGEL_E_INVALID_ARG` on malformed schema, NULL outputs, or
-/// other argument errors; the diagnostic is in
-/// `hegel_context_last_error`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_generate(
+/// Reconstruct and drop an engine-allocated buffer handed out by a
+/// `hegel_generate_*` draw. `data` must come from `Box::into_raw` on a boxed
+/// `[u8]` of length `len` and must not be freed again.
+unsafe fn free_engine_buffer(data: *mut u8, len: usize) {
+    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len)) });
+}
+
+/// Shared prologue/epilogue for the typed `hegel_generate_*` draws: clear
+/// the error channel, check the test-case handle, require a non-null out
+/// pointer (reporting "<fn_name>: out parameter is null"), run `draw`
+/// against the handle, pass the drawn value to `write`, and translate draw
+/// errors onto `ctx`. `write` performs the caller's raw out-pointer store,
+/// so it runs only when the out pointer is non-null and the draw succeeded.
+unsafe fn typed_draw<T>(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    schema_cbor: *const u8,
-    schema_len: usize,
-    out_value_cbor: *mut *const u8,
-    out_value_len: *mut usize,
+    fn_name: &str,
+    out_is_null: bool,
+    draw: impl FnOnce(&HegelTestCase) -> Result<T, DataSourceError>,
+    write: impl FnOnce(T),
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let (tc, mut local) = match unsafe { tc_guard(tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if schema_cbor.is_null() && schema_len > 0 {
-        set_last_error(ctx, "hegel_generate: schema pointer is null");
+    if out_is_null {
+        set_last_error(ctx, &format!("{fn_name}: out parameter is null"));
         return HEGEL_E_INVALID_ARG;
     }
-    if out_value_cbor.is_null() || out_value_len.is_null() {
-        set_last_error(ctx, "hegel_generate: out parameter is null");
-        return HEGEL_E_INVALID_ARG;
-    }
-
-    let schema_bytes = unsafe { std::slice::from_raw_parts(schema_cbor, schema_len) };
-    let schema: Value = match ciborium::de::from_reader(schema_bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            set_last_error(
-                ctx,
-                &format!("hegel_generate: malformed CBOR schema: {}", e),
-            );
-            return HEGEL_E_INVALID_ARG;
+    match draw(tc) {
+        Ok(v) => {
+            write(v);
+            HEGEL_OK
         }
-    };
-
-    let value = match tc.family.ds.generate(&schema) {
-        Ok(v) => v,
-        Err(e) => return translate_ds_error(ctx, e),
-    };
-
-    local.last_value.clear();
-    if let Err(e) = ciborium::ser::into_writer(&value, &mut local.last_value) {
-        // nocov start
-        set_last_error(
-            ctx,
-            &format!("hegel_generate: failed to re-serialize value: {}", e),
-        ); // nocov end
-        return HEGEL_E_INTERNAL; // nocov
+        Err(e) => translate_ds_error(ctx, e),
     }
-    unsafe {
-        *out_value_cbor = local.last_value.as_ptr();
-        *out_value_len = local.last_value.len();
-    }
-    HEGEL_OK
 }
 
 /// Open a labeled span around a group of draws so the shrinker can
@@ -1595,7 +1612,7 @@ pub unsafe extern "C" fn hegel_start_span(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.family.ds.start_span(label) {
+    match tc.stream.start_span(label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1615,7 +1632,7 @@ pub unsafe extern "C" fn hegel_stop_span(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match tc.family.ds.stop_span(discard) {
+    match tc.stream.stop_span(discard) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1651,7 +1668,7 @@ pub unsafe extern "C" fn hegel_new_collection(
     } else {
         Some(max_size)
     };
-    match tc.family.ds.new_collection(min_size, max) {
+    match tc.stream.new_collection(min_size, max) {
         Ok(id) => {
             unsafe { *out_collection_id = id };
             HEGEL_OK
@@ -1680,7 +1697,7 @@ pub unsafe extern "C" fn hegel_collection_more(
         set_last_error(ctx, "hegel_collection_more: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.collection_more(collection_id) {
+    match tc.stream.collection_more(collection_id) {
         Ok(m) => {
             unsafe { *out_more = m };
             HEGEL_OK
@@ -1716,7 +1733,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
             }
         }
     };
-    match tc.family.ds.collection_reject(collection_id, why_str) {
+    match tc.stream.collection_reject(collection_id, why_str) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
@@ -1748,7 +1765,7 @@ pub unsafe extern "C" fn hegel_new_pool(
         set_last_error(ctx, "hegel_new_pool: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.new_pool() {
+    match tc.stream.new_pool() {
         Ok(id) => {
             unsafe { *out_pool_id = id };
             HEGEL_OK
@@ -1779,7 +1796,7 @@ pub unsafe extern "C" fn hegel_pool_add(
         set_last_error(ctx, "hegel_pool_add: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.pool_add(pool_id) {
+    match tc.stream.pool_add(pool_id) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1816,7 +1833,7 @@ pub unsafe extern "C" fn hegel_pool_generate(
         set_last_error(ctx, "hegel_pool_generate: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.pool_generate(pool_id, consume) {
+    match tc.stream.pool_generate(pool_id, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1921,7 +1938,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     };
     let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
     let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
-    match tc.family.ds.new_state_machine(&rule_refs, &invariant_refs) {
+    match tc.stream.new_state_machine(&rule_refs, &invariant_refs) {
         Ok(id) => {
             unsafe { *out_state_machine_id = id };
             HEGEL_OK
@@ -1959,7 +1976,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         set_last_error(ctx, "hegel_state_machine_next_rule: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.family.ds.state_machine_next_rule(state_machine_id) {
+    match tc.stream.state_machine_next_rule(state_machine_id) {
         Ok(index) => {
             unsafe { *out_rule_index = index };
             HEGEL_OK
@@ -1986,7 +2003,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
 /// `[0.0, 1.0]` (including NaN), or a contradictory forced value; the
 /// diagnostic is in `hegel_context_last_error`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_primitive_boolean(
+pub unsafe extern "C" fn hegel_generate_boolean(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     p: f64,
@@ -1994,25 +2011,963 @@ pub unsafe extern "C" fn hegel_primitive_boolean(
     has_forced: bool,
     out_value: *mut bool,
 ) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_boolean",
+            out_value.is_null(),
+            |tc| tc.stream.generate_boolean(p, has_forced.then_some(forced)),
+            |v| *out_value = v,
+        )
+    }
+}
+
+/// Draw an integer in `[min_value, max_value]` (both inclusive, both
+/// required). The engine biases toward boundary values and shrinks toward
+/// zero. For bounds outside the `int64_t` range use
+/// `hegel_generate_integer_big`.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case (the caller should abort the body and
+/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_value` or `min_value > max_value`;
+/// the diagnostic is in `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_integer(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: i64,
+    max_value: i64,
+    out_value: *mut i64,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_integer",
+            out_value.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
+            },
+            |v| *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds"),
+        )
+    }
+}
+
+/// Draw an arbitrary-precision integer in `[min_value, max_value]`.
+///
+/// Bounds and result are two's-complement **little-endian** signed byte
+/// buffers (the natural encoding of Go's `math/big` `FillBytes` reversed, or
+/// Rust's `i128::to_le_bytes` for fixed-width values). Both bounds are
+/// required and must be non-empty.
+///
+/// On success writes the drawn value's two's-complement little-endian bytes
+/// into `out_value` (capacity `out_value_cap`), its minimal length into
+/// `*out_value_len`, sign-fills the rest of the buffer up to
+/// `out_value_cap` (so reading the whole buffer as a fixed-width
+/// two's-complement integer also yields the drawn value, with no
+/// sign-extension needed on the caller's side), and returns `HEGEL_OK`. A
+/// value in range never needs more bytes than the longer of the two bound
+/// encodings, so passing
+/// `out_value_cap >= max(min_value_len, max_value_len)` always succeeds.
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case. Returns `HEGEL_E_INVALID_ARG` for NULL or empty
+/// bounds, NULL out parameters, `min_value > max_value`, or an `out_value`
+/// buffer too small for the drawn value; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_integer_big(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: *const u8,
+    min_value_len: usize,
+    max_value: *const u8,
+    max_value_len: usize,
+    out_value: *mut u8,
+    out_value_cap: usize,
+    out_value_len: *mut usize,
+) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_value.is_null() {
-        set_last_error(ctx, "hegel_primitive_boolean: out parameter is null");
+    if min_value.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: min_value pointer is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc
-        .family
-        .ds
-        .primitive_boolean(p, has_forced.then_some(forced))
-    {
+    if max_value.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: max_value pointer is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if min_value_len == 0 || max_value_len == 0 {
+        set_last_error(
+            ctx,
+            "hegel_generate_integer_big: bound encodings must not be empty",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    if out_value.is_null() || out_value_len.is_null() {
+        set_last_error(ctx, "hegel_generate_integer_big: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let min_bytes = unsafe { std::slice::from_raw_parts(min_value, min_value_len) };
+    let max_bytes = unsafe { std::slice::from_raw_parts(max_value, max_value_len) };
+    let min = BigInt::from_signed_bytes_le(min_bytes);
+    let max = BigInt::from_signed_bytes_le(max_bytes);
+    match tc.stream.generate_integer(&min, &max) {
         Ok(v) => {
-            unsafe { *out_value = v };
+            let bytes = v.to_signed_bytes_le();
+            if bytes.len() > out_value_cap {
+                set_last_error(
+                    ctx,
+                    &format!(
+                        "hegel_generate_integer_big: out buffer too small \
+                         (need {}, have {})",
+                        bytes.len(),
+                        out_value_cap
+                    ),
+                );
+                return HEGEL_E_INVALID_ARG;
+            }
+            let fill = if bytes.last().unwrap() & 0x80 != 0 {
+                0xFF
+            } else {
+                0x00
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_value, bytes.len());
+                std::ptr::write_bytes(
+                    out_value.add(bytes.len()),
+                    fill,
+                    out_value_cap - bytes.len(),
+                );
+                *out_value_len = bytes.len();
+            }
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Draw a float of the given `width` (32 or 64) in
+/// `[min_value, max_value]`.
+///
+/// Pass `-INFINITY` / `INFINITY` for unbounded ends. NaN is drawn only when
+/// `allow_nan` is set; infinities only when `allow_infinity` is set and the
+/// relevant endpoint is unbounded. `exclude_min` / `exclude_max` make the
+/// corresponding bound exclusive by stepping it to the next representable
+/// value at the requested width. Nonzero magnitudes below
+/// `smallest_nonzero_magnitude` are never drawn — it must be positive and
+/// finite; pass `5e-324` (width 64) or the smallest `float` subnormal
+/// (width 32) for no restriction. Width-32 bounds must be exactly
+/// representable as `float`, and finite width-32 results are exactly
+/// representable as `float`.
+///
+/// On success writes the drawn value into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_value`, an unsupported width, NaN bounds, width-32 bounds that are
+/// not exactly representable as `float`, an invalid
+/// `smallest_nonzero_magnitude`, or an empty range; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_float(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    width: u32,
+    min_value: f64,
+    max_value: f64,
+    allow_nan: bool,
+    allow_infinity: bool,
+    exclude_min: bool,
+    exclude_max: bool,
+    smallest_nonzero_magnitude: f64,
+    out_value: *mut f64,
+) -> hegel_result_t {
+    let spec = crate::native::draws::FloatSpec {
+        width,
+        min_value,
+        max_value,
+        allow_nan,
+        allow_infinity,
+        exclude_min,
+        exclude_max,
+        smallest_nonzero_magnitude,
+    };
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_float",
+            out_value.is_null(),
+            |tc| tc.stream.generate_float(&spec),
+            |v| *out_value = v,
+        )
+    }
+}
+
+/// An engine-allocated byte buffer returned by `hegel_generate_bytes`.
+///
+/// The caller owns the buffer and must release it with
+/// `hegel_generate_bytes_result_free` (freeing through any other allocator
+/// is undefined behaviour). `data` is never NULL after a successful draw,
+/// even for `len == 0`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_generate_bytes_result_t {
+    pub data: *mut u8,
+    pub len: usize,
+}
+
+/// Draw a byte string with length in `[min_size, max_size]` (both
+/// inclusive).
+///
+/// On success fills `*out_result` with an engine-allocated buffer the caller
+/// owns (release with `hegel_generate_bytes_result_free`) and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL
+/// `out_result` or `min_size > max_size`; the diagnostic is in
+/// `hegel_context_last_error`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_bytes(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_size: u64,
+    max_size: u64,
+    out_result: *mut hegel_generate_bytes_result_t,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_bytes",
+            out_result.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_bytes(size_arg(min_size), size_arg(max_size))
+            },
+            |v| {
+                let boxed = v.into_boxed_slice();
+                let len = boxed.len();
+                let data = Box::into_raw(boxed) as *mut u8;
+                *out_result = hegel_generate_bytes_result_t { data, len };
+            },
+        )
+    }
+}
+
+/// Release a buffer returned by `hegel_generate_bytes` and reset the struct
+/// to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+/// (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_bytes_result_free(
+    ctx: *mut HegelContext,
+    result: *mut hegel_generate_bytes_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(result) = (unsafe { result.as_mut() }) else {
+        return HEGEL_OK;
+    };
+    if !result.data.is_null() {
+        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
+        // `hegel_generate_bytes` and are freed exactly once here (the struct
+        // is zeroed below, making a second call a no-op).
+        unsafe { free_engine_buffer(result.data, result.len) };
+    }
+    result.data = ptr::null_mut();
+    result.len = 0;
+    HEGEL_OK
+}
+
+/// Opaque specification of a string draw — the alphabet-and-shape half of
+/// `hegel_generate_string`.
+///
+/// Build one with a `hegel_string_generator_*` constructor (text, regex,
+/// email, url, domain); every parameter is validated at construction so a
+/// bad alphabet or pattern is reported immediately rather than mid-draw.
+/// A generator is immutable after construction and may be shared freely
+/// across test cases and threads. Free it with
+/// `hegel_string_generator_free` once no draws will use it again.
+pub struct HegelStringGenerator {
+    spec: crate::native::draws::StringSpec,
+}
+
+/// Translate a constructor-time engine error onto `ctx`. Constructors
+/// perform no draws, so any error they report is by definition an invalid
+/// argument.
+fn translate_construct_error(
+    ctx: *mut HegelContext,
+    e: crate::native::core::EngineError,
+) -> hegel_result_t {
+    set_last_error(ctx, &e.to_string());
+    HEGEL_E_INVALID_ARG
+}
+
+/// Convert a `u64` size argument to `usize`, saturating on 32-bit targets
+/// so an oversized request stays "absurdly large" (and fails at draw time
+/// like any other unsatisfiable size) instead of silently truncating to a
+/// small value.
+fn size_arg(v: u64) -> usize {
+    usize::try_from(v).unwrap_or(usize::MAX)
+}
+
+/// Read an optional NUL-terminated UTF-8 string argument. `Err` carries the
+/// invalid-argument diagnostic already set on `ctx`.
+unsafe fn optional_utf8_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const c_char,
+) -> Result<Option<String>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    match unsafe { CStr::from_ptr(p) }.to_str() {
+        Ok(s) => Ok(Some(s.to_string())),
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
+            Err(HEGEL_E_INVALID_ARG)
+        }
+    }
+}
+
+/// Read an optional length-delimited UTF-8 buffer argument. A NULL pointer
+/// means "absent". Length-delimited so the buffer may contain NUL bytes
+/// (U+0000 is a valid character to include or exclude).
+unsafe fn optional_utf8_buffer_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const u8,
+    len: usize,
+) -> Result<Option<String>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(p, len) };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(Some(s.to_string())),
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
+            Err(HEGEL_E_INVALID_ARG)
+        }
+    }
+}
+
+/// Read an optional array of NUL-terminated UTF-8 strings. A NULL array
+/// means "absent"; a non-NULL array with `len == 0` means "present and
+/// empty" (for `categories`, an empty alphabet).
+unsafe fn optional_utf8_array_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const *const c_char,
+    len: usize,
+) -> Result<Option<Vec<String>>, hegel_result_t> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    unsafe { names_from_c_array(ctx, fn_name, arg_name, p, len) }.map(Some)
+}
+
+/// Write a constructed string generator through `out_generator`, boxing it
+/// into a caller-owned handle.
+unsafe fn write_string_generator(
+    out_generator: *mut *mut HegelStringGenerator,
+    spec: crate::native::draws::StringSpec,
+) -> hegel_result_t {
+    let handle = Box::into_raw(Box::new(HegelStringGenerator { spec }));
+    unsafe { *out_generator = handle };
+    HEGEL_OK
+}
+
+/// Build a **text** string generator: strings with length in
+/// `[min_size, max_size]` whose characters are drawn from the described
+/// alphabet.
+///
+/// The alphabet starts from `codec`'s range — `"ascii"`, `"latin-1"` /
+/// `"iso-8859-1"`, or `"utf-8"` / NULL for all of Unicode — intersected
+/// with `[min_codepoint, max_codepoint]` (pass `0` and `UINT32_MAX` for no
+/// constraint; surrogates are always removed). `categories` restricts to
+/// the union of the named Unicode general categories (NULL for no
+/// restriction; a non-NULL empty list means an empty alphabet), and
+/// `exclude_categories` removes categories. `include_characters` /
+/// `exclude_characters` are UTF-8 buffers (pointer + byte length; NULL for
+/// none) of individual characters unioned in / removed last. They are
+/// length-delimited rather than NUL-terminated because U+0000 is a valid
+/// character to include or exclude.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator`, `min_size > max_size`, an unknown codec or
+/// category, non-UTF-8 string arguments, include/exclude conflicts, or
+/// constraints that leave no characters while `max_size > 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_text(
+    ctx: *mut HegelContext,
+    min_size: u64,
+    max_size: u64,
+    codec: *const c_char,
+    min_codepoint: u32,
+    max_codepoint: u32,
+    categories: *const *const c_char,
+    categories_len: usize,
+    exclude_categories: *const *const c_char,
+    exclude_categories_len: usize,
+    include_characters: *const u8,
+    include_characters_len: usize,
+    exclude_characters: *const u8,
+    exclude_characters_len: usize,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_text: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    const FN: &str = "hegel_string_generator_text";
+    let codec = match unsafe { optional_utf8_arg(ctx, FN, "codec", codec) } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let categories =
+        match unsafe { optional_utf8_array_arg(ctx, FN, "categories", categories, categories_len) }
+        {
+            Ok(v) => v,
+            Err(rc) => return rc,
+        };
+    let exclude_categories = match unsafe {
+        optional_utf8_array_arg(
+            ctx,
+            FN,
+            "exclude_categories",
+            exclude_categories,
+            exclude_categories_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let include_characters = match unsafe {
+        optional_utf8_buffer_arg(
+            ctx,
+            FN,
+            "include_characters",
+            include_characters,
+            include_characters_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let exclude_characters = match unsafe {
+        optional_utf8_buffer_arg(
+            ctx,
+            FN,
+            "exclude_characters",
+            exclude_characters,
+            exclude_characters_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(rc) => return rc,
+    };
+    let alphabet = crate::native::draws::TextAlphabet {
+        codec,
+        min_codepoint,
+        max_codepoint,
+        categories,
+        exclude_categories,
+        include_characters,
+        exclude_characters,
+    };
+    match crate::native::draws::StringSpec::text(&alphabet, size_arg(min_size), size_arg(max_size))
+    {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Build a **regex** string generator: strings matching `pattern`
+/// (Python-`re` syntax). When `fullmatch` is true the whole string matches
+/// the pattern; otherwise the match may be padded on either side.
+/// `alphabet` — optional (NULL for none) — must be a **text** generator; its
+/// character set constrains the padding and wildcard characters.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator`, a NULL / non-UTF-8 / invalid `pattern`, or
+/// an `alphabet` that is not a text generator.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_regex(
+    ctx: *mut HegelContext,
+    pattern: *const c_char,
+    fullmatch: bool,
+    alphabet: *const HegelStringGenerator,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_regex: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    let pattern =
+        match unsafe { optional_utf8_arg(ctx, "hegel_string_generator_regex", "pattern", pattern) }
+        {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                set_last_error(ctx, "hegel_string_generator_regex: pattern is null");
+                return HEGEL_E_INVALID_ARG;
+            }
+            Err(rc) => return rc,
+        };
+    let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &g.spec);
+    match crate::native::draws::StringSpec::regex(&pattern, fullmatch, alphabet_spec) {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Build an **email** string generator producing RFC 5321/5322 addresses
+/// like `alice@example.com`.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_email(
+    ctx: *mut HegelContext,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_email: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::email()) }
+}
+
+/// Build a **URL** string generator producing RFC 3986 `http`/`https` URLs.
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_generator`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_url(
+    ctx: *mut HegelContext,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_url: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    unsafe { write_string_generator(out_generator, crate::native::draws::StringSpec::url()) }
+}
+
+/// Build a **domain-name** string generator producing RFC 1035
+/// fully-qualified domain names of total length at most `max_length`
+/// (4..=255; RFC 1035 §2.3.4 allows 255).
+///
+/// On success writes a caller-owned handle into `*out_generator` (release
+/// with `hegel_string_generator_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic in `hegel_context_last_error`
+/// — for a NULL `out_generator` or a `max_length` that leaves no eligible
+/// top-level domains.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_domain(
+    ctx: *mut HegelContext,
+    max_length: u64,
+    out_generator: *mut *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_generator.is_null() {
+        set_last_error(ctx, "hegel_string_generator_domain: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_generator = ptr::null_mut() };
+    match crate::native::draws::StringSpec::domain(size_arg(max_length)) {
+        Ok(spec) => unsafe { write_string_generator(out_generator, spec) },
+        Err(e) => translate_construct_error(ctx, e),
+    }
+}
+
+/// Release a string generator built by a `hegel_string_generator_*`
+/// constructor. Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+/// Each generator must be freed exactly once, and only after every draw
+/// using it has completed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_string_generator_free(
+    ctx: *mut HegelContext,
+    generator: *mut HegelStringGenerator,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if generator.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `generator` came from `write_string_generator`'s Box::into_raw
+    // and is freed exactly once here.
+    drop(unsafe { Box::from_raw(generator) });
+    HEGEL_OK
+}
+
+/// An engine-allocated string buffer returned by `hegel_generate_string`.
+///
+/// `data` points to `len` bytes of UTF-8. The buffer is **not**
+/// NUL-terminated and may contain interior NUL bytes (the drawn alphabet
+/// can include U+0000), so it is not a C string — always use `len`. The
+/// caller owns the buffer and must release it with
+/// `hegel_generate_string_result_free` (freeing through any other allocator
+/// is undefined behaviour). `data` is never NULL after a successful draw,
+/// even for `len == 0`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_generate_string_result_t {
+    pub data: *mut c_char,
+    pub len: usize,
+}
+
+/// Draw a string described by `generator` (built with a
+/// `hegel_string_generator_*` constructor).
+///
+/// On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+/// caller owns (release with `hegel_generate_string_result_free`) and
+/// returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+/// budget is exhausted for this test case (the caller should abort the body
+/// and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+/// `HEGEL_E_ASSUME` when the draw rejected itself (e.g. an email exceeding
+/// the RFC length cap; discard the test case as invalid). Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `generator`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_result`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_string(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    generator: *const HegelStringGenerator,
+    out_result: *mut hegel_generate_string_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let Some(generator) = (unsafe { generator.as_ref() }) else {
+        set_last_error(ctx, "hegel_generate_string: generator handle is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_result.is_null() {
+        set_last_error(ctx, "hegel_generate_string: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match tc.stream.generate_string(&generator.spec) {
+        Ok(s) => {
+            let boxed = s.into_bytes().into_boxed_slice();
+            let len = boxed.len();
+            let data = Box::into_raw(boxed).cast::<c_char>();
+            unsafe { *out_result = hegel_generate_string_result_t { data, len } };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Release a buffer returned by `hegel_generate_string` and reset the
+/// struct to `{NULL, 0}`. Safe to call with a NULL `result` or an
+/// already-freed (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_string_result_free(
+    ctx: *mut HegelContext,
+    result: *mut hegel_generate_string_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(result) = (unsafe { result.as_mut() }) else {
+        return HEGEL_OK;
+    };
+    if !result.data.is_null() {
+        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
+        // `hegel_generate_string` and are freed exactly once here (the
+        // struct is zeroed below, making a second call a no-op).
+        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len) };
+    }
+    result.data = ptr::null_mut();
+    result.len = 0;
+    HEGEL_OK
+}
+
+/// A drawn Gregorian calendar date: `year` in `[1, 9999]`, `month` in
+/// `[1, 12]`, `day` in `[1, days-in-month]`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub struct hegel_date_t {
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+}
+
+/// A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
+/// `[0, 59]`, `microsecond` in `[0, 999999]`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub struct hegel_time_t {
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub microsecond: u32,
+}
+
+/// A drawn naive datetime (a date plus a time of day, no timezone).
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
+pub struct hegel_datetime_t {
+    pub date: hegel_date_t,
+    pub time: hegel_time_t,
+}
+
+fn rust_date(d: &hegel_date_t) -> crate::native::draws::special::Date {
+    crate::native::draws::special::Date {
+        year: d.year,
+        month: d.month,
+        day: d.day,
+    }
+}
+
+fn rust_time(t: &hegel_time_t) -> crate::native::draws::special::Time {
+    crate::native::draws::special::Time {
+        hour: t.hour,
+        minute: t.minute,
+        second: t.second,
+        microsecond: t.microsecond,
+    }
+}
+
+fn rust_datetime(dt: &hegel_datetime_t) -> crate::native::draws::special::DateTime {
+    crate::native::draws::special::DateTime {
+        date: rust_date(&dt.date),
+        time: rust_time(&dt.time),
+    }
+}
+
+fn c_date(d: crate::native::draws::special::Date) -> hegel_date_t {
+    hegel_date_t {
+        year: d.year,
+        month: d.month,
+        day: d.day,
+    }
+}
+
+fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
+    hegel_time_t {
+        hour: t.hour,
+        minute: t.minute,
+        second: t.second,
+        microsecond: t.microsecond,
+    }
+}
+
+/// Draw a Gregorian calendar date in `[min_value, max_value]` (both
+/// inclusive), shrinking toward 2000-01-01, or the nearest bound when that
+/// is out of range. Bounds are proleptic Gregorian dates with `year` in
+/// `[-999999, 999999]`; pass `{1, 1, 1}` and `{9999, 12, 31}` for the
+/// conventional full range.
+///
+/// On success writes the drawn date into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case (the caller should abort the body and
+/// call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_value`, an invalid calendar date
+/// in either bound, or `min_value > max_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_date(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: hegel_date_t,
+    max_value: hegel_date_t,
+    out_value: *mut hegel_date_t,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_date",
+            out_value.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_date(rust_date(&min_value), rust_date(&max_value))
+            },
+            |d| *out_value = c_date(d),
+        )
+    }
+}
+
+/// Draw a time of day in `[min_value, max_value]` (both inclusive),
+/// shrinking toward `min_value` (the representable time closest to
+/// midnight). Pass all-zeros and `{23, 59, 59, 999999}` for the full day.
+///
+/// On success writes the drawn time into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_value`, an out-of-range field in either bound, or
+/// `min_value > max_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_time(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: hegel_time_t,
+    max_value: hegel_time_t,
+    out_value: *mut hegel_time_t,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_time",
+            out_value.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_time(rust_time(&min_value), rust_time(&max_value))
+            },
+            |t| *out_value = c_time(t),
+        )
+    }
+}
+
+/// Draw a naive datetime (no timezone) in `[min_value, max_value]` (both
+/// inclusive), shrinking toward 2000-01-01T00:00:00 clamped into range: a
+/// bounded date draw, then a time draw whose bounds tighten to the endpoint
+/// times when the drawn date lands on a boundary date.
+///
+/// On success writes the drawn datetime into `*out_value` and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice budget
+/// is exhausted for this test case. Returns `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_value`, an invalid date or time in either bound, or
+/// `min_value > max_value`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_datetime(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    min_value: hegel_datetime_t,
+    max_value: hegel_datetime_t,
+    out_value: *mut hegel_datetime_t,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_datetime",
+            out_value.is_null(),
+            |tc| {
+                tc.stream
+                    .generate_datetime(rust_datetime(&min_value), rust_datetime(&max_value))
+            },
+            |dt| {
+                *out_value = hegel_datetime_t {
+                    date: c_date(dt.date),
+                    time: c_time(dt.time),
+                }
+            },
+        )
+    }
+}
+
+/// Draw a UUID as 16 big-endian bytes written to `out_bytes` (which must
+/// have room for 16 bytes).
+///
+/// When `has_version` is set, the RFC 4122 version nibble is forced to
+/// `version` (a single hex nibble, 0..=15 — conventionally 1..=5) and the
+/// variant nibble to the RFC 4122 variant. Without a version the 128 bits
+/// are uniform, except that the nil UUID is never produced.
+///
+/// On success writes 16 bytes and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case. Returns `HEGEL_E_INVALID_ARG` for a NULL `out_bytes` or
+/// a `version > 15`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_uuid(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    version: u8,
+    has_version: bool,
+    out_bytes: *mut u8,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_uuid",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_uuid(has_version.then_some(version)),
+            |bytes| std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16),
+        )
+    }
+}
+
+/// Draw an IPv4 address. Half the draws are uniform over the whole address
+/// space and half are biased into the IANA special-purpose ranges
+/// (loopback, private, documentation, …).
+///
+/// On success writes the address's 4 network-order bytes into `out_bytes`
+/// (which must have room for 4 bytes) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_ipv4(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_bytes: *mut u8,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_ipv4",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_ipv4(),
+            |a| {
+                let octets = a.octets();
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
+            },
+        )
+    }
+}
+
+/// Draw an IPv6 address, with the same special-range biasing as
+/// `hegel_generate_ipv4`.
+///
+/// On success writes the address's 16 network-order bytes into `out_bytes`
+/// (which must have room for 16 bytes) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, and `HEGEL_E_INVALID_ARG` for a NULL `out_bytes`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_generate_ipv6(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_bytes: *mut u8,
+) -> hegel_result_t {
+    unsafe {
+        typed_draw(
+            ctx,
+            tc,
+            "hegel_generate_ipv6",
+            out_bytes.is_null(),
+            |tc| tc.stream.generate_ipv6(),
+            |a| {
+                let octets = a.octets();
+                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
+            },
+        )
     }
 }
 
@@ -2050,7 +3005,7 @@ pub unsafe extern "C" fn hegel_target(
             return HEGEL_E_INVALID_ARG;
         }
     };
-    match tc.family.ds.target_observation(value, label) {
+    match tc.stream.target_observation(value, label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }

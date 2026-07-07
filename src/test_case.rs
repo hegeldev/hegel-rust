@@ -5,14 +5,11 @@ use crate::control::{
 use crate::ffi::CTestCase;
 use crate::generators::Generator;
 use crate::runner::Mode;
-use ciborium::Value;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-
-use crate::generators::value;
 
 #[diagnostic::on_unimplemented(
     message = "The first parameter in a #[composite] generator must have type TestCase.",
@@ -25,8 +22,8 @@ pub fn __assert_is_test_case<T: __IsTestCase>() {}
 /// Raise an invalid-argument (usage) error carrying `message`.
 ///
 /// The same usage error can be detected either while a test case is running
-/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside a
-/// schema build) or up front, before any run (constructing a generator and
+/// (e.g. an inline `tc.draw(gs::sampled_from(&[]))`, or a bound check inside
+/// a draw) or up front, before any run (constructing a generator and
 /// validating its arguments eagerly). To read cleanly in both cases:
 ///
 /// - **Inside a test context**, the error unwinds as a typed
@@ -66,7 +63,7 @@ pub(crate) use invalid_argument;
 /// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
 /// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
-///   generator's schema) was semantically invalid; the diagnostic is read
+///   generator argument) was semantically invalid; the diagnostic is read
 ///   synchronously from this thread's libhegel error context.
 /// - `HEGEL_E_ALREADY_COMPLETE` — the test case has finished. Unreachable
 ///   from a test body (the outcome is reported only after the body returns),
@@ -150,9 +147,12 @@ pub(crate) struct TestCaseLocalData {
 /// # Threading
 ///
 /// `TestCase` is `Send` but not `Sync`. To drive generation from another
-/// thread, clone the test case and move the clone. Clones share the same
-/// underlying backend connection — they are views onto one test case, not
-/// independent test cases.
+/// thread, clone the test case and move the clone. Each clone generates
+/// from its own *independent stream* of choices: draws on one clone never
+/// perturb the values any other clone (or the original) produces, so
+/// several threads can generate concurrently and the test stays fully
+/// deterministic — the same seed replays the same values on every stream,
+/// failures shrink normally, and the shrunk counterexample replays exactly.
 ///
 /// ```no_run
 /// use hegel::generators as gs;
@@ -163,46 +163,37 @@ pub(crate) struct TestCaseLocalData {
 ///     let handle = std::thread::spawn(move || {
 ///         tc_worker.draw(gs::integers::<i32>())
 ///     });
-///     let n = handle.join().unwrap();
 ///     let _b: bool = tc.draw(gs::booleans());
+///     let n = handle.join().unwrap();
 ///     let _ = n;
 /// }
 /// ```
 ///
 /// ## What is guaranteed
 ///
-/// Each clone owns its own backend handle, so a clone may be moved to and
-/// driven from another thread freely. A *single* handle (one clone) may only
-/// be driven by one thread at a time — the backend rejects concurrent use of
-/// one handle outright — which is why you `clone` to hand work to a thread
-/// rather than sharing one `TestCase` across threads (the type is `!Sync`, so
-/// the compiler enforces this too).
+/// Each clone owns its own stream, so a clone may be moved to and driven
+/// from another thread freely, concurrently with every other clone. A
+/// *single* clone may only be driven by one thread at a time — the backend
+/// rejects concurrent use of one handle outright — which is why you `clone`
+/// to hand work to a thread rather than sharing one `TestCase` across
+/// threads (the type is `!Sync`, so the compiler enforces this too).
 ///
-/// This covers patterns where threads do not race on generation — for example:
-///
-/// - Spawn a worker, let it draw, `join` it, then continue on the main
-///   thread.
-/// - Repeatedly spawn-and-join one worker at a time.
-/// - Any pattern where exactly one thread is drawing at a time, with a
-///   happens-before relationship (join, channel receive, barrier) between
-///   each thread's work.
+/// The clones share the test case's *outcome*: the whole family passes,
+/// fails, or is rejected as one test case, and the choice budget is shared
+/// across all streams. Everything else about generation is per-stream.
 ///
 /// ## What is not guaranteed
 ///
-/// Concurrent generation will get progressively better over time, but
-/// right now should be considered a borderline-internal feature. If
-/// you do not know exactly what you're doing it probably won't work.
+/// Determinism extends exactly as far as your own code's determinism. If
+/// threads race on *your* state — for example, which of two clones first
+/// consumes a value from a shared queue — Hegel replays each stream's
+/// values faithfully, but your test may still behave differently run to
+/// run, and such failures may not reproduce or shrink well.
 ///
-/// Two or more clones drawing *concurrently* is allowed (each has its own
-/// handle, and the backend keeps the shared engine state internally
-/// consistent), but it is **not deterministic**: the order in which draws
-/// interleave depends on thread scheduling, and the backend has no way to
-/// reproduce that order on replay. In practice this means such tests may:
-///
-/// - Produce different values on successive runs of the same seed.
-/// - Shrink poorly or not at all.
-/// - Surface backend errors (e.g. `StopTest`) in one thread caused by
-///   another thread's draws exhausting the budget.
+/// Variable pools and engine-managed collections are shared across clones
+/// (an id from one clone works on any other). Using one such object from
+/// two threads *at the same time* makes the affected draws depend on
+/// scheduling order, which brings back the same replay caveat.
 ///
 /// ## Panics inside spawned threads
 ///
@@ -221,8 +212,9 @@ pub struct TestCase {
     /// that is never joined) keeps the handle alive rather than dangling —
     /// its later draws fail cleanly because the case has finished.
     /// [`clone`](TestCase::clone) instead gets a fresh handle
-    /// (`hegel_test_case_clone`) with its own lock, so two clones can be
-    /// driven from different threads concurrently.
+    /// (`hegel_test_case_clone`) onto an independent stream of the same
+    /// test case, so two clones can be driven from different threads
+    /// concurrently without perturbing each other's values.
     handle: Arc<CTestCase>,
 }
 
@@ -695,41 +687,111 @@ impl TestCase {
     }
 }
 
-/// Send a schema to the engine and return the raw CBOR response.
-///
-/// The schema `Value` is serialized to CBOR bytes, handed to `hegel_generate`,
-/// and the borrowed result bytes are deserialized back into a `Value`. This
-/// extra serialize/parse per draw is the cost of going through the literal C
-/// ABI (the same bytes-level path every other language binding pays).
-#[doc(hidden)]
-pub fn generate_raw(tc: &TestCase, schema: &Value) -> Value {
-    let mut schema_bytes = Vec::new();
-    ciborium::ser::into_writer(schema, &mut schema_bytes).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to serialize schema: {}", e) // nocov
-    });
-    let value_bytes = match tc.with_ctc(|ctc| ctc.generate(&schema_bytes)) {
-        Ok(bytes) => bytes,
-        Err(rc) => raise_for_rc(rc),
-    };
-    ciborium::de::from_reader(value_bytes.as_slice()).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to deserialize value: {}", e) // nocov
-    })
-}
+impl TestCase {
+    /// Run a draw against this instance's libhegel handle, raising the
+    /// appropriate control-flow payload on failure.
+    fn draw_or_raise<T>(
+        &self,
+        f: impl FnOnce(&CTestCase) -> Result<T, hegel_c::hegel_result_t>,
+    ) -> T {
+        self.with_ctc(f).unwrap_or_else(|rc| raise_for_rc(rc))
+    }
 
-#[doc(hidden)]
-pub fn generate_from_schema<T: serde::de::DeserializeOwned>(tc: &TestCase, schema: &Value) -> T {
-    deserialize_value(generate_raw(tc, schema))
-}
+    /// Draw an integer in `[min_value, max_value]` (both within `i64`).
+    pub(crate) fn generate_integer_i64(&self, min_value: i64, max_value: i64) -> i64 {
+        self.draw_or_raise(|ctc| ctc.generate_integer(min_value, max_value))
+    }
 
-/// Deserialize a raw CBOR value into a Rust type.
-///
-/// This is a public helper for use by derived generators (proc macros)
-/// that need to deserialize individual field values from CBOR.
-pub fn deserialize_value<T: serde::de::DeserializeOwned>(raw: Value) -> T {
-    let hv = value::HegelValue::from(raw.clone());
-    value::from_hegel_value(hv).unwrap_or_else(|e| {
-        hegel_internal_error!("failed to deserialize value: {}\nValue: {:?}", e, raw); // nocov
-    })
+    /// Draw an integer with bounds given as two's-complement little-endian
+    /// byte encodings, returning the value's encoding sign-extended to 17
+    /// bytes.
+    pub(crate) fn generate_integer_le17(&self, min_value: &[u8], max_value: &[u8]) -> [u8; 17] {
+        self.draw_or_raise(|ctc| ctc.generate_integer_big(min_value, max_value))
+    }
+
+    /// Draw a float according to the full libhegel spec.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generate_float(
+        &self,
+        width: u32,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+        exclude_min: bool,
+        exclude_max: bool,
+        smallest_nonzero_magnitude: f64,
+    ) -> f64 {
+        self.draw_or_raise(|ctc| {
+            ctc.generate_float(
+                width,
+                min_value,
+                max_value,
+                allow_nan,
+                allow_infinity,
+                exclude_min,
+                exclude_max,
+                smallest_nonzero_magnitude,
+            )
+        })
+    }
+
+    /// Draw a boolean that is `true` with probability `p`.
+    pub(crate) fn generate_boolean(&self, p: f64) -> bool {
+        self.draw_or_raise(|ctc| ctc.generate_boolean(p))
+    }
+
+    /// Draw a byte string with length in `[min_size, max_size]`.
+    pub(crate) fn generate_bytes(&self, min_size: usize, max_size: usize) -> Vec<u8> {
+        self.draw_or_raise(|ctc| ctc.generate_bytes(min_size as u64, max_size as u64))
+    }
+
+    /// Draw a string described by a prebuilt libhegel string generator.
+    pub(crate) fn generate_string(&self, generator: &crate::ffi::StringGenerator) -> String {
+        self.draw_or_raise(|ctc| ctc.generate_string(generator))
+    }
+
+    /// Draw a Gregorian calendar date in `[min, max]`.
+    pub(crate) fn generate_date(
+        &self,
+        min: hegel_c::hegel_date_t,
+        max: hegel_c::hegel_date_t,
+    ) -> hegel_c::hegel_date_t {
+        self.draw_or_raise(|ctc| ctc.generate_date(min, max))
+    }
+
+    /// Draw a time of day in `[min, max]`.
+    pub(crate) fn generate_time(
+        &self,
+        min: hegel_c::hegel_time_t,
+        max: hegel_c::hegel_time_t,
+    ) -> hegel_c::hegel_time_t {
+        self.draw_or_raise(|ctc| ctc.generate_time(min, max))
+    }
+
+    /// Draw a naive datetime in `[min, max]`.
+    pub(crate) fn generate_datetime(
+        &self,
+        min: hegel_c::hegel_datetime_t,
+        max: hegel_c::hegel_datetime_t,
+    ) -> hegel_c::hegel_datetime_t {
+        self.draw_or_raise(|ctc| ctc.generate_datetime(min, max))
+    }
+
+    /// Draw a UUID's 16 big-endian bytes, optionally forcing the version.
+    pub(crate) fn generate_uuid(&self, version: Option<u8>) -> [u8; 16] {
+        self.draw_or_raise(|ctc| ctc.generate_uuid(version))
+    }
+
+    /// Draw an IPv4 address.
+    pub(crate) fn generate_ipv4(&self) -> std::net::Ipv4Addr {
+        self.draw_or_raise(|ctc| ctc.generate_ipv4())
+    }
+
+    /// Draw an IPv6 address.
+    pub(crate) fn generate_ipv6(&self) -> std::net::Ipv6Addr {
+        self.draw_or_raise(|ctc| ctc.generate_ipv6())
+    }
 }
 
 /// Uses the backend to determine collection sizing.
@@ -803,24 +865,62 @@ impl<'a> Collection<'a> {
 
 #[doc(hidden)]
 pub mod labels {
-    pub const LIST: u64 = 1;
-    pub const LIST_ELEMENT: u64 = 2;
-    pub const SET: u64 = 3;
-    pub const SET_ELEMENT: u64 = 4;
-    pub const MAP: u64 = 5;
-    pub const MAP_ENTRY: u64 = 6;
-    pub const TUPLE: u64 = 7;
-    pub const ONE_OF: u64 = 8;
-    pub const OPTIONAL: u64 = 9;
-    pub const FIXED_DICT: u64 = 10;
-    pub const FLAT_MAP: u64 = 11;
-    pub const FILTER: u64 = 12;
-    pub const MAPPED: u64 = 13;
-    pub const SAMPLED_FROM: u64 = 14;
-    pub const ENUM_VARIANT: u64 = 15;
-    pub const FEATURE_FLAG: u64 = 16;
+    use hegel_c::hegel_label_t;
+
+    pub const LIST: u64 = hegel_label_t::HEGEL_LABEL_LIST as u64;
+    pub const LIST_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_LIST_ELEMENT as u64;
+    pub const SET: u64 = hegel_label_t::HEGEL_LABEL_SET as u64;
+    pub const SET_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_SET_ELEMENT as u64;
+    pub const MAP: u64 = hegel_label_t::HEGEL_LABEL_MAP as u64;
+    pub const MAP_ENTRY: u64 = hegel_label_t::HEGEL_LABEL_MAP_ENTRY as u64;
+    pub const TUPLE: u64 = hegel_label_t::HEGEL_LABEL_TUPLE as u64;
+    pub const ONE_OF: u64 = hegel_label_t::HEGEL_LABEL_ONE_OF as u64;
+    pub const OPTIONAL: u64 = hegel_label_t::HEGEL_LABEL_OPTIONAL as u64;
+    pub const FIXED_DICT: u64 = hegel_label_t::HEGEL_LABEL_FIXED_DICT as u64;
+    pub const FLAT_MAP: u64 = hegel_label_t::HEGEL_LABEL_FLAT_MAP as u64;
+    pub const FILTER: u64 = hegel_label_t::HEGEL_LABEL_FILTER as u64;
+    pub const MAPPED: u64 = hegel_label_t::HEGEL_LABEL_MAPPED as u64;
+    pub const SAMPLED_FROM: u64 = hegel_label_t::HEGEL_LABEL_SAMPLED_FROM as u64;
+    pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
+    pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
 }
 
 #[cfg(test)]
 #[path = "../tests/embedded/test_case_tests.rs"]
 mod tests;
+
+/// The conventional full ranges for the structured draws: years 1..=9999
+/// (what Hypothesis's `dates()` spans) and the whole microsecond-resolution
+/// day.
+pub(crate) mod full_ranges {
+    pub(crate) const MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+        year: 1,
+        month: 1,
+        day: 1,
+    };
+    pub(crate) const MAX_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
+        year: 9999,
+        month: 12,
+        day: 31,
+    };
+    pub(crate) const MIDNIGHT: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+        hour: 0,
+        minute: 0,
+        second: 0,
+        microsecond: 0,
+    };
+    pub(crate) const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+        hour: 23,
+        minute: 59,
+        second: 59,
+        microsecond: 999_999,
+    };
+    pub(crate) const MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+        date: MIN_DATE,
+        time: MIDNIGHT,
+    };
+    pub(crate) const MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
+        date: MAX_DATE,
+        time: LAST_MICROSECOND,
+    };
+}

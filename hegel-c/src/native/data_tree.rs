@@ -13,16 +13,22 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
+use rand::RngExt;
 use rand::seq::SliceRandom;
 
 use crate::control::hegel_internal_debug_assert;
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, SpanEvent, Status};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Span, SpanEvent, Status,
+};
 use crate::native::rng::EngineRng;
 
 /// Hashable choice-value key. `f64` is keyed by its bit pattern so `-0.0`
 /// stays distinct from `0.0` and individual NaN payloads are tracked
-/// separately — both matter for novel-prefix exhaustion accounting.
+/// separately — both matter for novel-prefix exhaustion accounting. Clone
+/// values key by their child value sequence, recursively (the
+/// [`CloneRecord`](crate::native::core::CloneRecord) `Eq`/`Hash` impls
+/// compare values only, so realized info never splits a key).
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ChoiceValueKey {
     Integer(BigInt),
@@ -30,6 +36,7 @@ enum ChoiceValueKey {
     Float(u64),
     Bytes(Vec<u8>),
     String(Vec<u32>),
+    Clone(Arc<CloneRecord>),
 }
 
 impl From<&ChoiceValue> for ChoiceValueKey {
@@ -40,6 +47,7 @@ impl From<&ChoiceValue> for ChoiceValueKey {
             ChoiceValue::Float(f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceValue::Bytes(b) => ChoiceValueKey::Bytes(b.clone()),
             ChoiceValue::String(s) => ChoiceValueKey::String(s.clone()),
+            ChoiceValue::Clone(r) => ChoiceValueKey::Clone(Arc::clone(r)),
         }
     }
 }
@@ -54,6 +62,7 @@ impl ChoiceValueKey {
             ChoiceValueKey::Float(bits) => ChoiceValue::Float(f64::from_bits(*bits)),
             ChoiceValueKey::Bytes(b) => ChoiceValue::Bytes(b.clone()),
             ChoiceValueKey::String(s) => ChoiceValue::String(s.clone()),
+            ChoiceValueKey::Clone(r) => ChoiceValue::Clone(Arc::clone(r)),
         }
     }
 }
@@ -100,6 +109,26 @@ pub(crate) struct DataTreeNode {
     conclusion: Option<Conclusion>,
     /// Cached: true iff the subtree rooted here has been fully explored.
     pub(crate) is_exhausted: bool,
+    /// For a `Clone`-kind node: a trie over the cloned stream's own choices,
+    /// recorded from each realized [`CloneRecord`] observed here. Used to
+    /// predict punning inside the clone during [`simulate_full`] and to
+    /// generate novel prefixes *into* the cloned stream. The node's ordinary
+    /// `children` remain keyed by the complete realized record, which is
+    /// what keeps the parent's continuation sound when its behaviour depends
+    /// on values the clone drew.
+    clone_subtree: Option<Box<DataTreeNode>>,
+    /// Set when recording into `clone_subtree` contradicted an earlier
+    /// stream (a changed kind or a changed stream end at the same child
+    /// path). That happens when the cloned stream's behaviour depends on
+    /// values from *other* streams (cross-thread communication), which the
+    /// child-only trie cannot condition on — so prediction inside this clone
+    /// is disabled and only exact realized-record matches are served, rather
+    /// than misreporting the run as non-deterministic.
+    clone_subtree_disabled: bool,
+    /// Within a clone subtree: a recorded cloned stream ended at this node.
+    /// Plays the role a conclusion plays in the main tree — the walk ends
+    /// here, and the node is exhausted.
+    stream_ended: bool,
 }
 
 /// Iterative drop so a thousands-deep single-path tree doesn't blow
@@ -109,8 +138,10 @@ impl Drop for DataTreeNode {
     fn drop(&mut self) {
         let mut stack: Vec<Box<DataTreeNode>> =
             self.children.drain().map(|(_, child)| child).collect();
+        stack.extend(self.clone_subtree.take());
         while let Some(mut node) = stack.pop() {
             stack.extend(node.children.drain().map(|(_, child)| child));
+            stack.extend(node.clone_subtree.take());
         }
     }
 }
@@ -149,7 +180,7 @@ impl DataTreeNode {
     }
 }
 
-/// Walk `nodes` through `tree_root`, checking that the schema at every
+/// Walk `nodes` through `tree_root`, checking that the choice kind at every
 /// position matches what was observed on previous runs. Records the terminal
 /// `status` at the leaf (if the test concluded cleanly) and propagates
 /// exhaustion up the path so `generate_novel_prefix` can skip dead branches.
@@ -157,7 +188,8 @@ impl DataTreeNode {
 /// `kill_branch()`).
 ///
 /// Returns `Some(message)` if a non-determinism mismatch was detected (the
-/// schema at a position changed from a previous run), so the caller can fold
+/// choice kind at a position changed from a previous run), so the caller can
+/// fold
 /// it into a failing [`TestRunResult`] rather than panicking — keeping it from
 /// aborting an in-process engine driven over FFI. Returns `None` otherwise.
 /// Convenience wrapper for recording a path with only a status (no origin,
@@ -206,7 +238,7 @@ pub(crate) fn record_tree_full(
             Some(expected_kind) if *expected_kind != first.kind => {
                 return Some(format!(
                     "Your data generation is non-deterministic: at the same choice \
-                     position with the same prefix, the schema changed from {:?} to {:?}. \
+                     position with the same prefix, the choice kind changed from {:?} to {:?}. \
                      This usually means a generator depends on global mutable state.",
                     expected_kind, first.kind
                 ));
@@ -216,6 +248,9 @@ pub(crate) fn record_tree_full(
                 node.forced = first.was_forced;
             }
             _ => {}
+        }
+        if let ChoiceValue::Clone(record) = &first.value {
+            record_clone_record(node, record);
         }
         let key = ChoiceValueKey::from(&first.value);
         let child = node
@@ -264,6 +299,97 @@ pub(crate) fn record_tree_full(
     None
 }
 
+/// Fold one realized clone record into its clone node's subtree trie,
+/// disabling the subtree on any contradiction (see
+/// [`DataTreeNode::clone_subtree_disabled`]).
+fn record_clone_record(node: &mut DataTreeNode, record: &CloneRecord) {
+    if node.clone_subtree_disabled {
+        return;
+    }
+    let subtree = node
+        .clone_subtree
+        .get_or_insert_with(|| Box::new(DataTreeNode::default()));
+    if record_clone_stream(subtree, record).is_err() {
+        node.clone_subtree = None;
+        node.clone_subtree_disabled = true;
+    }
+}
+
+/// Record one cloned stream's realized record into the clone subtree trie
+/// rooted at `root`: the walk mirrors [`record_tree_full`], with the
+/// stream's end marked by [`DataTreeNode::stream_ended`] (and exhaustion) in
+/// place of a conclusion, and nested clone records recorded recursively.
+///
+/// Returns `Err(())` on any contradiction with a previously recorded stream
+/// — a changed kind at a position, a stream that previously ended here but
+/// now continues (or vice versa), or a record with no realized info. The
+/// caller disables prediction for this clone rather than treating the run
+/// as non-deterministic: a cloned stream's behaviour may legitimately
+/// depend on values from other streams, which this child-only trie cannot
+/// see.
+fn record_clone_stream(root: &mut DataTreeNode, record: &CloneRecord) -> Result<(), ()> {
+    let Some(nodes) = record.realized_nodes() else {
+        return Err(());
+    };
+    let mut path: Vec<*mut DataTreeNode> = Vec::with_capacity(nodes.len() + 1);
+    path.push(root as *mut _);
+
+    for first in nodes {
+        let parent_ptr = *path.last().unwrap();
+        // SAFETY: `parent_ptr` is either `root` or a child reached through
+        // the entry API below; the previous iteration's borrow has ended.
+        let node = unsafe { &mut *parent_ptr };
+        if node.stream_ended {
+            return Err(());
+        }
+        match &node.kind {
+            Some(expected_kind) if *expected_kind != first.kind => return Err(()),
+            None => {
+                node.kind = Some(first.kind.clone());
+                node.forced = first.was_forced;
+            }
+            _ => {}
+        }
+        if let ChoiceValue::Clone(nested) = &first.value {
+            record_clone_record(node, nested);
+        }
+        let key = ChoiceValueKey::from(&first.value);
+        let child = node
+            .children
+            .entry(key)
+            .or_insert_with(|| Box::new(DataTreeNode::default()));
+        path.push(child.as_mut() as *mut _);
+    }
+
+    let mut by_pos: Vec<Vec<SpanEvent>> = vec![Vec::new(); nodes.len() + 1];
+    for (pos, ev) in record.span_events() {
+        if let Some(slot) = by_pos.get_mut(*pos) {
+            slot.push(ev.clone());
+        }
+    }
+    for (depth, events) in by_pos.into_iter().enumerate() {
+        // SAFETY: `path[depth]` is a unique pointer into the subtree; no
+        // other reference into it is live.
+        let node = unsafe { &mut *path[depth] };
+        node.span_events = events;
+    }
+
+    // SAFETY: the just-walked leaf pointer; no other live reference.
+    let leaf = unsafe { &mut **path.last().unwrap() };
+    if leaf.kind.is_some() {
+        return Err(());
+    }
+    leaf.stream_ended = true;
+    leaf.is_exhausted = true;
+
+    while let Some(p) = path.pop() {
+        // SAFETY: the just-popped pointer; no other live reference.
+        let node = unsafe { &mut *p };
+        node.check_exhausted();
+    }
+    Ok(())
+}
+
 /// Small-domain cap for enumeration fallback in
 /// `pick_non_exhausted_value`.
 const ENUMERATION_CAP: u64 = 1024;
@@ -305,6 +431,14 @@ fn pick_non_exhausted_value(
 /// `DataTree.generate_novel_prefix` simplified for hegel's tree shape.
 /// An empty prefix means "draw everything fresh" — correct on the
 /// first call, when the tree is empty.
+///
+/// At a clone node the walk chooses between generating novelty *inside* the
+/// cloned stream (a recursive walk of the clone subtree, after which the
+/// prefix must stop — the resulting continuation has never been seen) and
+/// descending an already-realized record's continuation. When neither is
+/// available the prefix stops before the clone node, leaving the clone (and
+/// everything after it) to fresh random generation; a clone node's child
+/// space is unbounded, so it never exhausts the walk.
 pub(crate) fn generate_novel_prefix(
     tree_root: &DataTreeNode,
     rng: &mut EngineRng,
@@ -323,6 +457,38 @@ pub(crate) fn generate_novel_prefix(
                 .expect("a forced node records its single child in the same run");
             prefix.push(key.to_value());
             hegel_internal_debug_assert!(!child.is_exhausted);
+            current = child;
+            continue;
+        }
+        if matches!(**kind, ChoiceKind::Clone) {
+            let inside = if current.clone_subtree_disabled {
+                None
+            } else {
+                current
+                    .clone_subtree
+                    .as_deref()
+                    .filter(|s| !s.is_exhausted && s.kind.is_some())
+            };
+            let continuations: Vec<(&ChoiceValueKey, &DataTreeNode)> = current
+                .children
+                .iter()
+                .filter(|(_, c)| !c.is_exhausted)
+                .map(|(k, c)| (k, c.as_ref()))
+                .collect();
+            if let Some(subtree) = inside {
+                if continuations.is_empty() || rng.random::<f64>() < 0.5 {
+                    let sub_prefix = generate_novel_prefix(subtree, rng);
+                    prefix.push(ChoiceValue::Clone(Arc::new(CloneRecord::from_values(
+                        sub_prefix,
+                    ))));
+                    break;
+                }
+            }
+            if continuations.is_empty() {
+                break;
+            }
+            let (key, child) = continuations[rng.random_range(0..continuations.len())];
+            prefix.push(key.to_value());
             current = child;
             continue;
         }
@@ -394,34 +560,9 @@ pub(crate) fn simulate_full(
     let mut i = 0usize;
     loop {
         let pos = nodes.len();
-        for ev in &current.span_events {
-            match ev {
-                SpanEvent::Open { label } => {
-                    let parent = span_stack.last().copied();
-                    let depth = span_stack.len() as u32;
-                    let idx = spans.len();
-                    spans.push(Span {
-                        start: pos,
-                        end: pos,
-                        label: label.to_string(),
-                        depth,
-                        parent,
-                        discarded: false,
-                    });
-                    span_stack.push(idx);
-                }
-                SpanEvent::Close { discarded } => {
-                    if let Some(idx) = span_stack.pop() {
-                        spans[idx].end = pos;
-                        spans[idx].discarded = *discarded;
-                    }
-                }
-            }
-        }
+        replay_span_events(&current.span_events, pos, &mut spans, &mut span_stack);
         if let Some(concl) = &current.conclusion {
-            while let Some(idx) = span_stack.pop() {
-                spans[idx].end = pos;
-            }
+            close_open_spans(pos, &mut spans, &mut span_stack);
             return Some(SimulatedOutcome {
                 status: concl.status,
                 nodes,
@@ -437,9 +578,141 @@ pub(crate) fn simulate_full(
         let (realised, next) = if current.forced {
             let (key, next) = current.children.iter().next()?;
             (key.to_value(), next.as_ref())
+        } else if matches!(**kind, ChoiceKind::Clone) {
+            let (record, next) = resolve_clone_position(current, &choices[i])?;
+            (ChoiceValue::Clone(record), next)
         } else {
             let realised = if kind.validate(&choices[i]) {
                 choices[i].clone()
+            } else {
+                kind.unit()
+            };
+            let next = current.children.get(&ChoiceValueKey::from(&realised))?;
+            (realised, next.as_ref())
+        };
+        nodes.push(ChoiceNode::new((**kind).clone(), realised, current.forced));
+        i += 1;
+        current = next;
+    }
+}
+
+/// Apply one node's recorded span events at draw position `pos`, exactly as
+/// `start_span` / `stop_span` would have live.
+fn replay_span_events(
+    events: &[SpanEvent],
+    pos: usize,
+    spans: &mut Vec<Span>,
+    span_stack: &mut Vec<usize>,
+) {
+    for ev in events {
+        match ev {
+            SpanEvent::Open { label } => {
+                let parent = span_stack.last().copied();
+                let depth = span_stack.len() as u32;
+                let idx = spans.len();
+                spans.push(Span {
+                    start: pos,
+                    end: pos,
+                    label: label.to_string(),
+                    depth,
+                    parent,
+                    discarded: false,
+                });
+                span_stack.push(idx);
+            }
+            SpanEvent::Close { discarded } => {
+                if let Some(idx) = span_stack.pop() {
+                    spans[idx].end = pos;
+                    spans[idx].discarded = *discarded;
+                }
+            }
+        }
+    }
+}
+
+/// Close every still-open span at position `pos`, exactly as `freeze` does
+/// at the end of a stream.
+fn close_open_spans(pos: usize, spans: &mut [Span], span_stack: &mut Vec<usize>) {
+    while let Some(idx) = span_stack.pop() {
+        spans[idx].end = pos;
+    }
+}
+
+/// Resolve a clone position during simulation: predict the realized record
+/// the candidate value at this position would produce, and look up the
+/// parent's continuation for it.
+///
+/// With a usable clone subtree the prediction walks the candidate's child
+/// values through it ([`simulate_clone_stream`]), reproducing punning inside
+/// the clone; without one (never recorded, or disabled after a
+/// contradiction) only an exact value match can be served — the lookup keys
+/// on values, so the candidate's own record suffices. Either way the
+/// *stored* key's record is returned, which carries the realized child
+/// nodes and spans. A non-clone candidate puns to the empty clone, exactly
+/// as `clone_stream` does on replay.
+fn resolve_clone_position<'t>(
+    node: &'t DataTreeNode,
+    candidate: &ChoiceValue,
+) -> Option<(Arc<CloneRecord>, &'t DataTreeNode)> {
+    let candidate_values: Vec<ChoiceValue> = match candidate {
+        ChoiceValue::Clone(r) => r.values().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let key = match &node.clone_subtree {
+        Some(subtree) if !node.clone_subtree_disabled => {
+            ChoiceValueKey::Clone(Arc::new(simulate_clone_stream(subtree, &candidate_values)?))
+        }
+        _ => ChoiceValueKey::Clone(Arc::new(CloneRecord::from_values(candidate_values))),
+    };
+    let (stored_key, next) = node.children.get_key_value(&key)?;
+    let ChoiceValueKey::Clone(stored) = stored_key else {
+        unreachable!("clone keys only compare equal to clone keys");
+    };
+    Some((Arc::clone(stored), next.as_ref()))
+}
+
+/// Walk candidate child `values` through a clone subtree trie, reproducing
+/// how the cloned stream would replay them, and return the realized record —
+/// child nodes with kinds from the trie, spans replayed from the trie's span
+/// events, and the span events themselves.
+///
+/// Mirrors [`simulate_full`], with [`DataTreeNode::stream_ended`] playing
+/// the conclusion's role: reaching it realizes the stream (trailing
+/// candidate values are simply never read, like trailing values past a
+/// conclusion). Returns `None` when the walk leaves recorded territory —
+/// a divergent value, an unexplored position, or candidate values running
+/// out while the recorded stream kept drawing (a real child would overrun
+/// or extend randomly; either way the outcome must be executed to learn).
+fn simulate_clone_stream(root: &DataTreeNode, values: &[ChoiceValue]) -> Option<CloneRecord> {
+    let mut current = root;
+    let mut nodes: Vec<ChoiceNode> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut span_stack: Vec<usize> = Vec::new();
+    let mut events_out: Vec<(usize, SpanEvent)> = Vec::new();
+    let mut i = 0usize;
+    loop {
+        let pos = nodes.len();
+        for ev in &current.span_events {
+            events_out.push((pos, ev.clone()));
+        }
+        replay_span_events(&current.span_events, pos, &mut spans, &mut span_stack);
+        if current.stream_ended {
+            close_open_spans(pos, &mut spans, &mut span_stack);
+            return Some(CloneRecord::from_run(nodes, spans, events_out));
+        }
+        let kind = current.kind.as_ref()?;
+        if i >= values.len() {
+            return None;
+        }
+        let (realised, next) = if current.forced {
+            let (key, next) = current.children.iter().next()?;
+            (key.to_value(), next.as_ref())
+        } else if matches!(**kind, ChoiceKind::Clone) {
+            let (record, next) = resolve_clone_position(current, &values[i])?;
+            (ChoiceValue::Clone(record), next)
+        } else {
+            let realised = if kind.validate(&values[i]) {
+                values[i].clone()
             } else {
                 kind.unit()
             };

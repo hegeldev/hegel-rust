@@ -1,7 +1,7 @@
 use crate::common::utils::{assert_all_examples, check_can_generate_examples};
 use chrono::FixedOffset;
 use hegel::extras::chrono as chrono_gs;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators as gs;
 
 #[test]
 fn test_fixed_offsets_default() {
@@ -52,11 +52,12 @@ fn test_fixed_offsets_property(tc: hegel::TestCase) {
     assert!(v.local_minus_utc() <= hi);
 }
 
-#[test]
+#[hegel::test]
 #[should_panic(expected = "max_value < min_value")]
-fn test_fixed_offsets_min_greater_than_max() {
-    let g = chrono_gs::fixed_offsets()
-        .min_value(FixedOffset::east_opt(3600).unwrap())
-        .max_value(FixedOffset::east_opt(-3600).unwrap());
-    g.as_basic();
+fn test_fixed_offsets_min_greater_than_max(tc: hegel::TestCase) {
+    tc.draw(
+        chrono_gs::fixed_offsets()
+            .min_value(FixedOffset::east_opt(3600).unwrap())
+            .max_value(FixedOffset::east_opt(-3600).unwrap()),
+    );
 }

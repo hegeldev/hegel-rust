@@ -1,191 +1,206 @@
 mod common;
 
+use common::utils::expect_panic;
 use hegel::generators::{self as gs, Generator};
+use hegel::{Hegel, Settings};
+
+fn expect_draw_panic<T, G>(generator: G, pattern: &str)
+where
+    G: Generator<T> + 'static + std::panic::UnwindSafe,
+    T: std::fmt::Debug + Send + 'static,
+{
+    expect_panic(
+        move || {
+            Hegel::new(move |tc| {
+                tc.draw(&generator);
+            })
+            .settings(Settings::new().test_cases(1).database(None))
+            .run();
+        },
+        pattern,
+    );
+}
+
+fn check_draws<T, G>(generator: G)
+where
+    G: Generator<T> + 'static,
+    T: std::fmt::Debug + Send + 'static,
+{
+    Hegel::new(move |tc| {
+        tc.draw(&generator);
+    })
+    .settings(Settings::new().test_cases(5).database(None))
+    .run();
+}
 
 #[test]
-#[should_panic(expected = "max_value < min_value")]
 fn test_integers_min_greater_than_max() {
-    let g = gs::integers::<i32>().min_value(10).max_value(5);
-    g.as_basic();
+    expect_draw_panic(
+        gs::integers::<i32>().min_value(10).max_value(5),
+        "max_value < min_value",
+    );
 }
 
 #[test]
-#[should_panic(expected = "allow_nan=true")]
 fn test_floats_allow_nan_with_min_value() {
-    let g = gs::floats::<f64>().allow_nan(true).min_value(0.0);
-    g.as_basic();
+    expect_draw_panic(
+        gs::floats::<f64>().allow_nan(true).min_value(0.0),
+        "allow_nan=true",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_value < min_value")]
 fn test_floats_min_greater_than_max() {
-    let g = gs::floats::<f64>().min_value(10.0).max_value(5.0);
-    g.as_basic();
+    expect_draw_panic(
+        gs::floats::<f64>().min_value(10.0).max_value(5.0),
+        "max_value < min_value",
+    );
 }
 
 #[test]
-#[should_panic(expected = "InvalidArgument")]
 fn test_floats_pos_zero_min_neg_zero_max() {
-    let g = gs::floats::<f64>().min_value(0.0).max_value(-0.0);
-    g.as_basic();
+    expect_draw_panic(
+        gs::floats::<f64>().min_value(0.0).max_value(-0.0),
+        "InvalidArgument",
+    );
 }
 
 #[test]
-#[should_panic(expected = "InvalidArgument")]
 fn test_floats_pos_zero_min_neg_zero_max_f32() {
-    let g = gs::floats::<f32>().min_value(0.0).max_value(-0.0);
-    g.as_basic();
+    expect_draw_panic(
+        gs::floats::<f32>().min_value(0.0).max_value(-0.0),
+        "InvalidArgument",
+    );
 }
 
 #[test]
-#[should_panic(expected = "allow_infinity=true")]
 fn test_floats_allow_infinity_with_both_bounds() {
-    let g = gs::floats::<f64>()
-        .allow_infinity(true)
-        .min_value(0.0)
-        .max_value(1.0);
-    g.as_basic();
+    expect_draw_panic(
+        gs::floats::<f64>()
+            .allow_infinity(true)
+            .min_value(0.0)
+            .max_value(1.0),
+        "allow_infinity=true",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_size < min_size")]
 fn test_text_min_greater_than_max() {
-    let g = gs::text().min_size(5).max_size(3);
-    g.as_basic();
+    expect_draw_panic(gs::text().min_size(5).max_size(3), "max_size < min_size");
 }
 
 #[test]
-fn test_text_character_params_build_schema() {
-    let g = gs::text().codec("ascii");
-    assert!(g.as_basic().is_some());
-
-    let g = gs::text().min_codepoint(0x20).max_codepoint(0x7E);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::text().categories(&["L", "Nd"]);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::text().exclude_categories(&["Cc"]);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::text().include_characters("abc");
-    assert!(g.as_basic().is_some());
-
-    let g = gs::text().exclude_characters("xyz");
-    assert!(g.as_basic().is_some());
+fn test_text_character_params_draw() {
+    check_draws(gs::text().codec("ascii"));
+    check_draws(gs::text().min_codepoint(0x20).max_codepoint(0x7E));
+    check_draws(gs::text().categories(&["L", "Nd"]));
+    check_draws(gs::text().exclude_categories(&["Cc"]));
+    check_draws(gs::text().include_characters("abc"));
+    check_draws(gs::text().exclude_characters("xyz"));
 }
 
 #[test]
-#[should_panic(expected = "\"Cs\" includes surrogate codepoints")]
 fn test_text_categories_including_cs_panics() {
-    let g = gs::text().categories(&["L", "Cs"]);
-    g.as_basic();
+    expect_draw_panic(
+        gs::text().categories(&["L", "Cs"]),
+        "\"Cs\" includes surrogate codepoints",
+    );
 }
 
 #[test]
-#[should_panic(expected = "\"C\" includes surrogate codepoints")]
 fn test_text_categories_including_cs_supercat_panics() {
-    let g = gs::text().categories(&["C"]);
-    g.as_basic();
+    expect_draw_panic(
+        gs::text().categories(&["C"]),
+        "\"C\" includes surrogate codepoints",
+    );
 }
 
 #[test]
-fn test_characters_as_basic() {
-    let g = gs::characters();
-    assert!(g.as_basic().is_some());
+fn test_characters_draws() {
+    check_draws(gs::characters());
 }
 
 #[test]
-fn test_characters_params_build_schema() {
-    let g = gs::characters().codec("ascii");
-    assert!(g.as_basic().is_some());
-
-    let g = gs::characters().min_codepoint(0x20).max_codepoint(0x7E);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::characters().categories(&["L", "Nd"]);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::characters().exclude_categories(&["Cc"]);
-    assert!(g.as_basic().is_some());
-
-    let g = gs::characters().include_characters("abc");
-    assert!(g.as_basic().is_some());
-
-    let g = gs::characters().exclude_characters("xyz");
-    assert!(g.as_basic().is_some());
+fn test_characters_params_draw() {
+    check_draws(gs::characters().codec("ascii"));
+    check_draws(gs::characters().min_codepoint(0x20).max_codepoint(0x7E));
+    check_draws(gs::characters().categories(&["L", "Nd"]));
+    check_draws(gs::characters().exclude_categories(&["Cc"]));
+    check_draws(gs::characters().include_characters("abc"));
+    check_draws(gs::characters().exclude_characters("xyz"));
 }
 
 #[test]
-#[should_panic(expected = "\"Cs\" includes surrogate codepoints")]
 fn test_characters_categories_including_cs_panics() {
-    let g = gs::characters().categories(&["Cs"]);
-    g.as_basic();
+    expect_draw_panic(
+        gs::characters().categories(&["Cs"]),
+        "\"Cs\" includes surrogate codepoints",
+    );
 }
 
 #[test]
-#[should_panic(expected = "\"C\" includes surrogate codepoints")]
 fn test_characters_categories_including_cs_supercat_panics() {
-    let g = gs::characters().categories(&["C"]);
-    g.as_basic();
+    expect_draw_panic(
+        gs::characters().categories(&["C"]),
+        "\"C\" includes surrogate codepoints",
+    );
 }
 
 #[test]
-#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
 fn test_text_alphabet_with_codec() {
-    let g = gs::text().alphabet("abc").codec("ascii");
-    g.as_basic();
+    expect_draw_panic(gs::text().alphabet("abc").codec("ascii"), "Cannot combine");
 }
 
 #[test]
-#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
 fn test_text_codec_with_alphabet() {
-    let g = gs::text().codec("ascii").alphabet("abc");
-    g.as_basic();
+    expect_draw_panic(gs::text().codec("ascii").alphabet("abc"), "Cannot combine");
 }
 
 #[test]
-#[should_panic(expected = "Cannot combine .alphabet() with character methods")]
 fn test_text_alphabet_with_categories() {
-    let g = gs::text().alphabet("abc").categories(&["Lu"]);
-    g.as_basic();
+    expect_draw_panic(
+        gs::text().alphabet("abc").categories(&["Lu"]),
+        "Cannot combine",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_size < min_size")]
 fn test_binary_min_greater_than_max() {
-    let g = gs::binary().min_size(5).max_size(3);
-    g.as_basic();
+    expect_draw_panic(gs::binary().min_size(5).max_size(3), "max_size < min_size");
 }
 
 #[test]
-#[should_panic(expected = "max_size < min_size")]
 fn test_vecs_min_greater_than_max() {
-    let g = gs::vecs(gs::booleans()).min_size(5).max_size(3);
-    g.as_basic();
+    expect_draw_panic(
+        gs::vecs(gs::booleans()).min_size(5).max_size(3),
+        "max_size < min_size",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_size < min_size")]
 fn test_hashsets_min_greater_than_max() {
-    let g = gs::hashsets(gs::booleans()).min_size(5).max_size(3);
-    g.as_basic();
+    expect_draw_panic(
+        gs::hashsets(gs::booleans()).min_size(5).max_size(3),
+        "max_size < min_size",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_size < min_size")]
 fn test_hashmaps_min_greater_than_max() {
-    let g = gs::hashmaps(gs::text(), gs::booleans())
-        .min_size(5)
-        .max_size(3);
-    g.as_basic();
+    expect_draw_panic(
+        gs::hashmaps(gs::text(), gs::booleans())
+            .min_size(5)
+            .max_size(3),
+        "max_size < min_size",
+    );
 }
 
 #[test]
-#[should_panic(expected = "max_length must be between 4 and 255")]
 fn test_domains_max_length_too_small() {
-    let g = gs::domains().max_length(2);
-    g.as_basic();
+    expect_draw_panic(
+        gs::domains().max_length(2),
+        "max_length must be between 4 and 255",
+    );
 }
 
 #[test]

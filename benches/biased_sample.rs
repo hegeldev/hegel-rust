@@ -70,7 +70,7 @@ fn bench_biased_integer_sample(c: &mut Criterion) {
 
 fn ascii_string_choice() -> StringChoice {
     StringChoice {
-        intervals: IntervalSet::new(vec![(0x20, 0x7E)]),
+        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).into(),
         min_size: 0,
         max_size: 100,
     }
@@ -78,7 +78,7 @@ fn ascii_string_choice() -> StringChoice {
 
 fn unicode_string_choice() -> StringChoice {
     StringChoice {
-        intervals: IntervalSet::new(vec![(0x0, 0xD7FF), (0xE000, 0x10FFFF)]),
+        intervals: IntervalSet::new(vec![(0x0, 0xD7FF), (0xE000, 0x10FFFF)]).into(),
         min_size: 0,
         max_size: 100,
     }

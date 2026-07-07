@@ -1,5 +1,5 @@
 use super::*;
-use crate::native::bignum::BigInt;
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{BytesChoice, FloatChoice};
 
@@ -138,7 +138,7 @@ fn is_climbable_rejects_strings() {
     use crate::native::core::StringChoice;
     use crate::native::intervalsets::IntervalSet;
     let sc = StringChoice {
-        intervals: IntervalSet::new(vec![(0x20, 0x7E)]),
+        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).into(),
         min_size: 0,
         max_size: 10,
     };
@@ -246,38 +246,17 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::test_runner::Engine;
-use ciborium::Value;
 use std::collections::HashMap as StdHashMap;
-
-fn bool_schema() -> Value {
-    Value::Map(vec![(
-        Value::Text("type".into()),
-        Value::Text("boolean".into()),
-    )])
-}
-
-fn int_schema(min: i64, max: i64) -> Value {
-    Value::Map(vec![
-        (Value::Text("type".into()), Value::Text("integer".into())),
-        (Value::Text("min_value".into()), Value::Integer(min.into())),
-        (Value::Text("max_value".into()), Value::Integer(max.into())),
-    ])
-}
 
 /// A drawn boolean, or `Err(())` if the case overran / was aborted.
 fn draw_bool(ds: &dyn DataSource) -> Result<bool, ()> {
-    match ds.generate(&bool_schema()) {
-        Ok(Value::Bool(b)) => Ok(b),
-        Ok(other) => panic!("expected boolean, got {other:?}"),
-        Err(_) => Err(()),
-    }
+    ds.generate_boolean(0.5, None).map_err(|_| ())
 }
 
 /// A drawn integer in `[min, max]`, or `Err(())` if the case overran.
 fn draw_int(ds: &dyn DataSource, min: i64, max: i64) -> Result<i64, ()> {
-    match ds.generate(&int_schema(min, max)) {
-        Ok(Value::Integer(i)) => Ok(i128::from(i) as i64),
-        Ok(other) => panic!("expected integer, got {other:?}"),
+    match ds.generate_integer(&BigInt::from(min), &BigInt::from(max)) {
+        Ok(v) => Ok(v.to_i64().unwrap()),
         Err(_) => Err(()),
     }
 }

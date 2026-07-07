@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.24.0 - 2026-07-06
+
+This release removes `gs::fixed_dicts()` and its `FixedDictBuilder` /
+`FixedDictGenerator` types. They produced CBOR `Value` maps — a leftover
+currency from the engine's old serialization layer with no other
+consumer. For fixed-shape records, use `#[derive(DefaultGenerator)]` on
+a struct, or `gs::tuples!`. The `hegel::ciborium` re-export and the
+`ciborium` and `serde` dependencies are gone with it.
+
+This release also fixes two long-standing frontend issues:
+
+- Dropping a Hegel handle cached in your own `thread_local!` no longer
+  risks aborting the process during thread teardown when destructor
+  ordering ran Hegel's internal state down first.
+- When the engine reports an error while the runner is pulling the next
+  test case, the run now fails with the engine's actual diagnostic
+  instead of a misleading "run has not finished yet" internal error.
+
+Finally, `chrono::NaiveDate` generation now draws through the engine's
+new bounded date support, so `naive_dates()` shrinks toward 2000-01-01
+(clamped into the configured bounds) rather than toward year zero, and
+shrinks as a single unit.
+
+## 0.23.5 - 2026-07-06
+
+This patch replaces the CBOR schema layer between the frontend and the
+engine with typed draw calls. The documented API is unchanged; generation
+of regexes, domains, emails, and URLs should get a little faster, since
+patterns and alphabets are now prepared once per generator instead of
+once per draw.
+
+The `#[doc(hidden)]` schema machinery (`Generator::as_basic`,
+`BasicGenerator`, `generate_raw`, `generate_from_schema`,
+`deserialize_value`) is removed; it was internal API and not covered by
+stability guarantees. `Generator::do_draw` no longer has a default
+implementation, so a custom generator that only implemented `as_basic`
+must implement `do_draw` instead. `EmailGenerator` and `UrlGenerator`
+are no longer unit structs; construct them with `gs::emails()` and
+`gs::urls()`.
+
+Failure databases and reproduce blobs written by earlier versions will
+not replay against this release (the database has never been stable
+across upgrades).
+
+## 0.23.4 - 2026-07-06
+
+This patch makes cloned `TestCase`s generate from independent choice
+streams. Cloning a test case and moving the clone to another thread was
+already supported, but concurrent draws across clones interleaved into one
+shared sequence: values changed run to run, failures involving concurrent
+generation shrank poorly or not at all, and the docs warned the feature was
+borderline-internal. Each clone now draws from its own stream, so threads
+generating concurrently no longer interfere with each other: the same seed
+reproduces the same values on every stream, failures shrink normally
+(including the values drawn inside clones), and the shrunk counterexample
+replays exactly.
+
+Variable pools and engine-managed collections remain shared across clones;
+using one of those from two threads at the same time still makes the
+affected draws depend on scheduling order.
+
 ## 0.23.3 - 2026-07-03
 
 This patch fixes a use-after-free: a `TestCase` moved to a thread that outlived its test could touch freed memory when it drew after the test had finished. Such a draw now fails with a clear panic in that thread instead. As before, any thread that draws should be joined before the test returns.

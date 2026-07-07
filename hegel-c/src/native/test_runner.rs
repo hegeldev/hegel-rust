@@ -265,7 +265,7 @@ impl<'a> Engine<'a> {
             if let Some(msg) = large_initial_check(
                 run.status == Status::EarlyStop,
                 run.status,
-                run.nodes.len(),
+                crate::native::core::flattened_len(&run.nodes),
                 settings
                     .suppress_health_check
                     .contains(&HealthCheck::LargeInitialTestCase),
@@ -330,7 +330,7 @@ impl<'a> Engine<'a> {
                         "test case #{}: status = {:?}, choices = {}",
                         self.calls,
                         run.status,
-                        run.nodes.len()
+                        crate::native::core::flattened_len(&run.nodes)
                     );
                 }
 
@@ -1093,7 +1093,8 @@ impl<'a> Engine<'a> {
         let ntc = if extend == 0 {
             NativeTestCase::for_choices(choices, nodes, None)
         } else {
-            NativeTestCase::for_probe(choices, self.rng_spawn(), choices.len() + extend)
+            let budget = crate::native::core::flattened_values_len(choices) + extend;
+            NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
         };
         let (run, _mismatch) = self.test_function(ntc);
         run

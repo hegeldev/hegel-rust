@@ -3,15 +3,24 @@ pub(crate) mod float_index;
 pub(crate) mod state;
 pub(crate) mod state_machine;
 pub use choices::{
-    BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, EngineError, FloatChoice, InterestingOrigin,
-    NodesSortKey, Status, StringChoice, sort_key,
+    BytesChoice, ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, EngineError, FloatChoice,
+    InterestingOrigin, NodesSortKey, Status, StringChoice, flattened_len, flattened_values_len,
+    sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
-pub use state::{ManyState, NativeTestCase, NativeVariables, Span, SpanEvent, Spans};
+pub use state::{
+    ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Spans,
+};
 pub use state_machine::NativeStateMachine;
 
 /// Maximum number of choices a single test case can make.
 pub const BUFFER_SIZE: usize = 8 * 1024;
+
+/// Maximum nesting depth of cloned streams (a clone made from a clone made
+/// from …). The engine rejects deeper clones the same way it rejects
+/// over-deep spans, and the choice deserializer refuses deeper nesting so
+/// corrupt storage can't drive unbounded recursion.
+pub const MAX_CLONE_DEPTH: usize = 100;
 
 /// Probability of drawing a boundary/special value per special candidate.
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;

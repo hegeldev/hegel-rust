@@ -1,6 +1,6 @@
 use super::*;
 use crate::backend::TestCaseResult;
-use crate::cbor_utils::cbor_map;
+use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Database, Settings};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -41,14 +41,9 @@ fn run_native_replays_persisted_failure_on_second_run() {
 
     let first_failures = std::sync::Mutex::new(Vec::<i128>::new());
     let result = run_native(&settings, key, |ds| {
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => 0_i64,
-            "max_value" => 2_000_000_i64,
-        };
-        match ds.generate(&schema) {
-            Ok(ciborium::Value::Integer(i)) => {
-                let n: i128 = i.into();
+        match ds.generate_integer(&BigInt::from(0_i64), &BigInt::from(2_000_000_i64)) {
+            Ok(v) => {
+                let n = v.to_i128().unwrap();
                 if n >= 1_000_000 {
                     first_failures.lock().unwrap().push(n);
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
@@ -77,13 +72,8 @@ fn run_native_replays_persisted_failure_on_second_run() {
 
     let observed_first = std::sync::Mutex::new(None::<i128>);
     let _ = run_native(&settings, key, |ds| {
-        let schema = cbor_map! {
-            "type" => "integer",
-            "min_value" => 0_i64,
-            "max_value" => 2_000_000_i64,
-        };
-        if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
-            let n: i128 = i.into();
+        if let Ok(v) = ds.generate_integer(&BigInt::from(0_i64), &BigInt::from(2_000_000_i64)) {
+            let n = v.to_i128().unwrap();
             let mut slot = observed_first.lock().unwrap();
             if slot.is_none() {
                 *slot = Some(n);
@@ -154,13 +144,8 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
 /// interesting, over the full `i64` range.
 fn mark_above_million(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
     use crate::backend::Failure;
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => i64::MIN,
-        "max_value" => i64::MAX,
-    };
-    if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) {
-        let n: i128 = i.into();
+    if let Ok(v) = ds.generate_integer(&BigInt::from(i64::MIN), &BigInt::from(i64::MAX)) {
+        let n = v.to_i128().unwrap();
         if n >= 1_000_000 {
             ds.mark_complete(&TestCaseResult::Interesting(Failure {
                 origin: "n >= 1_000_000".to_string(),
@@ -176,16 +161,11 @@ fn mark_above_million(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
 /// value the shrinker minimised to, read back out of the result's blob.
 fn replay_above_million_blob(blob: &str) -> i128 {
     let ds = data_source_for_blob(&quiet_settings(1), blob).unwrap();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => i64::MIN,
-        "max_value" => i64::MAX,
-    };
-    let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) else {
+    let Ok(v) = ds.generate_integer(&BigInt::from(i64::MIN), &BigInt::from(i64::MAX)) else {
         panic!("expected an integer draw");
     };
     ds.mark_complete(&TestCaseResult::Valid);
-    i.into()
+    v.to_i128().unwrap()
 }
 
 /// Single-seed version of the boundary test, retained as a fast-feedback
@@ -227,19 +207,12 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
         .database(Some(db_path));
     let key = Some("replay-unbounded");
 
-    let schema_for = || {
-        cbor_map! {
-            "type" => "integer",
-            "min_value" => i64::MIN,
-            "max_value" => i64::MAX,
-        }
-    };
     let predicate = |n: i128| n >= 1_000_000;
 
     let last = std::sync::Mutex::new(None::<i128>);
     let result = run_native(&settings, key, |ds| {
-        if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
-            let n: i128 = i.into();
+        if let Ok(v) = ds.generate_integer(&BigInt::from(i64::MIN), &BigInt::from(i64::MAX)) {
+            let n = v.to_i128().unwrap();
             if predicate(n) {
                 *last.lock().unwrap() = Some(n);
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
@@ -259,8 +232,8 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
 
     let observed_first = std::sync::Mutex::new(None::<i128>);
     let _ = run_native(&settings, key, |ds| {
-        if let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema_for()) {
-            let n: i128 = i.into();
+        if let Ok(v) = ds.generate_integer(&BigInt::from(i64::MIN), &BigInt::from(i64::MAX)) {
+            let n = v.to_i128().unwrap();
             let mut slot = observed_first.lock().unwrap();
             if slot.is_none() {
                 *slot = Some(n);
@@ -288,9 +261,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
 #[test]
 fn run_native_callback_can_generate_via_data_source() {
     let result = run_native(&quiet_settings(3), None, |ds| {
-        let schema = cbor_map! {"type" => "boolean"};
-        let value = ds.generate(&schema).expect("generate succeeded");
-        assert!(matches!(value, ciborium::Value::Bool(_)));
+        ds.generate_boolean(0.5, None).unwrap();
         ds.mark_complete(&TestCaseResult::Valid);
     });
     assert!(result.unwrap().failures.is_empty());
@@ -300,14 +271,9 @@ fn run_native_callback_can_generate_via_data_source() {
 /// the blob tests to provoke (and later replay) a failure.
 fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
     use crate::backend::Failure;
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 0_i64,
-        "max_value" => 2_000_000_i64,
-    };
-    match ds.generate(&schema) {
-        Ok(ciborium::Value::Integer(i)) => {
-            let n: i128 = i.into();
+    match ds.generate_integer(&BigInt::from(0_i64), &BigInt::from(2_000_000_i64)) {
+        Ok(v) => {
+            let n = v.to_i128().unwrap();
             if n >= 1_000_000 {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
@@ -338,15 +304,10 @@ fn data_source_for_blob_replays_the_counterexample() {
     let blob = discover_reproduce_blob();
 
     let ds = data_source_for_blob(&quiet_settings(1), &blob).unwrap();
-    let schema = cbor_map! {
-        "type" => "integer",
-        "min_value" => 0_i64,
-        "max_value" => 2_000_000_i64,
-    };
-    let Ok(ciborium::Value::Integer(i)) = ds.generate(&schema) else {
+    let Ok(v) = ds.generate_integer(&BigInt::from(0_i64), &BigInt::from(2_000_000_i64)) else {
         panic!("expected an integer draw");
     };
-    let n: i128 = i.into();
+    let n = v.to_i128().unwrap();
     assert!(
         n >= 1_000_000,
         "replayed value {n} should still violate the property"

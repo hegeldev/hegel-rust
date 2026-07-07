@@ -1,4 +1,8 @@
-use ciborium::Value;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use crate::native::bignum::BigInt;
+use crate::native::draws::special::{Date, DateTime, Time};
+use crate::native::draws::{FloatSpec, StringSpec};
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 ///
@@ -14,10 +18,11 @@ pub enum DataSourceError {
     /// The backend rejected the current draw (e.g. a generated float could
     /// not be represented at the requested width).
     Assume,
-    /// A caller-supplied argument (typically a schema) was semantically
-    /// invalid. The main library converts this to a panic at the API surface;
-    /// libhegel maps it to `HEGEL_E_INVALID_ARG` with the message exposed via
-    /// `hegel_context_last_error`. Carries a human-readable diagnostic.
+    /// A caller-supplied draw argument (a bound, size, pattern, or similar)
+    /// was semantically invalid. The main library converts this to a panic
+    /// at the API surface; libhegel maps it to `HEGEL_E_INVALID_ARG` with
+    /// the message exposed via `hegel_context_last_error`. Carries a
+    /// human-readable diagnostic.
     InvalidArgument(String),
 }
 
@@ -44,14 +49,68 @@ impl std::error::Error for DataSourceError {}
 /// Implementations must be `Send + Sync` so a `TestCase` clone can be moved to
 /// another thread.
 pub trait DataSource: Send + Sync {
-    /// Send a CBOR schema and receive a generated CBOR value.
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError>;
+    /// Draw an integer uniformly-ish from `[min_value, max_value]`, biased
+    /// toward boundary values as the engine sees fit. Errors with
+    /// `InvalidArgument` when `min_value > max_value`.
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError>;
+
+    /// Draw a float according to `spec` (bounds, width, NaN/infinity policy,
+    /// exclusive-bound handling). Errors with `InvalidArgument` for an
+    /// invalid spec.
+    fn generate_float(&self, spec: &FloatSpec) -> Result<f64, DataSourceError>;
+
+    /// Draw a byte string with length in `[min_size, max_size]`. Errors with
+    /// `InvalidArgument` when `min_size > max_size`.
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError>;
+
+    /// Draw a string according to a validated [`StringSpec`] (text, regex,
+    /// email, url, or domain).
+    fn generate_string(&self, spec: &StringSpec) -> Result<String, DataSourceError>;
+
+    /// Draw a Gregorian calendar [`Date`] in `[min, max]`, shrinking toward
+    /// 2000-01-01 (clamped into range). Errors with `InvalidArgument` for
+    /// invalid or inverted bounds.
+    fn generate_date(&self, min: Date, max: Date) -> Result<Date, DataSourceError>;
+
+    /// Draw a [`Time`] of day in `[min, max]`, shrinking toward `min`.
+    /// Errors with `InvalidArgument` for invalid or inverted bounds.
+    fn generate_time(&self, min: Time, max: Time) -> Result<Time, DataSourceError>;
+
+    /// Draw a naive [`DateTime`] in `[min, max]`. Errors with
+    /// `InvalidArgument` for invalid or inverted bounds.
+    fn generate_datetime(&self, min: DateTime, max: DateTime) -> Result<DateTime, DataSourceError>;
+
+    /// Draw a UUID's 16 big-endian bytes. When `version` is set, the RFC
+    /// 4122 version and variant nibbles are forced accordingly; errors with
+    /// `InvalidArgument` when `version > 15`.
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError>;
+
+    /// Draw an IPv4 address.
+    fn generate_ipv4(&self) -> Result<Ipv4Addr, DataSourceError>;
+
+    /// Draw an IPv6 address.
+    fn generate_ipv6(&self) -> Result<Ipv6Addr, DataSourceError>;
 
     /// Begin a labeled span (used for composite generator structure).
     fn start_span(&self, label: u64) -> Result<(), DataSourceError>;
 
     /// End the current span. If `discard` is true, the span's choices are discarded.
     fn stop_span(&self, discard: bool) -> Result<(), DataSourceError>;
+
+    /// Create an independent cloned stream of this test case and return a
+    /// data source for it.
+    ///
+    /// The clone occupies one choice position in this stream and then
+    /// generates from its own independent choice sequence, so the clone and
+    /// every other stream of the family can be driven concurrently from
+    /// different threads without perturbing each other, deterministically
+    /// under replay. Completion ([`Self::mark_complete`]) remains
+    /// family-wide.
+    fn clone_stream(&self) -> Result<Box<dyn DataSource + Send + Sync>, DataSourceError>;
 
     /// Create a new collection. Returns an opaque handle.
     fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError>;
@@ -83,7 +142,7 @@ pub trait DataSource: Send + Sync {
     /// If `forced` is `Some`, the choice is still recorded (so replay and
     /// shrinking stay aligned) but the value is forced and no entropy is
     /// consumed.
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
 
     /// Create a new variable pool. Returns an opaque pool id.
     fn new_pool(&self) -> Result<i64, DataSourceError>;

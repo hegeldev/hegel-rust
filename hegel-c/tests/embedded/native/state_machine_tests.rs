@@ -192,7 +192,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     let mut ntc = replay(&[int(254), int(0)], 2);
     let mut sm = machine(2);
     assert!(matches!(sm.next_rule(&mut ntc), Err(EngineError::Overrun)));
-    assert_eq!(ntc.status, Some(Status::EarlyStop));
+    assert_eq!(ntc.status(), Some(Status::EarlyStop));
     ntc.freeze();
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(

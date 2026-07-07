@@ -20,30 +20,6 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
-/* CBOR-encoded {"type": "integer", "min_value": 0, "max_value": 100} */
-static const uint8_t INTEGER_SCHEMA[] = {
-    0xA3,                                            /* map(3) */
-    0x64, 't', 'y', 'p', 'e',
-    0x67, 'i', 'n', 't', 'e', 'g', 'e', 'r',
-    0x69, 'm', 'i', 'n', '_', 'v', 'a', 'l', 'u', 'e',
-    0x00,
-    0x69, 'm', 'a', 'x', '_', 'v', 'a', 'l', 'u', 'e',
-    0x18, 0x64
-};
-
-/* Decode a small CBOR unsigned integer (0..255). Returns -1 if the
- * encoding is something we don't handle (we know the engine only emits
- * the small-uint head for our [0, 100] range, so this is sufficient). */
-static int decode_small_uint(const uint8_t *bytes, size_t len) {
-    if (len < 1) return -1;
-    uint8_t major = bytes[0] >> 5;
-    uint8_t info  = bytes[0] & 0x1F;
-    if (major != 0) return -1;
-    if (info < 24) return info;
-    if (info == 24 && len >= 2) return bytes[1];
-    return -1;
-}
-
 #define ORIGIN "n >= 5"
 
 int main(void) {
@@ -64,9 +40,8 @@ int main(void) {
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
 
-        const uint8_t *value;
-        size_t value_len;
-        hegel_result_t rc = hegel_generate(ctx, tc, INTEGER_SCHEMA, sizeof(INTEGER_SCHEMA), &value, &value_len);
+        int64_t n;
+        hegel_result_t rc = hegel_generate_integer(ctx, tc, 0, 100, &n);
         if (rc == HEGEL_E_STOP_TEST) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
@@ -74,15 +49,7 @@ int main(void) {
         }
         if (rc != HEGEL_OK) {
             const char *err = hegel_context_last_error(ctx);
-            fprintf(stderr, "hegel_generate: rc=%d %s\n", rc, err);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
-            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
-            continue;
-        }
-
-        int n = decode_small_uint(value, value_len);
-        if (n < 0) {
-            fprintf(stderr, "decode failed\n");
+            fprintf(stderr, "hegel_generate_integer: rc=%d %s\n", rc, err);
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;

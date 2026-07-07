@@ -2,7 +2,7 @@
 //!
 //! hegeltest drives the engine the same way every other language binding
 //! does: through the `hegel_*` C functions exported by the `hegel-c` crate
-//! (lib name `hegel_c`), passing CBOR bytes and opaque handles and reading
+//! (lib name `hegel_c`), passing typed values and opaque handles and reading
 //! back `hegel_result_t` codes. This module is the single place that touches
 //! those raw functions; the rest of the frontend works against the safe
 //! wrappers here.
@@ -79,6 +79,20 @@ fn with_context<R>(f: impl FnOnce(*mut hegel_c::HegelContext) -> R) -> R {
     CONTEXT.with(|c| f(c.as_ptr()))
 }
 
+/// Run a libhegel free function from a `Drop` impl.
+///
+/// A handle a user caches in their own thread-local can be dropped during
+/// thread teardown after this thread's [`CONTEXT`] has already been
+/// destroyed (thread-local destructors run last-initialized-first, and the
+/// user's slot may well be initialized before our context). `LocalKey::with`
+/// panics on a destroyed key, and a panic inside a thread-local destructor
+/// aborts the process — so this uses `try_with` and skips the free when the
+/// context is gone. The engine-side allocation leaks at thread exit, which
+/// is harmless by comparison.
+fn free_on_drop(f: impl FnOnce(*mut hegel_c::HegelContext) -> hegel_c::hegel_result_t) {
+    let _ = CONTEXT.try_with(|c| require_ok(f(c.as_ptr())));
+}
+
 /// The most recent error message libhegel recorded on this thread's context,
 /// or an empty string if the last call on it succeeded. Read synchronously on
 /// the same thread that made the failing call, before any later call can
@@ -92,6 +106,15 @@ pub(crate) fn last_error_string() -> String {
 /// value still round-trips to a diagnostic rather than being dropped.
 fn cstring_lossy(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| CString::new(s.replace('\0', "\u{FFFD}")).unwrap())
+}
+
+/// Convert an engine-produced string buffer into an owned `String`, raising
+/// an internal error if the engine violated its guarantee of returning valid
+/// UTF-8.
+fn string_from_engine_bytes(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        crate::control::hegel_internal_error!("libhegel returned invalid UTF-8: {e}")
+    })
 }
 
 /// Owns a `*mut HegelSettings` and frees it on drop. Built from a frontend
@@ -192,9 +215,7 @@ impl SettingsHandle {
 impl Drop for SettingsHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_settings_new and is freed exactly once.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_settings_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_settings_free(ctx, self.raw) });
     }
 }
 
@@ -228,7 +249,8 @@ impl RunHandle {
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
-        if rc != hegel_result_t::HEGEL_OK || raw.is_null() {
+        require_ok(rc);
+        if raw.is_null() {
             None
         } else {
             Some(CTestCase { raw })
@@ -250,9 +272,7 @@ impl RunHandle {
 impl Drop for RunHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_start and is freed exactly once;
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_run_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_run_free(ctx, self.raw) });
     }
 }
 
@@ -310,29 +330,215 @@ impl CTestCase {
         CTestCase { raw }
     }
 
-    /// Generate a CBOR value for `schema_cbor`, returning a fresh copy of the
-    /// bytes (libhegel's buffer is invalidated by the next call on this
-    /// handle, so we copy immediately).
-    pub(crate) fn generate(&self, schema_cbor: &[u8]) -> Result<Vec<u8>, hegel_result_t> {
-        let mut out_ptr: *const u8 = ptr::null();
-        let mut out_len: usize = 0;
-        // SAFETY: schema bytes + out params are valid; on HEGEL_OK libhegel
+    /// Draw an integer in `[min_value, max_value]` (both within `i64`).
+    pub(crate) fn generate_integer(
+        &self,
+        min_value: i64,
+        max_value: i64,
+    ) -> Result<i64, hegel_result_t> {
+        let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_generate(
+            hegel_c::hegel_generate_integer(ctx, self.raw, min_value, max_value, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw an integer with bounds given as two's-complement little-endian
+    /// byte encodings, returning the drawn value's encoding sign-extended to
+    /// fill a 17-byte buffer (wide enough for any `i128` or `u128` value).
+    /// libhegel sign-fills the buffer beyond the minimal encoding, so the
+    /// whole array reads directly as a fixed-width value.
+    pub(crate) fn generate_integer_big(
+        &self,
+        min_value: &[u8],
+        max_value: &[u8],
+    ) -> Result<[u8; 17], hegel_result_t> {
+        let mut out = [0u8; 17];
+        let mut out_len: usize = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_integer_big(
                 ctx,
                 self.raw,
-                schema_cbor.as_ptr(),
-                schema_cbor.len(),
-                &mut out_ptr,
+                min_value.as_ptr(),
+                min_value.len(),
+                max_value.as_ptr(),
+                max_value.len(),
+                out.as_mut_ptr(),
+                out.len(),
                 &mut out_len,
             )
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(rc);
         }
-        // SAFETY: on success out_ptr/out_len describe a valid borrowed buffer.
-        let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
-        Ok(bytes.to_vec())
+        Ok(out)
+    }
+
+    /// Draw a float according to the full spec libhegel accepts.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generate_float(
+        &self,
+        width: u32,
+        min_value: f64,
+        max_value: f64,
+        allow_nan: bool,
+        allow_infinity: bool,
+        exclude_min: bool,
+        exclude_max: bool,
+        smallest_nonzero_magnitude: f64,
+    ) -> Result<f64, hegel_result_t> {
+        let mut out: f64 = 0.0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_float(
+                ctx,
+                self.raw,
+                width,
+                min_value,
+                max_value,
+                allow_nan,
+                allow_infinity,
+                exclude_min,
+                exclude_max,
+                smallest_nonzero_magnitude,
+                &mut out,
+            )
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a boolean that is `true` with probability `p`.
+    pub(crate) fn generate_boolean(&self, p: f64) -> Result<bool, hegel_result_t> {
+        let mut out = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_boolean(ctx, self.raw, p, false, false, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a byte string with length in `[min_size, max_size]`, copying the
+    /// engine-allocated buffer into an owned `Vec` and freeing it.
+    pub(crate) fn generate_bytes(
+        &self,
+        min_size: u64,
+        max_size: u64,
+    ) -> Result<Vec<u8>, hegel_result_t> {
+        let mut result = hegel_c::hegel_generate_bytes_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_bytes(ctx, self.raw, min_size, max_size, &mut result)
+        });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        // SAFETY: on success the result holds a valid engine-allocated buffer
+        // that this frontend owns; it is copied out and freed exactly once.
+        let bytes = unsafe { std::slice::from_raw_parts(result.data, result.len) }.to_vec();
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_bytes_result_free(ctx, &mut result)
+        }));
+        Ok(bytes)
+    }
+
+    /// Draw a string described by `generator`, copying the engine-allocated
+    /// buffer into an owned `String` and freeing it.
+    pub(crate) fn generate_string(
+        &self,
+        generator: &StringGenerator,
+    ) -> Result<String, hegel_result_t> {
+        let mut result = hegel_c::hegel_generate_string_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_string(ctx, self.raw, generator.raw, &mut result)
+        });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        // SAFETY: on success the result holds a valid engine-allocated UTF-8
+        // buffer that this frontend owns; it is copied out and freed exactly
+        // once.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec();
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_string_result_free(ctx, &mut result)
+        }));
+        Ok(string_from_engine_bytes(bytes))
+    }
+
+    /// Draw a Gregorian calendar date in `[min, max]`.
+    pub(crate) fn generate_date(
+        &self,
+        min: hegel_c::hegel_date_t,
+        max: hegel_c::hegel_date_t,
+    ) -> Result<hegel_c::hegel_date_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_date(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a time of day in `[min, max]`.
+    pub(crate) fn generate_time(
+        &self,
+        min: hegel_c::hegel_time_t,
+        max: hegel_c::hegel_time_t,
+    ) -> Result<hegel_c::hegel_time_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_time(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a naive datetime in `[min, max]`.
+    pub(crate) fn generate_datetime(
+        &self,
+        min: hegel_c::hegel_datetime_t,
+        max: hegel_c::hegel_datetime_t,
+    ) -> Result<hegel_c::hegel_datetime_t, hegel_result_t> {
+        let mut out = min;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_datetime(ctx, self.raw, min, max, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw a UUID's 16 big-endian bytes, optionally forcing the RFC 4122
+    /// version nibble.
+    pub(crate) fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], hegel_result_t> {
+        let mut out = [0u8; 16];
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_uuid(
+                ctx,
+                self.raw,
+                version.unwrap_or(0),
+                version.is_some(),
+                out.as_mut_ptr(),
+            )
+        });
+        rc_to_value(rc, out)
+    }
+
+    /// Draw an IPv4 address.
+    pub(crate) fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, hegel_result_t> {
+        let mut out = [0u8; 4];
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_ipv4(ctx, self.raw, out.as_mut_ptr())
+        });
+        rc_to_value(rc, std::net::Ipv4Addr::from(out))
+    }
+
+    /// Draw an IPv6 address.
+    pub(crate) fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, hegel_result_t> {
+        let mut out = [0u8; 16];
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_ipv6(ctx, self.raw, out.as_mut_ptr())
+        });
+        rc_to_value(rc, std::net::Ipv6Addr::from(out))
     }
 
     pub(crate) fn start_span(&self, label: u64) -> Result<(), hegel_result_t> {
@@ -470,9 +676,142 @@ impl Drop for CTestCase {
         // SAFETY: every `CTestCase` is an independent libhegel handle this
         // frontend created (from_blob, next_test_case, or clone_handle) and is
         // freed exactly once here, dropping its reference to the test case.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel string-generator handle (`hegel_string_generator_t`),
+/// freed on drop.
+///
+/// Built by the constructor methods, each of which validates its parameters
+/// eagerly and returns `Err` with libhegel's diagnostic on invalid input.
+/// The handle is immutable after construction, so it may be shared across
+/// test cases and threads; generators cache one per configuration.
+pub(crate) struct StringGenerator {
+    raw: *mut hegel_c::HegelStringGenerator,
+}
+
+// SAFETY: a string generator is immutable after construction — libhegel only
+// ever reads through the pointer — so sharing across threads is sound.
+unsafe impl Send for StringGenerator {}
+unsafe impl Sync for StringGenerator {}
+
+impl std::fmt::Debug for StringGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StringGenerator").finish_non_exhaustive()
+    }
+}
+
+impl StringGenerator {
+    /// Build a text generator over the alphabet described by the fields.
+    /// `max_codepoint` of `None` means unconstrained.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn text(
+        min_size: u64,
+        max_size: u64,
+        codec: Option<&str>,
+        min_codepoint: u32,
+        max_codepoint: Option<u32>,
+        categories: Option<&[String]>,
+        exclude_categories: Option<&[String]>,
+        include_characters: Option<&str>,
+        exclude_characters: Option<&str>,
+    ) -> Result<Self, String> {
+        let c_codec = codec.map(cstring_lossy);
+        let c_categories: Option<Vec<CString>> =
+            categories.map(|cats| cats.iter().map(|c| cstring_lossy(c)).collect());
+        let c_exclude_categories: Option<Vec<CString>> =
+            exclude_categories.map(|cats| cats.iter().map(|c| cstring_lossy(c)).collect());
+
+        let category_ptrs: Option<Vec<*const c_char>> = c_categories
+            .as_ref()
+            .map(|cats| cats.iter().map(|c| c.as_ptr()).collect());
+        let exclude_category_ptrs: Option<Vec<*const c_char>> = c_exclude_categories
+            .as_ref()
+            .map(|cats| cats.iter().map(|c| c.as_ptr()).collect());
+
+        let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_string_generator_text(
+                ctx,
+                min_size,
+                max_size,
+                c_codec.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                min_codepoint,
+                max_codepoint.unwrap_or(u32::MAX),
+                category_ptrs.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
+                category_ptrs.as_ref().map_or(0, |p| p.len()),
+                exclude_category_ptrs
+                    .as_ref()
+                    .map_or(ptr::null(), |p| p.as_ptr()),
+                exclude_category_ptrs.as_ref().map_or(0, |p| p.len()),
+                include_characters.map_or(ptr::null(), |s| s.as_ptr()),
+                include_characters.map_or(0, |s| s.len()),
+                exclude_characters.map_or(ptr::null(), |s| s.as_ptr()),
+                exclude_characters.map_or(0, |s| s.len()),
+                &mut raw,
+            )
+        });
+        Self::from_construction(rc, raw)
+    }
+
+    /// Build a regex generator; `alphabet` must be a text generator.
+    pub(crate) fn regex(
+        pattern: &str,
+        fullmatch: bool,
+        alphabet: Option<&StringGenerator>,
+    ) -> Result<Self, String> {
+        let c_pattern = cstring_lossy(pattern);
+        let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_string_generator_regex(
+                ctx,
+                c_pattern.as_ptr(),
+                fullmatch,
+                alphabet.map_or(ptr::null(), |a| a.raw),
+                &mut raw,
+            )
+        });
+        Self::from_construction(rc, raw)
+    }
+
+    pub(crate) fn email() -> Result<Self, String> {
+        let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
+        let rc =
+            with_context(|ctx| unsafe { hegel_c::hegel_string_generator_email(ctx, &mut raw) });
+        Self::from_construction(rc, raw)
+    }
+
+    pub(crate) fn url() -> Result<Self, String> {
+        let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe { hegel_c::hegel_string_generator_url(ctx, &mut raw) });
+        Self::from_construction(rc, raw)
+    }
+
+    pub(crate) fn domain(max_length: u64) -> Result<Self, String> {
+        let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_string_generator_domain(ctx, max_length, &mut raw)
+        });
+        Self::from_construction(rc, raw)
+    }
+
+    fn from_construction(
+        rc: hegel_result_t,
+        raw: *mut hegel_c::HegelStringGenerator,
+    ) -> Result<Self, String> {
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(last_error_string());
+        }
+        Ok(StringGenerator { raw })
+    }
+}
+
+impl Drop for StringGenerator {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a hegel_string_generator_* constructor and
+        // is freed exactly once.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_string_generator_free(ctx, self.raw) });
     }
 }
 
@@ -539,9 +878,7 @@ impl RunResult {
 impl Drop for RunResult {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_result and is freed exactly once.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_run_result_free(ctx, self.raw)
-        }));
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_run_result_free(ctx, self.raw) });
     }
 }
 

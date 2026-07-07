@@ -106,7 +106,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
         int_node(3),
         ChoiceNode::new(
             ChoiceKind::String(StringChoice {
-                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]),
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]).into(),
                 min_size: 0,
                 max_size: 16,
             }),

@@ -11,10 +11,13 @@
 //! result/failure/blob readers are all exercised through the raw C ABI under
 //! Miri, not just the handle pointers.
 
+mod common;
+
+use common::ok;
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob, hegel_generate,
+    hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob, hegel_generate_integer,
     hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_result,
     hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
     hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
@@ -24,24 +27,6 @@ use hegel_c::{
 };
 use std::ffi::CString;
 use std::ptr;
-
-/// A minimal CBOR schema for an integer in `[0, 100]`.
-fn integer_schema() -> Vec<u8> {
-    use ciborium::value::Value;
-    let v = Value::Map(vec![
-        (Value::Text("type".into()), Value::Text("integer".into())),
-        (Value::Text("min_value".into()), Value::Integer(0.into())),
-        (Value::Text("max_value".into()), Value::Integer(100.into())),
-    ]);
-    let mut buf = Vec::new();
-    ciborium::ser::into_writer(&v, &mut buf).unwrap();
-    buf
-}
-
-/// Assert a call that should always succeed for these tests returned `HEGEL_OK`.
-fn ok(rc: hegel_c::hegel_result_t) {
-    assert_eq!(rc, HEGEL_OK);
-}
 
 /// Carries a test-case handle into a spawned thread.
 struct SendPtr(*mut HegelTestCase);
@@ -74,7 +59,7 @@ unsafe fn one_case_run() -> (
     }
 }
 
-/// A span op proves a handle is live and reaches the shared data source without
+/// A span op proves a handle is live and reaches its stream without
 /// consuming the choice budget.
 unsafe fn alive(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
     unsafe {
@@ -250,20 +235,16 @@ fn full_run_generates_fails_and_shrinks() {
         let mut run: *mut HegelRun = ptr::null_mut();
         ok(hegel_run_start(ctx, s, &mut run));
 
-        let schema = integer_schema();
         loop {
             let mut tc: *mut HegelTestCase = ptr::null_mut();
             ok(hegel_next_test_case(ctx, run, &mut tc));
             if tc.is_null() {
                 break;
             }
-            let mut p: *const u8 = ptr::null();
-            let mut n = 0usize;
+            let mut value = 0i64;
             // Always interesting when a value is drawn; OVERRUN otherwise. This
             // makes the engine shrink toward the minimal failing example.
-            let status = if hegel_generate(ctx, tc, schema.as_ptr(), schema.len(), &mut p, &mut n)
-                == HEGEL_OK
-            {
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
                 hegel_status_t::HEGEL_STATUS_INTERESTING
             } else {
                 hegel_status_t::HEGEL_STATUS_OVERRUN

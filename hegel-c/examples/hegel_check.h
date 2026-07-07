@@ -8,9 +8,9 @@
  *
  *     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 50);
  *
- * Do NOT wrap calls with a meaningful non-OK code, such as hegel_generate or
- * the draw primitives returning HEGEL_E_STOP_TEST on choice-budget
- * exhaustion; handle those explicitly.
+ * Do NOT wrap calls with a meaningful non-OK code, such as the
+ * hegel_generate_* draw primitives returning HEGEL_E_STOP_TEST on
+ * choice-budget exhaustion; handle those explicitly.
  */
 
 #ifndef HEGEL_CHECK_H

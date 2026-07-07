@@ -1,6 +1,6 @@
 ---
 name: new-default-generator
-description: "How to add a DefaultGenerator impl for a type so gs::default::<T>() works. Use when the user asks to wire up default() for a type, add a default generator, or make a type usable with #[derive(Generate)]. Pair after the new-generator skill when adding a fresh generator, or use standalone when the underlying generator already exists or can be composed from existing generators."
+description: "How to add a DefaultGenerator impl for a type so gs::default::<T>() works. Use when the user asks to wire up default() for a type, add a default generator, or make a type usable with #[derive(DefaultGenerator)]. Pair after the new-generator skill when adding a fresh generator, or use standalone when the underlying generator already exists or can be composed from existing generators."
 ---
 
 # Adding a New Default Generator

@@ -1,35 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
-use ciborium::Value;
 
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
-    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, Span, SpanEvent, Status,
+    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, NativeTestCaseHandle,
+    Span, SpanEvent, Status,
 };
-use crate::native::schema;
-
-/// Per-test-case state shared between `NativeDataSource` and the engine
-/// that owns the handle.  The engine constructs both halves up-front,
-/// hands the data source into the test body, and then reads back nodes,
-/// spans, and the outcome through the handle.
-///
-/// The outcome lives on `ntc` as its (write-once) status plus interesting
-/// origin — set through [`NativeTestCase::conclude`], whether by a draw
-/// (overrun, assume, too-deep) or by [`DataSource::mark_complete`] — so there
-/// is a single source of truth that a late report cannot overwrite.
-pub struct NativeTestCaseInner {
-    pub ntc: NativeTestCase,
-    /// `tc.target()` observations recorded during the test case, keyed by
-    /// label. Populated by [`DataSource::target_observation`]; read back by
-    /// the targeting phase via [`NativeDataSource::take_target_observations`].
-    pub target_observations: HashMap<String, f64>,
-}
-
-/// Shared handle to the per-test-case inner state.
-pub type NativeTestCaseHandle = Arc<Mutex<NativeTestCaseInner>>;
+use crate::native::draws;
 
 pub struct NativeDataSource {
     inner: NativeTestCaseHandle,
@@ -37,34 +16,38 @@ pub struct NativeDataSource {
 }
 
 impl NativeDataSource {
-    /// Create a new `NativeDataSource` and return a shared handle.
+    /// Create a new `NativeDataSource` and return a shared handle to its
+    /// stream.
     ///
     /// The handle is the only way the engine reads back per-test-case
     /// state: choice nodes, spans, and the outcome reported by
     /// [`DataSource::mark_complete`].
     pub fn new(ntc: NativeTestCase) -> (Self, NativeTestCaseHandle) {
-        let inner = Arc::new(Mutex::new(NativeTestCaseInner {
-            ntc,
-            target_observations: HashMap::new(),
-        }));
-        let handle = Arc::clone(&inner);
-        (
-            NativeDataSource {
-                inner,
-                aborted: AtomicBool::new(false),
-            },
-            handle,
-        )
+        let handle: NativeTestCaseHandle = Arc::new(std::sync::Mutex::new(ntc));
+        (Self::from_handle(Arc::clone(&handle)), handle)
+    }
+
+    /// Wrap an existing stream handle — used for the root stream (via
+    /// [`Self::new`]) and for cloned streams (via
+    /// [`DataSource::clone_stream`]). Each wrapper has its own abort latch,
+    /// so one stream aborting on overrun doesn't mark its siblings' sources
+    /// aborted.
+    fn from_handle(handle: NativeTestCaseHandle) -> Self {
+        NativeDataSource {
+            inner: handle,
+            aborted: AtomicBool::new(false),
+        }
     }
 
     /// Convenience: extract choice nodes from a handle after a test case.
+    ///
+    /// Reassembles first, so once the family has concluded every clone node
+    /// carries its stream's realized record and the returned sequence is the
+    /// self-contained pieced-together choice sequence of the whole family.
     pub fn take_nodes(handle: &NativeTestCaseHandle) -> Vec<ChoiceNode> {
-        handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .ntc
-            .nodes
-            .clone()
+        let mut ntc = handle.lock().unwrap_or_else(|e| e.into_inner());
+        ntc.reassemble();
+        ntc.nodes.clone()
     }
 
     /// Convenience: extract spans from a handle after a test case.
@@ -72,7 +55,6 @@ impl NativeDataSource {
         handle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .ntc
             .spans
             .clone()
             .into_vec()
@@ -85,7 +67,6 @@ impl NativeDataSource {
         handle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .ntc
             .span_events
             .clone()
     }
@@ -100,35 +81,36 @@ impl NativeDataSource {
         handle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .family()
             .target_observations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    /// The test case's outcome, reconstructed from its write-once status (and
-    /// interesting origin). Whoever concluded the case first — a draw that
-    /// overran or hit a terminal assume, or the body via `mark_complete` — set
-    /// the status, and a later report could not change it.
+    /// The test case's outcome, reconstructed from its family's write-once
+    /// conclusion. Whoever concluded the family first — a draw that overran
+    /// or hit a terminal assume, or the body via `mark_complete` — set the
+    /// status, and a later report could not change it.
     ///
-    /// Panics only if the case never concluded — i.e. `mark_complete` was never
-    /// called on a case that didn't conclude during a draw, which the
+    /// Panics only if the family never concluded — i.e. `mark_complete` was
+    /// never called on a case that didn't conclude during a draw, which the
     /// cross-backend lifecycle in `run_lifecycle::run_test_case` guarantees
     /// won't occur.
     pub fn take_outcome(handle: &NativeTestCaseHandle) -> TestCaseResult {
-        let inner = handle.lock().unwrap_or_else(|e| e.into_inner());
-        let status = inner
-            .ntc
-            .status
-            .expect("mark_complete must be called for every test case");
+        let conclusion = handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .family()
+            .conclusion();
+        let (status, origin) =
+            conclusion.expect("mark_complete must be called for every test case");
         match status {
             Status::Valid => TestCaseResult::Valid,
             Status::Invalid => TestCaseResult::Invalid,
             Status::EarlyStop => TestCaseResult::Overrun,
             Status::Interesting => TestCaseResult::Interesting(Failure {
-                origin: inner
-                    .ntc
-                    .interesting_origin()
-                    .map(|o| o.0.clone())
-                    .unwrap_or_default(),
+                origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
             }),
         }
@@ -145,7 +127,7 @@ impl NativeDataSource {
     /// Acquire the test-case state under the abort guard.  Returns
     /// `DataSourceError::StopTest` immediately if a previous call has already
     /// aborted the test case so subsequent draws short-circuit without
-    /// touching `ntc`.
+    /// touching the stream.
     fn with_ntc<R>(
         &self,
         f: impl FnOnce(&mut NativeTestCase) -> Result<R, EngineError>,
@@ -153,8 +135,8 @@ impl NativeDataSource {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(self.aborted_error());
         }
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        f(&mut inner.ntc).map_err(|e| match e {
+        let mut ntc = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut ntc).map_err(|e| match e {
             EngineError::Overrun => {
                 self.aborted.store(true, Ordering::Relaxed);
                 DataSourceError::StopTest
@@ -169,8 +151,12 @@ impl NativeDataSource {
     }
 
     fn aborted_error(&self) -> DataSourceError {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match inner.ntc.status {
+        let status = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .status();
+        match status {
             Some(Status::Invalid) => DataSourceError::Assume,
             _ => DataSourceError::StopTest,
         }
@@ -197,8 +183,66 @@ fn checked_id(kind: &str, id: i64, len: usize) -> Result<usize, EngineError> {
 }
 
 impl DataSource for NativeDataSource {
-    fn generate(&self, schema: &Value) -> Result<Value, DataSourceError> {
-        self.with_ntc(|ntc| schema::interpret_schema(ntc, schema))
+    fn generate_integer(
+        &self,
+        min_value: &BigInt,
+        max_value: &BigInt,
+    ) -> Result<BigInt, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_integer(ntc, min_value, max_value))
+    }
+
+    fn generate_float(
+        &self,
+        spec: &crate::native::draws::FloatSpec,
+    ) -> Result<f64, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_float(ntc, spec))
+    }
+
+    fn generate_string(
+        &self,
+        spec: &crate::native::draws::StringSpec,
+    ) -> Result<String, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_string(ntc, spec))
+    }
+
+    fn generate_date(
+        &self,
+        min: crate::native::draws::special::Date,
+        max: crate::native::draws::special::Date,
+    ) -> Result<crate::native::draws::special::Date, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_date(ntc, min, max))
+    }
+
+    fn generate_time(
+        &self,
+        min: crate::native::draws::special::Time,
+        max: crate::native::draws::special::Time,
+    ) -> Result<crate::native::draws::special::Time, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_time(ntc, min, max))
+    }
+
+    fn generate_datetime(
+        &self,
+        min: crate::native::draws::special::DateTime,
+        max: crate::native::draws::special::DateTime,
+    ) -> Result<crate::native::draws::special::DateTime, DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_datetime(ntc, min, max))
+    }
+
+    fn generate_uuid(&self, version: Option<u8>) -> Result<[u8; 16], DataSourceError> {
+        self.with_ntc(|ntc| crate::native::draws::special::generate_uuid(ntc, version))
+    }
+
+    fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv4)
+    }
+
+    fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, DataSourceError> {
+        self.with_ntc(crate::native::draws::special::generate_ipv6)
+    }
+
+    fn generate_bytes(&self, min_size: usize, max_size: usize) -> Result<Vec<u8>, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_bytes(ntc, min_size, max_size))
     }
 
     fn start_span(&self, label: u64) -> Result<(), DataSourceError> {
@@ -215,6 +259,12 @@ impl DataSource for NativeDataSource {
         })
     }
 
+    fn clone_stream(&self) -> Result<Box<dyn DataSource + Send + Sync>, DataSourceError> {
+        self.with_ntc(|ntc| ntc.clone_stream()).map(|handle| {
+            Box::new(NativeDataSource::from_handle(handle)) as Box<dyn DataSource + Send + Sync>
+        })
+    }
+
     fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let state = ManyState::new(min_size as usize, max_size.map(|n| n as usize));
@@ -224,13 +274,12 @@ impl DataSource for NativeDataSource {
 
     fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| {
-            let mut state = ntc
-                .collections
-                .remove(&collection_id)
+            let family = Arc::clone(ntc.family());
+            let mut collections = family.collections.lock().unwrap_or_else(|e| e.into_inner());
+            let state = collections
+                .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            let result = schema::many_more(ntc, &mut state);
-            ntc.collections.insert(collection_id, state);
-            result
+            draws::many_more(ntc, state)
         })
     }
 
@@ -240,13 +289,12 @@ impl DataSource for NativeDataSource {
         _why: Option<&str>,
     ) -> Result<(), DataSourceError> {
         self.with_ntc(|ntc| {
-            let mut state = ntc
-                .collections
-                .remove(&collection_id)
+            let family = Arc::clone(ntc.family());
+            let mut collections = family.collections.lock().unwrap_or_else(|e| e.into_inner());
+            let state = collections
+                .get_mut(&collection_id)
                 .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            let result = schema::many_reject(ntc, &mut state);
-            ntc.collections.insert(collection_id, state);
-            result
+            draws::many_reject(ntc, state)
         })
     }
 
@@ -263,66 +311,73 @@ impl DataSource for NativeDataSource {
         let rules = rule_names.iter().map(|s| s.to_string()).collect();
         let invariants = invariant_names.iter().map(|s| s.to_string()).collect();
         self.with_ntc(|ntc| {
-            let id = ntc.state_machines.len() as i64;
-            ntc.state_machines
-                .push(crate::native::core::NativeStateMachine::new(
-                    rules, invariants,
-                ));
+            let mut machines = ntc
+                .family()
+                .state_machines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let id = machines.len() as i64;
+            machines.push(Arc::new(std::sync::Mutex::new(
+                crate::native::core::NativeStateMachine::new(rules, invariants),
+            )));
             Ok(id)
         })
     }
 
     fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let idx = checked_id("state machine", state_machine_id, ntc.state_machines.len())?;
-            let mut machine = std::mem::take(&mut ntc.state_machines[idx]);
-            let result = machine.next_rule(ntc);
-            ntc.state_machines[idx] = machine;
-            result
+            let machine = {
+                let machines = ntc
+                    .family()
+                    .state_machines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let idx = checked_id("state machine", state_machine_id, machines.len())?;
+                Arc::clone(&machines[idx])
+            };
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            machine.next_rule(ntc)
         })
     }
 
-    fn primitive_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
-        self.with_ntc(|ntc| {
-            if !(0.0..=1.0).contains(&p) {
-                return Err(EngineError::InvalidArgument(format!(
-                    "primitive_boolean(p = {p}) requires a probability in [0.0, 1.0]"
-                )));
-            }
-            if forced == Some(true) && p == 0.0 {
-                return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force true when p = 0.0".to_string(),
-                ));
-            }
-            if forced == Some(false) && p == 1.0 {
-                return Err(EngineError::InvalidArgument(
-                    "primitive_boolean: cannot force false when p = 1.0".to_string(),
-                ));
-            }
-            ntc.weighted_precise(p, forced)
-        })
+    fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }
 
     fn new_pool(&self) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let pool_id = ntc.variable_pools.len() as i64;
-            ntc.variable_pools
-                .push(crate::native::core::NativeVariables::new());
+            let mut pools = ntc
+                .family()
+                .variable_pools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let pool_id = pools.len() as i64;
+            pools.push(crate::native::core::NativeVariables::new());
             Ok(pool_id)
         })
     }
 
     fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
-            Ok(ntc.variable_pools[idx].next())
+            let mut pools = ntc
+                .family()
+                .variable_pools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let idx = checked_id("variable pool", pool_id, pools.len())?;
+            Ok(pools[idx].next())
         })
     }
 
     fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let pool_idx = checked_id("variable pool", pool_id, ntc.variable_pools.len())?;
-            let active = ntc.variable_pools[pool_idx].active();
+            let family = Arc::clone(ntc.family());
+            let mut pools = family
+                .variable_pools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let pool_idx = checked_id("variable pool", pool_id, pools.len())?;
+            let active = pools[pool_idx].active();
             if active.is_empty() {
                 return Err(EngineError::AssumeViolation);
             }
@@ -333,7 +388,7 @@ impl DataSource for NativeDataSource {
                 .unwrap() as usize;
             let variable_id = active[n - 1 - k];
             if consume {
-                ntc.variable_pools[pool_idx].consume(variable_id);
+                pools[pool_idx].consume(variable_id);
             }
             Ok(variable_id)
         })
@@ -346,20 +401,29 @@ impl DataSource for NativeDataSource {
                  got non-finite value"
             )));
         }
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.target_observations.contains_key(label) {
+        let family = Arc::clone(
+            self.inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .family(),
+        );
+        let mut observations = family
+            .target_observations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if observations.contains_key(label) {
             return Err(DataSourceError::InvalidArgument(format!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
                  tc.target(_, label={label:?}); each label can be observed at \
                  most once per test case"
             )));
         }
-        inner.target_observations.insert(label.to_string(), score);
+        observations.insert(label.to_string(), score);
         Ok(())
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ntc = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let (status, origin) = match result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),
@@ -369,7 +433,7 @@ impl DataSource for NativeDataSource {
                 Some(InterestingOrigin(failure.origin.clone())),
             ),
         };
-        inner.ntc.conclude(status, origin);
+        ntc.conclude(status, origin);
     }
 }
 

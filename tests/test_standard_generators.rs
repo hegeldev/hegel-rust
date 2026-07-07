@@ -636,7 +636,7 @@ mod provisional_strategies {
 
     use super::common::utils::expect_panic;
     use super::common::utils::{assert_all_examples, check_can_generate_examples, find_any};
-    use hegel::generators::{self as gs, Generator};
+    use hegel::generators as gs;
 
     fn url_allowed_chars() -> HashSet<char> {
         ('a'..='z')
@@ -690,7 +690,11 @@ mod provisional_strategies {
         for max_length in [0_usize, 3, 256] {
             expect_panic(
                 move || {
-                    gs::domains().max_length(max_length).as_basic();
+                    hegel::Hegel::new(move |tc| {
+                        tc.draw(gs::domains().max_length(max_length));
+                    })
+                    .settings(hegel::Settings::new().test_cases(1).database(None))
+                    .run();
                 },
                 "max_length must be between 4 and 255",
             );

@@ -187,3 +187,71 @@ mod threading {
         }
     }
 }
+
+mod independent_streams {
+    use hegel::generators::{self as gs};
+    use hegel::{Hegel, Settings, TestCase};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    fn small_int(tc: &TestCase) -> i64 {
+        tc.draw(gs::integers::<i64>().min_value(0).max_value(1000))
+    }
+
+    #[test]
+    fn concurrent_clone_streams_replay_deterministically_per_seed() {
+        let run_once = || -> Vec<(i64, i64)> {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let seen_in_test = Arc::clone(&seen);
+            Hegel::new(move |tc: TestCase| {
+                let worker = tc.clone();
+                let handle = thread::spawn(move || small_int(&worker));
+                let main_val = small_int(&tc);
+                let child_val = handle.join().unwrap();
+                seen_in_test.lock().unwrap().push((main_val, child_val));
+            })
+            .settings(Settings::new().test_cases(20).database(None).seed(Some(99)))
+            .run();
+            seen.lock().unwrap().clone()
+        };
+        let first = run_once();
+        assert!(!first.is_empty());
+        assert_eq!(first, run_once());
+    }
+
+    #[test]
+    fn concurrent_clone_failure_shrinks_to_the_minimal_counterexample() {
+        let found: Arc<Mutex<Option<(i64, i64)>>> = Arc::new(Mutex::new(None));
+        let found_in_test = Arc::clone(&found);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Hegel::new(move |tc: TestCase| {
+                let worker = tc.clone();
+                let handle = thread::spawn(move || small_int(&worker));
+                let main_val = small_int(&tc);
+                let child_val = handle.join().unwrap();
+                if child_val >= 100 {
+                    *found_in_test.lock().unwrap() = Some((main_val, child_val));
+                    panic!("HEGEL_CLONE_MINIMAL_FOUND");
+                }
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(200)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        }));
+        let payload = result.unwrap_err();
+        let msg = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or_default()
+            .to_string();
+        assert!(msg.contains("HEGEL_CLONE_MINIMAL_FOUND"), "{msg}");
+        let (main_val, child_val) = found.lock().unwrap().take().unwrap();
+        assert_eq!(child_val, 100);
+        assert_eq!(main_val, 0);
+    }
+}

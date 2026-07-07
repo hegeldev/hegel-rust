@@ -388,10 +388,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hegeltest"
-version = "0.23.3"
+version = "0.24.0"
 dependencies = [
  "chrono",
- "ciborium",
  "crc32fast",
  "criterion",
  "ctor",
@@ -407,7 +406,6 @@ dependencies = [
  "rand",
  "regex",
  "rustc-hash",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -415,10 +413,9 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-c"
-version = "0.24.0"
+version = "0.27.0"
 dependencies = [
  "cbindgen",
- "ciborium",
  "crc32fast",
  "ctor",
  "dashu-int",
@@ -429,14 +426,13 @@ dependencies = [
  "rand",
  "regex",
  "rustc-hash",
- "serde",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.23.3"
+version = "0.24.0"
 dependencies = [
  "proc-macro2",
  "quote",

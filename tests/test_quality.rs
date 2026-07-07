@@ -6,7 +6,6 @@ mod common;
 
 mod shrink_quality {
     use super::common::utils::{Minimal, minimal};
-    use ciborium::Value;
     use hegel::generators::{self as gs, Generator};
     use std::collections::{HashMap, HashSet};
 
@@ -411,29 +410,16 @@ mod shrink_quality {
         assert_eq!(b, a + 1);
     }
 
-    fn lookup_bool(v: &Value, key: &str) -> bool {
-        if let Value::Map(entries) = v {
-            for (k, val) in entries {
-                if let (Value::Text(s), Value::Bool(b)) = (k, val) {
-                    if s == key {
-                        return *b;
-                    }
-                }
-            }
-        }
-        panic!("missing or non-bool key {key} in {v:?}");
+    #[derive(hegel::DefaultGenerator, Debug)]
+    struct TwoBools {
+        a: bool,
+        b: bool,
     }
 
     #[test]
-    fn test_minimize_dict() {
-        let t: Value = minimal(
-            gs::fixed_dicts()
-                .field("a", gs::booleans())
-                .field("b", gs::booleans())
-                .build(),
-            |v: &Value| lookup_bool(v, "a") || lookup_bool(v, "b"),
-        );
-        assert!(!(lookup_bool(&t, "a") && lookup_bool(&t, "b")));
+    fn test_minimize_derived_struct() {
+        let t: TwoBools = minimal(gs::default::<TwoBools>(), |v: &TwoBools| v.a || v.b);
+        assert!(!(t.a && t.b));
     }
 
     #[test]
@@ -962,14 +948,15 @@ mod collective_minimization {
         ));
     }
 
+    #[derive(hegel::DefaultGenerator, Debug)]
+    struct IntBool {
+        a: i64,
+        b: bool,
+    }
+
     #[test]
-    fn test_can_collectively_minimize_fixed_dict_int_bool() {
-        check_collective_minimization(
-            gs::fixed_dicts()
-                .field("a", gs::integers::<i64>())
-                .field("b", gs::booleans())
-                .build(),
-        );
+    fn test_can_collectively_minimize_derived_struct_int_bool() {
+        check_collective_minimization(gs::default::<IntBool>().map(|v| (v.a, v.b)));
     }
 
     #[test]

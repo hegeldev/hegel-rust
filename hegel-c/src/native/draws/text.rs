@@ -1,60 +1,50 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::cbor_utils::{as_text, as_u64, map_get};
-use crate::native::core::{EngineError, NativeTestCase};
+use crate::native::core::EngineError;
 use crate::native::intervalsets::IntervalSet;
 use crate::unicodedata;
-use ciborium::Value;
 
-/// Default upper bound for `max_size` when the schema doesn't set one.
-/// Matches the cap Hypothesis uses in its server-side `text` strategy so
-/// generation doesn't run away on unbounded sizes.
-const DEFAULT_MAX_SIZE: usize = 100;
-
-pub(super) fn interpret_string(
-    ntc: &mut NativeTestCase,
-    schema: &Value,
-) -> Result<Value, EngineError> {
-    let min_size = map_get(schema, "min_size").and_then(as_u64).unwrap_or(0) as usize;
-    let max_size = map_get(schema, "max_size")
-        .and_then(as_u64)
-        .map(|n| n as usize)
-        .unwrap_or(min_size.max(DEFAULT_MAX_SIZE));
-
-    let intervals = build_intervals(schema)?;
-    if intervals.is_empty() && max_size > 0 {
-        return Err(EngineError::InvalidArgument(
-            "InvalidArgument: No valid characters in the specified range. \
-             The schema's codec/codepoint/category/include/exclude constraints \
-             leave no characters available."
-                .to_string(),
-        ));
-    }
-
-    let s = ntc.draw_string(intervals, min_size, max_size)?;
-    Ok(Value::Tag(91, Box::new(Value::Bytes(s.into_bytes()))))
+/// Character-alphabet constraints for a text draw, as accepted at the
+/// `hegel_string_generator_text` API surface.
+pub struct TextAlphabet {
+    /// Restrict to a codec's range: `"ascii"`, `"latin-1"` / `"iso-8859-1"`,
+    /// or `"utf-8"` (the default full-Unicode range).
+    pub codec: Option<String>,
+    /// Inclusive codepoint bounds, intersected with the codec range.
+    pub min_codepoint: u32,
+    pub max_codepoint: u32,
+    /// Restrict to the union of these Unicode general categories. `Some`
+    /// with an empty list means an empty alphabet.
+    pub categories: Option<Vec<String>>,
+    /// Remove these Unicode general categories.
+    pub exclude_categories: Option<Vec<String>>,
+    /// Always include these characters (unioned in last).
+    pub include_characters: Option<String>,
+    /// Always exclude these characters.
+    pub exclude_characters: Option<String>,
 }
 
-/// Build the effective character alphabet for a string schema, memoised by
-/// the schema's canonical CBOR encoding. Mirrors Hypothesis's
-/// `limited_category_index_cache` in `internal/charmap.py`.
-pub(super) fn build_intervals(schema: &Value) -> Result<IntervalSet, EngineError> {
-    type Cache = Mutex<HashMap<Vec<u8>, Arc<IntervalSet>>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut key = Vec::new();
-    ciborium::into_writer(schema, &mut key).expect("CBOR encoding of schema cannot fail");
-    if let Some(cached) = cache.lock().unwrap().get(&key) {
-        return Ok((**cached).clone());
+impl Default for TextAlphabet {
+    fn default() -> Self {
+        TextAlphabet {
+            codec: None,
+            min_codepoint: 0,
+            max_codepoint: u32::MAX,
+            categories: None,
+            exclude_categories: None,
+            include_characters: None,
+            exclude_characters: None,
+        }
     }
-    let computed = Arc::new(build_intervals_uncached(schema)?);
-    cache.lock().unwrap().insert(key, Arc::clone(&computed));
-    Ok((*computed).clone())
 }
 
-fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> {
-    let codec = map_get(schema, "codec").and_then(as_text);
+/// Build the effective character alphabet for a text draw. Mirrors
+/// Hypothesis's `charmap` handling: codec/codepoint bounds intersect,
+/// surrogates are always removed, category constraints apply over the whole
+/// codespace, and include/exclude character sets are applied last.
+pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineError> {
+    let codec = alphabet.codec.as_deref();
     let (codec_min, codec_max): (u32, u32) = match codec {
         Some("ascii") => (0, 127),
         Some("latin-1") | Some("iso-8859-1") => (0, 255),
@@ -65,29 +55,24 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
             )));
         }
     };
-    let (mut cp_min, mut cp_max) = (codec_min, codec_max);
+    let cp_min = codec_min.max(alphabet.min_codepoint);
+    let cp_max = codec_max.min(alphabet.max_codepoint);
 
-    if let Some(min_cp) = map_get(schema, "min_codepoint").and_then(as_u64) {
-        cp_min = cp_min.max(min_cp as u32);
-    }
-    if let Some(max_cp) = map_get(schema, "max_codepoint").and_then(as_u64) {
-        cp_max = cp_max.min(max_cp as u32);
-    }
-
-    let categories: Option<Vec<String>> = extract_string_array(schema, "categories");
-    let exclude_categories: Option<Vec<String>> =
-        extract_string_array(schema, "exclude_categories");
-    let include_chars: Option<Vec<char>> = map_get(schema, "include_characters")
-        .and_then(as_text)
+    let categories = alphabet.categories.as_ref();
+    let exclude_categories = alphabet.exclude_categories.as_ref();
+    let include_chars: Option<Vec<char>> = alphabet
+        .include_characters
+        .as_ref()
         .map(|s| s.chars().collect());
-    let exclude_chars: Option<Vec<char>> = map_get(schema, "exclude_characters")
-        .and_then(as_text)
+    let exclude_chars: Option<Vec<char>> = alphabet
+        .exclude_characters
+        .as_ref()
         .map(|s| s.chars().collect());
 
     for cat in categories
         .iter()
-        .flatten()
-        .chain(exclude_categories.iter().flatten())
+        .flat_map(|c| c.iter())
+        .chain(exclude_categories.iter().flat_map(|c| c.iter()))
     {
         if !is_valid_category(cat) {
             return Err(EngineError::InvalidArgument(format!(
@@ -131,18 +116,17 @@ fn build_intervals_uncached(schema: &Value) -> Result<IntervalSet, EngineError> 
 
     let needs_category_filter = categories.is_some()
         || exclude_categories
-            .as_ref()
             .map(|ec| !ec.iter().all(|c| c == "Cs"))
             .unwrap_or(false);
 
-    let mut intervals = if let Some(ref cats) = categories {
+    let mut intervals = if let Some(cats) = categories {
         if cats.is_empty() {
             IntervalSet::new(Vec::new())
         } else {
             let cat_union = categories_union(cats);
             base.intersection(&cat_union)
         }
-    } else if let Some(ref excl_cats) = exclude_categories {
+    } else if let Some(excl_cats) = exclude_categories {
         if needs_category_filter {
             let cat_union = categories_union(
                 &excl_cats
@@ -277,16 +261,6 @@ fn category_intervalset(cat: &str) -> IntervalSet {
     IntervalSet::new(ranges)
 }
 
-fn extract_string_array(schema: &Value, key: &str) -> Option<Vec<String>> {
-    map_get(schema, key).and_then(|v| {
-        if let Value::Array(arr) = v {
-            Some(arr.iter().filter_map(as_text).map(String::from).collect())
-        } else {
-            None
-        }
-    })
-}
-
 fn is_surrogate(c: char) -> bool {
     (0xD800..=0xDFFF).contains(&(c as u32))
 }
@@ -338,5 +312,5 @@ fn is_valid_category(cat: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/embedded/native/schema/text_tests.rs"]
+#[path = "../../../tests/embedded/native/draws/text_tests.rs"]
 mod tests;

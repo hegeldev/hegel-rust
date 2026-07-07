@@ -282,7 +282,6 @@ mod simple_collections {
     //! but drop the `frozenset` row (no `gs::frozensets()`).
 
     use super::common::utils::{assert_all_examples, find_any, minimal};
-    use ciborium::Value;
     use hegel::generators::{self as gs, Generator};
     use std::collections::{HashMap, HashSet};
 
@@ -301,41 +300,6 @@ mod simple_collections {
     fn test_find_empty_set_gives_empty() {
         let xs: HashSet<()> = minimal(gs::hashsets(gs::unit()).max_size(0), |_| true);
         assert!(xs.is_empty());
-    }
-
-    #[test]
-    fn test_find_empty_fixed_dict_gives_empty() {
-        let v: Value = minimal(gs::fixed_dicts().build(), |_| true);
-        let Value::Map(entries) = v else {
-            panic!("expected Value::Map");
-        };
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn test_fixed_dicts_preserve_field_order() {
-        let keys: Vec<String> = ["k7", "k2", "k0", "k3", "k9", "k1", "k5", "k8", "k4", "k6"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let mut builder = gs::fixed_dicts();
-        for k in &keys {
-            builder = builder.field(k, gs::booleans());
-        }
-        let expected = keys.clone();
-        assert_all_examples(builder.build(), move |v: &Value| {
-            let Value::Map(entries) = v else {
-                return false;
-            };
-            let got: Vec<String> = entries
-                .iter()
-                .map(|(k, _)| match k {
-                    Value::Text(s) => s.clone(),
-                    _ => panic!("expected text key, got {:?}", k),
-                })
-                .collect();
-            got == expected
-        });
     }
 
     #[test]
@@ -655,6 +619,41 @@ mod sampled_from {
                 .database(None)
                 .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
         )
+        .run();
+    }
+
+    #[test]
+    fn test_sets_of_samples_with_duplicated_source_values() {
+        Hegel::new(|tc| {
+            let x: HashSet<i64> =
+                tc.draw(gs::hashsets(gs::sampled_from(vec![0_i64, 0, 1])).min_size(2));
+            let expected: HashSet<i64> = [0, 1].into_iter().collect();
+            assert_eq!(x, expected);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_sets_of_samples_beyond_the_pool_bound_fall_back_to_rejection() {
+        Hegel::new(|tc| {
+            let x: HashSet<i64> = tc.draw(
+                gs::hashsets(gs::sampled_from((0..10_001).collect::<Vec<i64>>())).max_size(3),
+            );
+            assert!(x.len() <= 3);
+        })
+        .settings(Settings::new().test_cases(5).database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_filter_on_a_generator_reference_uses_its_enumerated_values() {
+        Hegel::new(|tc| {
+            let source = gs::sampled_from(vec![0_i64, 1, 2, 3]);
+            let v: i64 = tc.draw((&source).filter(|x: &i64| *x % 2 == 0));
+            assert!(v == 0 || v == 2);
+        })
+        .settings(Settings::new().database(None))
         .run();
     }
 

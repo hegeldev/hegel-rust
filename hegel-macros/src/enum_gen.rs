@@ -4,10 +4,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields, Variant};
 
-use crate::utils::{
-    cbor_map, cbor_text, cbor_to_iter, default_gen_bounds, is_valid_method_name, make_method_ident,
-    pascal_to_snake, tuple_schema,
-};
+use crate::utils::{default_gen_bounds, is_valid_method_name, make_method_ident, pascal_to_snake};
 
 /// Extract all field types from a variant.
 fn variant_field_types(variant: &Variant) -> Vec<&syn::Type> {
@@ -174,17 +171,12 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         .collect();
 
     let max_variant_idx = variants.len() - 1;
-    let variant_index_schema = cbor_map(vec![
-        (cbor_text("type"), cbor_text("integer")),
-        (
-            cbor_text("min_value"),
-            quote! { hegel::ciborium::Value::Integer(hegel::ciborium::value::Integer::from(0u64)) },
-        ),
-        (
-            cbor_text("max_value"),
-            quote! { hegel::ciborium::Value::Integer(hegel::ciborium::value::Integer::from(#max_variant_idx as u64)) },
-        ),
-    ]);
+    let variant_index_draw = quote! {
+        hegel::generators::integers::<usize>()
+            .min_value(0)
+            .max_value(#max_variant_idx)
+            .do_draw(__tc)
+    };
 
     let variant_to_field: HashMap<String, &syn::Ident> = data_variants
         .iter()
@@ -252,112 +244,27 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         quote! {
             impl<'a> hegel::generators::Generator<#enum_name> for #generator_name<'a> {
                 fn do_draw(&self, __tc: &hegel::TestCase) -> #enum_name {
-                    let basic = self.as_basic().unwrap();
-                    basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
-                }
-
-                fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                    let schema = #variant_index_schema;
-                    Some(hegel::generators::BasicGenerator::new(schema, |raw| {
-                        let index: usize = hegel::generators::deserialize_value(raw);
-                        match index {
-                            #(#unit_variant_match_arms,)*
-                            _ => unreachable!("Unknown variant index: {}", index),
-                        }
-                    }))
+                    let index: usize = #variant_index_draw;
+                    match index {
+                        #(#unit_variant_match_arms,)*
+                        _ => unreachable!("Unknown variant index: {}", index),
+                    }
                 }
             }
         }
     } else {
-        let data_variant_basic_bindings: Vec<proc_macro2::TokenStream> = field_names
-            .iter()
-            .map(|field_name| {
-                let basic_name = format_ident!("basic_{}", field_name);
-                quote! {
-                    let #basic_name = self.#field_name.as_basic()?;
-                }
-            })
-            .collect();
-
-        let null_schema = cbor_map(vec![
-            (cbor_text("type"), cbor_text("constant")),
-            (cbor_text("value"), quote! { hegel::ciborium::Value::Null }),
-        ]);
-        let one_of_schema_entries: Vec<proc_macro2::TokenStream> = variants
-            .iter()
-            .map(|variant| match &variant.fields {
-                Fields::Unit => null_schema.clone(),
-                _ => {
-                    let field_name = variant_to_field[&variant.ident.to_string()];
-                    let basic_name = format_ident!("basic_{}", field_name);
-                    quote! { #basic_name.schema().clone() }
-                }
-            })
-            .collect();
-
-        let parse_arms: Vec<proc_macro2::TokenStream> = variants
-            .iter()
-            .enumerate()
-            .map(|(i, variant)| {
-                let variant_name = &variant.ident;
-                match &variant.fields {
-                    Fields::Unit => quote! { #i => #enum_name::#variant_name },
-                    _ => {
-                        let field_name = variant_to_field[&variant.ident.to_string()];
-                        let basic_name = format_ident!("basic_{}", field_name);
-                        quote! { #i => #basic_name.parse_raw(value) }
-                    }
-                }
-            })
-            .collect();
-
         quote! {
             impl<'a> hegel::generators::Generator<#enum_name> for #generator_name<'a> {
                 fn do_draw(&self, __tc: &hegel::TestCase) -> #enum_name {
-                    if let Some(basic) = self.as_basic() {
-                        basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
-                    } else {
-                        __tc.start_span(hegel::generators::labels::ENUM_VARIANT);
-                        let index: usize = hegel::generate_from_schema(__tc,
-                            &#variant_index_schema
-                        );
+                    __tc.start_span(hegel::generators::labels::ENUM_VARIANT);
+                    let index: usize = #variant_index_draw;
 
-                        let __result = match index {
-                            #(#generate_match_arms,)*
-                            _ => unreachable!("Unknown variant index: {}", index),
-                        };
-                        __tc.stop_span(false);
-                        __result
-                    }
-                }
-
-                fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                    #(#data_variant_basic_bindings)*
-
-                    let one_of_schemas: Vec<hegel::ciborium::Value> = vec![
-                        #(#one_of_schema_entries,)*
-                    ];
-
-                    let schema = hegel::ciborium::Value::Map(vec![
-                        (
-                            hegel::ciborium::Value::Text("type".to_string()),
-                            hegel::ciborium::Value::Text("one_of".to_string()),
-                        ),
-                        (
-                            hegel::ciborium::Value::Text("generators".to_string()),
-                            hegel::ciborium::Value::Array(one_of_schemas),
-                        ),
-                    ]);
-
-                    Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                        let [idx, value]: [hegel::ciborium::Value; 2] =
-                            raw.into_array().unwrap().try_into().unwrap();
-                        let index = i128::from(idx.into_integer().unwrap()) as usize;
-                        match index {
-                            #(#parse_arms,)*
-                            _ => panic!("Unknown variant index: {}", index),
-                        }
-                    }))
+                    let __result = match index {
+                        #(#generate_match_arms,)*
+                        _ => unreachable!("Unknown variant index: {}", index),
+                    };
+                    __tc.stop_span(false);
+                    __result
                 }
             }
         }
@@ -461,38 +368,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            let basic_bindings: Vec<proc_macro2::TokenStream> = field_names
-                .iter()
-                .map(|name| {
-                    let basic_name = format_ident!("basic_{}", name);
-                    quote! { let #basic_name = self.#name.as_basic()?; }
-                })
-                .collect();
-
-            let schema_elements: Vec<_> = field_names
-                .iter()
-                .map(|name| {
-                    let basic_name = format_ident!("basic_{}", name);
-                    quote! { #basic_name.schema().clone() }
-                })
-                .collect();
-
-            let schema_ts = tuple_schema(schema_elements);
-            let parse_iter_ts =
-                cbor_to_iter("iter", quote! { raw }, "Expected tuple for variant fields");
-
-            let field_parse_in_closure: Vec<proc_macro2::TokenStream> = field_names
-                .iter()
-                .map(|name| {
-                    let basic_name = format_ident!("basic_{}", name);
-                    quote! {
-                        let #name = #basic_name.parse_raw(
-                            iter.next().unwrap_or_else(|| panic!("Missing element in tuple"))
-                        );
-                    }
-                })
-                .collect();
-
             quote! {
                 /// Generated generator for the #variant_name variant of #enum_name.
                 pub struct #variant_generator_name<'a> {
@@ -524,30 +399,9 @@ fn generate_variant_generator(
 
                 impl<'a> hegel::generators::Generator<#enum_name> for #variant_generator_name<'a> {
                     fn do_draw(&self, __tc: &hegel::TestCase) -> #enum_name {
-
-                        if let Some(basic) = self.as_basic() {
-                            basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
-                        } else {
-                            #enum_name::#variant_name {
-                                #(#field_constructions,)*
-                            }
+                        #enum_name::#variant_name {
+                            #(#field_constructions,)*
                         }
-                    }
-
-                    fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                        #(#basic_bindings)*
-
-                        let schema = #schema_ts;
-
-                        Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                            #parse_iter_ts
-
-                            #(#field_parse_in_closure)*
-
-                            #enum_name::#variant_name {
-                                #(#field_names,)*
-                            }
-                        }))
                     }
                 }
             }
@@ -602,38 +456,6 @@ fn generate_variant_generator(
                 })
                 .collect();
 
-            let basic_bindings: Vec<proc_macro2::TokenStream> = field_indices
-                .iter()
-                .map(|idx| {
-                    let basic_name = format_ident!("basic{}", idx);
-                    quote! { let #basic_name = self.#idx.as_basic()?; }
-                })
-                .collect();
-
-            let schema_elements: Vec<proc_macro2::TokenStream> = field_indices
-                .iter()
-                .map(|idx| {
-                    let basic_name = format_ident!("basic{}", idx);
-                    quote! { #basic_name.schema().clone() }
-                })
-                .collect();
-
-            let parse_raw_extractions: Vec<proc_macro2::TokenStream> = field_indices
-                .iter()
-                .map(|idx| {
-                    let basic_name = format_ident!("basic{}", idx);
-                    quote! {
-                        let #idx = #basic_name.parse_raw(
-                            iter.next().unwrap_or_else(|| panic!("Tuple variant missing element"))
-                        );
-                    }
-                })
-                .collect();
-
-            let schema_ts = tuple_schema(schema_elements);
-            let parse_iter_ts =
-                cbor_to_iter("iter", quote! { raw }, "Expected tuple for variant fields");
-
             quote! {
                 /// Generated generator for the #variant_name variant of #enum_name.
                 pub struct #variant_generator_name<'a> {
@@ -665,26 +487,7 @@ fn generate_variant_generator(
 
                 impl<'a> hegel::generators::Generator<#enum_name> for #variant_generator_name<'a> {
                     fn do_draw(&self, __tc: &hegel::TestCase) -> #enum_name {
-
-                        if let Some(basic) = self.as_basic() {
-                            basic.parse_raw(hegel::generate_raw(__tc, basic.schema()))
-                        } else {
-                            #enum_name::#variant_name(#(#field_generates,)*)
-                        }
-                    }
-
-                    fn as_basic(&self) -> Option<hegel::generators::BasicGenerator<'_, #enum_name>> {
-                        #(#basic_bindings)*
-
-                        let schema = #schema_ts;
-
-                        Some(hegel::generators::BasicGenerator::new(schema, move |raw| {
-                            #parse_iter_ts
-
-                            #(#parse_raw_extractions)*
-
-                            #enum_name::#variant_name(#(#field_indices,)*)
-                        }))
+                        #enum_name::#variant_name(#(#field_generates,)*)
                     }
                 }
             }

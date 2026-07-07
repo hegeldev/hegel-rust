@@ -17,10 +17,6 @@ impl Generator<Number> for NumberGenerator {
     fn do_draw(&self, tc: &crate::TestCase) -> Number {
         self.inner.do_draw(tc)
     }
-
-    fn as_basic(&self) -> Option<gs::BasicGenerator<'_, Number>> {
-        self.inner.as_basic()
-    }
 }
 
 /// Generate [`serde_json::Number`] values.

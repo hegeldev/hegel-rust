@@ -21,22 +21,6 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
-/* CBOR-encoded {"type": "boolean"} */
-static const uint8_t BOOLEAN_SCHEMA[] = {
-    0xA1,                                    /* map(1) */
-    0x64, 't', 'y', 'p', 'e',
-    0x67, 'b', 'o', 'o', 'l', 'e', 'a', 'n'
-};
-
-static bool decode_bool(const uint8_t *bytes, size_t len) {
-    if (len < 1) { fprintf(stderr, "decode_bool: empty\n"); exit(2); }
-    /* CBOR true = 0xF5, false = 0xF4. */
-    if (bytes[0] == 0xF5) return true;
-    if (bytes[0] == 0xF4) return false;
-    fprintf(stderr, "decode_bool: unexpected head 0x%02x\n", bytes[0]);
-    exit(2);
-}
-
 /* Draw a list of booleans, sized between min_size and max_size, using
  * a span (LIST) wrapping a collection (more/draw loop). Returns the
  * number of elements drawn, or -1 on engine error. */
@@ -63,15 +47,13 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
             hegel_stop_span(ctx, tc, false);
             return -1;
         }
-        const uint8_t *value;
-        size_t value_len;
-        rc = hegel_generate(ctx, tc, BOOLEAN_SCHEMA, sizeof(BOOLEAN_SCHEMA), &value, &value_len);
+        bool value;
+        rc = hegel_generate_boolean(ctx, tc, 0.5, false, false, &value);
         if (rc != HEGEL_OK) {
             hegel_stop_span(ctx, tc, false);
             hegel_stop_span(ctx, tc, false);
             return -1;
         }
-        (void)decode_bool(value, value_len);   /* exercise the decode path */
         hegel_stop_span(ctx, tc, false);
         n++;
     }
