@@ -1668,6 +1668,18 @@ pub unsafe extern "C" fn hegel_new_collection(
     } else {
         Some(max_size)
     };
+    if let Some(max) = max {
+        if min_size > max {
+            set_last_error(
+                ctx,
+                &format!(
+                    "hegel_new_collection requires min_size <= max_size, \
+                     got [{min_size}, {max}]"
+                ),
+            );
+            return HEGEL_E_INVALID_ARG;
+        }
+    }
     match tc.stream.new_collection(min_size, max) {
         Ok(id) => {
             unsafe { *out_collection_id = id };
