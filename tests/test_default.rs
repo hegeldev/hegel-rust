@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
+use crate::common::utils::find_any;
+
 #[test]
 fn test_default_bool() {
     check_can_generate_examples(gs::default::<bool>());
@@ -75,6 +77,11 @@ fn test_default_hashmap() {
 #[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
+
+    // Check that some paths are valid UTF-8
+    find_any(gs::default::<PathBuf>(), |p| p.to_str().is_some());
+    // Check that some paths are not UTF-8
+    find_any(gs::default::<PathBuf>(), |p| p.to_str().is_none());
 }
 
 #[test]
