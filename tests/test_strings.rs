@@ -920,6 +920,22 @@ mod regex_tests {
     }
 
     #[test]
+    fn test_builder_calls_after_a_draw_are_not_ignored() {
+        Hegel::new(|tc| {
+            let g = gs::text();
+            let _: String = tc.draw(&g);
+            let g = g.max_size(2);
+            let s: String = tc.draw(&g);
+            assert!(
+                s.chars().count() <= 2,
+                "a builder call after a draw was ignored by the cached handle: {s:?}"
+            );
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
     fn test_word_boundaries_hold_in_generated_strings() {
         fn is_word(c: char) -> bool {
             c == '_' || c.is_alphanumeric()

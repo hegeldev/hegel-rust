@@ -80,6 +80,14 @@ pub fn values() -> ValueGenerator {
     let def = gs::deferred::<Value>();
     let handle = def.generator();
 
+    // The recursive branches must keep the branching process subcritical:
+    // arrays and objects are each picked with probability 1/6, so with the
+    // default unbounded collection sizes (mean length 5) every node would
+    // expect ~1.67 children and a large fraction of trees would only
+    // terminate by exhausting the choice buffer. Capping the per-level size
+    // at 3 keeps the expected child count below 1, so trees die out
+    // naturally (Hypothesis's `st.recursive` bounds its trees for the same
+    // reason).
     let recursive = gs::one_of([
         gs::just(Value::Null).boxed(),
         gs::booleans().map(Value::Bool).boxed(),
@@ -87,11 +95,15 @@ pub fn values() -> ValueGenerator {
         <String as DefaultGenerator>::default_generator()
             .map(Value::String)
             .boxed(),
-        gs::vecs(handle.clone()).map(Value::Array).boxed(),
+        gs::vecs(handle.clone())
+            .max_size(3)
+            .map(Value::Array)
+            .boxed(),
         gs::hashmaps(
             <String as DefaultGenerator>::default_generator(),
             handle.clone(),
         )
+        .max_size(3)
         .map(|m: HashMap<String, Value>| Value::Object(m.into_iter().collect()))
         .boxed(),
     ])

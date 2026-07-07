@@ -614,11 +614,7 @@ mod sampled_from {
             let expected: HashSet<i64> = (0..50).collect();
             assert_eq!(keys, expected);
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
-        )
+        .settings(Settings::new().database(None))
         .run();
     }
 

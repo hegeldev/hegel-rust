@@ -2,12 +2,12 @@ use crate::generators::binary;
 
 use super::{
     BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
-    Generator, HashMapGenerator, IntegerGenerator, IpAddressGenerator, Ipv4AddressGenerator,
-    Ipv6AddressGenerator, OptionalGenerator, TextGenerator, VecGenerator, booleans, characters,
-    collections::ArrayGenerator, durations, floats, hashmaps, integers, ip_addresses, optional,
-    text, vecs,
+    Generator, HashMapGenerator, HashSetGenerator, IntegerGenerator, IpAddressGenerator,
+    Ipv4AddressGenerator, Ipv6AddressGenerator, OptionalGenerator, TextGenerator, VecGenerator,
+    booleans, characters, collections::ArrayGenerator, durations, floats, hashmaps, hashsets,
+    integers, ip_addresses, optional, text, vecs,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
@@ -268,6 +268,17 @@ where
     type Generator = HashMapGenerator<K::Generator, V::Generator, K, V>;
     fn default_generator() -> Self::Generator {
         hashmaps(K::default_generator(), V::default_generator())
+    }
+}
+
+impl<T: DefaultGenerator + 'static> DefaultGenerator for HashSet<T>
+where
+    T: Eq + Hash,
+    T::Generator: Send + Sync,
+{
+    type Generator = HashSetGenerator<T::Generator, T>;
+    fn default_generator() -> Self::Generator {
+        hashsets(T::default_generator())
     }
 }
 

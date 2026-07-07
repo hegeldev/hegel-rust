@@ -10,11 +10,22 @@ use std::marker::PhantomData;
 ///
 /// chrono encodes leap seconds by letting `nanosecond()` reach into
 /// `[1_000_000_000, 2_000_000_000)`; those bits are preserved here so the
-/// conversion is lossless and round-trips through [`total_nanos_to_time`].
+/// conversion round-trips through [`total_nanos_to_time`] for the
+/// end-of-day leap second. A leap second on any *other* second maps into
+/// the same totals as ordinary times on the following second, so it is not
+/// order-consistent as a bound — [`NaiveTimeGenerator`] rejects such bounds
+/// (see [`is_mid_day_leap`]).
 fn time_to_total_nanos(t: NaiveTime) -> i64 {
     let secs = i64::from(t.num_seconds_from_midnight());
     let nanos = i64::from(t.nanosecond());
     secs * 1_000_000_000 + nanos
+}
+
+/// Whether `t` uses chrono's leap-second representation on a second other
+/// than 23:59:59 (the only second whose leap encoding stays
+/// order-consistent under [`time_to_total_nanos`]).
+fn is_mid_day_leap(t: NaiveTime) -> bool {
+    t.nanosecond() >= 1_000_000_000 && t.num_seconds_from_midnight() != 86_399
 }
 
 /// Inverse of [`time_to_total_nanos`].
@@ -288,6 +299,11 @@ impl NaiveTimeGenerator {
 
 impl Generator<NaiveTime> for NaiveTimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> NaiveTime {
+        if is_mid_day_leap(self.min_value) || is_mid_day_leap(self.max_value) {
+            invalid_argument!(
+                "naive_times bounds using a leap second are only supported at 23:59:59"
+            );
+        }
         let min_nanos = time_to_total_nanos(self.min_value);
         let max_nanos = time_to_total_nanos(self.max_value);
         if min_nanos > max_nanos {
@@ -345,6 +361,14 @@ impl NaiveDateTimeGenerator {
 
 impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> NaiveDateTime {
+        if self.min_value.time().nanosecond() >= 1_000_000_000
+            || self.max_value.time().nanosecond() >= 1_000_000_000
+        {
+            invalid_argument!(
+                "naive_datetimes bounds cannot use a leap second: the epoch-nanosecond \
+                 encoding maps a leap second into the following second"
+            );
+        }
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
@@ -450,8 +474,15 @@ impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
 /// }
 /// ```
 pub fn naive_weeks() -> NaiveWeekGenerator {
+    // Pull the default date range in by a week on each side: a NaiveWeek
+    // whose window pokes past NaiveDate::MIN/MAX panics in chrono's own
+    // first_day/last_day/days accessors, so default-generated weeks would
+    // otherwise be landmines. An explicit min_date/max_date can still opt
+    // back into the extremes.
     NaiveWeekGenerator {
-        date_gen: naive_dates(),
+        date_gen: naive_dates()
+            .min_value(NaiveDate::MIN.checked_add_days(chrono::Days::new(7)).unwrap())
+            .max_value(NaiveDate::MAX.checked_sub_days(chrono::Days::new(7)).unwrap()),
         start_gen: Weekday::default_generator(),
     }
 }

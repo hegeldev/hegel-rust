@@ -489,7 +489,6 @@ impl FloatChoice {
             return s;
         }
         let base = float_to_index(s.abs());
-        let is_neg = s.is_sign_negative();
         for offset in 1u64..4 {
             let v_mag = index_to_float(base + offset);
             for v in [v_mag, -v_mag] {

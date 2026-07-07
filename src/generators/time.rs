@@ -9,16 +9,28 @@ use std::time::Duration;
 pub struct DurationGenerator {
     min_nanos: u64,
     max_nanos: u64,
+    /// Set when `min_value` was given a duration above `u64::MAX`
+    /// nanoseconds: no generatable value could satisfy it, so the draw
+    /// reports a usage error instead of silently generating below the
+    /// requested minimum.
+    min_unrepresentable: bool,
 }
 
 impl DurationGenerator {
     /// Set the minimum duration (inclusive).
     pub fn min_value(mut self, min: Duration) -> Self {
-        self.min_nanos = duration_to_nanos(min);
+        match u64::try_from(min.as_nanos()) {
+            Ok(nanos) => {
+                self.min_nanos = nanos;
+                self.min_unrepresentable = false;
+            }
+            Err(_) => self.min_unrepresentable = true,
+        }
         self
     }
 
-    /// Set the maximum duration (inclusive).
+    /// Set the maximum duration (inclusive). Saturates at `u64::MAX`
+    /// nanoseconds, the largest generatable duration.
     pub fn max_value(mut self, max: Duration) -> Self {
         self.max_nanos = duration_to_nanos(max);
         self
@@ -27,6 +39,12 @@ impl DurationGenerator {
 
 impl Generator<Duration> for DurationGenerator {
     fn do_draw(&self, tc: &TestCase) -> Duration {
+        if self.min_unrepresentable {
+            invalid_argument!(
+                "min_value exceeds the largest generatable Duration \
+                 (u64::MAX nanoseconds, about 584 years)"
+            );
+        }
         if self.min_nanos > self.max_nanos {
             invalid_argument!("Cannot have max_value < min_value");
         }
@@ -59,6 +77,7 @@ pub fn durations() -> DurationGenerator {
     DurationGenerator {
         min_nanos: 0,
         max_nanos: u64::MAX,
+        min_unrepresentable: false,
     }
 }
 

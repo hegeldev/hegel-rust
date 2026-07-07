@@ -190,6 +190,51 @@ fn test_naive_weeks_default() {
 }
 
 #[test]
+fn test_naive_weeks_default_accessors_do_not_panic() {
+    assert_all_examples(chrono_gs::naive_weeks(), |w| {
+        let first = w.first_day();
+        let last = w.last_day();
+        let days = w.days();
+        first <= last && days.contains(&first)
+    });
+}
+
+#[test]
+fn test_naive_times_mid_day_leap_bound_is_a_usage_error() {
+    use crate::common::utils::expect_panic;
+    let leap = NaiveTime::from_hms_nano_opt(12, 0, 59, 1_500_000_000).unwrap();
+    expect_panic(
+        || {
+            hegel::Hegel::new(move |tc| {
+                let _ = tc.draw(chrono_gs::naive_times().max_value(leap));
+            })
+            .settings(hegel::Settings::new().database(None))
+            .run();
+        },
+        "leap second",
+    );
+}
+
+#[test]
+fn test_naive_datetimes_leap_bound_is_a_usage_error() {
+    use crate::common::utils::expect_panic;
+    let leap = NaiveDateTime::new(
+        NaiveDate::from_ymd_opt(2024, 6, 30).unwrap(),
+        NaiveTime::from_hms_nano_opt(23, 59, 59, 1_500_000_000).unwrap(),
+    );
+    expect_panic(
+        || {
+            hegel::Hegel::new(move |tc| {
+                let _ = tc.draw(chrono_gs::naive_datetimes().max_value(leap));
+            })
+            .settings(hegel::Settings::new().database(None))
+            .run();
+        },
+        "leap second",
+    );
+}
+
+#[test]
 fn test_naive_weeks_start() {
     assert_all_examples(
         chrono_gs::naive_weeks().weekday_starts(gs::just(Weekday::Sun)),
