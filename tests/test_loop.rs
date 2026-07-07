@@ -20,6 +20,10 @@ use hegel::{Hegel, Settings};
 /// Run `body` as a Hegel property test and return the lines captured during
 /// the final replay of the shrunk failing case. `body` is expected to trigger
 /// a failure (otherwise no final replay is emitted and the snapshot is empty).
+/// The override receives the whole run's output, including the failure
+/// diagnostic that follows the draw/note lines; everything from the
+/// diagnostic header on is trimmed off, since these snapshots pin only the
+/// loop output (and the diagnostic's backtrace is machine-specific).
 fn capture_loop_output<F>(body: F) -> String
 where
     F: FnMut(hegel::TestCase) + 'static,
@@ -43,7 +47,12 @@ where
     }));
 
     let lines = buf.lock().unwrap().clone();
-    lines.join("\n")
+    lines
+        .iter()
+        .take_while(|line| !line.starts_with("thread '"))
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]

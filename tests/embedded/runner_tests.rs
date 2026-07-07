@@ -208,7 +208,7 @@ mod reproduce {
             .database(None)
             .verbosity(Verbosity::Quiet);
         let c_settings = SettingsHandle::build(&settings, None);
-        let run = RunHandle::start(&c_settings).expect("the engine starts");
+        let run = RunHandle::start(&c_settings, None).expect("the engine starts");
         while let Some(c_tc) = run.next_test_case() {
             crate::run_lifecycle::run_test_case(
                 c_tc,
@@ -216,6 +216,7 @@ mod reproduce {
                 false,
                 Mode::TestRun,
                 Verbosity::Quiet,
+                &crate::test_case::RunOutput::resolve(),
             );
         }
         let result = run.result();

@@ -47,7 +47,7 @@ fn drive_run(run: &RunHandle, mut f: impl FnMut(&CTestCase) -> Result<(), hegel_
 fn ffi_drives_a_passing_run_exercising_every_primitive() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None);
-    let run = RunHandle::start(&sh).unwrap();
+    let run = RunHandle::start(&sh, None).unwrap();
     let text = StringGenerator::text(0, 5, None, 0, None, None, None, None, None).unwrap();
 
     let mut cases = 0usize;
@@ -171,7 +171,7 @@ fn ffi_string_generator_constructors_cover_every_kind() {
 fn ffi_reports_failure_with_blob_then_replays_it() {
     let settings = test_settings(7);
     let sh = SettingsHandle::build(&settings, None);
-    let run = RunHandle::start(&sh).unwrap();
+    let run = RunHandle::start(&sh, None).unwrap();
 
     let origin = "n != 0";
     while let Some(tc) = run.next_test_case() {
@@ -199,7 +199,7 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         .expect("a shrunk failure carries a blob");
 
     let sh2 = SettingsHandle::build(&settings, None);
-    let replay = CTestCase::from_blob(&sh2, &blob).unwrap();
+    let replay = CTestCase::from_blob(&sh2, &blob, None).unwrap();
     assert_eq!(
         replay.generate_integer(0, 100).unwrap(),
         1,
@@ -217,7 +217,7 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
 fn ffi_clone_handle_shares_the_test_case() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None);
-    let run = RunHandle::start(&sh).unwrap();
+    let run = RunHandle::start(&sh, None).unwrap();
 
     let tc = run.next_test_case().unwrap();
     let clone = tc.clone_handle();
@@ -237,7 +237,7 @@ fn ffi_clone_handle_shares_the_test_case() {
 fn ffi_from_blob_rejects_undecodable_input() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None);
-    let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!") {
+    let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!", None) {
         Err(e) => e,
         Ok(_) => panic!("expected an undecodable blob to be rejected"),
     };
@@ -275,7 +275,7 @@ fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
 fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None);
-    let run = RunHandle::start(&sh).unwrap();
+    let run = RunHandle::start(&sh, None).unwrap();
     let _first = run.next_test_case().unwrap();
     run.next_test_case();
 }

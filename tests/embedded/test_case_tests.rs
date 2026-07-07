@@ -15,11 +15,11 @@ use crate::runner::{Mode, Settings};
 fn emitting_test_case() -> (RunHandle, TestCase) {
     let settings = Settings::new().database(None);
     let c_settings = SettingsHandle::build(&settings, None);
-    let run = RunHandle::start(&c_settings).expect("the engine starts");
+    let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun);
+    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, current_output_sink());
     (run, tc)
 }
 

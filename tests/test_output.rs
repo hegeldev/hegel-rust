@@ -541,3 +541,151 @@ mod snapshots_shrinking {
         assert_eq!(x, 1.0);
     }
 }
+
+mod override_captures_run_output {
+    //! `with_output_override` captures *all* of a run's output — the engine's
+    //! own progress lines (which historically went straight to stderr from
+    //! the engine worker thread), the final failure diagnostics with the
+    //! reproducer line, the multi-failure headline, and output produced by
+    //! clones driven on other threads. The sink is resolved once when the
+    //! run starts, so it travels with the run rather than being looked up
+    //! thread-locally at each emit site.
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{Arc, Mutex};
+
+    use hegel::generators as gs;
+    use hegel::{Hegel, Settings, Verbosity};
+
+    fn collect_with<F>(settings: Settings, body: F) -> Vec<String>
+    where
+        F: FnMut(hegel::TestCase) + 'static,
+    {
+        let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let buf_writer = buf.clone();
+        let sink: Arc<dyn Fn(&str) + Send + Sync> =
+            Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            hegel::with_output_override(sink, || {
+                Hegel::new(body).settings(settings).run();
+            });
+        }));
+
+        buf.lock().unwrap().clone()
+    }
+
+    fn settings(verbosity: Verbosity) -> Settings {
+        Settings::new()
+            .verbosity(verbosity)
+            .test_cases(5)
+            .database(None)
+            .derandomize(true)
+    }
+
+    #[test]
+    fn engine_progress_lines_reach_the_sink() {
+        let lines = collect_with(settings(Verbosity::Debug), |tc| {
+            let _ = tc.draw(gs::booleans());
+        });
+        assert!(
+            lines.iter().any(|l| l == "Starting phase: Generate"),
+            "expected the engine's phase line in the sink, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("test case #")),
+            "expected the engine's per-case debug lines in the sink, got {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "Test done. interesting_test_cases=0"),
+            "expected the engine's summary line in the sink, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn engine_shrink_and_blob_replay_lines_reach_the_sink() {
+        let lines = collect_with(settings(Verbosity::Debug), |tc| {
+            let _ = tc.draw(gs::integers::<i64>());
+            panic!("always fails");
+        });
+        assert!(
+            lines.iter().any(|l| l.starts_with("Shrinking:")),
+            "expected the engine's shrink progress in the sink, got {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("replaying failure blob:")),
+            "expected the final replay's blob trace in the sink, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn failure_diagnostic_and_reproducer_reach_the_sink() {
+        let lines = collect_with(settings(Verbosity::Normal).print_blob(true), |tc| {
+            let _ = tc.draw(gs::booleans());
+            panic!("canary for the sink");
+        });
+        assert!(
+            lines.iter().any(|l| l.contains("panicked at")),
+            "expected the diagnostic header in the sink, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("canary for the sink")),
+            "expected the panic message in the sink, got {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("To reproduce this failure")),
+            "expected the reproducer line in the sink, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("hegel::reproduce_failure")),
+            "expected the reproduce_failure attribute in the sink, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn multi_failure_headline_reaches_the_sink() {
+        let lines = collect_with(settings(Verbosity::Normal).test_cases(20), |tc| {
+            if tc.draw(gs::booleans()) {
+                panic!("first distinct bug");
+            } else {
+                panic!("second distinct bug");
+            }
+        });
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "Property-based test failed with 2 distinct failures."),
+            "expected the multi-failure headline in the sink, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("first distinct bug")),
+            "expected the first bug's diagnostic in the sink, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("second distinct bug")),
+            "expected the second bug's diagnostic in the sink, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn notes_from_a_clone_on_another_thread_reach_the_sink() {
+        let lines = collect_with(settings(Verbosity::Verbose), |tc| {
+            let clone = tc.clone();
+            std::thread::spawn(move || {
+                let _ = clone.draw(gs::booleans());
+                clone.note("note from another thread");
+            })
+            .join()
+            .unwrap();
+        });
+        assert!(
+            lines.iter().any(|l| l.contains("note from another thread")),
+            "expected the spawned thread's note in the sink, got {lines:?}"
+        );
+    }
+}

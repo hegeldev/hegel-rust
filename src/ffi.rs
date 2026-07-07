@@ -15,8 +15,9 @@
 //! small and the control-flow policy stays with the test lifecycle.
 
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::os::raw::c_char;
 use std::ptr;
 
@@ -220,26 +221,90 @@ impl Drop for SettingsHandle {
     }
 }
 
+/// Engine-output trampoline installed with `hegel_context_set_output` while
+/// a run or blob replay is being created: `user_data` points at the
+/// [`OutputSink`] the run resolved at start, and each engine output line is
+/// forwarded to it. The engine invokes this from its worker thread; the sink
+/// is `Send + Sync`, and the pointee stays alive for as long as the engine
+/// can emit — owned by the [`RunHandle`] for a run, borrowed across the
+/// creating call for a blob replay (whose only line is emitted during it).
+unsafe extern "C" fn engine_output_trampoline(
+    user_data: *mut c_void,
+    line: *const c_char,
+    len: usize,
+) {
+    let sink = unsafe { &*user_data.cast::<OutputSink>() };
+    let bytes = unsafe { std::slice::from_raw_parts(line.cast::<u8>(), len) };
+    sink(&String::from_utf8_lossy(bytes));
+}
+
+/// Install `sink` as `ctx`'s engine-output destination, run `f`, and restore
+/// the default. The engine snapshots the destination when a run or blob
+/// replay is created, so the installation only needs to span the creating
+/// call; `user_data` is `sink_ptr`, which the caller keeps alive for as long
+/// as the engine can emit through it. A `None` `sink_ptr` leaves the context
+/// alone (output stays on stderr).
+fn with_engine_output<R>(
+    ctx: *mut hegel_c::HegelContext,
+    sink_ptr: Option<*const OutputSink>,
+    f: impl FnOnce() -> R,
+) -> R {
+    if let Some(p) = sink_ptr {
+        // SAFETY: ctx is this thread's live context; the trampoline contract
+        // (thread-safe callback, pointee outlives the engine's emissions) is
+        // upheld by the caller keeping the sink alive.
+        require_ok(unsafe {
+            hegel_c::hegel_context_set_output(
+                ctx,
+                Some(engine_output_trampoline),
+                p.cast_mut().cast(),
+            )
+        });
+    }
+    let result = f();
+    if sink_ptr.is_some() {
+        // SAFETY: ctx is this thread's live context; a NULL callback resets
+        // it to the default stderr output.
+        require_ok(unsafe { hegel_c::hegel_context_set_output(ctx, None, ptr::null_mut()) });
+    }
+    result
+}
+
 /// Owns a `*mut HegelRun` and frees it on drop (which aborts and joins the
 /// engine worker if the run was not drained to completion).
 pub(crate) struct RunHandle {
     raw: *mut hegel_c::HegelRun,
+    /// The engine-output sink registered for this run, or `None` when the
+    /// run writes to stderr. The engine worker holds the raw `user_data`
+    /// pointer to this allocation for the life of the run, so it is freed
+    /// only in `Drop`, after `hegel_run_free` has joined the worker.
+    output: Option<*mut OutputSink>,
 }
 
 impl RunHandle {
-    /// Start a run. Returns `Err` with libhegel's diagnostic if the engine
-    /// could not be started.
-    pub(crate) fn start(settings: &SettingsHandle) -> Result<Self, String> {
+    /// Start a run whose engine output goes to `sink` (stderr when `None`).
+    /// Returns `Err` with libhegel's diagnostic if the engine could not be
+    /// started.
+    pub(crate) fn start(
+        settings: &SettingsHandle,
+        sink: Option<&OutputSink>,
+    ) -> Result<Self, String> {
+        let output = sink.map(|s| Box::into_raw(Box::new(s.clone())));
         let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
         // SAFETY: settings.as_ptr() is a live, non-null handle; &mut raw is a
         // valid out-parameter.
-        let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_run_start(ctx, settings.as_ptr(), &mut raw)
+        let rc = with_context(|ctx| {
+            with_engine_output(ctx, output.map(|p| p.cast_const()), || unsafe {
+                hegel_c::hegel_run_start(ctx, settings.as_ptr(), &mut raw)
+            })
         });
+        // Construct the handle before checking rc so the error path (raw is
+        // still null, which hegel_run_free accepts) releases the sink box.
+        let run = RunHandle { raw, output };
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string()); // nocov
         }
-        Ok(RunHandle { raw })
+        Ok(run)
     }
 
     /// Pull the next test case the engine wants to run, or `None` when the run
@@ -276,6 +341,13 @@ impl Drop for RunHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_start and is freed exactly once;
         free_on_drop(|ctx| unsafe { hegel_c::hegel_run_free(ctx, self.raw) });
+        if let Some(p) = self.output {
+            // SAFETY: hegel_run_free joined the engine worker above, so
+            // nothing can invoke the trampoline with this pointer any more;
+            // the box came from Box::into_raw in `start` and is
+            // reconstituted and freed exactly once.
+            drop(unsafe { Box::from_raw(p) });
+        }
     }
 }
 
@@ -302,15 +374,28 @@ unsafe impl Send for CTestCase {}
 unsafe impl Sync for CTestCase {}
 
 impl CTestCase {
-    /// Build a standalone test case that replays a base64 failure blob. Owned
-    /// by the caller (freed on drop). Returns `Err` with libhegel's diagnostic
-    /// if the blob is null/non-UTF-8/undecodable.
-    pub(crate) fn from_blob(settings: &SettingsHandle, blob: &str) -> Result<Self, String> {
+    /// Build a standalone test case that replays a base64 failure blob, with
+    /// engine output (the debug-verbosity replay trace) going to `sink`
+    /// (stderr when `None`). Owned by the caller (freed on drop). Returns
+    /// `Err` with libhegel's diagnostic if the blob is
+    /// null/non-UTF-8/undecodable.
+    pub(crate) fn from_blob(
+        settings: &SettingsHandle,
+        blob: &str,
+        sink: Option<&OutputSink>,
+    ) -> Result<Self, String> {
         let c_blob = cstring_lossy(blob);
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
         // SAFETY: settings is live; c_blob is a valid NUL-terminated string;
-        let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_from_blob(ctx, settings.as_ptr(), c_blob.as_ptr(), &mut raw)
+        let rc = with_context(|ctx| {
+            with_engine_output(ctx, sink.map(ptr::from_ref), || unsafe {
+                hegel_c::hegel_test_case_from_blob(
+                    ctx,
+                    settings.as_ptr(),
+                    c_blob.as_ptr(),
+                    &mut raw,
+                )
+            })
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string());

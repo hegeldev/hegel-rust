@@ -281,3 +281,32 @@ fn a_test_case_leaked_to_a_thread_outlives_its_case_safely() {
     release_tx.send(()).unwrap();
     assert!(handle.join().is_err());
 }
+
+#[test]
+fn output_override_captures_engine_output() {
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let buf_writer = Arc::clone(&buf);
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        hegel::with_output_override(sink, || {
+            Hegel::new(|tc: TestCase| {
+                let _ = tc.draw(gs::booleans());
+                panic!("always fails");
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(2)
+                    .database(None)
+                    .verbosity(hegel::Verbosity::Debug),
+            )
+            .run();
+        });
+    }));
+    assert!(result.is_err());
+    let lines = buf.lock().unwrap();
+    assert!(
+        lines.iter().any(|l| l.starts_with("test case #")),
+        "expected engine debug lines through the override, got {lines:?}"
+    );
+}

@@ -318,3 +318,32 @@ fn test_macro_explicit_case_with_computed_expression(tc: TestCase) {
     let n: i32 = tc.draw(generators::integers());
     panic!("fail: {}", n);
 }
+
+#[test]
+fn test_explicit_output_goes_to_the_output_override() {
+    use std::sync::{Arc, Mutex};
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let buf_writer = buf.clone();
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hegel::with_output_override(sink, || {
+            let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
+            etc.run(|tc: &hegel::ExplicitTestCase| {
+                let _: i32 = tc.__draw_named(generators::integers(), "x", false);
+                tc.note("a captured note");
+                panic!("intentional");
+            });
+        });
+    }));
+    assert!(result.is_err());
+    let lines = buf.lock().unwrap().clone();
+    assert!(
+        lines.iter().any(|l| l == "let x = 42;"),
+        "expected the drawn-value line in the sink, got {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l == "a captured note"),
+        "expected the note in the sink, got {lines:?}"
+    );
+}
