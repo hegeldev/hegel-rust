@@ -48,3 +48,29 @@ fn new_disables_database_in_ci() {
     assert!(matches!(settings.database, Database::Disabled));
     assert!(settings.derandomize);
 }
+
+#[test]
+fn output_debug_names_the_destination() {
+    assert_eq!(format!("{:?}", Output::stderr()), "Output(stderr)");
+    assert_eq!(
+        format!("{:?}", Output::callback(|_| {})),
+        "Output(callback)"
+    );
+}
+
+#[test]
+fn output_line_routes_to_the_callback_when_set() {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&lines);
+    let out = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
+    out.line("routed");
+    assert_eq!(lines.lock().unwrap().as_slice(), ["routed".to_string()]);
+    Output::stderr().line("this line goes to the test harness's stderr");
+}
+
+#[test]
+fn settings_default_to_stderr_output_and_carry_a_configured_one() {
+    assert_eq!(format!("{:?}", Settings::new().output), "Output(stderr)");
+    let s = Settings::new().output(Output::callback(|_| {}));
+    assert_eq!(format!("{:?}", s.output), "Output(callback)");
+}

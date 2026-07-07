@@ -64,9 +64,10 @@ pub fn run_native(
 /// surfaces as a stop-test error from the draw that overruns.
 ///
 /// `settings` accompany the replay — currently only
-/// [`Verbosity::Debug`](crate::Verbosity::Debug) is consulted, logging the
-/// decoded choice count — but they intentionally travel with the blob so
-/// future settings reach the replay path without a signature break.
+/// [`Verbosity::Debug`](crate::Verbosity::Debug) and the output destination
+/// are consulted, logging the decoded choice count — but they intentionally
+/// travel with the blob so future settings reach the replay path without a
+/// signature break.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
@@ -74,7 +75,10 @@ pub fn data_source_for_blob(
 ) -> Option<Box<dyn DataSource + Send + Sync>> {
     let choices = crate::native::blob::decode_failure(blob)?;
     if settings.verbosity == Verbosity::Debug {
-        eprintln!("replaying failure blob: choices = {}", choices.len());
+        settings.output.line(&format!(
+            "replaying failure blob: choices = {}",
+            choices.len()
+        ));
     }
     let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);

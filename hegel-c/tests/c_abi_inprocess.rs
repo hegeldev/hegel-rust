@@ -15,22 +15,23 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase, hegel_backend_t,
     hegel_collection_more, hegel_collection_reject, hegel_context_free, hegel_context_last_error,
-    hegel_context_new, hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
-    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
-    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_run_free, hegel_run_result,
-    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
-    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
-    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
-    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
-    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_version,
+    hegel_context_new, hegel_context_set_output, hegel_failure_free, hegel_failure_origin,
+    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
+    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
+    hegel_settings_set_mode, hegel_settings_set_phases,
+    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
+    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
 };
-use std::ffi::CString;
+use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
 use std::ptr;
+use std::sync::Mutex;
 
 unsafe fn result(ctx: *mut HegelContext, run: *mut HegelRun) -> *mut HegelRunResult {
     let mut r: *mut HegelRunResult = ptr::null_mut();
@@ -1467,4 +1468,232 @@ fn two_clones_draw_concurrently_without_concurrent_use_errors() {
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
+}
+
+/// Output callback for the `hegel_context_set_output` tests: `user_data`
+/// points at a `Mutex<Vec<String>>` that collects every line, checking on the
+/// way that `line` is NUL-terminated UTF-8 whose length matches `len`.
+unsafe extern "C" fn capture_output(user_data: *mut c_void, line: *const c_char, len: usize) {
+    let lines = unsafe { &*user_data.cast::<Mutex<Vec<String>>>() };
+    let text = unsafe { std::ffi::CStr::from_ptr(line) }
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(text.len(), len);
+    lines.lock().unwrap().push(text);
+}
+
+/// A debug-verbosity failing run started from a context with an output
+/// callback delivers the engine's progress lines (phase edges, per-case
+/// traces, shrink progress, the final summary) to the callback, passing the
+/// caller's `user_data` through.
+#[test]
+fn output_callback_receives_engine_output() {
+    let lines: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let ctx = hegel_context_new();
+    unsafe {
+        ok(hegel_context_set_output(
+            ctx,
+            Some(capture_output),
+            (&raw const lines).cast_mut().cast(),
+        ));
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        ok(hegel_c::hegel_settings_set_verbosity(
+            ctx,
+            s,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
+        ));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut value = 0i64;
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
+                hegel_status_t::HEGEL_STATUS_INTERESTING as u32
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN as u32
+            };
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+    let lines = lines.into_inner().unwrap();
+    let all = lines.join("\n");
+    assert!(
+        lines.iter().any(|l| l == "Starting phase: Generate"),
+        "got {all:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("test case #")),
+        "got {all:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("Shrinking:")),
+        "got {all:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "Test done. interesting_test_cases=1"),
+        "got {all:?}"
+    );
+}
+
+/// Passing a NULL callback to `hegel_context_set_output` resets the context
+/// to the default stderr output: a later run delivers nothing to the
+/// previously-installed callback.
+#[test]
+fn null_output_callback_resets_to_stderr() {
+    let lines: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let ctx = hegel_context_new();
+    unsafe {
+        ok(hegel_context_set_output(
+            ctx,
+            Some(capture_output),
+            (&raw const lines).cast_mut().cast(),
+        ));
+        ok(hegel_context_set_output(ctx, None, ptr::null_mut()));
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 2));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        ok(hegel_c::hegel_settings_set_verbosity(
+            ctx,
+            s,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
+        ));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut value = 0i64;
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
+                hegel_status_t::HEGEL_STATUS_VALID as u32
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN as u32
+            };
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+    assert!(lines.into_inner().unwrap().is_empty());
+}
+
+/// `hegel_context_set_output` on a NULL context is rejected: there is no
+/// context to store the callback on.
+#[test]
+fn set_output_on_null_context_is_rejected() {
+    unsafe {
+        assert_eq!(
+            hegel_context_set_output(ptr::null_mut(), Some(capture_output), ptr::null_mut()),
+            HEGEL_E_INVALID_HANDLE
+        );
+    }
+}
+
+/// `hegel_run_start` snapshots the context's output destination: resetting
+/// the callback after the run has started does not redirect the in-flight
+/// run's output back to stderr.
+#[test]
+fn run_start_snapshots_the_output_destination() {
+    let lines: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let ctx = hegel_context_new();
+    unsafe {
+        ok(hegel_context_set_output(
+            ctx,
+            Some(capture_output),
+            (&raw const lines).cast_mut().cast(),
+        ));
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 2));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        ok(hegel_c::hegel_settings_set_verbosity(
+            ctx,
+            s,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
+        ));
+        let run = start(ctx, s);
+        ok(hegel_context_set_output(ctx, None, ptr::null_mut()));
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut value = 0i64;
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
+                hegel_status_t::HEGEL_STATUS_VALID as u32
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN as u32
+            };
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_run_result_free(ctx, result(ctx, run)));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+    let lines = lines.into_inner().unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "Test done. interesting_test_cases=0"),
+        "got {lines:?}"
+    );
+}
+
+/// `hegel_test_case_from_blob` inherits the context's output callback too:
+/// at debug verbosity the blob-replay trace line is delivered to the
+/// callback instead of stderr.
+#[test]
+fn from_blob_replay_trace_goes_to_the_output_callback() {
+    let lines: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let ctx = hegel_context_new();
+    unsafe {
+        let blob = shrunk_failure_blob_with_draws(ctx, 2);
+        ok(hegel_context_set_output(
+            ctx,
+            Some(capture_output),
+            (&raw const lines).cast_mut().cast(),
+        ));
+        let s = make_settings(ctx);
+        ok(hegel_c::hegel_settings_set_verbosity(
+            ctx,
+            s,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
+        ));
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_from_blob(ctx, s, blob.as_ptr(), &mut tc));
+        assert!(!tc.is_null());
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+    let lines = lines.into_inner().unwrap();
+    assert_eq!(lines, ["replaying failure blob: choices = 2"]);
 }

@@ -476,6 +476,9 @@ typedef enum {
  threads is a data race and unsupported. Passing `NULL` wherever a context
  is accepted is allowed and simply opts out of error messages: the call
  still returns its usual error code, there is just nothing to read back.
+
+ Besides error reporting, a context carries the output destination for the
+ runs and test cases created with it — see `hegel_context_set_output`.
  */
 typedef struct hegel_context_t hegel_context_t;
 
@@ -574,6 +577,16 @@ typedef struct hegel_string_generator_t hegel_string_generator_t;
 typedef struct hegel_test_case_t hegel_test_case_t;
 
 /*
+ Per-line output callback, installed on a context with
+ `hegel_context_set_output` (see there for the full contract). `user_data`
+ is the pointer registered alongside the callback; `line` is one line of
+ engine output, NUL-terminated UTF-8 of `len` bytes (not counting the
+ terminator) without a trailing newline, valid only for the duration of
+ the call.
+ */
+typedef void (*hegel_output_callback_t)(void *user_data, const char *line, size_t len);
+
+/*
  An engine-allocated byte buffer returned by `hegel_generate_bytes`.
 
  The caller owns the buffer and must release it with
@@ -642,6 +655,37 @@ extern "C" {
  Never returns NULL. Must be paired with a `hegel_context_free` call.
  */
 hegel_context_t *hegel_context_new(void);
+
+/*
+ Redirect engine-emitted output (verbose / debug progress traces, warnings)
+ for the runs and test cases subsequently created with `ctx`, instead of
+ writing it to stderr.
+
+ `callback` is invoked once per line of output; `user_data` is passed
+ through to every invocation verbatim, for the caller to resolve to
+ whatever sink the output should reach (say, a Go `testing.T` handle). The
+ `line` argument is NUL-terminated UTF-8 of `len` bytes (not counting the
+ terminator), without a trailing newline; the buffer is owned by libhegel
+ and valid only for the duration of the call — copy it to keep it. Passing
+ a NULL `callback` resets the context to the default stderr output
+ (`user_data` is ignored).
+
+ The destination is snapshotted when a run (`hegel_run_start`) or blob
+ replay (`hegel_test_case_from_blob`) is created, so changing it later
+ only affects subsequently created ones. The engine emits output from a
+ worker thread inside libhegel, so the callback must be safe to invoke
+ from a thread other than the one that registered it, and it — along with
+ whatever `user_data` points to — must stay valid until every run started
+ while it was installed has been freed with `hegel_run_free`.
+
+ This sets only the *destination*; how much output the engine emits is
+ controlled by `hegel_settings_set_verbosity`. Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `ctx` (there is no context to store
+ the callback on).
+ */
+hegel_result_t hegel_context_set_output(hegel_context_t *ctx,
+                                        hegel_output_callback_t callback,
+                                        void *user_data);
 
 /*
  Free a context previously returned by `hegel_context_new`. Safe to call
@@ -811,7 +855,9 @@ hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
  The engine runs on a worker thread inside libhegel; this function
  returns immediately after spawning it. The caller does not need to
  hold the settings handle alive — `hegel_run_start` snapshots the
- settings it needs.
+ settings it needs. The run also snapshots `ctx`'s output destination
+ (see `hegel_context_set_output`): the engine's output for this run keeps
+ going to the callback installed at start time, for the life of the run.
 
  Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
  `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the

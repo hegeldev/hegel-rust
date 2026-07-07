@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Once;
@@ -56,7 +56,7 @@ pub mod __bench {
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
 use crate::native::bignum::BigInt;
-use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call.
 ///
@@ -360,6 +360,16 @@ pub enum hegel_label_t {
     HEGEL_LABEL_STRING = 30,
 }
 
+/// Per-line output callback, installed on a context with
+/// `hegel_context_set_output` (see there for the full contract). `user_data`
+/// is the pointer registered alongside the callback; `line` is one line of
+/// engine output, NUL-terminated UTF-8 of `len` bytes (not counting the
+/// terminator) without a trailing newline, valid only for the duration of
+/// the call.
+#[allow(non_camel_case_types)]
+pub type hegel_output_callback_t =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
+
 /// Opaque error-reporting context.
 ///
 /// libhegel records the diagnostic for a failed call on a context the caller
@@ -378,8 +388,57 @@ pub enum hegel_label_t {
 /// threads is a data race and unsupported. Passing `NULL` wherever a context
 /// is accepted is allowed and simply opts out of error messages: the call
 /// still returns its usual error code, there is just nothing to read back.
+///
+/// Besides error reporting, a context carries the output destination for the
+/// runs and test cases created with it — see `hegel_context_set_output`.
 pub struct HegelContext {
     last_error: CString,
+    output: Option<OutputTarget>,
+}
+
+/// The output callback registered on a `HegelContext` with
+/// `hegel_context_set_output`, paired with its `user_data` pointer.
+///
+/// A copy of this pair is snapshotted off the context whenever a run or blob
+/// replay is created, and travels to the engine's worker thread inside the
+/// run's settings.
+#[derive(Copy, Clone)]
+struct OutputTarget {
+    callback: unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize),
+    user_data: *mut c_void,
+}
+
+// SAFETY: the raw `user_data` pointer is what makes this `!Send + !Sync` by
+// default, but `hegel_context_set_output`'s documented contract is that the
+// callback must be safe to invoke with this `user_data` from any thread, so
+// handing the pair to the engine's worker thread is sound.
+unsafe impl Send for OutputTarget {}
+unsafe impl Sync for OutputTarget {}
+
+impl OutputTarget {
+    /// The engine-facing [`Output`] that delivers each line to this target.
+    ///
+    /// The closure binds `self` as a whole before touching its fields:
+    /// capturing the fields individually (RFC 2229 disjoint capture) would
+    /// capture a bare `*mut c_void` and lose [`OutputTarget`]'s `Send + Sync`
+    /// impls, which the sink's bounds require.
+    fn as_output(self) -> Output {
+        Output::callback(move |line| {
+            let target = self;
+            let line = cstring_lossy(line);
+            unsafe { (target.callback)(target.user_data, line.as_ptr(), line.as_bytes().len()) };
+        })
+    }
+}
+
+/// The engine [`Output`] destination for a run or blob replay created with
+/// `ctx`: the context's registered callback when one is installed, stderr
+/// otherwise (including for a NULL `ctx`).
+unsafe fn output_from_ctx(ctx: *const HegelContext) -> Output {
+    match unsafe { ctx.as_ref() }.and_then(|c| c.output) {
+        Some(target) => target.as_output(),
+        None => Output::stderr(),
+    }
 }
 
 /// Allocate a new error-reporting context initialised with an empty message.
@@ -388,7 +447,50 @@ pub struct HegelContext {
 pub extern "C" fn hegel_context_new() -> *mut HegelContext {
     Box::into_raw(Box::new(HegelContext {
         last_error: CString::default(),
+        output: None,
     }))
+}
+
+/// Redirect engine-emitted output (verbose / debug progress traces, warnings)
+/// for the runs and test cases subsequently created with `ctx`, instead of
+/// writing it to stderr.
+///
+/// `callback` is invoked once per line of output; `user_data` is passed
+/// through to every invocation verbatim, for the caller to resolve to
+/// whatever sink the output should reach (say, a Go `testing.T` handle). The
+/// `line` argument is NUL-terminated UTF-8 of `len` bytes (not counting the
+/// terminator), without a trailing newline; the buffer is owned by libhegel
+/// and valid only for the duration of the call — copy it to keep it. Passing
+/// a NULL `callback` resets the context to the default stderr output
+/// (`user_data` is ignored).
+///
+/// The destination is snapshotted when a run (`hegel_run_start`) or blob
+/// replay (`hegel_test_case_from_blob`) is created, so changing it later
+/// only affects subsequently created ones. The engine emits output from a
+/// worker thread inside libhegel, so the callback must be safe to invoke
+/// from a thread other than the one that registered it, and it — along with
+/// whatever `user_data` points to — must stay valid until every run started
+/// while it was installed has been freed with `hegel_run_free`.
+///
+/// This sets only the *destination*; how much output the engine emits is
+/// controlled by `hegel_settings_set_verbosity`. Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `ctx` (there is no context to store
+/// the callback on).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_context_set_output(
+    ctx: *mut HegelContext,
+    callback: hegel_output_callback_t,
+    user_data: *mut c_void,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(c) = (unsafe { ctx.as_mut() }) else {
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    c.output = callback.map(|callback| OutputTarget {
+        callback,
+        user_data,
+    });
+    HEGEL_OK
 }
 
 /// Free a context previously returned by `hegel_context_new`. Safe to call
@@ -1120,7 +1222,9 @@ fn install_worker_panic_hook() {
 /// The engine runs on a worker thread inside libhegel; this function
 /// returns immediately after spawning it. The caller does not need to
 /// hold the settings handle alive — `hegel_run_start` snapshots the
-/// settings it needs.
+/// settings it needs. The run also snapshots `ctx`'s output destination
+/// (see `hegel_context_set_output`): the engine's output for this run keeps
+/// going to the callback installed at start time, for the life of the run.
 ///
 /// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
@@ -1143,7 +1247,7 @@ pub unsafe extern "C" fn hegel_run_start(
         set_last_error(ctx, "hegel_run_start: settings pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    let settings = handle.inner.clone();
+    let settings = handle.inner.clone().output(unsafe { output_from_ctx(ctx) });
     let database_key = handle.database_key.clone();
 
     let (to_caller, from_worker) = mpsc::channel::<WorkerMessage>();
@@ -1433,7 +1537,8 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         set_last_error(ctx, "hegel_test_case_from_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
     };
-    let Some(ds) = data_source_for_blob(&handle.inner, blob) else {
+    let settings = handle.inner.clone().output(unsafe { output_from_ctx(ctx) });
+    let Some(ds) = data_source_for_blob(&settings, blob) else {
         set_last_error(
             ctx,
             "hegel_test_case_from_blob: the supplied failure blob could not be decoded. \

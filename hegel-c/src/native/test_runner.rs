@@ -156,9 +156,13 @@ impl<'a> Engine<'a> {
         let database_key = self.database_key;
         let max_test_cases = settings.test_cases;
         let verbosity = settings.verbosity;
-        let log_phase = move |name: &str, edge: &str| {
-            if matches!(verbosity, Verbosity::Verbose | Verbosity::Debug) {
-                eprintln!("{edge}ing phase: {name}");
+        let output = settings.output.clone();
+        let log_phase = {
+            let output = output.clone();
+            move |name: &str, edge: &str| {
+                if matches!(verbosity, Verbosity::Verbose | Verbosity::Debug) {
+                    output.line(&format!("{edge}ing phase: {name}"));
+                }
             }
         };
 
@@ -324,7 +328,7 @@ impl<'a> Engine<'a> {
                     NativeTestCase::for_probe(&prefix, case_rng, BUFFER_SIZE)
                 };
                 if verbosity == Verbosity::Verbose {
-                    eprintln!("Running test case");
+                    output.line("Running test case");
                 }
 
                 let (run, mismatch) = self.test_function(ntc);
@@ -333,12 +337,12 @@ impl<'a> Engine<'a> {
                 }
 
                 if verbosity == Verbosity::Debug {
-                    eprintln!(
+                    output.line(&format!(
                         "test case #{}: status = {:?}, choices = {}",
                         self.calls,
                         run.status,
                         crate::native::core::flattened_len(&run.nodes)
-                    );
+                    ));
                 }
 
                 if self.interesting.is_empty() {
@@ -433,11 +437,11 @@ impl<'a> Engine<'a> {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
-                eprintln!(
+                output.line(&format!(
                     "Shrinking: {} origin(s), initial total length = {}",
                     self.interesting.len(),
                     total
-                );
+                ));
             }
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 let key_bytes = key.as_bytes().to_vec();
@@ -510,7 +514,7 @@ impl<'a> Engine<'a> {
                     let mut shrinker = Shrinker::with_probe(
                         Box::new(|req: ShrinkRun| {
                             if verbosity == Verbosity::Verbose {
-                                eprintln!("Running test case");
+                                output.line("Running test case");
                             }
                             let run = match req {
                                 ShrinkRun::Full(nodes) => {
@@ -534,7 +538,7 @@ impl<'a> Engine<'a> {
                     shrinker.deadline = Some(shrink_deadline);
                     let _ = shrinker.initial_coarse_reduction();
                     if verbosity == Verbosity::Debug {
-                        shrinker.set_debug(|msg| eprintln!("{msg}"));
+                        shrinker.set_debug(|msg| output.line(msg));
                     }
                     shrinker.shrink();
                     shrink_timed_out |= shrinker.timed_out;
@@ -545,20 +549,20 @@ impl<'a> Engine<'a> {
             }
 
             if shrink_timed_out && verbosity != Verbosity::Quiet {
-                eprintln!("{}", slow_shrink_warning());
+                output.line(&slow_shrink_warning());
             }
 
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
-                eprintln!(
+                output.line(&format!(
                     "Shrinking complete: {} origin(s), final total length = {}",
                     self.interesting.len(),
                     total
-                );
+                ));
             }
             log_phase("Shrink", "End");
         } else if replay_aligned && verbosity == Verbosity::Debug {
-            eprintln!("Skipping shrink: reused aligned database replay");
+            output.line("Skipping shrink: reused aligned database replay");
         }
 
         if let (Some(db), Some(key)) = (self.db(), database_key) {
@@ -584,10 +588,10 @@ impl<'a> Engine<'a> {
         }
 
         if verbosity == Verbosity::Debug {
-            eprintln!(
+            output.line(&format!(
                 "Test done. interesting_test_cases={}",
                 self.interesting.len()
-            );
+            ));
         }
 
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
