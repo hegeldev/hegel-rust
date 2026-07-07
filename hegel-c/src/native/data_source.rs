@@ -74,9 +74,9 @@ impl NativeDataSource {
     /// Read the `tc.target()` observations the test body recorded.
     ///
     /// Used by the targeting phase in `test_runner` to read back per-label
-    /// scores after a test case completes. A non-mutating clone, like
-    /// [`Self::take_nodes`]/[`Self::take_spans`]: the handle may still be shared
-    /// with a run-owned [`crate::HegelTestCase`], so reading it must not mutate it.
+    /// scores after a test case completes. Returns a clone without mutating
+    /// the shared state: the handle may still be shared with a run-owned
+    /// [`crate::HegelTestCase`], so reading it must not perturb it.
     pub fn take_target_observations(handle: &NativeTestCaseHandle) -> HashMap<String, f64> {
         handle
             .lock()

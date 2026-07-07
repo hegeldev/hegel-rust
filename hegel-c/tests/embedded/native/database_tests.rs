@@ -72,6 +72,19 @@ fn move_value_creates_dst_when_absent() {
 }
 
 #[test]
+fn move_value_unregisters_an_emptied_source_key() {
+    let (db, _dir) = fresh_db();
+    db.save(b"src", b"v");
+    db.move_value(b"src", b"dst", b"v");
+    let keys = db.fetch(METAKEYS_NAME);
+    assert!(
+        !keys.contains(&b"src".to_vec()),
+        "an emptied source key must be unregistered from the metakeys index"
+    );
+    assert!(keys.contains(&b"dst".to_vec()));
+}
+
+#[test]
 fn move_value_falls_back_to_delete_save_when_rename_fails() {
     let (db, _dir) = fresh_db();
     db.save(b"dst", b"existing");

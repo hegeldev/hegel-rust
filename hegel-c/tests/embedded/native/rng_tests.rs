@@ -90,3 +90,23 @@ fn urandom_spawn_is_another_urandom_reader() {
     assert!(matches!(child, EngineRng::Urandom(_)));
     let _ = child.next_u64();
 }
+
+/// Pins literal values of the seeded stream so a silent stream change on a
+/// `rand` upgrade (SmallRng's algorithm is not stable across releases) is
+/// caught here rather than quietly breaking every stored seed. If this test
+/// fails after a deliberate `rand` bump, update the values and call out the
+/// broken seed reproducibility in the changelog.
+#[test]
+fn seeded_stream_is_pinned() {
+    let mut rng = EngineRng::seeded(42);
+    let got: Vec<u64> = (0..4).map(|_| rng.next_u64()).collect();
+    assert_eq!(
+        got,
+        vec![
+            15021278609987233951,
+            5881210131331364753,
+            18149643915985481100,
+            12933668939759105464,
+        ]
+    );
+}
