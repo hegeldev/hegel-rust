@@ -666,7 +666,7 @@ impl CTestCase {
         let c_origin = origin.map(cstring_lossy);
         let origin_ptr = c_origin.as_ref().map_or(ptr::null(), |c| c.as_ptr());
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_mark_complete(ctx, self.raw, status, origin_ptr)
+            hegel_c::hegel_mark_complete(ctx, self.raw, status as u32, origin_ptr)
         }))
     }
 }
@@ -928,27 +928,27 @@ fn cstr_opt(p: *const c_char) -> Option<String> {
     }
 }
 
-fn map_mode(mode: Mode) -> hegel_c::hegel_mode_t {
+fn map_mode(mode: Mode) -> u32 {
     match mode {
-        Mode::TestRun => hegel_c::hegel_mode_t::HEGEL_MODE_TEST_RUN,
-        Mode::SingleTestCase => hegel_c::hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE,
+        Mode::TestRun => hegel_c::hegel_mode_t::HEGEL_MODE_TEST_RUN as u32,
+        Mode::SingleTestCase => hegel_c::hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32,
     }
 }
 
-fn map_verbosity(v: Verbosity) -> hegel_c::hegel_verbosity_t {
+fn map_verbosity(v: Verbosity) -> u32 {
     match v {
-        Verbosity::Quiet => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET,
-        Verbosity::Normal => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL,
-        Verbosity::Verbose => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE,
-        Verbosity::Debug => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG,
+        Verbosity::Quiet => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET as u32,
+        Verbosity::Normal => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL as u32,
+        Verbosity::Verbose => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE as u32,
+        Verbosity::Debug => hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
     }
 }
 
-fn map_backend(backend: Option<Backend>) -> hegel_c::hegel_backend_t {
+fn map_backend(backend: Option<Backend>) -> u32 {
     match backend {
-        None => hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO,
-        Some(Backend::Default) => hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT,
-        Some(Backend::Urandom) => hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM,
+        None => hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO as u32,
+        Some(Backend::Default) => hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32,
+        Some(Backend::Urandom) => hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM as u32,
     }
 }
 

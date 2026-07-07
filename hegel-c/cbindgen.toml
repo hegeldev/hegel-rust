@@ -88,8 +88,20 @@ usize_is_size_t = true
 #   - hegel_phase_t / hegel_health_check_t: bitwise-OR'd into a uint32_t mask.
 #   - hegel_label_t: a uint64_t span label (the label space is open, so the
 #     parameter can't be the closed enum type).
+#   - hegel_mode_t / hegel_backend_t / hegel_verbosity_t / hegel_status_t:
+#     passed as uint32_t and validated, so an out-of-range value from a
+#     miscast C argument is a reportable error instead of undefined behavior
+#     in Rust.
 [export]
-include = ["hegel_phase_t", "hegel_health_check_t", "hegel_label_t"]
+include = [
+    "hegel_phase_t",
+    "hegel_health_check_t",
+    "hegel_label_t",
+    "hegel_mode_t",
+    "hegel_backend_t",
+    "hegel_verbosity_t",
+    "hegel_status_t",
+]
 
 [export.rename]
 "HegelContext" = "hegel_context_t"

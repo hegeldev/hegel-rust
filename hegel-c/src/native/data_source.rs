@@ -267,7 +267,9 @@ impl DataSource for NativeDataSource {
 
     fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let state = ManyState::new(min_size as usize, max_size.map(|n| n as usize));
+            let min_size = usize::try_from(min_size).unwrap_or(usize::MAX);
+            let max_size = max_size.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+            let state = ManyState::new(min_size, max_size);
             Ok(ntc.new_collection(state))
         })
     }

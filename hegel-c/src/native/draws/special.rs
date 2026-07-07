@@ -7,8 +7,9 @@ use crate::native::core::{EngineError, NativeTestCase};
 
 use super::{LABEL_DATE, LABEL_DATETIME, LABEL_IP_ADDRESS, LABEL_TIME, LABEL_UUID, spanned};
 
-/// A drawn Gregorian calendar date. `year` ∈ [1, 9999], `month` ∈ [1, 12],
-/// `day` ∈ [1, days-in-month].
+/// A drawn proleptic Gregorian calendar date. `year` ∈
+/// [[`MIN_YEAR`], [`MAX_YEAR`]], `month` ∈ [1, 12], `day` ∈
+/// [1, days-in-month].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Date {
     pub year: i32,
