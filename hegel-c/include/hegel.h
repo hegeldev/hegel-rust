@@ -771,7 +771,9 @@ hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
  Suppress (disable) a set of health checks, given as a bitwise OR of
  `hegel_health_check_t` values. The default is "no suppression"; use this
  when you know a check is going to fire and accept the underlying behavior
- (e.g. you intentionally have a high rejection rate).
+ (e.g. you intentionally have a high rejection rate). Each call replaces
+ the full set of suppressed checks, so passing 0 clears any previous
+ suppression.
  */
 hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
                                                         hegel_settings_t *s,

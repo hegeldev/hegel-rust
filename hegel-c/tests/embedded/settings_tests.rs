@@ -23,6 +23,16 @@ fn resolved_backend_picks_urandom_under_antithesis() {
 }
 
 #[test]
+fn suppress_health_check_replaces() {
+    let s = Settings::new()
+        .suppress_health_check([HealthCheck::TooSlow])
+        .suppress_health_check([HealthCheck::FilterTooMuch]);
+    assert_eq!(s.suppress_health_check, vec![HealthCheck::FilterTooMuch]);
+    let s = s.suppress_health_check([]);
+    assert_eq!(s.suppress_health_check, vec![]);
+}
+
+#[test]
 fn new_disables_database_in_ci() {
     let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let key = "TEAMCITY_VERSION";

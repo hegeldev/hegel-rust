@@ -15,6 +15,16 @@ fn test_settings_phases() {
 }
 
 #[test]
+fn test_settings_suppress_health_check_replaces() {
+    let s = Settings::new()
+        .suppress_health_check([HealthCheck::TooSlow])
+        .suppress_health_check([HealthCheck::FilterTooMuch]);
+    assert_eq!(s.suppress_health_check, vec![HealthCheck::FilterTooMuch]);
+    let s = s.suppress_health_check([]);
+    assert_eq!(s.suppress_health_check, vec![]);
+}
+
+#[test]
 fn test_settings_report_multiple_failures_default_true() {
     let s = Settings::new();
     assert!(s.report_multiple_failures);
