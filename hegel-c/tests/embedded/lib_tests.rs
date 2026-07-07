@@ -122,7 +122,12 @@ fn completion_is_reported_before_concurrent_use() {
         let (ctx, s, run, tc) = start_run_and_first_case();
 
         assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
 

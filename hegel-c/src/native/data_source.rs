@@ -302,16 +302,14 @@ impl DataSource for NativeDataSource {
 
     fn new_state_machine(
         &self,
-        rule_names: &[&str],
-        invariant_names: &[&str],
+        rule_names: Vec<String>,
+        invariant_names: Vec<String>,
     ) -> Result<i64, DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        let rules = rule_names.iter().map(|s| s.to_string()).collect();
-        let invariants = invariant_names.iter().map(|s| s.to_string()).collect();
         self.with_ntc(|ntc| {
             let mut machines = ntc
                 .family()
@@ -320,7 +318,7 @@ impl DataSource for NativeDataSource {
                 .unwrap_or_else(|e| e.into_inner());
             let id = machines.len() as i64;
             machines.push(Arc::new(std::sync::Mutex::new(
-                crate::native::core::NativeStateMachine::new(rules, invariants),
+                crate::native::core::NativeStateMachine::new(rule_names, invariant_names),
             )));
             Ok(id)
         })

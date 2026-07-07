@@ -98,11 +98,19 @@ fn null_handles_are_rejected_without_crashing() {
     let ctx = hegel_context_new();
     unsafe {
         assert_eq!(
-            hegel_settings_set_mode(ctx, ptr::null_mut(), hegel_mode_t::HEGEL_MODE_TEST_RUN as u32),
+            hegel_settings_set_mode(
+                ctx,
+                ptr::null_mut(),
+                hegel_mode_t::HEGEL_MODE_TEST_RUN as u32
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_settings_set_backend(ctx, ptr::null_mut(), hegel_backend_t::HEGEL_BACKEND_AUTO as u32),
+            hegel_settings_set_backend(
+                ctx,
+                ptr::null_mut(),
+                hegel_backend_t::HEGEL_BACKEND_AUTO as u32
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -248,7 +256,12 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_ne!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
 
@@ -432,7 +445,12 @@ fn explicit_backend_run_and_lifecycle_misuse() {
             HEGEL_OK
         );
         assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
         ok(hegel_test_case_free(ctx, tc));
@@ -727,7 +745,12 @@ fn live_test_case_argument_validation() {
         );
 
         assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
 
@@ -737,7 +760,12 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("already complete"));
         assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_E_ALREADY_COMPLETE
         );
         assert_eq!(hegel_test_case_free(ctx, tc), HEGEL_OK);
@@ -1233,18 +1261,33 @@ fn clones_share_a_run_owned_family() {
 
         // The first handle to complete the family wins and records the outcome.
         assert_eq!(
-            hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                c1,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
         // Completing a *different* handle in the now-complete family is a safe
         // no-op (first-caller-wins), so racing clones don't error.
         assert_eq!(
-            hegel_mark_complete(ctx, root, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                root,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
         // But completing the *same* handle twice is a usage error.
         assert_eq!(
-            hegel_mark_complete(ctx, c1, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                c1,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_E_ALREADY_COMPLETE
         );
         // Primitives on any family handle still report the family complete.

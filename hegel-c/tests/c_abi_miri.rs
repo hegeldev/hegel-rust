@@ -98,7 +98,12 @@ fn clones_and_root_free_independently_in_any_order() {
 
         // Complete via the surviving clone, then free it (the last handle).
         assert_eq!(
-            hegel_mark_complete(ctx, c2, hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                c2,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
         assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);

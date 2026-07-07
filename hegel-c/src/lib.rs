@@ -2025,9 +2025,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         Ok(v) => v,
         Err(rc) => return rc,
     };
-    let rule_refs: Vec<&str> = rules.iter().map(|s| s.as_str()).collect();
-    let invariant_refs: Vec<&str> = invariants.iter().map(|s| s.as_str()).collect();
-    match tc.stream.new_state_machine(&rule_refs, &invariant_refs) {
+    match tc.stream.new_state_machine(rules, invariants) {
         Ok(id) => {
             unsafe { *out_state_machine_id = id };
             HEGEL_OK

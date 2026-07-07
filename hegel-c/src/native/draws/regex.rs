@@ -22,15 +22,15 @@ fn is_surrogate_cp(cp: u32) -> bool {
 /// and ASCII-only filtering).
 type InKey = (usize, usize, u32);
 
-/// A regex pattern compiled once at string-generator construction time:
-/// the parsed AST, the optional user alphabet, and a cross-draw cache of
-/// the alphabet-constrained `IN`-node character sets (category classes like
-/// `\w` cost a full alphabet scan to materialise).
 /// Cache key for the alphabet-constrained `Any` and `NotLiteral` character
 /// sets: the excluded codepoint (`u32::MAX` for `Any`, which has none) plus
 /// the flag bits the set depends on.
 type CharKey = (u32, u32);
 
+/// A regex pattern compiled once at string-generator construction time:
+/// the parsed AST, the optional user alphabet, and cross-draw caches of
+/// the alphabet-constrained character sets (category classes like
+/// `\w` cost a full alphabet scan to materialise).
 #[derive(Debug)]
 pub(crate) struct CompiledRegex {
     parsed: ParsedPattern,
@@ -169,8 +169,7 @@ fn generate_regex_attempt(
                 return Ok(None);
             }
         }
-        if state.needs_whole_match && !whole_match(parsed, fullmatch, &final_chars, &state.groups)
-        {
+        if state.needs_whole_match && !whole_match(parsed, fullmatch, &final_chars, &state.groups) {
             return Ok(None);
         }
     }
@@ -196,8 +195,9 @@ fn whole_match(
         anchored.push(OpCode::At(AtCode::EndString));
         match_seq(&anchored, 0, chars, parsed.flags, groups).is_some()
     } else {
-        (0..=chars.len())
-            .any(|start| match_seq(&parsed.pattern.data, start, chars, parsed.flags, groups).is_some())
+        (0..=chars.len()).any(|start| {
+            match_seq(&parsed.pattern.data, start, chars, parsed.flags, groups).is_some()
+        })
     }
 }
 
@@ -577,7 +577,10 @@ fn generate_op(
 fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache_key = (items.to_vec(), flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII));
+    let cache_key = (
+        items.to_vec(),
+        flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII),
+    );
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap();

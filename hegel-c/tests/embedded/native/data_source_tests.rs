@@ -92,26 +92,35 @@ fn pool_generate_on_empty_pool_returns_assume() {
 fn new_state_machine_returns_sequential_ids() {
     let (ds, _handle) = random_source();
     assert_eq!(
-        ds.new_state_machine(&["push", "pop"], &["sorted"]).unwrap(),
+        ds.new_state_machine(vec!["push".into(), "pop".into()], vec!["sorted".into()])
+            .unwrap(),
         0
     );
-    assert_eq!(ds.new_state_machine(&["clear"], &[]).unwrap(), 1);
+    assert_eq!(
+        ds.new_state_machine(vec!["clear".into()], vec![]).unwrap(),
+        1
+    );
 }
 
 #[test]
 fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
-    let err = ds.new_state_machine(&[], &[]).unwrap_err();
+    let err = ds.new_state_machine(vec![], vec![]).unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("no rules"));
     assert!(!ds.test_aborted());
-    assert_eq!(ds.new_state_machine(&["push"], &[]).unwrap(), 0);
+    assert_eq!(
+        ds.new_state_machine(vec!["push".into()], vec![]).unwrap(),
+        0
+    );
 }
 
 #[test]
 fn state_machine_next_rule_returns_in_range_indices() {
     let (ds, _handle) = random_source();
-    let id = ds.new_state_machine(&["a", "b", "c"], &[]).unwrap();
+    let id = ds
+        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
+        .unwrap();
     for _ in 0..20 {
         assert!(ds.state_machine_next_rule(id).unwrap() < 3);
     }
@@ -120,13 +129,15 @@ fn state_machine_next_rule_returns_in_range_indices() {
 #[test]
 fn state_machine_next_rule_on_exhausted_source_stops_test() {
     let (ds, _handle) = exhausted_source();
-    let id = ds.new_state_machine(&["a", "b"], &[]).unwrap();
+    let id = ds
+        .new_state_machine(vec!["a".into(), "b".into()], vec![])
+        .unwrap();
     assert!(matches!(
         ds.state_machine_next_rule(id),
         Err(DataSourceError::StopTest)
     ));
     assert!(ds.state_machine_next_rule(id).is_err());
-    assert!(ds.new_state_machine(&["a"], &[]).is_err());
+    assert!(ds.new_state_machine(vec!["a".into()], vec![]).is_err());
 }
 
 #[test]
@@ -341,7 +352,9 @@ fn collections_are_shared_across_cloned_streams() {
 #[test]
 fn state_machines_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let machine = ds.new_state_machine(&["a", "b", "c"], &[]).unwrap();
+    let machine = ds
+        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
+        .unwrap();
     let child = ds.clone_stream().unwrap();
     assert!(child.state_machine_next_rule(machine).unwrap() < 3);
     assert!(ds.state_machine_next_rule(machine).unwrap() < 3);

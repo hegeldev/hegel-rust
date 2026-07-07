@@ -837,7 +837,9 @@ fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string()
             let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000));
             let ntc_ref = if fullmatch { &mut ntc2 } else { &mut ntc };
             if let Ok(s) = generate_regex(ntc_ref, &re, fullmatch) {
-                panic!("seed {seed} fullmatch={fullmatch}: a*+a produced {s:?}, but no string matches it");
+                panic!(
+                    "seed {seed} fullmatch={fullmatch}: a*+a produced {s:?}, but no string matches it"
+                );
             }
         }
     }
@@ -862,7 +864,10 @@ fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
             continue;
         };
         produced += 1;
-        assert_eq!(s, "x", "seed {seed}: {s:?} is case-equal to an excluded char");
+        assert_eq!(
+            s, "x",
+            "seed {seed}: {s:?} is case-equal to an excluded char"
+        );
     }
     assert!(produced > 0, "every draw was rejected");
 }
