@@ -85,6 +85,48 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
 }
 
 #[test]
+fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
+    let initial = vec![
+        string_node(
+            vec![
+                b'a' as u32,
+                b'b' as u32,
+                b'c' as u32,
+                b'd' as u32,
+                b'e' as u32,
+                b'f' as u32,
+            ],
+            0,
+            0x10FFFF,
+        ),
+        string_node(vec![b'z' as u32], 0, 0x10FFFF),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let s_ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s)) if s.len() >= 2
+                );
+                (s_ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.redistribute_string_pairs().unwrap();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::String(s) => assert_eq!(
+            s,
+            &vec![b'a' as u32, b'b' as u32],
+            "one invocation should move every element the predicate allows"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn shrink_strings_collapses_accepting_run_toward_simplest() {
     let initial = vec![string_node(
         vec![b'a' as u32, b'b' as u32],

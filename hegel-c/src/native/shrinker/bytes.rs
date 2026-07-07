@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
 
-use super::{ShrinkResult, Shrinker, bin_search_down_r};
+use super::{ShrinkResult, Shrinker, bin_search_down_r, find_integer_r};
 
 impl<'a> Shrinker<'a> {
     pub(super) fn shrink_bytes(&mut self) -> ShrinkResult<()> {
@@ -168,8 +168,11 @@ impl<'a> Shrinker<'a> {
         }
 
         let s_len = s.len();
-        bin_search_down_r(1, s_len as i128, &mut |n| {
-            let n = n as usize;
+        find_integer_r(|extra| {
+            let n = 1 + extra;
+            if n > s_len {
+                return Ok(false);
+            }
             let new_s = s[..s_len - n].to_vec();
             let mut new_t = s[s_len - n..].to_vec();
             new_t.extend_from_slice(&t);

@@ -85,6 +85,37 @@ fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
 }
 
 #[test]
+fn redistribute_bytes_pair_moves_several_elements_in_one_invocation() {
+    let initial = vec![
+        bytes_node(vec![1, 2, 3, 4, 5, 6], 0, 10),
+        bytes_node(vec![9], 0, 10),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let s_ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::Bytes(b)) if b.len() >= 2
+                );
+                (s_ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.redistribute_bytes_pairs().unwrap();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::Bytes(b) => assert_eq!(
+            b,
+            &vec![1, 2],
+            "one invocation should move every element the predicate allows"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn redistribute_bytes_pair_moves_entire_value_when_accepted() {
     let initial = vec![
         bytes_node(vec![1, 2, 3], 0, 10),

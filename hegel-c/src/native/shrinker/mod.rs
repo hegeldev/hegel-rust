@@ -185,8 +185,18 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Try a candidate choice sequence. If interesting and smaller than
-    /// the current best, update current_nodes. Returns whether interesting.
+    /// Try a candidate choice sequence. If the resulting run is interesting
+    /// and strictly smaller than the current best, adopt it.
+    ///
+    /// Returns whether the candidate is now the shrink target: `true` when
+    /// it already *was* the target (equal sort key, decided without
+    /// executing) or when the run's actual nodes were adopted, and `false`
+    /// otherwise — including for runs that were interesting but not adopted,
+    /// e.g. when punning realised a different, non-smaller sequence.
+    /// Mirrors Hypothesis's `consider_new_nodes`, whose callers use the
+    /// return value to keep their local view of the target in sync (a
+    /// pass that reorders based on `true` results would otherwise build its
+    /// next attempts from a state that never became real).
     ///
     /// The stored nodes are the actual sequence produced by the test
     /// function, not the candidate passed in. This matters when the test
@@ -205,16 +215,11 @@ impl<'a> Shrinker<'a> {
         if sort_key(&self.current_nodes) < sort_key(cmp) {
             return Ok(false);
         }
-        for (i, candidate) in nodes
-            .iter()
-            .enumerate()
-            .take(nodes.len().min(self.current_nodes.len()))
-        {
-            if nodes.len() != self.current_nodes.len() {
-                continue;
-            }
-            if self.current_nodes[i].was_forced && candidate.value != self.current_nodes[i].value {
-                return Ok(false);
+        if nodes.len() == self.current_nodes.len() {
+            for (candidate, current) in nodes.iter().zip(&self.current_nodes) {
+                if current.was_forced && candidate.value != current.value {
+                    return Ok(false);
+                }
             }
         }
         if self.improvements >= self.max_improvements {
@@ -231,8 +236,9 @@ impl<'a> Shrinker<'a> {
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
+            return Ok(true);
         }
-        Ok(is_interesting)
+        Ok(false)
     }
 
     /// Run the test function for `run`, or return [`ShrinkStop`] immediately —
@@ -261,7 +267,9 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
-        if self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall {
+        if self.improvements > 0
+            && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
+        {
             return Ok(());
         }
         let (is_interesting, actual_nodes, actual_spans) =

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
 
-use super::{ShrinkResult, Shrinker, bin_search_down_r};
+use super::{ShrinkResult, Shrinker, bin_search_down_r, find_integer_r};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_ne};
 
 impl<'a> Shrinker<'a> {
@@ -28,12 +28,22 @@ impl<'a> Shrinker<'a> {
 
             let cur_len = self.current_string(i).len();
             if cur_len > kind.min_size {
-                for target_len in kind.min_size..cur_len {
-                    let cand: Vec<u32> = self.current_string(i)[..target_len].to_vec();
-                    if self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))? {
-                        break;
-                    }
+                let captured = self.current_string(i);
+                bin_search_down_r(kind.min_size as i128, cur_len as i128, &mut |sz| {
+                    let cand: Vec<u32> = captured[..sz as usize].to_vec();
+                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                })?;
+            }
+
+            let cur_len = self.current_string(i).len();
+            let scan_end = (kind.min_size + 8).min(cur_len);
+            for target_len in kind.min_size..scan_end {
+                let cur = self.current_string(i);
+                if target_len > cur.len() {
+                    break;
                 }
+                let cand: Vec<u32> = cur[..target_len].to_vec();
+                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))?;
             }
 
             let mut j = self.current_string(i).len();
@@ -230,8 +240,11 @@ impl<'a> Shrinker<'a> {
         }
 
         let s_len = s.len();
-        bin_search_down_r(1, s_len as i128, &mut |n| {
-            let n = n as usize;
+        find_integer_r(|extra| {
+            let n = 1 + extra;
+            if n > s_len {
+                return Ok(false);
+            }
             let new_s = s[..s_len - n].to_vec();
             let mut new_t = s[s_len - n..].to_vec();
             new_t.extend_from_slice(&t);

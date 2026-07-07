@@ -500,7 +500,7 @@ impl<'a> Shrinker<'a> {
                 }
                 if live_base(self) > lo {
                     find_integer_r(|n| {
-                        let attempt = live_base(self) - BigInt::from(2u64 * n as u64);
+                        let attempt = live_base(self) - BigInt::from(2u128 * n as u128);
                         group_replace(self, &attempt)
                     })?;
                 }
@@ -523,7 +523,7 @@ impl<'a> Shrinker<'a> {
                 let neg_hi = -&lo;
                 if live_base(self) < neg_hi {
                     find_integer_r(|n| {
-                        let attempt = live_base(self) + BigInt::from(2u64 * n as u64);
+                        let attempt = live_base(self) + BigInt::from(2u128 * n as u128);
                         group_replace(self, &attempt)
                     })?;
                 }

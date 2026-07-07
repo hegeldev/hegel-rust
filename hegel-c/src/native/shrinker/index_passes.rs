@@ -64,16 +64,18 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for new_val in &decrement_targets {
-                    let mut attempt = self.current_nodes.clone();
-                    attempt[i] = attempt[i].with_value(new_val.clone());
-                    self.consider(&attempt)?;
+                    if gap == 1 {
+                        let mut attempt = self.current_nodes.clone();
+                        attempt[i] = attempt[i].with_value(new_val.clone());
+                        self.consider(&attempt)?;
 
-                    let mut zeroed = attempt.clone();
-                    for node in &mut zeroed[i + 1..] {
-                        let s = node.kind.simplest();
-                        *node = node.with_value(s);
+                        let mut zeroed = attempt;
+                        for node in &mut zeroed[i + 1..] {
+                            let s = node.kind.simplest();
+                            *node = node.with_value(s);
+                        }
+                        self.consider(&zeroed)?;
                     }
-                    self.consider(&zeroed)?;
 
                     if j < self.current_nodes.len() && !is_unindexed(&self.current_nodes[j].kind) {
                         let kind_j = self.current_nodes[j].kind.clone();
