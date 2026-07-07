@@ -920,6 +920,21 @@ mod regex_tests {
     }
 
     #[test]
+    fn test_word_boundaries_hold_in_generated_strings() {
+        fn is_word(c: char) -> bool {
+            c == '_' || c.is_alphanumeric()
+        }
+        assert_all_examples(gs::from_regex(r"\bfoo\b"), |s: &String| {
+            let cs: Vec<char> = s.chars().collect();
+            (0..cs.len().saturating_sub(2)).any(|i| {
+                cs[i..i + 3] == ['f', 'o', 'o']
+                    && (i == 0 || !is_word(cs[i - 1]))
+                    && (i + 3 == cs.len() || !is_word(cs[i + 3]))
+            })
+        });
+    }
+
+    #[test]
     fn test_impossible_negative_lookahead() {
         assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
     }

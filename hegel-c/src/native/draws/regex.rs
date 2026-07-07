@@ -54,18 +54,45 @@ impl CompiledRegex {
 /// Draw a string matching `re`, anchored at both ends when `fullmatch`
 /// and otherwise padded with draws from the compiled alphabet (or the full
 /// codespace when it has none).
+///
+/// Candidates whose deferred checks fail (a `\b` that the padding broke, a
+/// possessive repeat whose committed count the pattern can't actually
+/// match, ...) are retried a few times within the same test case — the
+/// analogue of Hypothesis's strategy-level `.filter(re.search)` retries —
+/// before the whole test case is marked invalid.
 pub(crate) fn generate_regex(
     ntc: &mut NativeTestCase,
     re: &CompiledRegex,
     fullmatch: bool,
 ) -> Result<String, EngineError> {
+    const MAX_ATTEMPTS: usize = 5;
+    for _ in 0..MAX_ATTEMPTS {
+        if let Some(s) = generate_regex_attempt(ntc, re, fullmatch)? {
+            return Ok(s);
+        }
+    }
+    mark_invalid(ntc)?;
+    unreachable!("mark_invalid returns Err — control flow does not reach here")
+}
+
+/// One generation attempt. Returns `Ok(None)` when the candidate was
+/// generated but failed a deferred check against the final string.
+fn generate_regex_attempt(
+    ntc: &mut NativeTestCase,
+    re: &CompiledRegex,
+    fullmatch: bool,
+) -> Result<Option<String>, EngineError> {
     let parsed = &re.parsed;
     let alphabet = &re.alphabet;
 
     let mut state = GenState {
         groups: HashMap::new(),
         flags: parsed.flags,
+        fullmatch,
+        pending_anchors: Vec::new(),
+        pending_asserts: Vec::new(),
         pending_lookaheads: Vec::new(),
+        needs_whole_match: false,
         in_cache: &re.in_cache,
     };
     let mut result = String::new();
@@ -74,7 +101,7 @@ pub(crate) fn generate_regex(
         if !fullmatch {
             draw_pad(ntc, alphabet, &mut result)?;
         }
-        return Ok(result);
+        return Ok(Some(result));
     }
 
     if !fullmatch {
@@ -85,8 +112,42 @@ pub(crate) fn generate_regex(
         draw_suffix(ntc, parsed, alphabet, &mut result)?;
     }
 
-    if !state.pending_lookaheads.is_empty() {
+    let needs_final_checks = !state.pending_anchors.is_empty()
+        || !state.pending_asserts.is_empty()
+        || !state.pending_lookaheads.is_empty()
+        || state.needs_whole_match;
+    if needs_final_checks {
         let final_chars: Vec<char> = result.chars().collect();
+        for anchor in &state.pending_anchors {
+            if !at_matches(&anchor.at, &final_chars, anchor.char_pos, anchor.flags) {
+                return Ok(None);
+            }
+        }
+        for pending in &state.pending_asserts {
+            let holds = if pending.direction >= 0 {
+                match_seq(
+                    &pending.pattern.data,
+                    pending.char_pos,
+                    &final_chars,
+                    pending.flags,
+                    &pending.groups,
+                )
+                .is_some()
+            } else {
+                (0..=pending.char_pos).any(|start| {
+                    match_seq(
+                        &pending.pattern.data,
+                        start,
+                        &final_chars,
+                        pending.flags,
+                        &pending.groups,
+                    ) == Some(pending.char_pos)
+                })
+            };
+            if !holds {
+                return Ok(None);
+            }
+        }
         for pending in &state.pending_lookaheads {
             if match_seq(
                 &pending.pattern.data,
@@ -97,12 +158,39 @@ pub(crate) fn generate_regex(
             )
             .is_some()
             {
-                mark_invalid(ntc)?;
+                return Ok(None);
             }
+        }
+        if state.needs_whole_match && !whole_match(parsed, fullmatch, &final_chars, &state.groups)
+        {
+            return Ok(None);
         }
     }
 
-    Ok(result)
+    Ok(Some(result))
+}
+
+/// Whether the pattern matches `chars` — anywhere for search semantics, or
+/// spanning the whole string for `fullmatch`. Used as a post-generation
+/// filter (Hypothesis filters every candidate through `re.search`) for the
+/// constructs whose generated output is not a match by construction: atomic
+/// groups and possessive repeats commit to a repetition count during
+/// generation that the pattern's real (non-backtracking) semantics may not
+/// admit.
+fn whole_match(
+    parsed: &ParsedPattern,
+    fullmatch: bool,
+    chars: &[char],
+    groups: &HashMap<u32, String>,
+) -> bool {
+    if fullmatch {
+        let mut anchored = parsed.pattern.data.clone();
+        anchored.push(OpCode::At(AtCode::EndString));
+        match_seq(&anchored, 0, chars, parsed.flags, groups).is_some()
+    } else {
+        (0..=chars.len())
+            .any(|start| match_seq(&parsed.pattern.data, start, chars, parsed.flags, groups).is_some())
+    }
 }
 
 /// Mutable state threaded through generation: captured groups (for
@@ -111,19 +199,41 @@ pub(crate) fn generate_regex(
 struct GenState<'a> {
     groups: HashMap<u32, String>,
     flags: u32,
+    /// Whether the draw is anchored at both ends. Affects how lookaround
+    /// assertions are generated: in fullmatch mode their bodies must not be
+    /// emitted (the pattern has to consume the entire output), so they become
+    /// deferred checks instead.
+    fullmatch: bool,
+    /// Zero-width anchors (`\b`, `\B`, and `$`/`\Z` in non-final positions)
+    /// recorded during generation and checked against the final output
+    /// string, since the content that follows them isn't known yet when they
+    /// are reached.
+    pending_anchors: Vec<PendingAnchor>,
+    /// Positive lookaround assertions deferred in fullmatch mode.
+    pending_asserts: Vec<PendingAssertNot>,
     /// Negative-lookahead assertions recorded during generation. Each entry
     /// captures the assertion body, the active flags, and a snapshot of the
     /// groups at the point of the assertion. We check them against the final
     /// output string in [`generate_regex`].
     pending_lookaheads: Vec<PendingAssertNot>,
+    /// Set when the pattern contains an atomic group or possessive repeat,
+    /// whose generated output must be re-validated against the whole pattern.
+    needs_whole_match: bool,
     /// The enclosing [`CompiledRegex`]'s cross-draw cache of
     /// alphabet-constrained `IN`-node character sets.
     in_cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
 }
 
+struct PendingAnchor {
+    char_pos: usize,
+    at: AtCode,
+    flags: u32,
+}
+
 #[derive(Clone)]
 struct PendingAssertNot {
     char_pos: usize,
+    direction: i32,
     pattern: SubPattern,
     flags: u32,
     groups: HashMap<u32, String>,
@@ -293,7 +403,13 @@ fn generate_op(
                     mark_invalid(ntc)?;
                 }
             }
-            _ => {}
+            AtCode::End | AtCode::EndString | AtCode::Boundary | AtCode::NonBoundary => {
+                state.pending_anchors.push(PendingAnchor {
+                    char_pos: out.chars().count(),
+                    at: *at,
+                    flags: state.flags,
+                });
+            }
         },
         OpCode::In(items) => {
             if alphabet.is_none() {
@@ -357,8 +473,18 @@ fn generate_op(
                 generate_subpattern(ntc, no, state, alphabet, out)?;
             }
         }
-        OpCode::Assert { p, .. } => {
-            generate_subpattern(ntc, p, state, alphabet, out)?;
+        OpCode::Assert { direction, p } => {
+            if state.fullmatch {
+                state.pending_asserts.push(PendingAssertNot {
+                    char_pos: out.chars().count(),
+                    direction: *direction,
+                    pattern: p.clone(),
+                    flags: state.flags,
+                    groups: state.groups.clone(),
+                });
+            } else {
+                generate_subpattern(ntc, p, state, alphabet, out)?;
+            }
         }
         OpCode::AssertNot { direction, p } => {
             if *direction < 0 {
@@ -374,6 +500,7 @@ fn generate_op(
             } else {
                 state.pending_lookaheads.push(PendingAssertNot {
                     char_pos: out.chars().count(),
+                    direction: *direction,
                     pattern: p.clone(),
                     flags: state.flags,
                     groups: state.groups.clone(),
@@ -384,11 +511,15 @@ fn generate_op(
             mark_invalid(ntc)?;
         }
         OpCode::AtomicGroup(p) => {
+            state.needs_whole_match = true;
             generate_subpattern(ntc, p, state, alphabet, out)?;
         }
         OpCode::MaxRepeat { min, max, item }
         | OpCode::MinRepeat { min, max, item }
         | OpCode::PossessiveRepeat { min, max, item } => {
+            if matches!(op, OpCode::PossessiveRepeat { .. }) {
+                state.needs_whole_match = true;
+            }
             let min = *min as usize;
             let max = if *max == u32::MAX {
                 None
@@ -518,7 +649,10 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
         out
     } else {
         let cat_blocks: Vec<ChCode> = categories;
-        let positive_set: HashSet<char> = positive.into_iter().collect();
+        let mut positive_set: HashSet<char> = HashSet::new();
+        for c in positive {
+            positive_set.extend(swapcase_blacklist(c, flags));
+        }
         gather_chars(alphabet, |c| {
             if ascii_only && (c as u32) >= 128 {
                 return false;
@@ -850,6 +984,7 @@ fn match_seq(
             };
             let mut positions = vec![pos];
             let mut cur = pos;
+            let mut zero_width = false;
             loop {
                 if let Some(m) = mx {
                     if positions.len() > m {
@@ -861,13 +996,18 @@ fn match_seq(
                         cur = next;
                         positions.push(cur);
                     }
-                    _ => break,
+                    Some(_) => {
+                        zero_width = true;
+                        break;
+                    }
+                    None => break,
                 }
             }
-            if positions.len() - 1 < mn {
+            let mn_eff = if zero_width { 0 } else { mn };
+            if positions.len() - 1 < mn_eff {
                 return None;
             }
-            for i in (mn..positions.len()).rev() {
+            for i in (mn_eff..positions.len()).rev() {
                 if let Some(end) = match_seq(rest, positions[i], chars, flags, groups) {
                     return Some(end);
                 }
@@ -886,7 +1026,8 @@ fn match_seq(
             while count < mn {
                 let next = match_seq(&item.data, cur, chars, flags, groups)?;
                 if next <= cur {
-                    return None;
+                    count = mn;
+                    break;
                 }
                 cur = next;
                 count += 1;
@@ -917,6 +1058,7 @@ fn match_seq(
             };
             let mut cur = pos;
             let mut count = 0usize;
+            let mut zero_width = false;
             loop {
                 if let Some(m) = mx {
                     if count >= m {
@@ -928,10 +1070,14 @@ fn match_seq(
                         cur = next;
                         count += 1;
                     }
-                    _ => break,
+                    Some(_) => {
+                        zero_width = true;
+                        break;
+                    }
+                    None => break,
                 }
             }
-            if count < mn {
+            if count < mn && !zero_width {
                 return None;
             }
             match_seq(rest, cur, chars, flags, groups)
