@@ -174,6 +174,13 @@ where
     /// contain most of a small alphabet. Port of Hypothesis's
     /// `UniqueSampledListStrategy`.
     fn draw_from_pool(&self, tc: &TestCase, mut remaining: Vec<T>) -> HashSet<T> {
+        if self.min_size > remaining.len() {
+            invalid_argument!(
+                "Cannot generate a set: min_size {} is larger than the {} distinct values the element generator can produce",
+                self.min_size,
+                remaining.len()
+            );
+        }
         let effective_max = self
             .max_size
             .map_or(remaining.len(), |m| m.min(remaining.len()));
