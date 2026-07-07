@@ -8,17 +8,23 @@ pub fn expand_composite(mut f: ItemFn) -> TokenStream {
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
     let Some((FnArg::Typed(tc_arg), passthrough)) = input_parameters.split_first() else {
-        panic!(
+        return syn::Error::new_spanned(
+            &f.sig,
             "A #[composite] generator must define a first parameter of type TestCase. When \
             drawing from a #[composite] generator with tc.draw(my_composite_gen), `tc` will \
-            be automatically passed to my_composite_gen as the first argument."
+            be automatically passed to my_composite_gen as the first argument.",
         )
+        .to_compile_error();
     };
     let tc_pattern = &tc_arg.pat;
     let tc_type = &tc_arg.ty;
 
     let ReturnType::Type(_, return_type) = &f.sig.output else {
-        panic!("#[composite] generators must explicitly declare a return type.")
+        return syn::Error::new_spanned(
+            &f.sig,
+            "#[composite] generators must explicitly declare a return type.",
+        )
+        .to_compile_error();
     };
 
     let composed_generator_type = quote! {

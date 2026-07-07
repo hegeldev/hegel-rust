@@ -28,7 +28,7 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     if func.sig.inputs.len() != 1 {
         return syn::Error::new_spanned(
             &func.sig,
-            "#[hegel::main] functions must take exactly one parameter of type hegel::TestCase.",
+            "#[hegel::main] functions must take exactly one parameter of type ::hegel::TestCase.",
         )
         .to_compile_error();
     }
@@ -77,32 +77,32 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let new_body: TokenStream = quote! {
         {
-            let __hegel_default_settings: hegel::Settings = #default_settings_expr;
-            let __hegel_settings: hegel::Settings = match hegel::__apply_cli_args(
+            let __hegel_default_settings: ::hegel::Settings = #default_settings_expr;
+            let __hegel_settings: ::hegel::Settings = match ::hegel::__apply_cli_args(
                 __hegel_default_settings,
                 ::std::env::args(),
             ) {
-                hegel::CliOutcome::Success(s) => s,
-                hegel::CliOutcome::Help(msg) => {
+                ::hegel::CliOutcome::Success(s) => s,
+                ::hegel::CliOutcome::Help(msg) => {
                     println!("{}", msg);
                     ::std::process::exit(0);
                 }
-                hegel::CliOutcome::ParseError(msg) => {
+                ::hegel::CliOutcome::ParseError(msg) => {
                     eprintln!("{}", msg);
                     ::std::process::exit(2);
                 }
             };
 
-            if __hegel_settings.has_phase(hegel::Phase::Explicit) {
+            if __hegel_settings.has_phase(::hegel::Phase::Explicit) {
                 #(#explicit_blocks)*
             }
 
-            hegel::Hegel::new(|#param_pat: #param_ty| #body)
+            ::hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
             .__database_key(format!("{}::{}", module_path!(), #fn_name))
-            .test_location(hegel::TestLocation {
+            .test_location(::hegel::TestLocation {
                 function: #fn_name.to_string(),
-                file: file!().to_string(),
+                file: file!().replace('\\', "/"),
                 class: module_path!().to_string(),
                 begin_line: line!(),
             })

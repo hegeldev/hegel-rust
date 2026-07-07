@@ -27,23 +27,35 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
     };
 
     let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+    for field_name in &field_names {
+        if *field_name == "new" || *field_name == "boxed" {
+            return syn::Error::new_spanned(
+                field_name,
+                format!(
+                    "field name `{field_name}` collides with the generated builder API of \
+                     #[derive(DefaultGenerator)]; rename the field or implement \
+                     DefaultGenerator by hand"
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
 
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
-
-    let builder_methods: Vec<_> = field_names.to_vec();
 
     let generator_fields = field_names
         .iter()
         .zip(field_types.iter())
         .map(|(name, ty)| {
             quote! {
-                #name: hegel::generators::BoxedGenerator<'a, #ty>
+                #name: ::hegel::generators::BoxedGenerator<'a, #ty>
             }
         });
 
     let new_field_inits = field_types.iter().map(|ty| {
         quote! {
-            <#ty as hegel::generators::DefaultGenerator>::default_generator().boxed()
+            <#ty as ::hegel::generators::DefaultGenerator>::default_generator().boxed()
         }
     });
 
@@ -53,22 +65,20 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
-    let with_method_impls = field_names
-        .iter()
-        .zip(field_types.iter())
-        .zip(builder_methods.iter())
-        .map(|((field_name, field_type), method_name)| {
+    let with_method_impls = field_names.iter().zip(field_types.iter()).map(
+        |(field_name, field_type)| {
             quote! {
                 /// Set a custom generator for this field.
-                pub fn #method_name<G>(mut self, generator: G) -> Self
+                pub fn #field_name<G>(mut self, generator: G) -> Self
                 where
-                    G: hegel::generators::Generator<#field_type> + Send + Sync + 'a,
+                    G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
                 {
                     self.#field_name = generator.boxed();
                     self
                 }
             }
-        });
+        },
+    );
 
     let generate_fields = field_names.iter().map(|name| {
         quote! {
@@ -80,7 +90,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let expanded = quote! {
         const _: () = {
-            use hegel::generators::Generator as _;
+            use ::hegel::generators::Generator as _;
 
             pub struct #generator_name<'a> {
                 #(#generator_fields,)*
@@ -101,17 +111,16 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
             impl<'a> Default for #generator_name<'a>
             where
-                #(#field_types: hegel::generators::DefaultGenerator,)*
-                #(<#field_types as hegel::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+                #(#default_bounds,)*
             {
                 fn default() -> Self {
                     Self::new()
                 }
             }
 
-            impl<'a> hegel::generators::Generator<#name> for #generator_name<'a> {
-                fn do_draw(&self, __tc: &hegel::TestCase) -> #name {
-                    __tc.start_span(hegel::generators::labels::FIXED_DICT);
+            impl<'a> ::hegel::generators::Generator<#name> for #generator_name<'a> {
+                fn do_draw(&self, __tc: &::hegel::TestCase) -> #name {
+                    __tc.start_span(::hegel::generators::labels::FIXED_DICT);
                     let __result = #name {
                         #(#generate_fields,)*
                     };
@@ -120,7 +129,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 }
             }
 
-            impl hegel::generators::DefaultGenerator for #name
+            impl ::hegel::generators::DefaultGenerator for #name
             where
                 #(#default_generator_bounds,)*
             {

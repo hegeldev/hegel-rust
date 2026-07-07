@@ -85,8 +85,8 @@ impl SettingsAttrArgs {
 
         match &self.settings {
             Some(expr) => quote! { #expr #(#chain)* },
-            None if chain.is_empty() => quote! { hegel::Settings::new() },
-            None => quote! { hegel::Settings::new() #(#chain)* },
+            None if chain.is_empty() => quote! { ::hegel::Settings::new() },
+            None => quote! { ::hegel::Settings::new() #(#chain)* },
         }
     }
 }
@@ -440,9 +440,9 @@ pub fn build_explicit_blocks(
 
             quote! {
                 {
-                    let __hegel_etc = hegel::ExplicitTestCase::new()
+                    let __hegel_etc = ::hegel::ExplicitTestCase::new()
                         #(#with_value_calls)*;
-                    __hegel_etc.run(|#param_pat: &hegel::ExplicitTestCase| #body);
+                    __hegel_etc.run(|#param_pat: &::hegel::ExplicitTestCase| #body);
                 }
             }
         })

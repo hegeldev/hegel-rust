@@ -53,7 +53,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     if func.sig.inputs.len() != 1 {
         return syn::Error::new_spanned(
             &func.sig,
-            "#[hegel::test] functions must take exactly one parameter of type hegel::TestCase.",
+            "#[hegel::test] functions must take exactly one parameter of type ::hegel::TestCase.",
         )
         .to_compile_error();
     }
@@ -75,8 +75,17 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     if let Some(asy) = func.sig.asyncness {
         return syn::Error::new_spanned(
             asy,
-            "#[hegel::test] does not support bare interactions with async functions.\
+            "#[hegel::test] does not support bare interactions with async functions. \
              Put #[hegel::test] below an async test macro like #[tokio::test] instead.",
+        )
+        .to_compile_error();
+    }
+
+    if let syn::ReturnType::Type(_, ty) = &func.sig.output {
+        return syn::Error::new_spanned(
+            ty,
+            "#[hegel::test] functions cannot declare a return type: the test body's \
+             assertions are the property, and the rewritten function returns ().",
         )
         .to_compile_error();
     }
@@ -112,15 +121,15 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let new_body: TokenStream = quote! {
         {
             let __hegel_settings = #settings_expr;
-            if __hegel_settings.has_phase(hegel::Phase::Explicit) {
+            if __hegel_settings.has_phase(::hegel::Phase::Explicit) {
                 #(#explicit_blocks)*
             }
 
-            hegel::Hegel::new(|#param_pat: #param_ty| #body)
+            ::hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
             #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
-            .test_location(hegel::TestLocation {
+            .test_location(::hegel::TestLocation {
                 function: #test_name.to_string(),
                 file: file!().replace('\\', "/"),
                 class: module_path!().to_string(),

@@ -18,6 +18,16 @@ use syn::{Data, DeriveInput, ItemFn, ItemImpl, parse_macro_input};
 pub fn derive_generator(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
+    if !input.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &input.generics,
+            "#[derive(DefaultGenerator)] does not support generic types: the generated \
+             generator has no way to pick concrete generators for the type parameters. \
+             Implement DefaultGenerator by hand for the concrete instantiations you need.",
+        )
+        .to_compile_error()
+        .into();
+    }
     match &input.data {
         Data::Struct(data) => struct_gen::derive_struct_generator(&input, data),
         Data::Enum(data) => enum_gen::derive_enum_generator(&input, data),
@@ -43,7 +53,15 @@ pub fn standalone_function(attr: TokenStream, item: TokenStream) -> TokenStream 
 }
 
 #[proc_macro_attribute]
-pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn composite(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "#[hegel::composite] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
     let input = parse_macro_input!(item as ItemFn);
     composite::expand_composite(input).into()
 }
@@ -92,7 +110,15 @@ pub fn reproduce_failure(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn state_machine(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "#[hegel::state_machine] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
     let block = parse_macro_input!(item as ItemImpl);
     stateful::expand_state_machine(block).into()
 }

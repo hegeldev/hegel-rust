@@ -31,7 +31,7 @@ pub fn expand_explicit_test_case(_attr: TokenStream, item: TokenStream) -> Token
              Write:\n  \
                #[hegel::test]\n  \
                #[hegel::explicit_test_case(...)]\n  \
-               fn my_test(tc: hegel::TestCase) { ... }",
+               fn my_test(tc: ::hegel::TestCase) { ... }",
         )
         .to_compile_error()
     } else {

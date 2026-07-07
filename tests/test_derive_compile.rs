@@ -23,3 +23,73 @@ fn main() {}
         )
         .cargo_run(&[]);
 }
+
+#[test]
+fn test_derive_on_zero_variant_enum_is_a_clean_compile_error() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+#[derive(Debug, hegel::DefaultGenerator)]
+enum Void {}
+
+fn main() {}
+"#,
+        )
+        .expect_failure("cannot be derived for enums with no variants")
+        .cargo_run(&[]);
+}
+
+#[test]
+fn test_derive_on_generic_type_is_a_clean_compile_error() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+#[derive(Debug, hegel::DefaultGenerator)]
+struct Point<T> {
+    x: T,
+}
+
+fn main() {}
+"#,
+        )
+        .expect_failure("does not support generic types")
+        .cargo_run(&[]);
+}
+
+#[test]
+fn test_derive_with_field_named_new_is_a_clean_compile_error() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+#[derive(Debug, hegel::DefaultGenerator)]
+struct Odd {
+    new: bool,
+}
+
+fn main() {}
+"#,
+        )
+        .expect_failure("collides with the generated builder API")
+        .cargo_run(&[]);
+}
+
+/// `Foo` (tuple) generates `foo` and `foo_with` builders; `FooWith` (named)
+/// would generate `foo_with` too. Both must fall back to their raw variant
+/// idents rather than colliding.
+#[test]
+fn test_derive_with_variant_with_suffix_collision_compiles() {
+    TempRustProject::new()
+        .main_file(
+            r#"
+#[derive(Debug, hegel::DefaultGenerator)]
+#[allow(dead_code)]
+enum Tricky {
+    Foo(u32),
+    FooWith { x: u32 },
+}
+
+fn main() {}
+"#,
+        )
+        .cargo_run(&[]);
+}
