@@ -667,15 +667,11 @@ enum EscapeResult {
 }
 
 fn uniq_set(items: Vec<SetItem>) -> Vec<SetItem> {
-    let mut seen = Vec::new();
-    let mut out = Vec::new();
-    for item in items {
-        if !seen.iter().any(|x: &SetItem| x == &item) {
-            seen.push(item.clone());
-            out.push(item);
-        }
-    }
-    out
+    let mut seen = std::collections::HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| seen.insert(item.clone()))
+        .collect()
 }
 
 fn is_repeat_opcode(op: &OpCode) -> bool {

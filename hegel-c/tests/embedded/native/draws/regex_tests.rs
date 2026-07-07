@@ -669,7 +669,8 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     let cache = Mutex::new(HashMap::new());
-    let mut state = ignorecase_state(&cache);
+    let char_cache = Mutex::new(HashMap::new());
+    let mut state = ignorecase_state(&cache, &char_cache);
     let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
@@ -685,7 +686,10 @@ fn compile_rejects_unparseable_patterns() {
     assert!(CompiledRegex::compile("a+b?", None).is_ok());
 }
 
-fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> {
+fn ignorecase_state<'a>(
+    cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
+    char_cache: &'a Mutex<HashMap<CharKey, Arc<[char]>>>,
+) -> GenState<'a> {
     GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,
@@ -695,6 +699,7 @@ fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> 
         pending_lookaheads: Vec::new(),
         needs_whole_match: false,
         in_cache: cache,
+        char_cache,
     }
 }
 
@@ -702,9 +707,10 @@ fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> 
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     use crate::native::rng::EngineRng;
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
         assert_eq!(out, "ß", "seed {seed} emitted a non-matching case variant");
@@ -716,9 +722,10 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     use crate::native::rng::EngineRng;
     let mut seen = std::collections::HashSet::new();
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
         seen.insert(out);
@@ -737,9 +744,10 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
         (0x307, 0x307),
     ]));
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..100 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(
             &mut ntc,

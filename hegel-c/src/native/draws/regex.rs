@@ -26,11 +26,17 @@ type InKey = (usize, usize, u32);
 /// the parsed AST, the optional user alphabet, and a cross-draw cache of
 /// the alphabet-constrained `IN`-node character sets (category classes like
 /// `\w` cost a full alphabet scan to materialise).
+/// Cache key for the alphabet-constrained `Any` and `NotLiteral` character
+/// sets: the excluded codepoint (`u32::MAX` for `Any`, which has none) plus
+/// the flag bits the set depends on.
+type CharKey = (u32, u32);
+
 #[derive(Debug)]
 pub(crate) struct CompiledRegex {
     parsed: ParsedPattern,
     alphabet: Option<IntervalSet>,
     in_cache: Mutex<HashMap<InKey, Arc<[char]>>>,
+    char_cache: Mutex<HashMap<CharKey, Arc<[char]>>>,
 }
 
 impl CompiledRegex {
@@ -47,6 +53,7 @@ impl CompiledRegex {
             parsed,
             alphabet,
             in_cache: Mutex::new(HashMap::new()),
+            char_cache: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -94,6 +101,7 @@ fn generate_regex_attempt(
         pending_lookaheads: Vec::new(),
         needs_whole_match: false,
         in_cache: &re.in_cache,
+        char_cache: &re.char_cache,
     };
     let mut result = String::new();
 
@@ -222,6 +230,9 @@ struct GenState<'a> {
     /// The enclosing [`CompiledRegex`]'s cross-draw cache of
     /// alphabet-constrained `IN`-node character sets.
     in_cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
+    /// The enclosing [`CompiledRegex`]'s cross-draw cache of
+    /// alphabet-constrained `Any` / `NotLiteral` character sets.
+    char_cache: &'a Mutex<HashMap<CharKey, Arc<[char]>>>,
 }
 
 struct PendingAnchor {
@@ -291,9 +302,9 @@ fn draw_prefix(
         match at {
             AtCode::BeginningString => return Ok(()),
             AtCode::Beginning => {
-                if parsed.flags & SRE_FLAG_MULTILINE != 0 {
+                if parsed.flags & SRE_FLAG_MULTILINE != 0 && alphabet_allows(alphabet, '\n') {
                     draw_pad(ntc, alphabet, out)?;
-                    if !out.is_empty() && ntc.weighted(0.5, None)? {
+                    if !out.is_empty() {
                         out.push('\n');
                     }
                 }
@@ -315,6 +326,9 @@ fn draw_suffix(
         match at {
             AtCode::EndString => return Ok(()),
             AtCode::End => {
+                if !alphabet_allows(alphabet, '\n') {
+                    return Ok(());
+                }
                 if parsed.flags & SRE_FLAG_MULTILINE != 0 {
                     if ntc.weighted(0.5, None)? {
                         out.push('\n');
@@ -378,15 +392,29 @@ fn generate_op(
                 let chars = cached_default_not_literal(*cp, state.flags);
                 emit_from_chars(ntc, &chars, out)?;
             } else {
-                let c = codepoint_to_char(*cp);
-                let blacklist = swapcase_blacklist(c, state.flags);
-                let chars = gather_chars(alphabet, |c| !blacklist.contains(&c));
+                let chars = cached_chars(
+                    state.char_cache,
+                    (*cp, state.flags & SRE_FLAG_IGNORECASE),
+                    || {
+                        let c = codepoint_to_char(*cp);
+                        let blacklist = swapcase_blacklist(c, state.flags);
+                        gather_chars(alphabet, |c| !blacklist.contains(&c))
+                    },
+                );
                 emit_from_chars(ntc, &chars, out)?;
             }
         }
         OpCode::Any => {
             let allow_newline = state.flags & SRE_FLAG_DOTALL != 0;
-            let chars = gather_chars(alphabet, |c| allow_newline || c != '\n');
+            let chars = if alphabet.is_none() {
+                cached_default_any(allow_newline)
+            } else {
+                cached_chars(
+                    state.char_cache,
+                    (u32::MAX, state.flags & SRE_FLAG_DOTALL),
+                    || gather_chars(alphabet, |c| allow_newline || c != '\n'),
+                )
+            };
             emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::At(at) => match at {
@@ -549,10 +577,11 @@ fn generate_op(
 fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache_key = (items.to_vec(), flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII));
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap();
-        if let Some(cached) = guard.get(&(items.to_vec(), flags)) {
+        if let Some(cached) = guard.get(&cache_key) {
             return Arc::clone(cached);
         }
     }
@@ -560,7 +589,40 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
     cache
         .lock()
         .unwrap()
-        .insert((items.to_vec(), flags), Arc::clone(&computed));
+        .insert(cache_key, Arc::clone(&computed));
+    computed
+}
+
+/// Cached character set for `Any` nodes with the default alphabet: the whole
+/// BMP minus surrogates (minus `'\n'` without DOTALL). Same rationale as
+/// [`cached_default_in_set`] — the 64K-codepoint scan is too expensive to
+/// repeat per drawn character.
+fn cached_default_any(allow_newline: bool) -> Arc<[char]> {
+    static CACHE: OnceLock<[Arc<[char]>; 2]> = OnceLock::new();
+    let both = CACHE.get_or_init(|| {
+        [
+            gather_chars(&None, |c| c != '\n').into(),
+            gather_chars(&None, |_| true).into(),
+        ]
+    });
+    Arc::clone(&both[usize::from(allow_newline)])
+}
+
+/// Look up `key` in a per-[`CompiledRegex`] character-set cache, computing
+/// and inserting it on a miss.
+fn cached_chars<F: FnOnce() -> Vec<char>>(
+    cache: &Mutex<HashMap<CharKey, Arc<[char]>>>,
+    key: CharKey,
+    compute: F,
+) -> Arc<[char]> {
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(cached) = guard.get(&key) {
+            return Arc::clone(cached);
+        }
+    }
+    let computed: Arc<[char]> = compute().into();
+    cache.lock().unwrap().insert(key, Arc::clone(&computed));
     computed
 }
 

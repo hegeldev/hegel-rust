@@ -82,37 +82,49 @@ impl IntervalSet {
         Some(u + t as u32)
     }
 
+    /// Index of the last interval whose start is `<= elem` — the only
+    /// interval that can contain `elem` — or `None` when every interval
+    /// starts above it.
+    fn interval_for(&self, elem: u32) -> Option<usize> {
+        self.intervals
+            .partition_point(|&(s, _)| s <= elem)
+            .checked_sub(1)
+    }
+
     pub fn contains(&self, elem: u32) -> bool {
-        self.intervals.iter().any(|&(s, e)| s <= elem && elem <= e)
+        match self.interval_for(elem) {
+            Some(j) => elem <= self.intervals[j].1,
+            None => false,
+        }
     }
 
     /// Position of `value`, or `None` if not present.
     pub fn index(&self, value: u32) -> Option<usize> {
-        for (&offset, &(u, v)) in self.offsets.iter().zip(&self.intervals) {
-            if u == value {
-                return Some(offset);
-            } else if u > value {
-                return None;
-            }
-            if value <= v {
-                return Some(offset + (value - u) as usize);
-            }
+        let j = self.interval_for(value)?;
+        let (u, v) = self.intervals[j];
+        if value <= v {
+            Some(self.offsets[j] + (value - u) as usize)
+        } else {
+            None
         }
-        None
     }
 
     /// Smallest position `i` with `self[i] >= value`, or `self.len()` if
     /// every element is below `value`.
     pub fn index_above(&self, value: u32) -> usize {
-        for (&offset, &(u, v)) in self.offsets.iter().zip(&self.intervals) {
-            if u >= value {
-                return offset;
+        match self.interval_for(value) {
+            Some(j) => {
+                let (u, v) = self.intervals[j];
+                if value <= v {
+                    self.offsets[j] + (value - u) as usize
+                } else if j + 1 < self.intervals.len() {
+                    self.offsets[j + 1]
+                } else {
+                    self.size
+                }
             }
-            if value <= v {
-                return offset + (value - u) as usize;
-            }
+            None => 0,
         }
-        self.size
     }
 
     /// Set-union: every element of `self` or `other`. Overlapping or

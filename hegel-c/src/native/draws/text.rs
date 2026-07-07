@@ -114,11 +114,6 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
 
     let base = range_minus_surrogates(cp_min, cp_max);
 
-    let needs_category_filter = categories.is_some()
-        || exclude_categories
-            .map(|ec| !ec.iter().all(|c| c == "Cs"))
-            .unwrap_or(false);
-
     let mut intervals = if let Some(cats) = categories {
         if cats.is_empty() {
             IntervalSet::new(Vec::new())
@@ -127,7 +122,9 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
             base.intersection(&cat_union)
         }
     } else if let Some(excl_cats) = exclude_categories {
-        if needs_category_filter {
+        if excl_cats.iter().all(|c| c == "Cs") {
+            base
+        } else {
             let cat_union = categories_union(
                 &excl_cats
                     .iter()
@@ -136,8 +133,6 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
                     .collect::<Vec<_>>(),
             );
             base.difference(&cat_union)
-        } else {
-            base
         }
     } else {
         base
@@ -152,15 +147,8 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
 
     if let Some(ref incl) = include_chars {
         if !incl.is_empty() {
-            let incl_filtered: Vec<char> = incl
-                .iter()
-                .filter(|c| !is_surrogate(**c))
-                .copied()
-                .collect();
-            if !incl_filtered.is_empty() {
-                let incl_set = chars_to_intervals(&incl_filtered);
-                intervals = intervals.union(&incl_set);
-            }
+            let incl_set = chars_to_intervals(incl);
+            intervals = intervals.union(&incl_set);
         }
     }
 
@@ -259,10 +247,6 @@ fn category_intervalset(cat: &str) -> IntervalSet {
         ranges.push((start, 0x10FFFF));
     }
     IntervalSet::new(ranges)
-}
-
-fn is_surrogate(c: char) -> bool {
-    (0xD800..=0xDFFF).contains(&(c as u32))
 }
 
 /// Whether `cat` is a valid Unicode general category name. Accepts the seven
