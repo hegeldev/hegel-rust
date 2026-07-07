@@ -73,6 +73,16 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
             "float bounds must not be NaN".to_string(),
         ));
     }
+    if spec.allow_nan && (spec.min_value.is_finite() || spec.max_value.is_finite()) {
+        return Err(EngineError::InvalidArgument(
+            "Cannot have allow_nan=true with min_value or max_value".to_string(),
+        ));
+    }
+    if spec.allow_infinity && spec.min_value.is_finite() && spec.max_value.is_finite() {
+        return Err(EngineError::InvalidArgument(
+            "Cannot have allow_infinity=true with both min_value and max_value".to_string(),
+        ));
+    }
     if spec.width == 32 {
         for (name, bound) in [("min_value", spec.min_value), ("max_value", spec.max_value)] {
             if f64::from(bound as f32) != bound {
