@@ -135,6 +135,32 @@ fn lower_integers_together_skips_kind_punning() {
 }
 
 #[test]
+fn lower_integers_together_survives_accepted_same_length_kind_pun() {
+    use crate::native::core::choices::BooleanChoice;
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let mut out: Vec<ChoiceNode> = nodes.to_vec();
+                out[0] = ChoiceNode::new(
+                    ChoiceKind::Boolean(BooleanChoice),
+                    ChoiceValue::Boolean(false),
+                    false,
+                );
+                (true, out, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5), int_node(10), int_node(20)],
+        Spans::new(),
+    );
+    shrinker.lower_integers_together().unwrap();
+    assert!(matches!(
+        shrinker.current_nodes[0].value,
+        ChoiceValue::Boolean(false)
+    ));
+}
+
+#[test]
 fn shrink_duplicates_skips_groups_whose_members_diverged() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run| match run {
