@@ -228,6 +228,23 @@ fn step_choice_bytes_handles_zero_after_step() {
 }
 
 #[test]
+fn step_choice_bytes_handles_values_wider_than_128_bits() {
+    let mut value = vec![0x01u8; 17];
+    let node = bytes_node(value.clone(), 0, 32);
+    value[16] = 0x02;
+    assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Bytes(value)));
+}
+
+#[test]
+fn step_choice_bytes_handles_high_bit_of_16_byte_value() {
+    let mut value = vec![0x00u8; 16];
+    value[0] = 0x80;
+    let node = bytes_node(value.clone(), 0, 32);
+    value[15] = 0x01;
+    assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Bytes(value)));
+}
+
+#[test]
 fn step_choice_bytes_returns_none_when_overflows_max_size() {
     let node = bytes_node(vec![0xFF], 0, 1);
     assert_eq!(step_choice(&node, 1), None);
