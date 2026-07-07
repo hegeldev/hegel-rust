@@ -1,4 +1,35 @@
-/// guaranteed to reproduce a failure within a specific version of Hegel.
+//! Failure blobs: a portable, copy-pasteable reproducer for a failing test
+//! case — a base64 string encoding its choice sequence.
+//!
+//! A blob encodes the *choice sequence* of a (usually minimal) failing test
+//! case so it can be replayed deterministically — pasted into a
+//! `#[hegel::reproduce_failure("…")]` attribute, fed to
+//! `Hegel::reproduce_failure`, or handed across the C ABI.
+//!
+//! # Format
+//!
+//! ```text
+//! base64( prefix_byte ++ payload )
+//! ```
+//!
+//! where `payload` is [`serialize_choices`] of the choice sequence and the
+//! `prefix_byte` selects how it is stored:
+//!
+//! - `0` (`PREFIX_RAW`):  `payload` is the raw `serialize_choices` bytes.
+//! - `1` (`PREFIX_ZLIB`): `payload` is the zlib compression of those bytes.
+//!
+//! [`encode_failure`] computes both and keeps whichever is shorter — for the
+//! tiny choice sequences a shrunk counterexample usually has, the zlib header
+//! overhead loses and the raw form wins (so most blobs carry prefix `0`); for
+//! large sequences the compressed form wins. The inner `serialize_choices`
+//! encoding (see [`crate::native::database`]) is Hegel's own, so it is only
+//! guaranteed to reproduce a failure within a specific version of Hegel.
+//!
+//! [`decode_failure`] reverses every step and returns `None` on *any*
+//! malformation (bad base64, unknown prefix byte, corrupt zlib stream, or a
+//! payload [`deserialize_choices`] rejects). Callers treat `None` as "this
+//! blob can't be replayed" and panic.
+
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
 use crate::native::database::{deserialize_choices, serialize_choices};

@@ -221,7 +221,13 @@ impl<'a> Engine<'a> {
                     if run.status == Status::Interesting {
                         if i < primary_count {
                             found_interesting_in_primary = true;
-                            if run.nodes.len() != stored_choices.len() {
+                            if run.nodes.len() != stored_choices.len()
+                                || run
+                                    .nodes
+                                    .iter()
+                                    .zip(&stored_choices)
+                                    .any(|(node, stored)| node.value != *stored)
+                            {
                                 replay_aligned = false;
                             }
                         } else {
@@ -486,8 +492,13 @@ impl<'a> Engine<'a> {
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, _) = self.test_function(verify_ntc);
-                if verify.status != Status::Interesting {
+                let (verify, mismatch) = self.test_function(verify_ntc);
+                if let Some(msg) = mismatch {
+                    return Err(RunError::NonDeterministic(msg));
+                }
+                if verify.status != Status::Interesting
+                    || verify.origin.as_deref() != Some(origin.as_str())
+                {
                     return Err(RunError::Flaky(flaky_diagnostic()));
                 }
 
@@ -545,7 +556,6 @@ impl<'a> Engine<'a> {
                 );
             }
             log_phase("Shrink", "End");
-        } else if self.interesting.is_empty() && verbosity == Verbosity::Debug {
         } else if replay_aligned && verbosity == Verbosity::Debug {
             eprintln!("Skipping shrink: reused aligned database replay");
         }

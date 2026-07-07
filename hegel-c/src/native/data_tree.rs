@@ -233,6 +233,8 @@ pub(crate) fn record_tree_full(
     for first in nodes {
         let parent_ptr = *path.last().unwrap();
         // SAFETY: `parent_ptr` is either the original `tree_root` or a
+        // pointer derived from the previous `or_insert_with` borrow; no
+        // other live `&mut` aliases the node.
         let node = unsafe { &mut *parent_ptr };
         match &node.kind {
             Some(expected_kind) if *expected_kind != first.kind => {
@@ -268,6 +270,7 @@ pub(crate) fn record_tree_full(
     }
     for (depth, events) in by_pos.into_iter().enumerate() {
         // SAFETY: `path[depth]` is a unique pointer into the tree; no other
+        // live reference aliases it here.
         let node = unsafe { &mut *path[depth] };
         node.span_events = events;
     }
@@ -292,6 +295,7 @@ pub(crate) fn record_tree_full(
 
     while let Some(p) = path.pop() {
         // SAFETY: `p` is the just-popped pointer; no other live
+        // reference exists to that node at this point.
         let node = unsafe { &mut *p };
         node.check_exhausted();
     }
