@@ -213,7 +213,7 @@ fn null_handles_are_rejected_without_crashing() {
 
         assert_eq!(
             hegel_test_case_clone(ctx, ptr::null(), ptr::null_mut()),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         let mut clone_out: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
@@ -1238,6 +1238,10 @@ fn clones_share_a_run_owned_family() {
         let root = next_case(ctx, run);
         assert!(!root.is_null());
 
+        assert_eq!(
+            hegel_test_case_clone(ctx, root, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
         let mut c1: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
         assert!(!c1.is_null());

@@ -1222,15 +1222,15 @@ pub unsafe extern "C" fn hegel_next_test_case(
     out_test_case: *mut *mut HegelTestCase,
 ) -> hegel_result_t {
     clear_last_error(ctx);
+    let Some(run) = (unsafe { run.as_mut() }) else {
+        set_last_error(ctx, "hegel_next_test_case: run pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
     if out_test_case.is_null() {
         set_last_error(ctx, "hegel_next_test_case: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    let Some(run) = (unsafe { run.as_mut() }) else {
-        set_last_error(ctx, "hegel_next_test_case: run pointer is null");
-        return HEGEL_E_INVALID_HANDLE;
-    };
 
     if let Some(family) = run.current_family.take() {
         if !family.completed.load(Ordering::Acquire) {
@@ -1295,15 +1295,15 @@ pub unsafe extern "C" fn hegel_run_result(
     out_result: *mut *mut HegelRunResult,
 ) -> hegel_result_t {
     clear_last_error(ctx);
+    let Some(run) = (unsafe { run.as_ref() }) else {
+        set_last_error(ctx, "hegel_run_result: run pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
     if out_result.is_null() {
         set_last_error(ctx, "hegel_run_result: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_result = ptr::null_mut() };
-    let Some(run) = (unsafe { run.as_ref() }) else {
-        set_last_error(ctx, "hegel_run_result: run pointer is null");
-        return HEGEL_E_INVALID_HANDLE;
-    };
     match &run.result {
         Some(r) => {
             unsafe { *out_result = into_raw_send_sync(r.clone()) };
@@ -1411,15 +1411,15 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
     out_test_case: *mut *mut HegelTestCase,
 ) -> hegel_result_t {
     clear_last_error(ctx);
+    let Some(handle) = (unsafe { s.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_from_blob: settings pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
     if out_test_case.is_null() {
         set_last_error(ctx, "hegel_test_case_from_blob: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    let Some(handle) = (unsafe { s.as_ref() }) else {
-        set_last_error(ctx, "hegel_test_case_from_blob: settings pointer is null");
-        return HEGEL_E_INVALID_HANDLE;
-    };
     if blob.is_null() {
         set_last_error(ctx, "hegel_test_case_from_blob: blob pointer is null");
         return HEGEL_E_INVALID_ARG;
@@ -1511,15 +1511,15 @@ pub unsafe extern "C" fn hegel_test_case_clone(
     out_test_case: *mut *mut HegelTestCase,
 ) -> hegel_result_t {
     clear_last_error(ctx);
+    let (src, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_clone", tc) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
     if out_test_case.is_null() {
         set_last_error(ctx, "hegel_test_case_clone: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    let (src, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_clone", tc) } {
-        Ok(pair) => pair,
-        Err(rc) => return rc,
-    };
     let stream = match src.stream.clone_stream() {
         Ok(stream) => stream,
         Err(e) => return translate_ds_error(ctx, e),
