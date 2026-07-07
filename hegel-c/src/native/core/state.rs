@@ -585,6 +585,9 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
 pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+    if sc.intervals.is_empty() {
+        return Vec::new();
+    }
     let want_empty = sc.min_size == 0 && sc.max_size > 0;
     let want_one = sc.min_size <= 1 && sc.max_size >= 1;
     let want_two = sc.min_size <= 2 && sc.max_size >= 2;

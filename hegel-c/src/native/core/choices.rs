@@ -278,13 +278,20 @@ impl StringChoice {
     }
 
     /// The simplest sequence of codepoints of length `min_size`, built
-    /// from repeated [`simplest_codepoint`].
+    /// from repeated [`simplest_codepoint`]. An empty alphabet is legal when
+    /// `min_size == 0` (the empty string is then the choice's only value).
     pub fn simplest(&self) -> Vec<u32> {
+        if self.min_size == 0 {
+            return Vec::new();
+        }
         vec![self.simplest_codepoint(); self.min_size]
     }
 
     /// Second-simplest codepoint sequence, used for type-punning during replay.
     pub fn unit(&self) -> Vec<u32> {
+        if self.intervals.is_empty() {
+            return self.simplest();
+        }
         let simplest_cp = self.simplest_codepoint();
         let second_cp = self.key_to_codepoint(1);
         match second_cp {
@@ -367,7 +374,10 @@ impl StringChoice {
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
         use crate::native::bignum::{BigUint, Zero};
         let alpha = BigUint::from(self.alpha_size());
-        hegel_internal_assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
+        hegel_internal_assert!(
+            !alpha.is_zero() || self.max_size == 0,
+            "StringChoice::from_index: empty alphabet with nonzero max_size"
+        );
         let mut remaining = index;
         for length in self.min_size..=self.max_size {
             let bucket_size = alpha.pow(length as u32);

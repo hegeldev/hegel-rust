@@ -1032,6 +1032,24 @@ fn choice_value_equality_is_false_across_variants() {
 }
 
 #[test]
+fn string_choice_empty_alphabet_zero_max_size_has_empty_simplest_and_unit() {
+    let sc = string_choice(vec![], 0, 0);
+    assert_eq!(sc.simplest(), Vec::<u32>::new());
+    assert_eq!(sc.unit(), Vec::<u32>::new());
+    assert!(sc.validate(&[]));
+}
+
+#[test]
+fn string_choice_empty_alphabet_zero_max_size_indexing_round_trips() {
+    use crate::native::bignum::BigUint;
+    let sc = string_choice(vec![], 0, 0);
+    assert_eq!(sc.max_index(), BigUint::from(0u32));
+    assert_eq!(sc.to_index(&[]), BigUint::from(0u32));
+    assert_eq!(sc.from_index(BigUint::from(0u32)), Some(Vec::new()));
+    assert_eq!(sc.from_index(BigUint::from(1u32)), None);
+}
+
+#[test]
 fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
     let sc = string_choice(vec![], 0, 1);
     let payload =

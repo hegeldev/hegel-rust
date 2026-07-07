@@ -987,6 +987,19 @@ fn biased_string_sample_caps_constant_pool_probability() {
 }
 
 #[test]
+fn biased_string_sample_empty_alphabet_returns_empty_string() {
+    let sc = StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![]).into(),
+        min_size: 0,
+        max_size: 0,
+    };
+    let mut rng = EngineRng::seeded(7);
+    for _ in 0..200 {
+        assert_eq!(biased_string_sample(&sc, &mut rng), Vec::<u32>::new());
+    }
+}
+
+#[test]
 fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let fc = FloatChoice {
         min_value: -f64::MAX,
@@ -1179,6 +1192,24 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
     let msg = payload.downcast_ref::<String>().unwrap();
     assert!(msg.contains("min_size <= max_size"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
+    let choices = vec![ChoiceValue::String(Vec::new())];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
+    assert_eq!(s, "");
+}
+
+#[test]
+fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
+    let choices = vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(5))];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
+    assert_eq!(s, "");
 }
 
 #[test]
