@@ -244,6 +244,10 @@ pub(crate) fn run_test_case(
     let quiet = verbosity == Verbosity::Quiet;
     let should_emit = (is_final && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
+    // Drop any capture left over from a previous test case on this thread
+    // (e.g. a body that caught its own panic and then passed): a later panic
+    // that skips the hook via resume_unwind must not inherit it.
+    take_panic_info();
 
     let c_tc = Arc::new(c_tc);
     let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode);

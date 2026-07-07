@@ -263,6 +263,53 @@ fn capture_flag() -> bool {
 }
 
 #[test]
+fn stateful_overrun_mid_rule_is_reported_as_overrun() {
+    use crate::stateful::{Rule, StateMachine};
+    struct Hungry;
+    impl StateMachine for Hungry {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("chomp", |_m, tc| {
+                loop {
+                    let _: i64 = tc.draw(gs::integers());
+                }
+            })]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+    let result = run_case_capturing(false, Verbosity::Normal, &mut |tc| {
+        crate::stateful::run(Hungry, tc);
+        panic!("unreachable: the endless rule must exhaust the choice budget");
+    });
+    assert!(
+        matches!(result, TestCaseResult::Overrun),
+        "an overrun inside a rule must unwind through run(), got {result:?}"
+    );
+}
+
+#[test]
+fn stale_panic_info_is_not_attributed_to_a_later_hook_skipping_panic() {
+    let result = run_case_capturing(false, Verbosity::Normal, &mut |_tc| {
+        let _ = std::panic::catch_unwind(|| panic!("handled internally"));
+    });
+    assert!(matches!(result, TestCaseResult::Valid));
+
+    let result = run_case_capturing(false, Verbosity::Normal, &mut |_tc| {
+        std::panic::resume_unwind(Box::new("hook-skipping panic".to_string()));
+    });
+    match result {
+        TestCaseResult::Interesting(f) => {
+            assert_eq!(
+                f.origin, "Panic at <unknown>",
+                "a hook-skipping panic must not inherit the previous case's capture"
+            );
+        }
+        other => panic!("expected Interesting, got {other:?}"),
+    }
+}
+
+#[test]
 fn discarded_failures_skip_backtrace_capture() {
     run_case_capturing(false, Verbosity::Normal, &mut |_tc| panic!("{}", "boom"));
     assert!(

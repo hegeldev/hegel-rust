@@ -61,7 +61,7 @@
 //! ```
 
 use crate::TestCase;
-use crate::control::{AssumeFailed, StopTest, raise_control};
+use crate::control::{AssumeFailed, hegel_internal_assert};
 use crate::generators::{Generator, integers};
 use crate::runner::Mode;
 use crate::test_case::raise_for_rc;
@@ -111,7 +111,7 @@ pub struct Pool<T> {
 fn pool_generate(tc: &TestCase, pool_id: i64, consume: bool) -> i64 {
     match tc.with_ctc(|ctc| ctc.pool_generate(pool_id, consume)) {
         Ok(id) => id,
-        Err(_) => raise_control(StopTest),
+        Err(rc) => raise_for_rc(rc),
     }
 }
 
@@ -130,7 +130,7 @@ impl<T> Pool<T> {
     pub fn add(&mut self, v: T) {
         let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
             Ok(id) => id,
-            Err(_) => raise_control(StopTest), // nocov
+            Err(rc) => raise_for_rc(rc), // nocov
         };
         if self.values.contains_key(&variable_id) {
             panic!("unexpected variable id in map"); // nocov
@@ -203,7 +203,7 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
 pub fn pool<T>(tc: &TestCase) -> Pool<T> {
     let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
         Ok(id) => id,
-        Err(_) => raise_control(StopTest), // nocov
+        Err(rc) => raise_for_rc(rc), // nocov
     };
     Pool {
         pool_id,
@@ -224,8 +224,7 @@ pub trait StateMachine {
     fn invariants(&self) -> Vec<Rule<Self>>;
 }
 
-fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
-    let invariants = m.invariants();
+fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &TestCase) {
     for invariant in invariants {
         let inv_tc = tc.child(2); // nocov
         (invariant.apply)(m, inv_tc); // nocov
@@ -233,7 +232,7 @@ fn check_invariants(m: &mut impl StateMachine, tc: &TestCase) {
 }
 
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
-pub fn run(mut m: impl StateMachine, tc: TestCase) {
+pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let invariants = m.invariants();
@@ -244,7 +243,7 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
     };
 
     tc.note("Initial invariant check.");
-    check_invariants(&mut m, &tc);
+    check_invariants(&mut m, &invariants, &tc);
 
     let is_single = tc.mode() == Mode::SingleTestCase;
 
@@ -267,10 +266,14 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
     {
         step += 1;
         let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
-            Ok(i) => i as usize,
+            Ok(i) => i,
             Err(rc) => raise_for_rc(rc),
         };
-        let rule = &rules[rule_index];
+        hegel_internal_assert!(
+            (0..rules.len() as i64).contains(&rule_index),
+            "state_machine_next_rule returned out-of-range rule index {rule_index}"
+        );
+        let rule = &rules[rule_index as usize];
         tc.note(&format!("Step {}: {}", step, rule.name));
 
         let rule_tc = tc.child(2);
@@ -281,12 +284,14 @@ pub fn run(mut m: impl StateMachine, tc: TestCase) {
         match result {
             Ok(()) => {
                 steps_run_successfully += 1;
-                check_invariants(&mut m, &tc);
+                check_invariants(&mut m, &invariants, &tc);
             }
-            Err(e) if e.downcast_ref::<StopTest>().is_some() => break,
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
                 tc.note("Rule stopped early due to violated assumption.");
             }
+            // Everything else — including StopTest, so an out-of-data case is
+            // reported as an overrun instead of returning normally with a
+            // half-applied rule — unwinds through the caller.
             Err(e) => resume_unwind(e),
         };
     }
