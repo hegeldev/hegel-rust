@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.1 - 2026-07-07
+
+This patch updates the PathBuf DefaultGenerator to generate non-UTF-8 paths on Unix and Windows systems.
+
 ## 0.24.0 - 2026-07-06
 
 This release removes `gs::fixed_dicts()` and its `FixedDictBuilder` /
