@@ -201,7 +201,7 @@ fn usage() -> String {
     s.push_str("  --verbosity <LEVEL>                  quiet | normal | verbose | debug\n");
     s.push_str("  --derandomize <true|false>           Use a deterministic derived seed\n");
     s.push_str(
-        "  --database <PATH|disabled>           Database path for failing-example storage\n",
+        "  --database <PATH|disabled|none>      Database path for failing-example storage\n",
     );
     s.push_str(
         "  --suppress-health-check <NAMES>      Comma-separated health check names, or 'all'\n",

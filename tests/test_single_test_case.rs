@@ -121,6 +121,33 @@ fn test_single_test_case_via_test_macro(tc: TestCase) {
 }
 
 #[test]
+fn test_single_test_case_repeat_continues_past_failed_assumption() {
+    let iteration_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counter = iteration_count.clone();
+
+    expect_panic(
+        || {
+            hegel::Hegel::new(move |tc| {
+                tc.repeat(|| {
+                    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if n % 2 == 0 {
+                        tc.assume(false);
+                    }
+                    if n >= 10 {
+                        panic!("reached 10 iterations");
+                    }
+                });
+            })
+            .settings(hegel::Settings::new().mode(Mode::SingleTestCase))
+            .run();
+        },
+        "reached 10 iterations",
+    );
+
+    assert!(iteration_count.load(std::sync::atomic::Ordering::Relaxed) >= 10);
+}
+
+#[test]
 fn test_single_test_case_repeat_loops_indefinitely() {
     let iteration_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let counter = iteration_count.clone();

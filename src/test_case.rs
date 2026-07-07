@@ -249,10 +249,14 @@ thread_local! {
 /// stderr. Non-final test cases still drop their draw/note output as usual.
 #[doc(hidden)]
 pub fn with_output_override<R>(sink: OutputSink, f: impl FnOnce() -> R) -> R {
-    let prev = OUTPUT_OVERRIDE.with(|cell| cell.borrow_mut().replace(sink));
-    let result = f();
-    OUTPUT_OVERRIDE.with(|cell| *cell.borrow_mut() = prev);
-    result
+    struct Restore(Option<OutputSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OUTPUT_OVERRIDE.with(|cell| *cell.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(OUTPUT_OVERRIDE.with(|cell| cell.borrow_mut().replace(sink)));
+    f()
 }
 
 /// Return a clone of the currently-installed output sink, if any. Lets the
@@ -519,16 +523,22 @@ impl TestCase {
 
             let prev_indent = self.local.borrow().indent;
             self.local.borrow_mut().indent = prev_indent + 2;
-            body();
+            let result = catch_unwind(AssertUnwindSafe(&mut *body));
             self.local.borrow_mut().indent = prev_indent;
+
+            match result {
+                Ok(()) => {}
+                Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {}
+                Err(e) => resume_unwind(e),
+            }
         }
     }
 
     fn repeat_property_test(&self, body: &mut dyn FnMut()) -> ! {
         use crate::generators::{booleans, integers};
 
-        const MAX_SAFE_MIN_SIZE: usize = 1 << 40;
-        let min_size = self.draw_silent(integers::<usize>().max_value(MAX_SAFE_MIN_SIZE));
+        let max_safe_min_size = usize::try_from(1u64 << 40).unwrap_or(usize::MAX / 2);
+        let min_size = self.draw_silent(integers::<usize>().max_value(max_safe_min_size));
 
         let mut collection = Collection::new(self, min_size, None);
         let mut iteration: u64 = 0;

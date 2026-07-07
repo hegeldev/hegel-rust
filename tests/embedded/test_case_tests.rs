@@ -183,3 +183,16 @@ fn unexpected_code_unwinds_as_an_internal_error() {
     assert!(msg.contains("unexpected code -3"), "{msg}");
     assert!(msg.contains("Internal error in hegel"), "{msg}");
 }
+
+#[test]
+fn with_output_override_restores_the_sink_on_panic() {
+    let sink: OutputSink = std::sync::Arc::new(|_line: &str| {});
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_output_override(sink, || panic!("boom"));
+    }));
+    assert!(result.is_err());
+    assert!(
+        current_output_sink().is_none(),
+        "a panicking capture closure must not leave its sink installed"
+    );
+}

@@ -269,16 +269,23 @@ pub(crate) fn run_test_case(
                 Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
                 Err(e) => e,
             };
-            let msg = panic_message(&e);
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
-            let diagnostic =
-                render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
             let captured = if is_final && !quiet {
-                Some(diagnostic)
+                let msg = panic_message(&e);
+                Some(render_diagnostic(
+                    &thread_name,
+                    &thread_id,
+                    &location,
+                    &msg,
+                    &backtrace,
+                ))
             } else {
                 if verbose {
+                    let msg = panic_message(&e);
+                    let diagnostic =
+                        render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
                     for line in diagnostic.trim_end_matches('\n').split('\n') {
                         crate::test_case::emit_verbose_line(line);
                     }
@@ -286,9 +293,7 @@ pub(crate) fn run_test_case(
                 None
             };
             let failure = TestCaseResult::Interesting(Failure {
-                panic_message: msg,
                 origin: format!("Panic at {}", location),
-                reproduce_blob: None,
             });
             (failure, Some(e), captured)
         }

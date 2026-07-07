@@ -194,17 +194,17 @@
 //! }
 //! ```
 //!
-//! Clones share the same backend connection — they are views onto one test
-//! case, not independent test cases. Individual backend calls are serialised
-//! by a shared mutex, so code like "spawn worker, worker draws, join, main
-//! thread draws" is deterministic.
+//! Clones share the test case's *outcome* — the whole family passes, fails,
+//! or is rejected as one test case — but each clone draws from its own
+//! independent, deterministic stream of choices, so several threads can
+//! generate concurrently without perturbing each other's values and the
+//! same seed replays the same values on every stream.
 //!
-//! **Using threads is extremely fragile and should only be used with
-//! caution.** You are likely to get flaky test failures when
-//! multiple threads draw concurrently. We intend to increase support for this use case
-//! over time, but at the moment it is a significant footgun —
-//! see [`TestCase`]'s documentation for the full contract and the patterns
-//! that are safe to rely on.
+//! Determinism extends only as far as your own code's determinism: if your
+//! threads race on shared state, Hegel replays each stream faithfully but
+//! the test may still behave differently run to run — see [`TestCase`]'s
+//! documentation for the full contract and the patterns that are safe to
+//! rely on.
 //!
 //! ## Learning more
 //!

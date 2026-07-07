@@ -133,6 +133,7 @@ impl SettingsHandle {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
             // SAFETY: ctx is this thread's live context; &mut raw is a valid
+            // out-parameter.
             unsafe {
                 require_ok(hegel_c::hegel_settings_new(ctx, &mut raw));
                 require_ok(hegel_c::hegel_settings_set_mode(
@@ -231,6 +232,7 @@ impl RunHandle {
     pub(crate) fn start(settings: &SettingsHandle) -> Result<Self, String> {
         let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
         // SAFETY: settings.as_ptr() is a live, non-null handle; &mut raw is a
+        // valid out-parameter.
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_run_start(ctx, settings.as_ptr(), &mut raw)
         });
@@ -247,6 +249,7 @@ impl RunHandle {
     pub(crate) fn next_test_case(&self) -> Option<CTestCase> {
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
         // SAFETY: self.raw is a live run handle; libhegel blocks until the next
+        // test case is available or the run completes.
         let rc =
             with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
         require_ok(rc);

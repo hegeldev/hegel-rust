@@ -75,6 +75,8 @@ fn test_database_path() {
 fn test_database_disabled() {
     let parsed = apply(&["--database", "disabled"]);
     assert_eq!(parsed.database, Database::Disabled);
+    let parsed = apply(&["--database", "none"]);
+    assert_eq!(parsed.database, Database::Disabled);
 }
 
 #[test]
