@@ -465,10 +465,11 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
 ///
 /// Port of Hypothesis's `BytestringProvider.draw_boolean`: draw a single byte
 /// `n ∈ [0, 256)` and return `n >= falsey`, where
-/// `falsey = max(1, floor(256 * (1 - p)))`. The `floor` keeps `falsey <= 255`
-/// (so at least `n == 255` stays truthy for tiny `p`), and the `max(1, …)`
-/// keeps at least `n == 0` falsey for `p` near one. A probability needing more
-/// than 8 bits is approximated, but only slightly.
+/// `falsey = min(255, max(1, floor(256 * (1 - p))))`. The `min(255, …)` keeps
+/// at least `n == 255` truthy for tiny `p` (for `p ≤ ~2⁻⁵⁴`, `1.0 - p` rounds
+/// to exactly `1.0` and the floor alone would make `true` unreachable), and
+/// the `max(1, …)` keeps at least `n == 0` falsey for `p` near one. A
+/// probability needing more than 8 bits is approximated, but only slightly.
 ///
 /// Callers must pass `0.0 < p < 1.0`; the `p <= 0` / `p >= 1` cases are forced
 /// without consuming entropy by [`NativeTestCase::weighted`].
@@ -477,7 +478,7 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
 /// boolean) matters for the urandom backend, where every byte is
 /// fuzzer-controlled entropy and a one-bit decision should cost one byte.
 pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
-    let falsey = (256.0 * (1.0 - p)).floor().max(1.0) as u32;
+    let falsey = ((256.0 * (1.0 - p)).floor().max(1.0) as u32).min(255);
     let mut byte = [0u8; 1];
     rng.fill_bytes(&mut byte);
     u32::from(byte[0]) >= falsey
@@ -584,6 +585,42 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// from the full alphabet (~1.1M codepoints) almost never produces the
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
+/// Per-alphabet cache of which [`GLOBAL_CONSTANTS_STRINGS`] entries consist
+/// solely of codepoints the alphabet contains. Validating the ~60 constants
+/// (some 40+ codepoints long) against the alphabet on every string draw is
+/// the dominant cost of `biased_string_sample`, and the containment result
+/// depends only on the immutable `IntervalSet`, so it is memoised per
+/// allocation. Entries are keyed by the `Arc`'s address with a `Weak`
+/// identity check, so an address reused after a drop cannot serve a stale
+/// mask — it recomputes and overwrites its slot.
+fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
+    use std::sync::OnceLock;
+    type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = Arc::as_ptr(intervals) as usize;
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((weak, mask)) = guard.get(&key) {
+            if weak
+                .upgrade()
+                .is_some_and(|live| Arc::ptr_eq(&live, intervals))
+            {
+                return Arc::clone(mask);
+            }
+        }
+    }
+    let mask: Arc<[bool]> = GLOBAL_CONSTANTS_STRINGS
+        .iter()
+        .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
+        .collect();
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, (Arc::downgrade(intervals), Arc::clone(&mask)));
+    mask
+}
+
 pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
     if sc.intervals.is_empty() {
         return Vec::new();
@@ -593,7 +630,13 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
     let want_two = sc.min_size <= 2 && sc.max_size >= 2;
     let small_count = 1 + want_empty as usize + want_one as usize + want_two as usize;
     let global_pool = &*GLOBAL_CONSTANTS_STRINGS;
-    let valid_global_count = global_pool.iter().filter(|cps| sc.validate(cps)).count();
+    let contained = constants_in_alphabet(&sc.intervals);
+    let size_ok = |cps: &[u32]| sc.min_size <= cps.len() && cps.len() <= sc.max_size;
+    let valid_global_count = global_pool
+        .iter()
+        .zip(contained.iter())
+        .filter(|(cps, m)| **m && size_ok(cps))
+        .count();
     let count = small_count + valid_global_count;
     let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
@@ -621,8 +664,8 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
             return vec![simplest_cp, simplest_cp];
         }
         let mut skip = idx - small_count;
-        for cps in global_pool.iter() {
-            if sc.validate(cps) {
+        for (cps, &m) in global_pool.iter().zip(contained.iter()) {
+            if m && size_ok(cps) {
                 if skip == 0 {
                     return cps.clone();
                 }
@@ -814,30 +857,6 @@ impl Spans {
         self.inner.get(i)
     }
 
-    /// Access by signed index with wrap-around (`-1` = last).  Returns
-    /// `None` for any out-of-range index.
-    pub fn get_signed(&self, i: i64) -> Option<&Span> {
-        let n = self.inner.len() as i64;
-        if i < -n || i >= n {
-            return None;
-        }
-        let idx = if i < 0 { (i + n) as usize } else { i as usize };
-        self.inner.get(idx)
-    }
-
-    /// Indices of the direct children of the span at `i`, in
-    /// preorder (the order in which they were started).
-    ///
-    /// Computed from each span's `parent` field; runs in O(n) over the
-    /// span list.
-    pub fn children(&self, i: usize) -> Vec<usize> {
-        self.inner
-            .iter()
-            .enumerate()
-            .filter_map(|(j, s)| (s.parent == Some(i)).then_some(j))
-            .collect()
-    }
-
     /// True iff every non-forced choice inside the span at `span_idx` is at
     /// its kind's simplest value.  A forced choice can't be lowered further,
     /// so it counts as trivial for this purpose.  Out-of-range `span_idx`
@@ -847,6 +866,9 @@ impl Spans {
             return false;
         };
         let end = span.end.min(nodes.len());
+        if span.start > end {
+            return false;
+        }
         nodes[span.start..end]
             .iter()
             .all(|n| n.was_forced || n.value == n.kind.simplest())
@@ -855,11 +877,6 @@ impl Spans {
     /// View as a slice, for code that wants raw indexing.
     pub fn as_slice(&self) -> &[Span] {
         &self.inner
-    }
-
-    /// Mutable slice access.
-    pub fn as_mut_slice(&mut self) -> &mut [Span] {
-        &mut self.inner
     }
 
     /// Consume the collection and return the underlying `Vec`.
@@ -893,16 +910,6 @@ impl std::ops::Index<usize> for Spans {
     type Output = Span;
     fn index(&self, i: usize) -> &Span {
         &self.inner[i]
-    }
-}
-
-impl std::ops::Index<i64> for Spans {
-    type Output = Span;
-    fn index(&self, i: i64) -> &Span {
-        let n = self.inner.len();
-        self.get_signed(i).unwrap_or_else(|| {
-            panic!("Index {i} out of range [-{n}, {n})");
-        })
     }
 }
 
@@ -1451,7 +1458,6 @@ impl NativeTestCase {
         };
 
         let (value, was_forced) = self.resolve_choice(
-            &ChoiceKind::Integer(kind.clone()),
             || ChoiceValue::Integer(kind.simplest()),
             || ChoiceValue::Integer(kind.unit()),
             |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
@@ -1538,7 +1544,6 @@ impl NativeTestCase {
         };
 
         let (value, was_forced) = self.resolve_choice(
-            &ChoiceKind::Float(kind.clone()),
             || ChoiceValue::Float(kind.simplest()),
             || ChoiceValue::Float(kind.unit()),
             |v| matches!(v, ChoiceValue::Float(f) if kind.validate(*f)),
@@ -1571,7 +1576,6 @@ impl NativeTestCase {
         let kind = BytesChoice { min_size, max_size };
 
         let (value, was_forced) = self.resolve_choice(
-            &ChoiceKind::Bytes(kind.clone()),
             || ChoiceValue::Bytes(kind.simplest()),
             || ChoiceValue::Bytes(kind.unit()),
             |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
@@ -1616,7 +1620,6 @@ impl NativeTestCase {
         };
 
         let (value, was_forced) = self.resolve_choice(
-            &ChoiceKind::String(kind.clone()),
             || ChoiceValue::String(kind.simplest()),
             || ChoiceValue::String(kind.unit()),
             |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
@@ -1677,7 +1680,6 @@ impl NativeTestCase {
             (ChoiceValue::Boolean(f), true)
         } else {
             self.resolve_choice(
-                &ChoiceKind::Boolean(kind.clone()),
                 || ChoiceValue::Boolean(kind.simplest()),
                 || ChoiceValue::Boolean(kind.unit()),
                 |v| matches!(v, ChoiceValue::Boolean(_)),
@@ -1721,7 +1723,6 @@ impl NativeTestCase {
     /// choice kinds have shifted across runs.
     fn resolve_choice(
         &mut self,
-        _kind: &ChoiceKind,
         simplest: impl FnOnce() -> ChoiceValue,
         unit: impl FnOnce() -> ChoiceValue,
         validate: impl FnOnce(&ChoiceValue) -> bool,

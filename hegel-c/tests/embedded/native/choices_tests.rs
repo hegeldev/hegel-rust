@@ -201,6 +201,27 @@ fn max_children_saturating_string() {
     assert_eq!(kind.max_children_saturating(u128::MAX), u128::MAX);
 }
 
+#[test]
+fn max_children_saturating_degenerate_and_huge_sizes_stay_cheap() {
+    let kind = ChoiceKind::Bytes(BytesChoice {
+        min_size: 1_000_000_000,
+        max_size: usize::MAX,
+    });
+    assert_eq!(kind.max_children_saturating(1024), 1024);
+
+    let kind = ChoiceKind::String(string_choice(vec![], 0, 0));
+    assert_eq!(kind.max_children_saturating(1024), 1);
+
+    let kind = ChoiceKind::String(string_choice(vec![(b'a' as u32, b'a' as u32)], 2, 5));
+    assert_eq!(kind.max_children_saturating(1024), 4);
+    let kind = ChoiceKind::String(string_choice(
+        vec![(b'a' as u32, b'a' as u32)],
+        0,
+        usize::MAX,
+    ));
+    assert_eq!(kind.max_children_saturating(1024), 1024);
+}
+
 fn integer_choice(min: i128, max: i128) -> IntegerChoice {
     IntegerChoice {
         min_value: BigInt::from(min),
@@ -399,6 +420,23 @@ fn float_choice_unit_falls_through_to_simplest_on_nan_start() {
         smallest_nonzero_magnitude: 5e-324,
     };
     assert!(fc.unit().is_nan());
+}
+
+#[test]
+fn float_choice_unit_finds_a_distinct_value_in_sub_integer_ranges() {
+    let c = fc(0.0, 0.5, false, false);
+    let u = c.unit();
+    assert!(c.validate(u));
+    assert_ne!(
+        u.to_bits(),
+        c.simplest().to_bits(),
+        "[0, 0.5] has a second value, so unit() must not collapse to simplest"
+    );
+
+    let c = fc(-0.5, 0.0, false, false);
+    let u = c.unit();
+    assert!(c.validate(u));
+    assert_ne!(u.to_bits(), c.simplest().to_bits());
 }
 
 #[test]

@@ -139,3 +139,9 @@ fn integer_floats_are_lex_simpler_than_fractions() {
     assert!(float_to_index(1.0) < float_to_index(2.0));
     assert!(float_to_index(1_000_000.0) < float_to_index(0.5));
 }
+
+#[test]
+fn reverse_bits_n_of_zero_bits_is_zero() {
+    assert_eq!(reverse_bits_n(u64::MAX, 0), 0);
+    assert_eq!(reverse_bits_n(0b1011, 4), 0b1101);
+}

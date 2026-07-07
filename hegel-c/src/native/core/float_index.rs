@@ -21,8 +21,12 @@ pub fn decode_exponent(enc: u64) -> u64 {
     if enc <= 1023 { enc + 1023 } else { 2046 - enc }
 }
 
-/// Reverse the lowest `n` bits of `v`.
+/// Reverse the lowest `n` bits of `v`. Reversing zero bits is the empty
+/// value (and `>> 64` would be a shift-overflow, so it needs its own arm).
 pub fn reverse_bits_n(v: u64, n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
     v.reverse_bits() >> (64 - n)
 }
 

@@ -15,12 +15,12 @@ fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> 
 /// Per-test-case feature flags over rule indices, deciding which rules are
 /// enabled for the current test case.
 ///
-/// The disabling probability is decided up front so that
-/// all-enabled and all-disabled subsets are reachable; rules are then
-/// decided lazily as they are first asked about. Decided flags are
-/// re-recorded as forced draws on later queries, so deleting the original
-/// deciding draw during shrinking just moves the decision to the next
-/// query point.
+/// The disabling probability is decided up front so that any subset from
+/// all-enabled down to a single surviving rule is reachable (all-disabled is
+/// not: see `at_least_one_of`); rules are then decided lazily as they are
+/// first asked about. Decided flags are re-recorded as forced draws on later
+/// queries, so deleting the original deciding draw during shrinking just
+/// moves the decision to the next query point.
 struct FeatureFlags {
     p_disabled: f64,
     /// Decision per rule index; `None` until first queried.
