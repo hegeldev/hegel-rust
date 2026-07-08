@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.2 - 2026-07-08
+
+This release updates the `hegeltest-c` dependency to 0.27.1.
+
 ## 0.24.1 - 2026-07-07
 
 This patch updates the PathBuf DefaultGenerator to generate non-UTF-8 paths on Unix and Windows systems.
