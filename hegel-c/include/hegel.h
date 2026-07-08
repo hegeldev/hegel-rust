@@ -1636,6 +1636,29 @@ hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
                                        size_t len);
 
 /*
+ Attach a comment to the line currently being written: the text is
+ emitted verbatim at the end of that line, every group open at this
+ position is forced to break — a comment poisons the rest of its line, so
+ nothing else may share it — and the text contributes nothing to width
+ accounting. A comment-forced group also breaks before its closing text,
+ so a trailing delimiter is not annotated by a comment on the group's last
+ element.
+
+ The engine stores the text verbatim: pass the full rendered form of the
+ comment, in the comment syntax of the language being printed (e.g.
+ `"  // like this"` or `"  (* like this *)"`), including any separating
+ whitespace.
+
+ `text` follows the same rules as `hegel_printer_text` (UTF-8, no
+ newlines, NULL only with `len == 0`), and errors are reported the same
+ way.
+ */
+hegel_result_t hegel_printer_comment(hegel_context_t *ctx,
+                                     hegel_printer_t *printer,
+                                     const uint8_t *text,
+                                     size_t len);
+
+/*
  Emit an unconditional newline followed by the current indentation.
 
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and

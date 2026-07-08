@@ -219,6 +219,44 @@ fn dead_deferred_slots_ignore_writes() {
 }
 
 #[test]
+fn comments_attach_to_line_ends_and_break_open_groups() {
+    let mut printer = PrettyPrinter::new(79);
+    printer.begin_group(1, "[");
+    printer.text("1,");
+    printer.breakable(" ");
+    printer.text("2");
+    printer.comment("or any other generated value");
+    printer.text(",");
+    printer.breakable(" ");
+    printer.text("3");
+    printer.end_group(1, "]");
+    assert_eq!(
+        printer.value(),
+        "[1,\n 2,  // or any other generated value\n 3\n]"
+    );
+}
+
+#[test]
+fn comments_outside_groups_do_not_affect_layout() {
+    let mut printer = PrettyPrinter::new(79);
+    printer.text("let x = 0;");
+    printer.comment("or any other generated value");
+    printer.hard_break();
+    printer.text("let y = 1;");
+    assert_eq!(
+        printer.value(),
+        "let x = 0;  // or any other generated value\nlet y = 1;"
+    );
+}
+
+#[test]
+#[should_panic(expected = "must not contain newlines")]
+fn comments_with_newlines_panic() {
+    let mut printer = PrettyPrinter::new(79);
+    printer.comment("a\nb");
+}
+
+#[test]
 fn printer_debug_form_is_opaque() {
     let printer = PrettyPrinter::new(79);
     assert_eq!(

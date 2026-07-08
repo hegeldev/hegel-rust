@@ -511,11 +511,277 @@ fn commit_or_abort_without_begin_is_an_error() {
 }
 
 #[test]
-fn replay_surfaces_unbalanced_groups() {
+fn resolve_surfaces_unbalanced_groups_after_the_hole() {
     let mut p = printer(79);
     p.deferred(M).unwrap();
     p.end_group(M, 0, "").unwrap();
     assert_eq!(p.resolve(), Err(PrinterError::UnbalancedGroup));
+}
+
+#[test]
+fn resolve_surfaces_unbalanced_groups_in_slot_content() {
+    let mut p = printer(79);
+    let slot = p.deferred(M).unwrap();
+    p.end_group(Target::Slot(slot), 0, "").unwrap();
+    assert_eq!(p.resolve(), Err(PrinterError::UnbalancedGroup));
+    assert_eq!(p.value(), Err(PrinterError::UnbalancedGroup));
+}
+
+#[test]
+fn slot_content_may_close_groups_opened_before_the_hole() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    let slot = p.deferred(M).unwrap();
+    p.end_group(Target::Slot(slot), 1, "]").unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "[1]");
+}
+
+#[test]
+fn commit_of_unbalanced_speculation_into_main_errors_atomically() {
+    let mut p = printer(79);
+    p.text(M, "x").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "junk").unwrap();
+    p.end_group(M, 0, ")").unwrap();
+    assert_eq!(p.commit_speculative(M), Err(PrinterError::UnbalancedGroup));
+    p.abort_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "x");
+}
+
+#[test]
+fn speculation_may_close_groups_opened_outside_it() {
+    let mut p = printer(79);
+    p.begin_group(M, 0, "(").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "x").unwrap();
+    p.end_group(M, 0, ")").unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "(x)");
+}
+
+#[test]
+fn nested_speculation_commits_are_not_validated_until_the_outer_commit() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.begin_speculative(M).unwrap();
+    p.end_group(M, 0, ")").unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.commit_speculative(M), Err(PrinterError::UnbalancedGroup));
+    p.abort_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "");
+}
+
+#[test]
+fn value_can_be_read_repeatedly_and_interleaved_with_writes() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    assert_eq!(p.value().unwrap(), "a");
+    assert_eq!(p.value().unwrap(), "a");
+    p.text(M, "b").unwrap();
+    assert_eq!(p.value().unwrap(), "ab");
+}
+
+#[test]
+fn comment_is_emitted_at_the_end_of_its_line() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.text(M, "b").unwrap();
+    p.hard_break(M).unwrap();
+    p.text(M, "d").unwrap();
+    assert_eq!(p.value().unwrap(), "ab  // c\nd");
+}
+
+#[test]
+fn comment_at_end_of_document_appears_without_a_newline() {
+    let mut p = printer(79);
+    p.text(M, "x").unwrap();
+    p.comment(M, "  // c").unwrap();
+    assert_eq!(p.value().unwrap(), "x  // c");
+}
+
+#[test]
+fn comment_forces_every_open_group_to_break() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2").unwrap();
+    p.comment(M, "  // or any other generated value").unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "3").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    assert_eq!(
+        p.value().unwrap(),
+        "[1,\n 2,  // or any other generated value\n 3\n]"
+    );
+}
+
+#[test]
+fn comment_breaks_earlier_breakables_of_its_groups() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1,").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2,").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "3").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "[1,\n 2,\n 3  // c\n]");
+}
+
+#[test]
+fn comment_does_not_break_groups_opened_after_it() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.begin_group(M, 1, "(").unwrap();
+    p.text(M, "2,").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "3").unwrap();
+    p.end_group(M, 1, ")").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "[1,  // c\n (2, 3)\n]");
+}
+
+#[test]
+fn nested_comment_forced_groups_each_break_before_their_close() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "(").unwrap();
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    p.text(M, ",").unwrap();
+    p.end_group(M, 1, ")").unwrap();
+    assert_eq!(p.value().unwrap(), "([1  // c\n ],\n)");
+}
+
+#[test]
+fn comment_break_trims_leading_whitespace_from_the_close_text() {
+    let mut p = printer(79);
+    p.begin_group(M, 4, "S {").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "a: 1").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.end_group(M, 4, " }").unwrap();
+    assert_eq!(p.value().unwrap(), "S {\n    a: 1  // c\n}");
+}
+
+#[test]
+fn comment_outside_any_group_does_not_poison_later_breakables() {
+    let mut p = printer(20);
+    p.text(M, "a").unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.hard_break(M).unwrap();
+    p.text(M, "1").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2").unwrap();
+    assert_eq!(p.value().unwrap(), "a  // c\n1 2");
+}
+
+#[test]
+fn comment_does_not_count_toward_width() {
+    let mut p = printer(10);
+    p.text(M, "12").unwrap();
+    p.comment(M, "  // aaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "45").unwrap();
+    assert_eq!(p.value().unwrap(), "12 45  // aaaaaaaaaaaaaaaaaaaaaaaaaa");
+}
+
+#[test]
+fn comment_before_a_width_forced_break_stays_on_its_own_line() {
+    let mut p = printer(2);
+    p.text(M, "12").unwrap();
+    p.comment(M, " // c").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "45").unwrap();
+    assert_eq!(p.value().unwrap(), "12 // c\n45");
+}
+
+#[test]
+fn comment_after_a_buffered_breakable_attaches_to_the_later_line() {
+    let mut p = printer(4);
+    p.text(M, "ab").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "cd").unwrap();
+    p.comment(M, " // c").unwrap();
+    p.text(M, "ef").unwrap();
+    assert_eq!(p.value().unwrap(), "ab\ncdef // c");
+}
+
+#[test]
+fn multiple_comments_on_one_line_concatenate_in_order() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    p.comment(M, "  // one").unwrap();
+    p.comment(M, "  // two").unwrap();
+    p.hard_break(M).unwrap();
+    assert_eq!(p.value().unwrap(), "a  // one  // two\n");
+}
+
+#[test]
+fn comment_in_an_aborted_speculation_is_dropped() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.abort_speculative(M).unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "[1, 2]");
+}
+
+#[test]
+fn comment_in_a_committed_speculation_takes_effect() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.comment(M, "  // c").unwrap();
+    p.commit_speculative(M).unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2").unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "[1,  // c\n 2\n]");
+}
+
+#[test]
+fn comment_inside_a_deferred_slot_breaks_the_groups_open_at_the_hole() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1,").unwrap();
+    p.breakable(M, " ").unwrap();
+    let slot = p.deferred(M).unwrap();
+    p.end_group(M, 1, "]").unwrap();
+    p.text(Target::Slot(slot), "2").unwrap();
+    p.comment(Target::Slot(slot), "  // c").unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "[1,\n 2  // c\n]");
+}
+
+#[test]
+fn comment_on_a_dead_slot_is_an_error() {
+    let mut p = printer(79);
+    let slot = p.deferred(M).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(
+        p.comment(Target::Slot(slot), "  // c"),
+        Err(PrinterError::DeadSlot)
+    );
 }
 
 #[test]
@@ -580,6 +846,7 @@ enum Op {
     BeginGroup { indent: usize, open: String },
     EndGroup { dedent: usize, close: String },
     ShiftIndent(isize),
+    Comment(String),
 }
 
 fn apply(p: &mut Printer, target: Target, op: &Op) {
@@ -590,6 +857,7 @@ fn apply(p: &mut Printer, target: Target, op: &Op) {
         Op::BeginGroup { indent, open } => p.begin_group(target, *indent, open).unwrap(),
         Op::EndGroup { dedent, close } => p.end_group(target, *dedent, close).unwrap(),
         Op::ShiftIndent(delta) => p.shift_indent(target, *delta).unwrap(),
+        Op::Comment(s) => p.comment(target, s).unwrap(),
     }
 }
 
@@ -604,8 +872,9 @@ fn random_text(rng: &mut SmallRng) -> String {
 fn random_program(rng: &mut SmallRng) -> Vec<Op> {
     let mut ops = Vec::new();
     let mut open = 0usize;
+    let mut comments = 0usize;
     for _ in 0..rng.random_range(1..60) {
-        ops.push(match rng.random_range(0..8) {
+        ops.push(match rng.random_range(0..9) {
             0..=2 => Op::Text(random_text(rng)),
             3..=4 => Op::Breakable([" ", ", ", ""][rng.random_range(0..3)].to_string()),
             5 => Op::HardBreak,
@@ -624,7 +893,11 @@ fn random_program(rng: &mut SmallRng) -> Vec<Op> {
                     }
                 }
             }
-            _ => Op::ShiftIndent(rng.random_range(-2i64..4) as isize),
+            7 => Op::ShiftIndent(rng.random_range(-2i64..4) as isize),
+            _ => {
+                comments += 1;
+                Op::Comment(format!(" ©{comments}"))
+            }
         });
     }
     for _ in 0..open {
@@ -642,10 +915,11 @@ fn maybe_insert_aborted_junk(p: &mut Printer, rng: &mut SmallRng) {
     }
     p.begin_speculative(M).unwrap();
     for _ in 0..rng.random_range(1..4) {
-        match rng.random_range(0..4) {
+        match rng.random_range(0..5) {
             0 => p.text(M, &random_text(rng)).unwrap(),
             1 => p.breakable(M, " ").unwrap(),
             2 => p.hard_break(M).unwrap(),
+            3 => p.comment(M, " ©junk").unwrap(),
             _ => {
                 p.deferred(M).unwrap();
             }
@@ -705,5 +979,37 @@ fn deferred_and_speculative_printing_matches_inline() {
             model.value().unwrap(),
             "seed {seed}"
         );
+    }
+}
+
+#[test]
+fn comments_always_terminate_their_line_and_appear_exactly_once() {
+    for seed in 0..200u64 {
+        let mut rng = SmallRng::seed_from_u64(seed + 1000);
+        let max_width = rng.random_range(1..40);
+        let ops = random_program(&mut rng);
+        let comments = ops.iter().filter(|op| matches!(op, Op::Comment(_))).count();
+
+        let mut p = printer(max_width);
+        for op in &ops {
+            apply(&mut p, M, op);
+        }
+        let output = p.value().unwrap().to_string();
+
+        assert_eq!(
+            output.matches('©').count(),
+            comments,
+            "seed {seed}: every comment should appear exactly once\n{output}"
+        );
+        for line in output.lines() {
+            if let Some(position) = line.find('©') {
+                assert!(
+                    line[position..]
+                        .chars()
+                        .all(|c| c == '©' || c == ' ' || c.is_ascii_digit()),
+                    "seed {seed}: comment must be the last thing on its line: {line:?}"
+                );
+            }
+        }
     }
 }

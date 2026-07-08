@@ -107,6 +107,21 @@ impl PrettyPrinter {
         self.handle.shift_indent(delta as i64).unwrap();
     }
 
+    /// Attach a comment to the line currently being written: `text` is
+    /// rendered as `  // text` at the end of that line, every group open at
+    /// this position is forced to break — nothing else may share a line with
+    /// a comment — and the comment is excluded from line-width accounting. A
+    /// group forced to break by a comment also breaks before its closing
+    /// delimiter, so the delimiter is not caught up in a comment on the
+    /// group's last element.
+    ///
+    /// This is how explain-mode annotations (`// or any other generated
+    /// value`) attach to the parts of a reported value they describe. `text`
+    /// must not contain newlines; a comment is a single-line construct.
+    pub fn comment(&mut self, text: &str) {
+        self.handle.comment(&format!("  // {text}")).unwrap();
+    }
+
     /// Splice in any outstanding deferred content, flush pending break
     /// points, and return everything printed so far.
     pub fn value(&mut self) -> String {

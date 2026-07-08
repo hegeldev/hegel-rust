@@ -972,6 +972,15 @@ impl PrinterHandle {
         }))
     }
 
+    /// Attach a comment (passed in full rendered form) to the line currently
+    /// being written: it is emitted at the end of that line, forces every
+    /// open group to break, and is excluded from width accounting.
+    pub(crate) fn comment(&self, text: &str) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_comment(ctx, self.raw, text.as_ptr(), text.len())
+        }))
+    }
+
     /// Open a group: emit `open`, then indent subsequent break points by
     /// `indent`.
     pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), String> {

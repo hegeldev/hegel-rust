@@ -3421,6 +3421,45 @@ pub unsafe extern "C" fn hegel_printer_breakable(
     }
 }
 
+/// Attach a comment to the line currently being written: the text is
+/// emitted verbatim at the end of that line, every group open at this
+/// position is forced to break — a comment poisons the rest of its line, so
+/// nothing else may share it — and the text contributes nothing to width
+/// accounting. A comment-forced group also breaks before its closing text,
+/// so a trailing delimiter is not annotated by a comment on the group's last
+/// element.
+///
+/// The engine stores the text verbatim: pass the full rendered form of the
+/// comment, in the comment syntax of the language being printed (e.g.
+/// `"  // like this"` or `"  (* like this *)"`), including any separating
+/// whitespace.
+///
+/// `text` follows the same rules as `hegel_printer_text` (UTF-8, no
+/// newlines, NULL only with `len == 0`), and errors are reported the same
+/// way.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_comment(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_comment";
+    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().comment(handle.target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
 /// Emit an unconditional newline followed by the current indentation.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
