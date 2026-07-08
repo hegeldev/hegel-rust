@@ -251,8 +251,12 @@ pub enum hegel_phase_t {
     HEGEL_PHASE_TARGET = 1 << 3,
     /// Shrink discovered failing examples toward minimal counterexamples.
     HEGEL_PHASE_SHRINK = 1 << 4,
-    /// Convenience: all five phases enabled. This is the default.
-    HEGEL_PHASE_ALL = 0x1F,
+    /// After shrinking, vary each span of the minimal counterexample and
+    /// flag the parts whose value is irrelevant to the failure (read the
+    /// results via `hegel_failure_comment`). Requires `HEGEL_PHASE_SHRINK`.
+    HEGEL_PHASE_EXPLAIN = 1 << 5,
+    /// Convenience: all six phases enabled. This is the default.
+    HEGEL_PHASE_ALL = 0x3F,
 }
 
 /// A health check, used as a bit flag for
@@ -703,6 +707,9 @@ pub struct HegelFailure {
     /// sequence, or `None` when the engine produced no blob (a
     /// single-test-case run). Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
+    /// Explain-phase annotations, sorted by choice slice. Read via
+    /// `hegel_failure_comment_count` / `hegel_failure_comment`.
+    comments: Vec<(u64, u64, CString)>,
 }
 
 impl From<Failure> for HegelFailure {
@@ -712,6 +719,11 @@ impl From<Failure> for HegelFailure {
             reproduce_blob: f
                 .reproduce_blob
                 .map(|b| CString::new(b).expect("reproduce blob is base64 and contains no NUL")),
+            comments: f
+                .comments
+                .into_iter()
+                .map(|c| (c.start, c.end, cstring_lossy(&c.text)))
+                .collect(),
         }
     }
 }
@@ -1103,6 +1115,9 @@ pub unsafe extern "C" fn hegel_settings_set_phases(
     }
     if phases & (HEGEL_PHASE_SHRINK as u32) != 0 {
         v.push(Phase::Shrink);
+    }
+    if phases & (HEGEL_PHASE_EXPLAIN as u32) != 0 {
+        v.push(Phase::Explain);
     }
     handle.inner = handle.inner.clone().phases(v);
     HEGEL_OK
@@ -3979,6 +3994,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
             TestCaseResult::Interesting(Failure {
                 origin: origin_str,
                 reproduce_blob: None,
+                comments: Vec::new(),
             })
         }
         _ => {
@@ -4219,6 +4235,110 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
             None => ptr::null(),
         };
     }
+    HEGEL_OK
+}
+
+/// Write the number of explain-phase annotations on this failure into
+/// `*out_count`. Zero when the explain phase was disabled, skipped, or found
+/// nothing to say. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `f` or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_count`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_comment_count(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_count: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_comment_count") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_count.is_null() {
+        set_last_error(ctx, "hegel_failure_comment_count: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_count = f.comments.len() };
+    HEGEL_OK
+}
+
+/// Read one explain-phase annotation off a failure: the half-open choice
+/// slice `[*out_start, *out_end)` of the shrunk counterexample the note
+/// applies to, and the note's text (without any comment syntax). The
+/// whole-test "varied together" note uses the marker slice `(0, 0)`.
+///
+/// A client renders these by attaching each text as a comment to whatever
+/// printed region consumed exactly that choice slice on the final replay;
+/// slices matching no printed region are dropped.
+///
+/// The written text pointer is owned by the failure snapshot and stays valid
+/// until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
+/// `f` and `HEGEL_E_INVALID_ARG` for a NULL out parameter or an
+/// out-of-range `index` (see `hegel_failure_comment_count`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_comment(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    index: usize,
+    out_start: *mut u64,
+    out_end: *mut u64,
+    out_text: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_comment") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_start.is_null() || out_end.is_null() || out_text.is_null() {
+        set_last_error(ctx, "hegel_failure_comment: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Some((start, end, text)) = f.comments.get(index) else {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_failure_comment: index {index} is out of range \
+                 (the failure has {} comments)",
+                f.comments.len()
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    unsafe {
+        *out_start = *start;
+        *out_end = *end;
+        *out_text = text.as_ptr();
+    }
+    HEGEL_OK
+}
+
+/// Write the number of choices this test case has recorded so far into
+/// `*out_count`.
+///
+/// Snapshotting the count before and after a draw yields the choice slice
+/// the draw consumed, which is how a client matches printed regions against
+/// the slices named by `hegel_failure_comment` during the final replay. The
+/// count is per-stream: a cloned handle reports the choices of its own
+/// stream. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_count`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_choice_count(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    out_count: *mut u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(tc) = (unsafe { tc.as_ref() }) else {
+        set_last_error(
+            ctx,
+            "hegel_test_case_choice_count: test case pointer is null",
+        );
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_count.is_null() {
+        set_last_error(ctx, "hegel_test_case_choice_count: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_count = tc.stream.choices_consumed() };
     HEGEL_OK
 }
 

@@ -210,9 +210,15 @@ typedef enum {
      */
     HEGEL_PHASE_SHRINK = (1 << 4),
     /*
-     Convenience: all five phases enabled. This is the default.
+     After shrinking, vary each span of the minimal counterexample and
+     flag the parts whose value is irrelevant to the failure (read the
+     results via `hegel_failure_comment`). Requires `HEGEL_PHASE_SHRINK`.
      */
-    HEGEL_PHASE_ALL = 31,
+    HEGEL_PHASE_EXPLAIN = (1 << 5),
+    /*
+     Convenience: all six phases enabled. This is the default.
+     */
+    HEGEL_PHASE_ALL = 63,
 } hegel_phase_t;
 
 /*
@@ -1968,6 +1974,53 @@ hegel_result_t hegel_failure_origin(hegel_context_t *ctx,
 hegel_result_t hegel_failure_reproduction_blob(hegel_context_t *ctx,
                                                const hegel_failure_t *f,
                                                const char **out_blob);
+
+/*
+ Write the number of explain-phase annotations on this failure into
+ `*out_count`. Zero when the explain phase was disabled, skipped, or found
+ nothing to say. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `f` or
+ `HEGEL_E_INVALID_ARG` for a NULL `out_count`.
+ */
+hegel_result_t hegel_failure_comment_count(hegel_context_t *ctx,
+                                           const hegel_failure_t *f,
+                                           size_t *out_count);
+
+/*
+ Read one explain-phase annotation off a failure: the half-open choice
+ slice `[*out_start, *out_end)` of the shrunk counterexample the note
+ applies to, and the note's text (without any comment syntax). The
+ whole-test "varied together" note uses the marker slice `(0, 0)`.
+
+ A client renders these by attaching each text as a comment to whatever
+ printed region consumed exactly that choice slice on the final replay;
+ slices matching no printed region are dropped.
+
+ The written text pointer is owned by the failure snapshot and stays valid
+ until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
+ `f` and `HEGEL_E_INVALID_ARG` for a NULL out parameter or an
+ out-of-range `index` (see `hegel_failure_comment_count`).
+ */
+hegel_result_t hegel_failure_comment(hegel_context_t *ctx,
+                                     const hegel_failure_t *f,
+                                     size_t index,
+                                     uint64_t *out_start,
+                                     uint64_t *out_end,
+                                     const char **out_text);
+
+/*
+ Write the number of choices this test case has recorded so far into
+ `*out_count`.
+
+ Snapshotting the count before and after a draw yields the choice slice
+ the draw consumed, which is how a client matches printed regions against
+ the slices named by `hegel_failure_comment` during the final replay. The
+ count is per-stream: a cloned handle reports the choices of its own
+ stream. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+ `HEGEL_E_INVALID_ARG` for a NULL `out_count`.
+ */
+hegel_result_t hegel_test_case_choice_count(hegel_context_t *ctx,
+                                            hegel_test_case_t *tc,
+                                            uint64_t *out_count);
 
 /*
  Write libhegel's version — matching the parent `hegeltest` crate's

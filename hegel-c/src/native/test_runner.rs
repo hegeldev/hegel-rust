@@ -17,7 +17,7 @@ use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
 
-use crate::backend::{DataSource, Failure, RunError, TestCaseResult};
+use crate::backend::{DataSource, ExplainComment, Failure, RunError, TestCaseResult};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
     Spans, Status, sort_key,
@@ -52,6 +52,26 @@ pub struct RunResult {
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
+
+/// Maximum number of experiments the explain phase runs per candidate slice
+/// (and per together-round), on top of any deterministic borrowed-value
+/// candidates. Mirrors Hypothesis's 500.
+const EXPLAIN_ATTEMPTS: usize = 500;
+
+/// Number of same-origin failures the explain phase needs to observe before
+/// it declares a slice freely variable. Mirrors Hypothesis's 100.
+const EXPLAIN_SAME_FAILURES_NEEDED: usize = 100;
+
+/// The comment attached to a slice whose value is irrelevant to the failure.
+/// Exact string from Hypothesis.
+const EXPLAIN_NOTE: &str = "or any other generated value";
+
+/// The whole-test comments produced by re-varying every commented slice
+/// together. Exact strings from Hypothesis.
+const EXPLAIN_TOGETHER_ALWAYS: &str =
+    "The test always failed when commented parts were varied together.";
+const EXPLAIN_TOGETHER_SOMETIMES: &str =
+    "The test sometimes passed when commented parts were varied together.";
 
 /// Maximum number of *total* filtered (assume()-failed) test cases — counted
 /// while fewer than [`HEALTH_CHECK_MAX_VALID`] valid test cases have been seen —
@@ -510,7 +530,7 @@ impl<'a> Engine<'a> {
 
                 let target_origin = origin.clone();
                 let initial_spans = Spans::from(verify.spans.clone());
-                let shrunk = {
+                let (shrunk, shrunk_spans, this_shrink_timed_out) = {
                     let this: &mut Engine<'_> = &mut *self;
                     let mut shrinker = Shrinker::with_probe(
                         Box::new(|req: ShrinkRun| {
@@ -543,9 +563,19 @@ impl<'a> Engine<'a> {
                     }
                     shrinker.shrink();
                     shrink_timed_out |= shrinker.timed_out;
-                    shrinker.current_nodes
+                    (
+                        shrinker.current_nodes,
+                        shrinker.current_spans,
+                        shrinker.timed_out,
+                    )
                 };
-                self.interesting.insert(origin.clone(), shrunk);
+                self.interesting.insert(origin.clone(), shrunk.clone());
+                if settings.phases.contains(&Phase::Explain) && !this_shrink_timed_out {
+                    let comments = self.explain(&origin, &shrunk, &shrunk_spans, shrink_deadline);
+                    if !comments.is_empty() {
+                        self.slice_comments.insert(origin.clone(), comments);
+                    }
+                }
                 shrunk_origins.insert(origin);
             }
 
@@ -606,13 +636,16 @@ impl<'a> Engine<'a> {
             }
         }
 
+        let mut slice_comments = std::mem::take(&mut self.slice_comments);
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
                 let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                let comments = slice_comments.remove(&origin).unwrap_or_default();
                 Failure {
                     origin,
                     reproduce_blob: Some(crate::native::blob::encode_failure(&choices)),
+                    comments,
                 }
             })
             .collect())
@@ -921,6 +954,9 @@ pub(crate) struct Engine<'a> {
     /// counterexample. This is what makes a single test that fails with
     /// several distinct bugs surface each one.
     pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
+    /// Explain-phase annotations per origin, computed right after that
+    /// origin's shrink fixpoint and attached to its [`Failure`] in the report.
+    slice_comments: HashMap<String, Vec<ExplainComment>>,
     pub(crate) targeting: crate::native::targeting::TargetingState,
     pub(crate) calls: u64,
     pub(crate) valid_test_cases: u64,
@@ -952,6 +988,7 @@ impl<'a> Engine<'a> {
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::new(),
+            slice_comments: HashMap::new(),
             targeting: crate::native::targeting::TargetingState::new(),
             calls: 0,
             valid_test_cases: 0,
@@ -1208,6 +1245,252 @@ impl<'a> Engine<'a> {
                 return;
             }
         }
+    }
+}
+
+/// True iff `nodes` ends with `suffix` (comparing kind, value, and
+/// forcedness).
+fn nodes_end_with(nodes: &[ChoiceNode], suffix: &[ChoiceNode]) -> bool {
+    nodes.len() >= suffix.len() && nodes[nodes.len() - suffix.len()..] == *suffix
+}
+
+/// A choice slice `[start, end)` of the shrink target, the unit the explain
+/// phase varies.
+type ExplainSlice = (usize, usize);
+
+/// The explain phase — a port of Hypothesis's `Shrinker._explain`.
+///
+/// After an origin's shrink fixpoint, each span of the minimal
+/// counterexample is varied: its choices are replaced with fresh random
+/// values of the same kinds (after first trying values borrowed from
+/// same-shaped sibling spans, so `assert a == b`-style tests aren't
+/// misreported), preserving the suffix. A span for which
+/// [`EXPLAIN_SAME_FAILURES_NEEDED`] same-origin failures are observed —
+/// and no passing run — is flagged with [`EXPLAIN_NOTE`]; any single
+/// passing run proves the span matters. When two or more spans are
+/// flagged, a final round varies all of them together and reports whether
+/// the test still always failed.
+///
+/// Two adaptations from Hypothesis: the experiment units are the engine's
+/// spans rather than frontend-recorded `arg_slices` (which is what makes
+/// sub-expression annotations like a single list element possible), and
+/// the together-round preserves the choices after the last commented slice
+/// rather than truncating them.
+///
+/// The `passing_choice_sequences` pre-check (an optimization that skips
+/// experiments the run has already refuted) is not ported.
+impl<'a> Engine<'a> {
+    /// Run one explain experiment: replay `choices`, extending with random
+    /// draws when the attempt changes the test case's control flow and
+    /// needs more data. Paths the choice tree already records are served
+    /// without running the body.
+    fn explain_test_function(&mut self, choices: &[ChoiceValue]) -> RunResult {
+        if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices, None) {
+            return RunResult {
+                status: out.status,
+                nodes: out.nodes,
+                spans: out.spans,
+                origin: out.origin,
+                target_observations: out.target_observations,
+                span_events: Vec::new(),
+            };
+        }
+        let rng = self.rng_spawn();
+        let ntc = NativeTestCase::for_probe(choices, rng, BUFFER_SIZE);
+        self.test_function(ntc).0
+    }
+
+    /// Compute the explain annotations for `origin`'s shrunk counterexample
+    /// (`nodes` with span structure `spans`). Returns them sorted by slice;
+    /// the whole-test "varied together" note, when present, uses the marker
+    /// slice `(0, 0)`. Returns nothing if the shrink target moves while
+    /// experimenting (an experiment stumbled on a smaller counterexample) or
+    /// the deadline expires before any slice is flagged.
+    fn explain(
+        &mut self,
+        origin: &str,
+        nodes: &[ChoiceNode],
+        spans: &Spans,
+        deadline: std::time::Instant,
+    ) -> Vec<ExplainComment> {
+        let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+
+        let slices: Vec<(usize, usize)> = spans
+            .as_slice()
+            .iter()
+            .filter(|s| !s.discarded)
+            .map(|s| (s.start, s.end.min(nodes.len())))
+            .filter(|&(start, end)| start < end)
+            .filter(|&(start, end)| nodes[start..end].iter().any(|n| !n.was_forced))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut ordered = slices.clone();
+        ordered.sort_by_key(|&(start, end)| (std::cmp::Reverse(end - start), start, end));
+
+        let mut rng = self.rng_spawn();
+        let mut comments: HashMap<(usize, usize), String> = HashMap::new();
+        let mut chunks: HashMap<(usize, usize), Vec<Vec<ChoiceValue>>> = HashMap::new();
+
+        'slices: for &(start, end) in &ordered {
+            if comments.keys().any(|&(s, e)| s <= start && end <= e) {
+                continue;
+            }
+
+            let mut candidates: Vec<Vec<ChoiceValue>> = Vec::new();
+            for &(other_start, other_end) in &slices {
+                if (other_start, other_end) == (start, end)
+                    || other_end - other_start != end - start
+                {
+                    continue;
+                }
+                let same_kinds = nodes[start..end]
+                    .iter()
+                    .zip(&nodes[other_start..other_end])
+                    .all(|(a, b)| {
+                        std::mem::discriminant(a.kind.as_ref())
+                            == std::mem::discriminant(b.kind.as_ref())
+                    });
+                if !same_kinds {
+                    continue;
+                }
+                let candidate = values[other_start..other_end].to_vec();
+                if candidate == values[start..end] || candidates.contains(&candidate) {
+                    continue;
+                }
+                candidates.push(candidate);
+            }
+
+            let mut n_same_failures = 0usize;
+            for n_attempt in 0..(EXPLAIN_ATTEMPTS + candidates.len()) {
+                if std::time::Instant::now() >= deadline {
+                    break 'slices;
+                }
+                if n_attempt.saturating_sub(10 + candidates.len()) > n_same_failures * 5 {
+                    break;
+                }
+
+                let replacement: Vec<ChoiceValue> = if n_attempt < candidates.len() {
+                    candidates[n_attempt].clone()
+                } else {
+                    nodes[start..end]
+                        .iter()
+                        .map(|n| {
+                            if n.was_forced {
+                                n.value.clone()
+                            } else {
+                                n.kind.random_value(&mut rng)
+                            }
+                        })
+                        .collect()
+                };
+
+                let mut attempt: Vec<ChoiceValue> = Vec::with_capacity(values.len());
+                attempt.extend_from_slice(&values[..start]);
+                attempt.extend(replacement.iter().cloned());
+                attempt.extend_from_slice(&values[end..]);
+
+                let mut result = self.explain_test_function(&attempt);
+                if result.status == Status::EarlyStop {
+                    continue;
+                }
+
+                let chunk: Vec<ChoiceValue>;
+                if result.nodes.len() == attempt.len()
+                    && nodes_end_with(&result.nodes, &nodes[end..])
+                {
+                    chunk = replacement;
+                } else {
+                    let result_end = spans
+                        .as_slice()
+                        .iter()
+                        .zip(result.spans.iter())
+                        .find(|(old, _)| (old.start, old.end) == (start, end))
+                        .map(|(_, new)| new.end);
+                    let Some(result_end) = result_end else {
+                        continue;
+                    };
+                    if result_end < start || result_end > result.nodes.len() {
+                        continue;
+                    }
+                    let result_values: Vec<ChoiceValue> =
+                        result.nodes.iter().map(|n| n.value.clone()).collect();
+                    chunk = result_values[start..result_end].to_vec();
+                    let mut fixed: Vec<ChoiceValue> = Vec::new();
+                    fixed.extend_from_slice(&values[..start]);
+                    fixed.extend_from_slice(&chunk);
+                    fixed.extend_from_slice(&values[end..]);
+                    result = self.explain_test_function(&fixed);
+                }
+                chunks.entry((start, end)).or_default().push(chunk);
+
+                if self.interesting.get(origin).map(|n| n.as_slice()) != Some(nodes) {
+                    return Vec::new();
+                }
+                if result.status == Status::Valid {
+                    break;
+                }
+                if result.status == Status::Interesting && result.origin.as_deref() == Some(origin)
+                {
+                    n_same_failures += 1;
+                    if n_same_failures >= EXPLAIN_SAME_FAILURES_NEEDED {
+                        comments.insert((start, end), EXPLAIN_NOTE.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if comments.len() >= 2 {
+            let mut chunks_by_start: Vec<(ExplainSlice, Vec<Vec<ChoiceValue>>)> = chunks
+                .into_iter()
+                .filter(|(slice, _)| comments.contains_key(slice))
+                .collect();
+            chunks_by_start.sort_by_key(|&(slice, _)| slice);
+            let mut n_same_failures_together = 0usize;
+            for _ in 0..EXPLAIN_ATTEMPTS {
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                let mut new_choices: Vec<ChoiceValue> = Vec::new();
+                let mut prev_end = 0usize;
+                for ((start, end), pool) in &chunks_by_start {
+                    new_choices.extend_from_slice(&values[prev_end..*start]);
+                    let pick = rng.random_range(0..pool.len());
+                    new_choices.extend(pool[pick].iter().cloned());
+                    prev_end = *end;
+                }
+                new_choices.extend_from_slice(&values[prev_end..]);
+
+                let result = self.explain_test_function(&new_choices);
+                if self.interesting.get(origin).map(|n| n.as_slice()) != Some(nodes) {
+                    return Vec::new();
+                }
+                if result.status == Status::Valid {
+                    comments.insert((0, 0), EXPLAIN_TOGETHER_SOMETIMES.to_string());
+                    break;
+                }
+                if result.status == Status::Interesting && result.origin.as_deref() == Some(origin)
+                {
+                    n_same_failures_together += 1;
+                    if n_same_failures_together >= EXPLAIN_SAME_FAILURES_NEEDED {
+                        comments.insert((0, 0), EXPLAIN_TOGETHER_ALWAYS.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut out: Vec<ExplainComment> = comments
+            .into_iter()
+            .map(|((start, end), text)| ExplainComment {
+                start: start as u64,
+                end: end as u64,
+                text,
+            })
+            .collect();
+        out.sort_by_key(|c| (c.start, c.end));
+        out
     }
 }
 

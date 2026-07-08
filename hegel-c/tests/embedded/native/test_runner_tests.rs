@@ -11,7 +11,7 @@
 
 use super::*;
 
-use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::backend::{DataSource, ExplainComment, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Mode, Phase};
 use std::time::Duration;
@@ -46,6 +46,7 @@ fn boom(msg: &str) -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
+        comments: Vec::new(),
     })
 }
 
@@ -453,6 +454,220 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         result.failures[0].origin.contains("always fails"),
         "{:?}",
         result.failures
+    );
+}
+
+/// Run `body` through a full derandomized engine run and return its failures.
+fn explore_failures<B>(body: B, phases: Option<Vec<Phase>>, shrink_budget: Duration) -> Vec<Failure>
+where
+    B: Fn(&dyn DataSource) -> TestCaseResult,
+{
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let mut settings = Settings::new()
+        .test_cases(50)
+        .database(None)
+        .derandomize(true);
+    if let Some(phases) = phases {
+        settings = settings.phases(phases);
+    }
+    let exploration = run_main(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        shrink_budget,
+    );
+    complete_native(exploration).unwrap().failures
+}
+
+const ALL_BUT_EXPLAIN: [Phase; 5] = [
+    Phase::Explicit,
+    Phase::Reuse,
+    Phase::Generate,
+    Phase::Target,
+    Phase::Shrink,
+];
+
+#[test]
+fn explain_comments_a_freely_variable_draw() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(_ignored) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(b) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            if b >= 0 {
+                boom("b is non-negative")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(
+        failures[0].comments,
+        vec![ExplainComment {
+            start: 0,
+            end: 1,
+            text: EXPLAIN_NOTE.to_string(),
+        }],
+        "only the ignored draw can vary freely"
+    );
+}
+
+#[test]
+fn explain_flags_nothing_when_the_phase_is_disabled() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(_ignored) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            boom("always fails")
+        },
+        Some(ALL_BUT_EXPLAIN.to_vec()),
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].comments.is_empty(),
+        "{:?}",
+        failures[0].comments
+    );
+}
+
+#[test]
+fn explain_reports_when_commented_parts_always_fail_together() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(_a) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(_b) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            boom("always fails")
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(
+        failures[0].comments,
+        vec![
+            ExplainComment {
+                start: 0,
+                end: 0,
+                text: EXPLAIN_TOGETHER_ALWAYS.to_string(),
+            },
+            ExplainComment {
+                start: 0,
+                end: 1,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+            ExplainComment {
+                start: 1,
+                end: 2,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn explain_reports_when_commented_parts_sometimes_pass_together() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(a) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(b) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if a && b {
+                TestCaseResult::Valid
+            } else {
+                boom("not both")
+            }
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(
+        failures[0].comments,
+        vec![
+            ExplainComment {
+                start: 0,
+                end: 0,
+                text: EXPLAIN_TOGETHER_SOMETIMES.to_string(),
+            },
+            ExplainComment {
+                start: 0,
+                end: 1,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+            ExplainComment {
+                start: 1,
+                end: 2,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn explain_is_skipped_when_shrinking_times_out() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(_ignored) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            boom("always fails")
+        },
+        None,
+        Duration::ZERO,
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].comments.is_empty(),
+        "{:?}",
+        failures[0].comments
+    );
+}
+
+#[test]
+fn explain_handles_slices_that_change_the_test_cases_length() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(flag) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if flag {
+                let Ok(_extra) = rint(ds, I32_MIN, I32_MAX) else {
+                    return TestCaseResult::Overrun;
+                };
+            }
+            boom("either way")
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(
+        failures[0].comments,
+        vec![ExplainComment {
+            start: 0,
+            end: 1,
+            text: EXPLAIN_NOTE.to_string(),
+        }],
+        "the branch flag varies freely even though it changes the length"
     );
 }
 

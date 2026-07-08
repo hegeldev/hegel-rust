@@ -49,6 +49,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
+                        comments: Vec::new(),
                     }));
                 } else {
                     ds.mark_complete(&TestCaseResult::Valid);
@@ -82,6 +83,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    comments: Vec::new(),
                 }));
                 return;
             }
@@ -150,6 +152,7 @@ fn mark_above_million(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             ds.mark_complete(&TestCaseResult::Interesting(Failure {
                 origin: "n >= 1_000_000".to_string(),
                 reproduce_blob: None,
+                comments: Vec::new(),
             }));
             return;
         }
@@ -218,6 +221,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    comments: Vec::new(),
                 }));
                 return;
             }
@@ -242,6 +246,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    comments: Vec::new(),
                 }));
                 return;
             }
@@ -278,6 +283,7 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    comments: Vec::new(),
                 }));
             } else {
                 ds.mark_complete(&TestCaseResult::Valid);
@@ -338,6 +344,7 @@ fn run_native_single_test_case_reports_the_failure() {
         ds.mark_complete(&TestCaseResult::Interesting(Failure {
             origin: "single-case bug".to_string(),
             reproduce_blob: None,
+            comments: Vec::new(),
         }));
     })
     .unwrap();

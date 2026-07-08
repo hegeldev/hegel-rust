@@ -112,6 +112,7 @@ impl NativeDataSource {
             Status::Interesting => TestCaseResult::Interesting(Failure {
                 origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
+                comments: Vec::new(),
             }),
         }
     }
@@ -423,6 +424,14 @@ impl DataSource for NativeDataSource {
         }
         observations.insert(label.to_string(), score);
         Ok(())
+    }
+
+    fn choices_consumed(&self) -> u64 {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .nodes
+            .len() as u64
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {

@@ -15,7 +15,8 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase,
     hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
+    hegel_context_last_error, hegel_context_new, hegel_failure_comment,
+    hegel_failure_comment_count, hegel_failure_free, hegel_failure_origin,
     hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
     hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
     hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
@@ -26,7 +27,8 @@ use hegel_c::{
     hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    hegel_test_case_choice_count, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -889,6 +891,138 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
 
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A failing property whose first draw is irrelevant to the failure: the
+/// explain phase flags it, and the annotation is readable through
+/// `hegel_failure_comment_count` / `hegel_failure_comment`. Also exercises
+/// `hegel_test_case_choice_count` on a blob-replay case and every
+/// argument-validation path of the three new functions.
+#[test]
+fn explain_comments_are_readable_through_the_abi() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 30));
+        ok(hegel_c::hegel_settings_set_derandomize(ctx, s, true));
+        let run = start(ctx, s);
+        let origin = CString::new("Panic at explain.rs:1:1").unwrap();
+        let min = i64::from(i32::MIN);
+        let max = i64::from(i32::MAX);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut ignored = 0i64;
+            let mut b = 0i64;
+            let first = hegel_generate_integer(ctx, tc, min, max, &mut ignored);
+            let second = hegel_generate_integer(ctx, tc, min, max, &mut b);
+            let (status, origin_ptr) = if first != HEGEL_OK || second != HEGEL_OK {
+                (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+            } else if b >= 0 {
+                (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+            } else {
+                (hegel_status_t::HEGEL_STATUS_VALID, ptr::null())
+            };
+            ok(hegel_mark_complete(ctx, tc, status as u32, origin_ptr));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+
+        let res = result(ctx, run);
+        let f = failure_at(ctx, res, 0);
+        assert!(!f.is_null());
+        let mut count = 0usize;
+        ok(hegel_failure_comment_count(ctx, f, &mut count));
+        assert_eq!(count, 1);
+        let mut comment_start = u64::MAX;
+        let mut comment_end = u64::MAX;
+        let mut text: *const c_char = ptr::null();
+        ok(hegel_failure_comment(
+            ctx,
+            f,
+            0,
+            &mut comment_start,
+            &mut comment_end,
+            &mut text,
+        ));
+        assert_eq!((comment_start, comment_end), (0, 1));
+        assert_eq!(
+            std::ffi::CStr::from_ptr(text).to_str().unwrap(),
+            "or any other generated value"
+        );
+
+        assert_eq!(
+            hegel_failure_comment(ctx, f, 1, &mut comment_start, &mut comment_end, &mut text),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out of range"));
+        assert_eq!(
+            hegel_failure_comment(ctx, f, 0, ptr::null_mut(), &mut comment_end, &mut text),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_failure_comment_count(ctx, f, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_failure_comment_count(ctx, ptr::null(), &mut count),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_failure_comment(
+                ctx,
+                ptr::null(),
+                0,
+                &mut comment_start,
+                &mut comment_end,
+                &mut text
+            ),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        let blob = repro_blob_of(ctx, f);
+        assert!(!blob.is_null());
+        let mut replay: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_from_blob(
+            ctx,
+            s,
+            blob,
+            None,
+            ptr::null_mut(),
+            &mut replay,
+        ));
+        let mut consumed = u64::MAX;
+        ok(hegel_test_case_choice_count(ctx, replay, &mut consumed));
+        assert_eq!(consumed, 0);
+        assert_eq!(
+            hegel_test_case_choice_count(ctx, replay, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut ignored = 0i64;
+        ok(hegel_generate_integer(ctx, replay, min, max, &mut ignored));
+        ok(hegel_test_case_choice_count(ctx, replay, &mut consumed));
+        assert_eq!(consumed, 1);
+        assert_eq!(
+            hegel_test_case_choice_count(ctx, ptr::null_mut(), &mut consumed),
+            HEGEL_E_INVALID_HANDLE
+        );
+        ok(hegel_mark_complete(
+            ctx,
+            replay,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, replay));
+
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));

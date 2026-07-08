@@ -165,6 +165,14 @@ pub trait DataSource: Send + Sync {
     /// non-finite or the label has already been observed this test case.
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
 
+    /// Number of choices this stream has recorded so far.
+    ///
+    /// Snapshotting this before and after a draw yields the choice slice the
+    /// draw consumed, which is how a client matches printed regions against
+    /// the choice slices named by a failure's explain-phase
+    /// [`ExplainComment`]s on the final replay.
+    fn choices_consumed(&self) -> u64;
+
     /// Signal that the test case is complete and report its outcome.
     ///
     /// Called exactly once per test case, after the test body has finished
@@ -173,6 +181,24 @@ pub trait DataSource: Send + Sync {
     /// its engine needs here — e.g. stashing the outcome on a handle for the
     /// engine to consume.
     fn mark_complete(&self, result: &TestCaseResult);
+}
+
+/// An explain-phase annotation on a failure: the choice slice
+/// `[start, end)` of the shrunk counterexample could be varied without
+/// changing the failure, or — for the whole-test marker slice `(0, 0)` — a
+/// note about varying every commented slice together.
+///
+/// Clients attach the text as a comment to whatever printed region consumed
+/// exactly that choice slice on the final replay; slices that match no
+/// printed region are silently dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainComment {
+    /// Index of the first choice of the slice.
+    pub start: u64,
+    /// Index one past the last choice of the slice.
+    pub end: u64,
+    /// Human-readable annotation, without any comment syntax.
+    pub text: String,
 }
 
 /// A single interesting test case surfaced by a run.
@@ -196,6 +222,10 @@ pub struct Failure {
     /// it via `hegel_test_case_from_blob`; paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
+    /// Explain-phase annotations for the shrunk counterexample, sorted by
+    /// slice. Empty when the explain phase is disabled, was skipped (e.g.
+    /// shrinking timed out), or found nothing to say.
+    pub comments: Vec<ExplainComment>,
 }
 
 /// Result of running a single test case.
