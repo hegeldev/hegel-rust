@@ -9,12 +9,13 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelPrinter, hegel_context_free, hegel_context_new, hegel_mark_complete,
     hegel_note, hegel_printer_abort_speculative, hegel_printer_begin_group,
-    hegel_printer_begin_speculative, hegel_printer_breakable, hegel_printer_commit_speculative,
-    hegel_printer_deferred, hegel_printer_end_group, hegel_printer_free, hegel_printer_hard_break,
-    hegel_printer_is_live, hegel_printer_new, hegel_printer_resolve, hegel_printer_shift_indent,
-    hegel_printer_text, hegel_printer_value, hegel_printer_value_result_free,
-    hegel_printer_value_result_t, hegel_run_free, hegel_settings_free, hegel_status_t,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_printer,
+    hegel_printer_begin_speculative, hegel_printer_breakable, hegel_printer_comment,
+    hegel_printer_commit_speculative, hegel_printer_deferred, hegel_printer_end_group,
+    hegel_printer_free, hegel_printer_hard_break, hegel_printer_is_live, hegel_printer_new,
+    hegel_printer_resolve, hegel_printer_shift_indent, hegel_printer_text, hegel_printer_value,
+    hegel_printer_value_result_free, hegel_printer_value_result_t, hegel_run_free,
+    hegel_settings_free, hegel_status_t, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_printer,
 };
 use std::ptr;
 
@@ -215,6 +216,72 @@ fn speculative_regions_commit_and_abort() {
         );
         assert!(last_error(ctx).contains("without an open speculative region"));
         assert_eq!(hegel_printer_abort_speculative(ctx, p), HEGEL_E_INVALID_ARG);
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn comments_attach_to_line_ends_and_break_open_groups() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let p = new_printer(ctx, 79);
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".as_ptr(), 1));
+        text(ctx, p, "1,");
+        ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
+        text(ctx, p, "2");
+        let comment = "  // or any other generated value";
+        ok(hegel_printer_comment(
+            ctx,
+            p,
+            comment.as_ptr(),
+            comment.len(),
+        ));
+        text(ctx, p, ",");
+        ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
+        text(ctx, p, "3");
+        ok(hegel_printer_end_group(ctx, p, 1, "]".as_ptr(), 1));
+        assert_eq!(
+            value(ctx, p),
+            "[1,\n 2,  // or any other generated value\n 3\n]"
+        );
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn comment_arguments_are_validated() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let p = new_printer(ctx, 79);
+        assert_eq!(
+            hegel_printer_comment(ctx, p, "a\nb".as_ptr(), 3),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("must not contain newlines"));
+        assert_eq!(
+            hegel_printer_comment(ctx, p, ptr::null(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("text is null"));
+        ok(hegel_printer_comment(ctx, p, ptr::null(), 0));
+
+        let mut slot: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_printer_deferred(ctx, p, &mut slot));
+        ok(hegel_printer_resolve(ctx, p));
+        assert_eq!(
+            hegel_printer_comment(ctx, slot, "x".as_ptr(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("session ended"));
+
+        let null: *mut HegelPrinter = ptr::null_mut();
+        assert_eq!(
+            hegel_printer_comment(ctx, null, "x".as_ptr(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        ok(hegel_printer_free(ctx, slot));
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
     }
