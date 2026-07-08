@@ -4,6 +4,7 @@ mod enum_gen;
 mod explicit_test_case;
 mod hegel_main;
 mod hegel_test;
+mod pretty_printable;
 mod reproduce_failure;
 mod rewrite_draws;
 mod standalone_function;
@@ -25,6 +26,14 @@ pub fn derive_generator(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into(),
     }
+}
+
+#[proc_macro_derive(PrettyPrintable)]
+pub fn derive_pretty_printable(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    pretty_printable::derive_pretty_printable(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 #[proc_macro_attribute]
