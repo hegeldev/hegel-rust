@@ -177,7 +177,7 @@ mod composite_structs {
 
     #[hegel::composite]
     fn doubled<G: Generator<i64>>(tc: &TestCase, inner: G) -> i64 {
-        tc.draw(&inner).wrapping_mul(2)
+        tc.draw_silent(&inner).wrapping_mul(2)
     }
 
     #[hegel::test(test_cases = 10)]
@@ -188,7 +188,7 @@ mod composite_structs {
 
     #[hegel::composite]
     fn from_boxed(tc: &TestCase, inner: BoxedGenerator<'static, i64>) -> i64 {
-        tc.draw(&inner)
+        tc.draw_silent(&inner)
     }
 
     #[hegel::test(test_cases = 10)]

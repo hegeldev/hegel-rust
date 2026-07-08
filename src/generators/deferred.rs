@@ -1,9 +1,10 @@
-use super::{BoxedGenerator, Generator};
+use super::{BoxedPrintableGenerator, Generator, PrintableGenerator};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::TestCase;
 use std::sync::{Arc, OnceLock};
 
 struct DeferredGenerator<T> {
-    inner: Arc<OnceLock<BoxedGenerator<'static, T>>>,
+    inner: Arc<OnceLock<BoxedPrintableGenerator<'static, T>>>,
 }
 
 impl<T: Send + Sync> Generator<T> for DeferredGenerator<T> {
@@ -12,6 +13,15 @@ impl<T: Send + Sync> Generator<T> for DeferredGenerator<T> {
             .get()
             .unwrap_or_else(|| panic!("DeferredGenerator has not been set"))
             .do_draw(tc)
+    }
+}
+
+impl<T: Send + Sync> PrintableGenerator<T> for DeferredGenerator<T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        self.inner
+            .get()
+            .unwrap_or_else(|| panic!("DeferredGenerator has not been set"))
+            .do_draw_and_print(tc, printer)
     }
 }
 
@@ -33,6 +43,7 @@ impl<T: Send + Sync> Generator<T> for DeferredGenerator<T> {
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
+/// #[derive(hegel::PrettyPrintable)]
 /// enum Tree {
 ///     Leaf(i32),
 ///     Branch(Box<Tree>, Box<Tree>),
@@ -45,7 +56,7 @@ impl<T: Send + Sync> Generator<T> for DeferredGenerator<T> {
 /// tree.set(hegel::one_of!(leaf, branch));
 /// ```
 pub struct DeferredGeneratorDefinition<T> {
-    inner: Arc<OnceLock<BoxedGenerator<'static, T>>>,
+    inner: Arc<OnceLock<BoxedPrintableGenerator<'static, T>>>,
 }
 
 impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
@@ -54,11 +65,11 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
     ///
     /// Can be called multiple times to produce independent handles
     /// that all share the same underlying definition.
-    pub fn generator(&self) -> BoxedGenerator<'static, T> {
+    pub fn generator(&self) -> BoxedPrintableGenerator<'static, T> {
         DeferredGenerator {
             inner: Arc::clone(&self.inner),
         }
-        .boxed()
+        .boxed_printable()
     }
 
     /// Set the implementation for this deferred generator.
@@ -70,8 +81,8 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
     /// # Panics
     ///
     /// Drawing from a handle before `set` is called will panic.
-    pub fn set(self, generator: impl Generator<T> + Send + Sync + 'static) {
-        let _ = self.inner.set(generator.boxed());
+    pub fn set(self, generator: impl PrintableGenerator<T> + Send + Sync + 'static) {
+        let _ = self.inner.set(generator.boxed_printable());
     }
 }
 
@@ -86,6 +97,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T> {
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
+/// #[derive(hegel::PrettyPrintable)]
 /// enum Tree {
 ///     Leaf(i32),
 ///     Branch(Box<Tree>, Box<Tree>),

@@ -388,6 +388,24 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
             #generate_trait_impl
 
+            impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                for #generator_name<'a, #(#param_uses,)*>
+            where
+                #(#user_predicates,)*
+                #(#type_param_idents: 'a,)*
+                #self_ty: ::hegel::PrettyPrintable,
+            {
+                fn do_draw_and_print(
+                    &self,
+                    __tc: &::hegel::TestCase,
+                    __printer: &mut ::hegel::PrettyPrinter,
+                ) -> #self_ty {
+                    let __value = ::hegel::generators::Generator::do_draw(self, __tc);
+                    ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
+                    __value
+                }
+            }
+
             #default_generator_impl
         };
     };
@@ -534,6 +552,24 @@ fn generate_variant_generator(
                         }
                     }
                 }
+
+                impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                    for #variant_generator_name<'a, #(#param_uses,)*>
+                where
+                    #(#user_predicates,)*
+                    #(#type_param_idents: 'a,)*
+                    #self_ty: ::hegel::PrettyPrintable,
+                {
+                    fn do_draw_and_print(
+                        &self,
+                        __tc: &::hegel::TestCase,
+                        __printer: &mut ::hegel::PrettyPrinter,
+                    ) -> #self_ty {
+                        let __value = ::hegel::generators::Generator::do_draw(self, __tc);
+                        ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
+                        __value
+                    }
+                }
             }
         }
         Fields::Unnamed(fields) => {
@@ -635,6 +671,24 @@ fn generate_variant_generator(
                 {
                     fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
                         #enum_name::#variant_name(#(#field_generates,)*)
+                    }
+                }
+
+                impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                    for #variant_generator_name<'a, #(#param_uses,)*>
+                where
+                    #(#user_predicates,)*
+                    #(#type_param_idents: 'a,)*
+                    #self_ty: ::hegel::PrettyPrintable,
+                {
+                    fn do_draw_and_print(
+                        &self,
+                        __tc: &::hegel::TestCase,
+                        __printer: &mut ::hegel::PrettyPrinter,
+                    ) -> #self_ty {
+                        let __value = ::hegel::generators::Generator::do_draw(self, __tc);
+                        ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
+                        __value
                     }
                 }
             }

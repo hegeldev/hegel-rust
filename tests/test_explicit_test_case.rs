@@ -47,7 +47,7 @@ fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
     let _ = x;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 struct Point {
     x: i32,
     y: i32,

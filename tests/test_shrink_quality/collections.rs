@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::common::utils::{Minimal, expect_panic, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 use hegel::{Hegel, Settings};
 
 fn list_and_int() -> impl Generator<(Vec<i64>, i64)> {
@@ -352,8 +352,11 @@ fn test_redistribute_stale_indices_after_type_change() {
             );
             let _: bool = tc.draw(gs::booleans());
             let _: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(0).boxed(),
-                gs::booleans().map(|b| b as i64).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(0)
+                    .boxed_printable(),
+                gs::booleans().map(|b| b as i64).boxed_printable(),
             ]));
             if v0 {
                 panic!("v0 set");
@@ -402,12 +405,24 @@ fn test_sort_stale_indices_after_punning() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let v0: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
             ]));
             let v1: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
             ]));
             if v0 + v1 > 10 {
                 panic!("sum");

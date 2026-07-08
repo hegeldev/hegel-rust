@@ -79,6 +79,11 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
 
     let generics = &f.sig.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let mut printable_generics = generics.clone();
+    printable_generics
+        .params
+        .push(syn::parse_quote! { __HegelT });
+    let (printable_impl_generics, _, _) = printable_generics.split_for_impl();
     let lifetimes: Vec<_> = generics.lifetimes().map(|l| &l.lifetime).collect();
     let type_params: Vec<_> = generics.type_params().map(|t| &t.ident).collect();
     let has_marker = !lifetimes.is_empty() || !type_params.is_empty();
@@ -153,6 +158,24 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
                     Self::__hegel_body(tc, #(::core::clone::Clone::clone(&self.#field_idents)),*);
                 tc.stop_span(false);
                 __hegel_result
+            }
+        }
+
+        impl #printable_impl_generics ::hegel::generators::PrintableGenerator<__HegelT> for #struct_name #ty_generics
+        where
+            #(#clone_bounds,)*
+            #(#user_predicates,)*
+            #struct_name #ty_generics: ::hegel::generators::Generator<__HegelT>,
+            __HegelT: ::hegel::PrettyPrintable,
+        {
+            fn do_draw_and_print(
+                &self,
+                tc: &::hegel::TestCase,
+                printer: &mut ::hegel::PrettyPrinter,
+            ) -> __HegelT {
+                let __hegel_value = ::hegel::generators::Generator::do_draw(self, tc);
+                ::hegel::PrettyPrintable::pretty_print(&__hegel_value, printer);
+                __hegel_value
             }
         }
     }

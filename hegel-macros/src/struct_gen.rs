@@ -170,6 +170,24 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 }
             }
 
+            impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                for #generator_name<'a, #(#param_uses,)*>
+            where
+                #(#user_predicates,)*
+                #(#type_param_idents: 'a,)*
+                #self_ty: ::hegel::PrettyPrintable,
+            {
+                fn do_draw_and_print(
+                    &self,
+                    __tc: &::hegel::TestCase,
+                    __printer: &mut ::hegel::PrettyPrinter,
+                ) -> #self_ty {
+                    let __value = ::hegel::generators::Generator::do_draw(self, __tc);
+                    ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
+                    __value
+                }
+            }
+
             impl<#gen_params> ::hegel::generators::DefaultGenerator for #self_ty
             where
                 #(#user_predicates,)*

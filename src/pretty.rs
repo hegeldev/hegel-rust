@@ -53,6 +53,12 @@ impl PrettyPrinter {
         }
     }
 
+    /// Wrap an existing engine printer handle (e.g. a test case's shared
+    /// document).
+    pub(crate) fn from_handle(handle: PrinterHandle) -> Self {
+        PrettyPrinter { handle }
+    }
+
     /// Emit literal, unbreakable text.
     ///
     /// Newlines in `s` are honored as unconditional line breaks (equivalent
@@ -104,6 +110,63 @@ impl PrettyPrinter {
     /// Flush pending break points and return everything printed so far.
     pub fn value(&mut self) -> String {
         self.handle.value().unwrap()
+    }
+
+    /// Open a speculative region: output printed through the returned
+    /// [`Speculation`] is held back until [`Speculation::commit`] emits it or
+    /// [`Speculation::abort`] discards it. Dropping the `Speculation` without
+    /// committing (e.g. on unwind) aborts it.
+    ///
+    /// This is how draw-time printing survives rejection: a combinator that
+    /// may retract a draw — a filter retry, a rejected collection element —
+    /// prints each attempt inside a speculative region and only commits the
+    /// accepted one.
+    pub fn speculate(&mut self) -> Speculation<'_> {
+        self.handle.begin_speculative().unwrap();
+        Speculation {
+            printer: self,
+            resolved: false,
+        }
+    }
+}
+
+/// An open speculative region on a [`PrettyPrinter`]; see
+/// [`PrettyPrinter::speculate`].
+#[derive(Debug)]
+pub struct Speculation<'a> {
+    printer: &'a mut PrettyPrinter,
+    resolved: bool,
+}
+
+impl Speculation<'_> {
+    /// The printer to print the speculative output through.
+    pub fn printer(&mut self) -> &mut PrettyPrinter {
+        self.printer
+    }
+
+    /// Close the region, keeping its output.
+    pub fn commit(mut self) {
+        self.resolved = true;
+        self.printer.handle.commit_speculative().unwrap();
+    }
+
+    /// Close the region, discarding its output.
+    pub fn abort(mut self) {
+        self.resolved = true;
+        self.printer.handle.abort_speculative().unwrap();
+    }
+}
+
+/// Dropping an uncommitted speculation — most importantly during an unwind
+/// out of a speculative draw, such as a budget-exhausted `StopTest` or a
+/// failed assumption mid-attempt — discards its output, so a partial attempt
+/// never corrupts the document. The result is deliberately ignored: this can
+/// run during a panic, where a second panic would abort the process.
+impl Drop for Speculation<'_> {
+    fn drop(&mut self) {
+        if !self.resolved {
+            let _ = self.printer.handle.abort_speculative();
+        }
     }
 }
 

@@ -17,7 +17,7 @@ mod common;
 /// trait method) without importing the trait, so it only compiled when users
 /// happened to `use hegel::DefaultGenerator` (which brings both the derive
 /// macro AND the trait into scope).
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 struct Person {
     name: String,
@@ -39,13 +39,13 @@ fn test_derive_compiles_without_generator_trait_import() {
     .run();
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Point<T> {
     x: T,
     y: i32,
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 enum Shape<T: std::fmt::Debug> {
     Empty,
@@ -53,7 +53,7 @@ enum Shape<T: std::fmt::Debug> {
     Pair { a: T, b: bool },
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Fixed<const N: usize> {
     xs: [u8; N],
 }
@@ -79,7 +79,7 @@ fn test_derive_on_generic_types_compiles_and_generates() {
 /// `Foo` (tuple) generates `foo` and `foo_with` builders; `FooWith` (named)
 /// would generate `foo_with` too. Both must fall back to their raw variant
 /// idents rather than colliding.
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 enum Tricky {
     Foo(u32),

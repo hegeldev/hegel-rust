@@ -137,7 +137,7 @@ where
             .database(None)
             .suppress_health_check(checks.iter().cloned());
         Hegel::new(move |tc| {
-            let value = tc.draw(&self.generator);
+            let value = tc.draw_silent(&self.generator);
             assert!(
                 (self.predicate)(&value),
                 "Found value that does not match predicate"
@@ -264,7 +264,7 @@ where
 
         let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
-                let value = tc.draw(&self.generator);
+                let value = tc.draw_silent(&self.generator);
                 if (self.condition)(&value) {
                     *found_clone.lock().unwrap() = Some(value);
                     panic!("HEGEL_FOUND");
@@ -348,9 +348,12 @@ where
 
     pub fn run(self) -> T {
         let generator = self.generator;
-        MinimalWith::new(move |tc: &TestCase| tc.draw(&generator), self.condition)
-            .test_cases(self.test_cases)
-            .run()
+        MinimalWith::new(
+            move |tc: &TestCase| tc.draw_silent(&generator),
+            self.condition,
+        )
+        .test_cases(self.test_cases)
+        .run()
     }
 }
 
@@ -497,7 +500,7 @@ where
     pub fn run(self) {
         let condition = self.condition;
         Hegel::new(move |tc| {
-            let value = tc.draw(&self.generator);
+            let value = tc.draw_silent(&self.generator);
             assert!(
                 !condition(&value),
                 "Found value that does not match predicate"
@@ -511,4 +514,49 @@ where
         )
         .run();
     }
+}
+
+/// Run a failing single-draw property over `generator` and return the final
+/// replay's captured draw/note lines, asserting a `let draw_1 = …;` line was
+/// printed.
+#[allow(dead_code)]
+pub fn printed_draw_lines<T, G>(generator: G) -> Vec<String>
+where
+    G: hegel::PrintableGenerator<T> + 'static,
+    T: 'static,
+{
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = buf.clone();
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        hegel::with_output_override(sink, || {
+            Hegel::new(move |tc| {
+                tc.draw(&generator);
+                panic!("printed_draw_lines probe");
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(5)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        });
+    }));
+    assert!(result.is_err(), "expected the probe property to fail");
+    let mut lines = buf.lock().unwrap().clone();
+    if let Some(pos) = lines
+        .iter()
+        .position(|l| l.starts_with("thread '") && l.contains("panicked at"))
+    {
+        lines.truncate(pos);
+    }
+    assert!(
+        lines.iter().any(|l| l.starts_with("let draw_1 = ")),
+        "expected a printed draw line in {lines:?}"
+    );
+    lines
 }
