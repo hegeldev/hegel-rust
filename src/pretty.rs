@@ -107,9 +107,28 @@ impl PrettyPrinter {
         self.handle.shift_indent(delta as i64).unwrap();
     }
 
-    /// Flush pending break points and return everything printed so far.
+    /// Splice in any outstanding deferred content, flush pending break
+    /// points, and return everything printed so far.
     pub fn value(&mut self) -> String {
+        let _ = self.handle.resolve();
         self.handle.value().unwrap()
+    }
+
+    /// Open a deferred hole at the current position and return a handle to
+    /// fill it in later.
+    ///
+    /// Whatever is printed through the returned [`DeferredPrinter`] — at any
+    /// later point, e.g. while a test body runs — appears at the hole's
+    /// position when [`value`](PrettyPrinter::value) renders the document,
+    /// with line-breaking behaving as if it had been printed inline. This is
+    /// how a generator whose value's representation is only known during
+    /// test execution (a Hegel-controlled random number generator, say)
+    /// prints: it reserves a hole at draw time and records into it as the
+    /// value is used.
+    pub fn deferred(&mut self) -> DeferredPrinter {
+        DeferredPrinter {
+            handle: self.handle.deferred().unwrap(),
+        }
     }
 
     /// Open a speculative region: output printed through the returned
@@ -127,6 +146,40 @@ impl PrettyPrinter {
             printer: self,
             resolved: false,
         }
+    }
+}
+
+/// A handle onto a deferred hole in a [`PrettyPrinter`] document; see
+/// [`PrettyPrinter::deferred`].
+///
+/// Once the document renders (or the speculative region the hole was opened
+/// inside is aborted), the slot is dead and every method becomes a silent
+/// no-op — a value that outlives its test case can keep trying to record
+/// without consequence.
+#[derive(Debug)]
+pub struct DeferredPrinter {
+    handle: crate::ffi::PrinterHandle,
+}
+
+impl DeferredPrinter {
+    /// Emit literal text into the slot. Newlines are honored as line breaks.
+    pub fn text(&mut self, s: &str) {
+        let mut first = true;
+        for segment in s.split('\n') {
+            if !first {
+                let _ = self.handle.hard_break();
+            }
+            first = false;
+            if !segment.is_empty() {
+                let _ = self.handle.text(segment);
+            }
+        }
+    }
+
+    /// Emit a potential break point into the slot, rendering as `sep` when
+    /// the enclosing group fits on one line.
+    pub fn breakable(&mut self, sep: &str) {
+        let _ = self.handle.breakable(sep);
     }
 }
 
