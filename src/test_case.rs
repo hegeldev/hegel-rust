@@ -845,7 +845,7 @@ impl<'a> Collection<'a> {
     /// Ask the backend whether to produce another element.
     pub fn more(&mut self) -> bool {
         if self.finished {
-            return false; // nocov
+            return false;
         }
         let handle = self.ensure_initialized();
         let result = match self.tc.with_ctc(|ctc| ctc.collection_more(handle)) {
@@ -863,13 +863,11 @@ impl<'a> Collection<'a> {
 
     /// Reject the last element (don't count it towards the size budget).
     pub fn reject(&mut self, why: Option<&str>) {
-        // nocov start
         if self.finished {
             return;
         }
         let handle = self.ensure_initialized();
         let _ = self.tc.with_ctc(|ctc| ctc.collection_reject(handle, why));
-        // nocov end
     }
 }
 

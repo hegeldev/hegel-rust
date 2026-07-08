@@ -1348,3 +1348,15 @@ fn clone_vs_clone_ordering_compares_flat_len_then_child_count() {
     assert_eq!(flattened_len(&deep), flattened_len(&shallow));
     assert!(sort_key(&deep) < sort_key(&shallow));
 }
+
+#[test]
+fn string_choice_from_index_on_empty_alphabet_with_nonzero_max_is_an_internal_error() {
+    use crate::native::bignum::BigUint;
+    let sc = string_choice(vec![], 0, 1);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sc.from_index(BigUint::from(0u32))
+    }))
+    .unwrap_err();
+    let msg = payload.downcast_ref::<String>().unwrap();
+    assert!(msg.contains("empty alphabet"), "{msg}");
+}

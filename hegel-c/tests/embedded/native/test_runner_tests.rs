@@ -921,21 +921,33 @@ fn shrink_verify_with_a_different_origin_is_flaky() {
 #[test]
 fn shrink_verify_surfaces_generator_nondeterminism() {
     use std::sync::atomic::{AtomicBool, Ordering};
+    // The body draws a boolean and fails on true; after the first failure it
+    // permanently switches the follow-up draw's kind. With
+    // report_multiple_failures(false), generation stops at that first
+    // failure, so the very next execution is the pre-shrink verification
+    // replay — which must surface the kind mismatch as nondeterminism.
     let seen_bug = AtomicBool::new(false);
     let result = reuse_run(
         Settings::new()
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
-            if seen_bug.swap(true, Ordering::SeqCst) {
-                if rint(ds, 0, 100).is_err() {
-                    return TestCaseResult::Overrun;
-                }
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
                 return TestCaseResult::Valid;
             }
-            if rbool(ds).is_err() {
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
                 return TestCaseResult::Overrun;
             }
             boom("stable origin")

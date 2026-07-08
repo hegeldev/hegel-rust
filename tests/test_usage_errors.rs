@@ -134,6 +134,18 @@ fn hashset_min_size_above_distinct_pool_is_a_clean_usage_error() {
 }
 
 #[test]
+fn hashmap_min_size_above_distinct_key_pool_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        let _: std::collections::HashMap<i64, bool> =
+            tc.draw(gs::hashmaps(gs::sampled_from(vec![1_i64, 2, 3]), gs::booleans()).min_size(5));
+    });
+    assert_clean_usage_error(
+        &msg,
+        "min_size 5 is larger than the 3 distinct keys the key generator can produce",
+    );
+}
+
+#[test]
 fn sampled_from_empty_drawn_inline_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
         let _: i32 = tc.draw(gs::sampled_from(Vec::<i32>::new()));

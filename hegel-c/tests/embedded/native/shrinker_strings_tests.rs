@@ -87,18 +87,7 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
 #[test]
 fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
     let initial = vec![
-        string_node(
-            vec![
-                b'a' as u32,
-                b'b' as u32,
-                b'c' as u32,
-                b'd' as u32,
-                b'e' as u32,
-                b'f' as u32,
-            ],
-            0,
-            0x10FFFF,
-        ),
+        string_node("abcdefgh".chars().map(|c| c as u32).collect(), 0, 0x10FFFF),
         string_node(vec![b'z' as u32], 0, 0x10FFFF),
     ];
     let mut shrinker = Shrinker::with_probe(
@@ -106,7 +95,7 @@ fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let s_ok = matches!(
                     nodes.first().map(|n| &n.value),
-                    Some(ChoiceValue::String(s)) if s.len() >= 2
+                    Some(ChoiceValue::String(s)) if !s.is_empty()
                 );
                 (s_ok, nodes.to_vec(), Spans::new())
             }
@@ -119,7 +108,7 @@ fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => assert_eq!(
             s,
-            &vec![b'a' as u32, b'b' as u32],
+            &vec![b'a' as u32],
             "one invocation should move every element the predicate allows"
         ),
         _ => unreachable!(),
@@ -193,6 +182,43 @@ fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
         ChoiceValue::String(s) => {
             assert_eq!(s.len(), 1);
             assert!((b'A' as u32..=b'Z' as u32).contains(&s[0]));
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// A truncation accepted during the bounded linear scan shortens the current
+/// value below the next candidate length, which must end the scan rather
+/// than slice out of bounds.
+#[test]
+fn shrink_strings_linear_scan_breaks_when_replace_shortens_below_target() {
+    let original: Vec<u32> = "abcdefghi".chars().map(|c| c as u32).collect();
+    let prefix6 = original[..6].to_vec();
+    let prefix3 = original[..3].to_vec();
+    let initial = vec![string_node(original.clone(), 0, 0x10FFFF)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run| match run {
+            crate::native::shrinker::ShrinkRun::Full(nodes) => {
+                let ok = matches!(
+                    nodes.first().map(|n| &n.value),
+                    Some(ChoiceValue::String(s))
+                        if *s == original || *s == prefix6 || *s == prefix3
+                );
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.shrink_strings().unwrap();
+    match &shrinker.current_nodes[0].value {
+        ChoiceValue::String(s) => {
+            assert_eq!(
+                s.len(),
+                3,
+                "expected the shortest allowed prefix, got {s:?}"
+            )
         }
         _ => unreachable!(),
     }

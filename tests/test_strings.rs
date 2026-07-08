@@ -920,6 +920,20 @@ mod regex_tests {
     }
 
     #[test]
+    fn test_text_with_large_min_size_and_no_max_still_varies_length() {
+        assert_all_examples(gs::text().min_size(150), |s: &String| {
+            (150..=250).contains(&s.chars().count())
+        });
+    }
+
+    #[test]
+    fn test_binary_with_large_min_size_and_no_max_still_varies_length() {
+        assert_all_examples(gs::binary().min_size(150), |b: &Vec<u8>| {
+            (150..=250).contains(&b.len())
+        });
+    }
+
+    #[test]
     fn test_builder_calls_after_a_draw_are_not_ignored() {
         Hegel::new(|tc| {
             let g = gs::text();

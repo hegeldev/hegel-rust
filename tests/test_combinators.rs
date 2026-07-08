@@ -19,6 +19,30 @@ fn test_sampled_from_strings(tc: TestCase) {
 }
 
 #[test]
+fn test_one_of_enumerates_when_all_children_do() {
+    let g = hegel::one_of!(
+        gs::sampled_from(vec![1_i64, 2]),
+        gs::sampled_from(vec![3_i64, 4]),
+    );
+    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
+
+    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]), gs::integers::<i64>());
+    assert!(g.enumerate_values().is_none());
+}
+
+#[test]
+fn test_one_of_enumerable_children_feed_the_filter_pool() {
+    assert_all_examples(
+        hegel::one_of!(
+            gs::sampled_from(vec![1_i64, 2]),
+            gs::sampled_from(vec![3_i64, 4]),
+        )
+        .filter(|x: &i64| x % 2 == 1),
+        |x: &i64| *x == 1 || *x == 3,
+    );
+}
+
+#[test]
 fn test_optional_can_generate_some() {
     find_any(gs::optional(gs::integers::<i32>()), |v| v.is_some());
 }

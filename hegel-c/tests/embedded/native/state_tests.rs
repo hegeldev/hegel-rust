@@ -1078,3 +1078,20 @@ fn weighted_boolean_sample_keeps_true_reachable_for_tiny_p() {
     assert!(trues > 0, "true must stay reachable for any p > 0");
     assert!(trues < 400, "tiny p must stay rare, got {trues}/20000");
 }
+
+#[test]
+fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 5,
+        end: 7,
+        label: "stale".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    assert!(
+        !spans.trivial(0, &[]),
+        "a span past the end of the nodes must not count as trivial"
+    );
+}

@@ -904,3 +904,74 @@ fn match_seq_min_repeat_counts_zero_width_iterations_toward_min() {
     }];
     assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
 }
+
+#[test]
+fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?<=a)b", None).unwrap();
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        assert!(
+            generate_regex(&mut ntc, &re, true).is_err(),
+            "a fixed-width lookbehind can never hold at the start of a fullmatch"
+        );
+    }
+
+    let re = CompiledRegex::compile("(?<=a*)b", None).unwrap();
+    let mut produced = 0;
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        if let Ok(s) = generate_regex(&mut ntc, &re, true) {
+            produced += 1;
+            assert_eq!(s, "b");
+        }
+    }
+    assert!(produced > 0, "an empty-matching lookbehind body must pass");
+}
+
+#[test]
+fn generate_regex_end_anchor_with_no_newline_in_alphabet_does_not_pad() {
+    use crate::native::rng::EngineRng;
+    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]));
+    let re = CompiledRegex::compile("a$", alphabet).unwrap();
+    let mut produced = 0;
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, false) else {
+            continue;
+        };
+        produced += 1;
+        assert!(s.ends_with('a'), "no newline available to pad with: {s:?}");
+    }
+    assert!(produced > 0);
+}
+
+#[test]
+fn generate_regex_multiline_caret_in_the_middle_generates_nothing() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?m)a^b", None).unwrap();
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        assert!(
+            generate_regex(&mut ntc, &re, false).is_err(),
+            "a mid-pattern ^ preceded by a literal can never match"
+        );
+    }
+}
+
+#[test]
+fn match_seq_possessive_repeat_counts_zero_width_iterations_toward_min() {
+    let groups = HashMap::new();
+    let optional_a = sub(vec![OpCode::MaxRepeat {
+        min: 0,
+        max: 1,
+        item: sub(vec![lit('a')]),
+    }]);
+    let pattern = [OpCode::PossessiveRepeat {
+        min: 3,
+        max: 3,
+        item: optional_a,
+    }];
+    assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
+    assert_eq!(match_seq(&pattern, 0, &chars("aa"), 0, &groups), Some(2));
+}

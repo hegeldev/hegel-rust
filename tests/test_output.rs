@@ -173,13 +173,14 @@ fn test_failing_test_output() {
 
 /// A backtrace frame that should symbolize as `name`, tolerating the
 /// `-C instrument-coverage` artifact where the symbolizer resolves a frame
-/// to its `__covrec_*` coverage-record symbol instead of the function name.
-/// Which frames lose their name is binary-layout luck, so any of the frames
-/// these tests assert on can be hit on a coverage build. The covrec
-/// alternative is anchored to the frame's `at <file>` line, so the
+/// to its `__covrec_*` coverage-record symbol — or to no symbol at all
+/// (`<unknown>`, seen on aarch64 coverage builds) — instead of the function
+/// name. Which frames lose their name is binary-layout luck, so any of the
+/// frames these tests assert on can be hit on a coverage build. The fallback
+/// alternatives are anchored to the frame's `at <file>` line, so the
 /// assertion still proves the right frame is present.
 fn frame_named(name: &str, file: &str) -> String {
-    format!(r"(?:{name}|__covrec_[0-9A-Fa-f]+u?\n\s+at [^\n]*{file}:\d+:\d+\n)")
+    format!(r"(?:{name}|(?:__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+:\d+\n)")
 }
 
 #[test]
