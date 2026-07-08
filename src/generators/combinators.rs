@@ -1,4 +1,6 @@
-use super::{BoxedGenerator, Generator, TestCase, integers, labels};
+use super::generators::draw_and_print_value;
+use super::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers, labels};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -19,6 +21,14 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
         Some(self.elements.to_vec())
+    }
+}
+
+impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<T>
+    for SampledFromGenerator<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -46,12 +56,13 @@ where
 /// Created by [`one_of()`]; the [`one_of!`](crate::one_of) macro instead
 /// builds an arity-specific generator that keeps its components unboxed.
 ///
-/// Generic over the stored generator type `B`, defaulting to
-/// [`BoxedGenerator`](super::BoxedGenerator) — the type-erased form a
-/// runtime-sized collection of alternatives needs.
+/// Generic over the stored generator type `B`: built from
+/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s it is itself
+/// printable; built from plain [`BoxedGenerator`](super::BoxedGenerator)s
+/// (the default) it can only be drawn silently.
 pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     generators: Vec<B>,
-    _phantom: PhantomData<&'a fn() -> T>,
+    _phantom: PhantomData<fn(&'a ()) -> T>,
 }
 
 fn draw_one_of<T>(tc: &TestCase, max_index: usize, pick: impl FnOnce(usize) -> T) -> T {
@@ -81,11 +92,19 @@ impl<'a, T, B: Generator<T>> Generator<T> for OneOfGenerator<'a, T, B> {
     }
 }
 
+impl<'a, T, B: PrintableGenerator<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, B> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_one_of(tc, self.generators.len() - 1, |index| {
+            self.generators[index].do_draw_and_print(tc, printer)
+        })
+    }
+}
+
 /// Choose from multiple generators of the same type.
 ///
-/// Accepts any iterable of generators of one type — typically
-/// `Vec<BoxedGenerator<T>>`. For a more convenient syntax, use the
-/// `one_of!` macro instead.
+/// Accepts any iterable of boxed generators — `Vec<BoxedPrintableGenerator<T>>`
+/// for a printable result, or `Vec<BoxedGenerator<T>>` for a silent one. For a
+/// more convenient syntax, use the `one_of!` macro instead.
 pub fn one_of<'a, T, B, I>(generators: I) -> OneOfGenerator<'a, T, B>
 where
     B: Generator<T>,
@@ -362,6 +381,26 @@ where
         let result = if tc.generate_boolean(0.5) {
             Some(self.inner.do_draw(tc))
         } else {
+            None
+        };
+        tc.stop_span(false);
+        result
+    }
+}
+
+impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+        tc.start_span(labels::OPTIONAL);
+        let result = if tc.generate_boolean(0.5) {
+            printer.begin_group(5, "Some(");
+            let value = self.inner.do_draw_and_print(tc, printer);
+            printer.end_group(5, ")");
+            Some(value)
+        } else {
+            printer.text("None");
             None
         };
         tc.stop_span(false);

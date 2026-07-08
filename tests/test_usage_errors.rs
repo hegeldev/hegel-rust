@@ -156,7 +156,7 @@ fn sampled_from_empty_drawn_inline_is_a_clean_usage_error() {
 #[test]
 fn one_of_empty_drawn_inline_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
-        let _: i32 = tc.draw(gs::one_of(
+        let _: i32 = tc.draw_silent(gs::one_of(
             Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new(),
         ));
     });

@@ -300,7 +300,9 @@ pub(crate) fn run_test_case(
         mode,
         case_sink.or_else(|| output.sink().cloned()),
     );
+    let reporter = tc.child(0);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
+    reporter.emit_rendered_output();
 
     let (tc_result, payload, diagnostic) = match result {
         Ok(()) => (TestCaseResult::Valid, None, None),

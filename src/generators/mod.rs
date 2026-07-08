@@ -45,7 +45,10 @@ pub use compose::ComposedGenerator;
 pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred};
-pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
+pub use generators::{
+    BoxedGenerator, BoxedPrintableGenerator, Filtered, FlatMapped, Generator, Mapped, PrintAsValue,
+    PrintWith, PrintableGenerator,
+};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use recursive::{RecursiveGenerator, SubtreeGenerator, recursive};

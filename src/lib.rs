@@ -244,6 +244,7 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
+pub use generators::PrintableGenerator;
 pub use pretty::{PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
@@ -286,10 +287,10 @@ pub use hegel_c::__bench;
 /// # Struct Example
 ///
 /// ```no_run
-/// use hegel::DefaultGenerator;
+/// use hegel::{DefaultGenerator, PrettyPrintable};
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, DefaultGenerator)]
+/// #[derive(Debug, PrettyPrintable, DefaultGenerator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -312,10 +313,10 @@ pub use hegel_c::__bench;
 /// # Enum Example
 ///
 /// ```no_run
-/// use hegel::DefaultGenerator;
+/// use hegel::{DefaultGenerator, PrettyPrintable};
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, DefaultGenerator)]
+/// #[derive(Debug, PrettyPrintable, DefaultGenerator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
@@ -404,7 +405,7 @@ pub use hegel_macros::PrettyPrintable;
 /// ```no_run
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, hegel::PrettyPrintable)]
 /// enum Tree {
 ///     Leaf,
 ///     Branch(Box<Tree>, Box<Tree>),

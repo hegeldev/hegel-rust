@@ -6,68 +6,68 @@ use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct Person {
     name: String,
     age: u32,
     active: bool,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithOptional {
     label: String,
     value: Option<i32>,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithVec {
     items: Vec<i32>,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithNested {
     point: Point,
     label: String,
 }
 
-#[derive(DeriveGenerator, Debug, Clone, PartialEq)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone, PartialEq)]
 enum Color {
     Red,
     Green,
     Blue,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum Shape {
     Circle { radius: f64 },
     Rectangle { width: f64, height: f64 },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum MixedEnum {
     Empty,
     WithValue(i32),
     WithFields { x: i32, y: String },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum SingleVariantData {
     Only(String),
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum TupleVariants {
     Pair(i32, i32),
     Triple(bool, String, u8),
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 enum WithNestedTypes {
     VecVariant(Vec<i32>),
@@ -75,7 +75,7 @@ enum WithNestedTypes {
     PlainVariant { count: u32 },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum Op {
     Reset,
     Skip,
@@ -431,7 +431,7 @@ fn test_derive_tuple_struct_with_multiple_custom_fields() {
     assert_all_examples(g, |t: &TuplePair| t.0 == 1 && t.1 == "a");
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum NameConflict {
     FieldName(i32),
@@ -448,7 +448,7 @@ fn test_derive_enum_triple_conflict() {
     check_can_generate_examples(g);
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum KeywordVariants {
     Super(i32),

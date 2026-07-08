@@ -3,7 +3,7 @@ mod common;
 use hegel::TestCase;
 use hegel::generators as gs;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, hegel::PrettyPrintable)]
 enum BinTree {
     Leaf(),
     Branch(Box<BinTree>, Box<BinTree>),

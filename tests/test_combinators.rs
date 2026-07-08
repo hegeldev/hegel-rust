@@ -1,8 +1,8 @@
 mod common;
 
-use common::utils::{assert_all_examples, find_any};
-use hegel::TestCase;
-use hegel::generators::{self as gs, Generator};
+use common::utils::{assert_all_examples, expect_panic, find_any};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
+use hegel::{Hegel, Settings, TestCase};
 
 #[hegel::test]
 fn test_sampled_from_returns_element_from_list(tc: TestCase) {
@@ -97,7 +97,7 @@ fn test_one_of_with_different_types_via_map(tc: TestCase) {
 
 #[hegel::test]
 fn test_one_of_many(tc: TestCase) {
-    let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed())));
+    let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed_printable())));
     assert!((0..10).contains(&value));
 }
 
@@ -148,8 +148,8 @@ fn test_filter(tc: TestCase) {
 fn test_boxed_generator_clone(tc: TestCase) {
     let gen1 = gs::integers::<i32>().min_value(0).max_value(10).boxed();
     let gen2 = gen1.clone();
-    let v1 = tc.draw(gen1);
-    let v2 = tc.draw(gen2);
+    let v1 = tc.draw_silent(gen1);
+    let v2 = tc.draw_silent(gen2);
     assert!((0..=10).contains(&v1));
     assert!((0..=10).contains(&v2));
 }
@@ -158,7 +158,7 @@ fn test_boxed_generator_clone(tc: TestCase) {
 fn test_boxed_generator_double_boxed(tc: TestCase) {
     let gen1 = gs::integers::<i32>().min_value(0).max_value(10).boxed();
     let gen2 = gen1.boxed();
-    let value = tc.draw(gen2);
+    let value = tc.draw_silent(gen2);
     assert!((0..=10).contains(&value));
 }
 
@@ -178,7 +178,7 @@ fn test_sampled_from_accepts_array(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_non_primitive(tc: TestCase) {
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, hegel::PrettyPrintable)]
     struct Point {
         x: i32,
         y: i32,
@@ -624,7 +624,7 @@ mod nocover_filtering {
                 s = s.filter(move |x: &i64| *x != f).boxed();
             }
 
-            let x: i64 = tc.draw(&s);
+            let x: i64 = tc.draw_silent(&s);
             assert!((1..=20).contains(&x));
             assert!(!forbidden.contains(&x));
         })
