@@ -197,6 +197,28 @@ fn printer_groups_lay_out_inline_or_broken() {
 }
 
 #[test]
+fn deferred_holes_fill_in_before_rendering() {
+    let mut printer = PrettyPrinter::new(79);
+    printer.text("a");
+    let mut slot = printer.deferred();
+    printer.text("d");
+    slot.text("b\nc");
+    assert_eq!(printer.value(), "ab\ncd");
+}
+
+#[test]
+fn dead_deferred_slots_ignore_writes() {
+    let mut printer = PrettyPrinter::new(79);
+    printer.text("a");
+    let mut slot = printer.deferred();
+    slot.text("b");
+    assert_eq!(printer.value(), "ab");
+    slot.text("ignored");
+    slot.breakable(" ");
+    assert_eq!(printer.value(), "ab");
+}
+
+#[test]
 fn printer_debug_form_is_opaque() {
     let printer = PrettyPrinter::new(79);
     assert_eq!(

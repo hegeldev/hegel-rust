@@ -994,6 +994,25 @@ impl PrinterHandle {
         }))
     }
 
+    /// Open a deferred hole at this handle's current position and return a
+    /// handle onto its slot. Content written to the slot is spliced in at
+    /// the hole's position when [`PrinterHandle::resolve`] runs.
+    pub(crate) fn deferred(&self) -> Result<PrinterHandle, String> {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_deferred(ctx, self.raw, &mut raw)
+        }))?;
+        Ok(PrinterHandle { raw })
+    }
+
+    /// Splice every deferred hole's content in at its position; all slots of
+    /// the session die.
+    pub(crate) fn resolve(&self) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_resolve(ctx, self.raw)
+        }))
+    }
+
     /// Open a speculative region: subsequent output buffers until committed
     /// or aborted.
     pub(crate) fn begin_speculative(&self) -> Result<(), String> {
