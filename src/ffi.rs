@@ -895,6 +895,120 @@ impl Drop for StringGenerator {
     }
 }
 
+/// An owned libhegel pretty-printer handle (`hegel_printer_t`), freed on
+/// drop.
+///
+/// Wraps one handle onto an engine-side document; the engine shares the
+/// document between handles (a deferred slot handle points into the same
+/// document as its root), so dropping a handle never discards content.
+/// Methods return `Err` with libhegel's diagnostic on misuse;
+/// [`crate::pretty::PrettyPrinter`] decides which of those to tolerate and
+/// which to raise.
+pub(crate) struct PrinterHandle {
+    raw: *mut hegel_c::HegelPrinter,
+}
+
+// SAFETY: the engine synchronizes every printer call on the document's own
+// lock, so handles may be used and dropped from any thread.
+unsafe impl Send for PrinterHandle {}
+unsafe impl Sync for PrinterHandle {}
+
+impl std::fmt::Debug for PrinterHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrinterHandle").finish_non_exhaustive()
+    }
+}
+
+impl PrinterHandle {
+    /// Create a standalone document that keeps lines within `max_width`
+    /// characters.
+    pub(crate) fn new(max_width: u64) -> Self {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_new(ctx, max_width, &mut raw)
+        }));
+        PrinterHandle { raw }
+    }
+
+    fn check(rc: hegel_result_t) -> Result<(), String> {
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(last_error_string());
+        }
+        Ok(())
+    }
+
+    /// Emit literal text. Must not contain newlines.
+    pub(crate) fn text(&self, s: &str) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_text(ctx, self.raw, s.as_ptr(), s.len())
+        }))
+    }
+
+    /// Emit a break point rendering as `sep` when the enclosing group fits.
+    pub(crate) fn breakable(&self, sep: &str) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_breakable(ctx, self.raw, sep.as_ptr(), sep.len())
+        }))
+    }
+
+    /// Emit an unconditional newline plus the current indentation.
+    pub(crate) fn hard_break(&self) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_hard_break(ctx, self.raw)
+        }))
+    }
+
+    /// Open a group: emit `open`, then indent subsequent break points by
+    /// `indent`.
+    pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_begin_group(ctx, self.raw, indent, open.as_ptr(), open.len())
+        }))
+    }
+
+    /// Close the innermost group: dedent by `dedent`, then emit `close`.
+    pub(crate) fn end_group(&self, dedent: u64, close: &str) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_end_group(ctx, self.raw, dedent, close.as_ptr(), close.len())
+        }))
+    }
+
+    /// Adjust the indentation applied by subsequent break points.
+    pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_shift_indent(ctx, self.raw, delta)
+        }))
+    }
+
+    /// Flush pending break points and read everything printed so far.
+    pub(crate) fn value(&self) -> Result<String, String> {
+        let mut result = hegel_c::hegel_printer_value_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_value(ctx, self.raw, &mut result)
+        }))?;
+        // SAFETY: on success the engine guarantees `data` is a non-null
+        // engine-allocated buffer of `len` bytes; it is copied out and then
+        // released exactly once via hegel_printer_value_result_free.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec();
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_value_result_free(ctx, &mut result)
+        }));
+        Ok(string_from_engine_bytes(bytes))
+    }
+}
+
+impl Drop for PrinterHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from hegel_printer_new / hegel_printer_deferred /
+        // hegel_test_case_printer and is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_printer_free(ctx, self.raw) });
+    }
+}
+
 /// Owned snapshot of a finished run's aggregate result, independent of the
 /// [`RunHandle`] it was read from; released via `hegel_run_result_free` on
 /// drop.

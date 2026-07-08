@@ -224,6 +224,7 @@ pub mod explicit_test_case;
 pub mod extras;
 pub(crate) mod ffi;
 pub mod generators;
+pub mod pretty;
 #[doc(hidden)]
 pub mod run_lifecycle;
 pub(crate) mod runner;
@@ -233,6 +234,7 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
+pub use pretty::{PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
 #[doc(hidden)]
@@ -315,6 +317,35 @@ pub use hegel_c::__bench;
 /// }
 /// ```
 pub use hegel_macros::DefaultGenerator;
+
+/// Derive [`PrettyPrintable`] for a struct or enum.
+///
+/// The generated implementation prints the value in Rust-expression syntax —
+/// `Name { field: value, … }`, `Name(value, …)`, and `Name::Variant …` for
+/// enums — using the printer's group machinery so values that do not fit on
+/// one line wrap with each field on its own line. Every generic type
+/// parameter is given a [`PrettyPrintable`] bound, mirroring how
+/// `derive(Debug)` bounds `Debug`.
+///
+/// For a type whose `Debug` output is already the representation you want
+/// (or one you cannot add a derive to), use
+/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
+///
+/// ```
+/// use hegel::{PrettyPrintable, PrettyPrinter};
+///
+/// #[derive(PrettyPrintable)]
+/// struct Person {
+///     name: String,
+///     age: u32,
+/// }
+///
+/// let person = Person { name: "Ada".to_string(), age: 36 };
+/// let mut printer = PrettyPrinter::new(79);
+/// person.pretty_print(&mut printer);
+/// assert_eq!(printer.value(), "Person { name: \"Ada\", age: 36 }");
+/// ```
+pub use hegel_macros::PrettyPrintable;
 
 /// Define a composite generator from a function.
 ///
