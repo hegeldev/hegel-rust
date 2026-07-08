@@ -1,12 +1,12 @@
 error[E0283]: type annotations needed
-  --> tests/ui-e0283-msrv/default_cant_infer_through_draw.rs:11:21
+  --> tests/ui-e0283-current-all-features/default_cant_infer_through_draw.rs:11:21
    |
 11 |     let _ = tc.draw(gs::default());
    |                ---- ^^^^^^^^^^^^^ cannot infer type for type parameter `impl PrintableGenerator<T>` declared on the method `draw`
    |                |
    |                required by a bound introduced by this call
    |
-   = note: cannot satisfy `_: PrintableGenerator<_>`
+   = note: the type must implement `PrintableGenerator<_>`
    = help: the following types implement trait `PrintableGenerator<T>`:
              `&G` implements `PrintableGenerator<T>`
              `ArrayGenerator<G, T, N>` implements `PrintableGenerator<[T; N]>`
@@ -14,8 +14,8 @@ error[E0283]: type annotations needed
              `BoolGenerator` implements `PrintableGenerator<bool>`
              `BoxedPrintableGenerator<'_, T>` implements `PrintableGenerator<T>`
              `CharactersGenerator` implements `PrintableGenerator<char>`
+             `DateGenerator` implements `PrintableGenerator<jiff::civil::date::Date>`
              `DateStringGenerator` implements `PrintableGenerator<String>`
-             `DateTimeStringGenerator` implements `PrintableGenerator<String>`
            and $N others
 note: required by a bound in `TestCase::draw`
   --> src/test_case.rs

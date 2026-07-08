@@ -1,4 +1,5 @@
-use super::{DefaultGenerator, Generator, TestCase, labels};
+use super::{DefaultGenerator, Generator, PrintableGenerator, TestCase, labels};
+use crate::pretty::PrettyPrinter;
 use std::marker::PhantomData;
 
 /// Creates a tuple generator from 0–12 component generators.
@@ -85,6 +86,37 @@ macro_rules! impl_tuple {
             }
         }
 
+        impl<$($T,)+ $($G,)+> PrintableGenerator<($($T,)+)> for $name<$($G,)+ $($T,)+>
+        where
+            $($G: PrintableGenerator<$T>,)+
+        {
+            fn do_draw_and_print(
+                &self,
+                tc: &TestCase,
+                printer: &mut PrettyPrinter,
+            ) -> ($($T,)+) {
+                tc.start_span(labels::TUPLE);
+                printer.begin_group(1, "(");
+                let mut index = 0usize;
+                let result = ($(
+                    {
+                        if index > 0 {
+                            printer.text(",");
+                            printer.breakable(" ");
+                        }
+                        index += 1;
+                        self.$field.do_draw_and_print(tc, printer)
+                    },
+                )+);
+                if index == 1 {
+                    printer.text(",");
+                }
+                printer.end_group(1, ")");
+                tc.stop_span(false);
+                result
+            }
+        }
+
         #[doc(hidden)]
         #[allow(clippy::too_many_arguments)]
         pub fn $fn_name<$($T,)+ $($G: Generator<$T>,)+>(
@@ -113,6 +145,12 @@ pub struct Tuple0Generator;
 
 impl Generator<()> for Tuple0Generator {
     fn do_draw(&self, _tc: &TestCase) {}
+}
+
+impl PrintableGenerator<()> for Tuple0Generator {
+    fn do_draw_and_print(&self, _tc: &TestCase, printer: &mut PrettyPrinter) {
+        printer.text("()");
+    }
 }
 
 #[doc(hidden)]

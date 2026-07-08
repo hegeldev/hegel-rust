@@ -51,9 +51,16 @@ fn e0283_note_uses_must_implement_wording() -> bool {
 fn ui() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/*.rs");
-    if e0283_note_uses_must_implement_wording() {
-        t.compile_fail("tests/ui-e0283-current/*.rs");
-    } else {
-        t.compile_fail("tests/ui-e0283-msrv/*.rs");
-    }
+    // The E0283 diagnostic also enumerates `PrintableGenerator` implementors,
+    // and the feature-gated extras add entries to that list, so the golden is
+    // split by feature set as well: CI runs the suite with default features
+    // and with `--all-features`, and each gets its own golden per wording.
+    let all_features = cfg!(all(feature = "jiff", feature = "chrono"));
+    let golden = match (e0283_note_uses_must_implement_wording(), all_features) {
+        (true, false) => "tests/ui-e0283-current/*.rs",
+        (false, false) => "tests/ui-e0283-msrv/*.rs",
+        (true, true) => "tests/ui-e0283-current-all-features/*.rs",
+        (false, true) => "tests/ui-e0283-msrv-all-features/*.rs",
+    };
+    t.compile_fail(golden);
 }

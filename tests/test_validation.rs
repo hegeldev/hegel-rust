@@ -12,7 +12,7 @@ where
     expect_panic(
         move || {
             Hegel::new(move |tc| {
-                tc.draw(&generator);
+                tc.draw_silent(&generator);
             })
             .settings(Settings::new().test_cases(1).database(None))
             .run();
@@ -27,7 +27,7 @@ where
     T: std::fmt::Debug + Send + 'static,
 {
     Hegel::new(move |tc| {
-        tc.draw(&generator);
+        tc.draw_silent(&generator);
     })
     .settings(Settings::new().test_cases(5).database(None))
     .run();
@@ -266,7 +266,7 @@ mod validation {
         expect_panic(
             move || {
                 Hegel::new(move |tc| {
-                    tc.draw(&generator);
+                    tc.draw_silent(&generator);
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();

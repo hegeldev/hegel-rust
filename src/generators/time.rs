@@ -1,4 +1,6 @@
-use super::{Generator, TestCase, integers};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase, integers};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::time::Duration;
 
@@ -53,6 +55,12 @@ impl Generator<Duration> for DurationGenerator {
             .max_value(self.max_nanos)
             .do_draw(tc);
         Duration::from_nanos(nanos)
+    }
+}
+
+impl PrintableGenerator<Duration> for DurationGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Duration {
+        draw_and_print_value(self, tc, printer)
     }
 }
 

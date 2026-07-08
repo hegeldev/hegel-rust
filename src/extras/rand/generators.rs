@@ -5,7 +5,8 @@ use rand::SeedableRng;
 use rand::rand_core::TryRng;
 use rand::rngs::StdRng;
 
-use crate::generators::{Generator, TestCase, binary, integers};
+use crate::generators::{Generator, PrintableGenerator, TestCase, binary, integers};
+use crate::pretty::PrettyPrinter;
 
 /// Generator for random number generators. Created by [`randoms()`].
 ///
@@ -34,6 +35,14 @@ impl Generator<HegelRandom> for RandomsGenerator {
         } else {
             HegelRandom::ArtificialRandom(tc.clone())
         }
+    }
+}
+
+impl PrintableGenerator<HegelRandom> for RandomsGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HegelRandom {
+        let value = self.do_draw(tc);
+        printer.text(&format!("{value:?}"));
+        value
     }
 }
 

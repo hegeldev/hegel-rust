@@ -234,6 +234,7 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
+pub use generators::PrintableGenerator;
 pub use pretty::{PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 

@@ -1,4 +1,6 @@
-use super::{Generator, TestCase};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::marker::PhantomData;
 use std::sync::OnceLock;
@@ -165,6 +167,12 @@ impl<T: Integer> Generator<T> for IntegerGenerator<T> {
             (Some(lo), Some(hi)) => T::from_i64(tc.generate_integer_i64(lo, hi)),
             _ => T::from_le17(tc.generate_integer_le17(&min.to_le17(), &max.to_le17())),
         }
+    }
+}
+
+impl<T: Integer + PrettyPrintable> PrintableGenerator<T> for IntegerGenerator<T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -406,6 +414,12 @@ impl<T: Float> Generator<T> for FloatGenerator<T> {
             params.smallest_nonzero_magnitude,
         );
         T::from_f64(v)
+    }
+}
+
+impl<T: Float + PrettyPrintable> PrintableGenerator<T> for FloatGenerator<T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 

@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::mem::discriminant;
 
 use crate::common::utils::expect_panic;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 use hegel::{Hegel, Settings};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 enum FloatOrBool {
     Float(f64),
@@ -18,12 +18,16 @@ fn test_one_of_produces_different_types() {
         || {
             Hegel::new(|tc| {
                 let x = tc.draw(gs::one_of(vec![
-                    gs::floats::<f64>().map(FloatOrBool::Float).boxed(),
-                    gs::booleans().map(FloatOrBool::Bool).boxed(),
+                    gs::floats::<f64>()
+                        .map(FloatOrBool::Float)
+                        .boxed_printable(),
+                    gs::booleans().map(FloatOrBool::Bool).boxed_printable(),
                 ]));
                 let y = tc.draw(gs::one_of(vec![
-                    gs::floats::<f64>().map(FloatOrBool::Float).boxed(),
-                    gs::booleans().map(FloatOrBool::Bool).boxed(),
+                    gs::floats::<f64>()
+                        .map(FloatOrBool::Float)
+                        .boxed_printable(),
+                    gs::booleans().map(FloatOrBool::Bool).boxed_printable(),
                 ]));
                 assert!(discriminant(&x) == discriminant(&y));
             })

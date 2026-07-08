@@ -3,13 +3,14 @@ use crate::control::{
     hegel_internal_error, raise_control,
 };
 use crate::ffi::CTestCase;
-use crate::generators::Generator;
+use crate::generators::{Generator, PrintableGenerator};
+use crate::pretty::PrettyPrinter;
 use crate::runner::Mode;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[diagnostic::on_unimplemented(
     message = "The first parameter in a #[composite] generator must have type TestCase.",
@@ -111,6 +112,30 @@ pub(crate) struct TestCaseGlobalData {
     /// frontend's own draw-name accounting, never backend traffic. No method
     /// holds it while calling back into `TestCase`.
     draw_state: Mutex<DrawState>,
+    /// The pretty-printed document of drawn values and notes, created lazily
+    /// on the first emitting draw or note. Family-wide (fetched through the
+    /// engine's `hegel_test_case_printer`), so clones and children print into
+    /// one document. The mutex is held for a whole top-level draw so that
+    /// concurrent clones emit whole lines, never interleaved fragments.
+    printer: OnceLock<Mutex<PrettyPrinter>>,
+    /// Notes recorded while a draw was printing (`span_depth > 0`, e.g. from
+    /// inside a composite body). Emitting them inline would splice text into
+    /// the middle of the draw's `let … = …;` line, so they are buffered here
+    /// and flushed — in order — once the enclosing draw completes.
+    pending_notes: Mutex<Vec<(usize, String)>>,
+}
+
+/// The width drawn-value documents are laid out to.
+const PRINTER_MAX_WIDTH: u64 = 79;
+
+/// Emit one note line: an indent prefix, the message (with any embedded
+/// newlines breaking at the note's indentation), and a closing line break.
+fn emit_note_line(printer: &mut PrettyPrinter, indent: usize, message: &str) {
+    printer.text(&" ".repeat(indent));
+    printer.shift_indent(indent as isize);
+    printer.text(message);
+    printer.shift_indent(-(indent as isize));
+    printer.hard_break();
 }
 
 pub(crate) struct DrawState {
@@ -364,6 +389,8 @@ impl TestCase {
                     named_draw_repeatable: HashMap::new(),
                     allocated_display_names: HashSet::new(),
                 }),
+                printer: OnceLock::new(),
+                pending_notes: Mutex::new(Vec::new()),
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -405,7 +432,14 @@ impl TestCase {
     /// Note: when run inside a `#[hegel::test]`, `draw()` will typically be
     /// rewritten to `__draw_named()` with an appropriate variable name
     /// in order to give better test output.
-    pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
+    ///
+    /// Requires a [`PrintableGenerator`] so the drawn value's representation
+    /// can be reported with a failing test case; to draw from a plain
+    /// [`Generator`], use [`draw_silent`](Self::draw_silent), or make the
+    /// generator printable with
+    /// [`print_as_value`](crate::generators::Generator::print_as_value) or
+    /// [`print_with`](crate::generators::Generator::print_with).
+    pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
         self.__draw_named(generator, "draw", true)
     }
 
@@ -422,16 +456,33 @@ impl TestCase {
     ///
     /// Not intended for direct use. This is the target that `#[hegel::test]` rewrites `draw()`
     /// calls to where appropriate.
-    pub fn __draw_named<T: std::fmt::Debug>(
+    pub fn __draw_named<T>(
         &self,
-        generator: impl Generator<T>,
+        generator: impl PrintableGenerator<T>,
         name: &str,
         repeatable: bool,
     ) -> T {
-        let value = generator.do_draw(self);
-        if self.local.borrow().span_depth == 0 {
-            self.record_named_draw(&value, name, repeatable);
+        if self.local.borrow().span_depth > 0 {
+            return generator.do_draw(self);
         }
+        let Some(display_name) = self.allocate_display_name(name, repeatable) else {
+            return generator.do_draw(self);
+        };
+        let indent = self.local.borrow().indent;
+        let value = self.with_printer(|printer| {
+            let mut speculation = printer.speculate();
+            let printer = speculation.printer();
+            printer.text(&" ".repeat(indent));
+            printer.shift_indent(indent as isize);
+            printer.text(&format!("let {display_name} = "));
+            let value = generator.do_draw_and_print(self, printer);
+            printer.text(";");
+            printer.shift_indent(-(indent as isize));
+            printer.hard_break();
+            speculation.commit();
+            value
+        });
+        self.flush_pending_notes();
         value
     }
 
@@ -504,9 +555,21 @@ impl TestCase {
     /// }
     /// ```
     pub fn note(&self, message: &str) {
-        let local = self.local.borrow();
-        let indent = local.indent;
-        (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
+        if !self.global.emit {
+            return;
+        }
+        let (indent, mid_draw) = {
+            let local = self.local.borrow();
+            (local.indent, local.span_depth > 0)
+        };
+        if mid_draw {
+            self.global
+                .pending_notes
+                .lock()
+                .push((indent, message.to_string()));
+        } else {
+            self.with_printer(|printer| emit_note_line(printer, indent, message));
+        }
     }
 
     /// Record a targeting observation to help the engine find extreme inputs.
@@ -652,10 +715,57 @@ impl TestCase {
         }
     }
 
-    fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
+    /// Run `f` with the test case's document printer, creating the document
+    /// on first use. The printer lock is held for all of `f`, so a whole
+    /// top-level draw (or note line) is emitted atomically with respect to
+    /// concurrently-drawing clones.
+    fn with_printer<R>(&self, f: impl FnOnce(&mut PrettyPrinter) -> R) -> R {
+        let printer = self.global.printer.get_or_init(|| {
+            Mutex::new(PrettyPrinter::from_handle(
+                self.with_ctc(|ctc| ctc.printer(PRINTER_MAX_WIDTH)),
+            ))
+        });
+        f(&mut printer.lock())
+    }
+
+    /// Emit any notes recorded while a draw was in progress. Must not be
+    /// called while holding the printer lock.
+    fn flush_pending_notes(&self) {
+        let notes = std::mem::take(&mut *self.global.pending_notes.lock());
+        if notes.is_empty() {
+            return;
+        }
+        self.with_printer(|printer| {
+            for (indent, message) in &notes {
+                emit_note_line(printer, *indent, message);
+            }
+        });
+    }
+
+    /// Render the document of drawn values and notes accumulated so far and
+    /// push it, line by line, through the output sink. Called by the run
+    /// lifecycle once the test body has finished (successfully or not).
+    pub(crate) fn emit_rendered_output(&self) {
+        if !self.global.emit {
+            return;
+        }
+        self.flush_pending_notes();
+        let Some(printer) = self.global.printer.get() else {
+            return;
+        };
+        let output = printer.lock().value();
+        let local = self.local.borrow();
+        for line in output.lines() {
+            (local.on_draw)(line);
+        }
+    }
+
+    /// Validate and count a draw name, returning the allocated display name
+    /// when this draw should be recorded (`None` when not emitting).
+    fn allocate_display_name(&self, name: &str, repeatable: bool) -> Option<String> {
         let emit = self.global.emit;
 
-        let display_name = self.with_draw_state(|draw_state| {
+        self.with_draw_state(|draw_state| {
             match draw_state.named_draw_repeatable.get(name) {
                 Some(&prev) if prev != repeatable => {
                     hegel_internal_error!(
@@ -711,22 +821,7 @@ impl TestCase {
                 name
             };
             Some(display)
-        });
-
-        let Some(display_name) = display_name else {
-            return;
-        };
-
-        let local = self.local.borrow();
-        let indent = local.indent;
-
-        (local.on_draw)(&format!(
-            "{:indent$}let {} = {:?};",
-            "",
-            display_name,
-            value,
-            indent = indent
-        ));
+        })
     }
 
     /// Run `f` with this instance's own libhegel handle.

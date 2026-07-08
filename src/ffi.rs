@@ -736,6 +736,20 @@ impl CTestCase {
         }))
     }
 
+    /// Fetch a root handle onto the document shared by this test case's
+    /// family (created on first use, sized to `max_width`; the engine
+    /// ignores `max_width` on later calls). The document outlives the case's
+    /// completion, so drawn values can be assembled during the body and read
+    /// back after `mark_complete`.
+    pub(crate) fn printer(&self, max_width: u64) -> PrinterHandle {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_printer(ctx, self.raw, max_width, &mut raw)
+        }));
+        PrinterHandle { raw }
+    }
+
     /// Report the test case's outcome. `origin` is supplied only for an
     /// interesting (failing) status; libhegel ignores it otherwise.
     pub(crate) fn mark_complete(
@@ -977,6 +991,28 @@ impl PrinterHandle {
     pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), String> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_shift_indent(ctx, self.raw, delta)
+        }))
+    }
+
+    /// Open a speculative region: subsequent output buffers until committed
+    /// or aborted.
+    pub(crate) fn begin_speculative(&self) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_begin_speculative(ctx, self.raw)
+        }))
+    }
+
+    /// Close the innermost speculative region, keeping its content.
+    pub(crate) fn commit_speculative(&self) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_commit_speculative(ctx, self.raw)
+        }))
+    }
+
+    /// Close the innermost speculative region, discarding its content.
+    pub(crate) fn abort_speculative(&self) -> Result<(), String> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_abort_speculative(ctx, self.raw)
         }))
     }
 

@@ -4,7 +4,7 @@ use hegel::TestCase;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, PartialEq, hegel::DefaultGenerator)]
+#[derive(Debug, PartialEq, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Wrapper {
     value: i32,
 }
@@ -255,7 +255,7 @@ fn test_vec_unique_partial_eq_struct_composite(tc: TestCase) {
 
 #[test]
 fn test_vec_no_partial_eq_compiles_without_unique() {
-    #[derive(hegel::DefaultGenerator)]
+    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable)]
     struct NoEq {
         #[allow(dead_code)]
         value: i32,

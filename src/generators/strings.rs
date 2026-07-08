@@ -1,8 +1,10 @@
 use std::sync::OnceLock;
 
-use super::{Generator, TestCase, labels};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase, labels};
 use crate::control::hegel_internal_assert;
 use crate::ffi;
+use crate::pretty::PrettyPrinter;
 use crate::test_case::{full_ranges, invalid_argument};
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
@@ -739,4 +741,88 @@ impl Generator<String> for UuidsGenerator {
 /// See [`UuidsGenerator`] for builder methods.
 pub fn uuids() -> UuidsGenerator {
     UuidsGenerator { version: None }
+}
+
+impl PrintableGenerator<String> for TextGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<char> for CharactersGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> char {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for RegexGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<Vec<u8>> for BinaryGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<u8> {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for EmailGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for UrlGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DomainGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::IpAddr> for IpAddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::IpAddr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::Ipv4Addr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::Ipv6Addr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DateStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for TimeStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DateTimeStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for UuidsGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
 }

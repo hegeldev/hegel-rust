@@ -185,6 +185,16 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     }
 }
 
+impl<'a, T: crate::PrettyPrintable> crate::generators::PrintableGenerator<&'a T>
+    for ValuesReusable<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> &'a T {
+        let value = self.do_draw(tc);
+        value.pretty_print(printer);
+        value
+    }
+}
+
 /// A generator that consumes values from a [`Pool`], removing each value it
 /// yields.
 ///
@@ -201,6 +211,14 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool_id, true);
         self.values.borrow_mut().remove(&variable_id).unwrap()
+    }
+}
+
+impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T> for ValuesConsumed<'_, T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        let value = self.do_draw(tc);
+        value.pretty_print(printer);
+        value
     }
 }
 

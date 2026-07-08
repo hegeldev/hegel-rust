@@ -32,7 +32,7 @@ pub trait DefaultGenerator: Sized {
 /// use hegel::generators::{self as gs, DefaultGenerator};
 /// use hegel::DefaultGenerator;
 ///
-/// #[derive(DefaultGenerator, Debug)]
+/// #[derive(DefaultGenerator, hegel::PrettyPrintable, Debug)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
