@@ -21,14 +21,14 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
         .map(|m| {
             let name_str = m.name.to_string();
             let name = &m.name;
-            // Only conditional-compilation attributes make sense on the
-            // generated vec entry; forwarding everything would put e.g. the
-            // method's doc comments on an expression, which trips
+            // Forward the method's attributes (cfg gates, user attribute
+            // macros, ...) onto the generated vec entry, except doc
+            // comments: those would land on an expression and trip
             // unused_doc_comments in the user's crate.
             let attrs: Vec<&Attribute> = m
                 .attrs
                 .iter()
-                .filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
+                .filter(|a| !a.path().is_ident("doc"))
                 .collect();
             quote! {
                 #(#attrs)*

@@ -533,8 +533,11 @@ typedef struct hegel_run_result_t hegel_run_result_t;
  free with `hegel_settings_free`. Settings can be reused across
  multiple runs; the engine reads them at `hegel_run_start` time.
 
- A settings handle must only be used from one thread at a time (unlike
- test-case handles, which detect and reject concurrent use).
+ A settings handle may be shared across threads once configured — e.g.
+ built once and then handed to `hegel_run_start` from several threads
+ concurrently. The `hegel_settings_set_*` setters mutate the handle, so
+ each setter call requires exclusive access: do not call one concurrently
+ with any other use of the same handle.
  */
 typedef struct hegel_settings_t hegel_settings_t;
 
@@ -675,8 +678,9 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  `hegel_settings_free` call. Returns `HEGEL_E_INVALID_ARG` if
  `out_settings` is NULL.
 
- Like run handles (and unlike test-case handles), a settings handle
- must only be used from one thread at a time.
+ See `hegel_settings_t` for the threading contract: a configured handle
+ may be shared across threads, but each setter call requires exclusive
+ access.
  */
 hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
 
@@ -1054,9 +1058,10 @@ hegel_result_t hegel_pool_add(hegel_context_t *ctx,
 
  On success writes the chosen variable id into `*out_variable_id` and
  returns `HEGEL_OK`. Returns `HEGEL_E_ASSUME` if the pool currently
- has no active variables — the caller should guard against that (e.g.
- only draw when it knows it has added at least one variable) or treat
- it like a failed assumption and mark the test case INVALID.
+ has no active variables — the caller should treat that like any other
+ failed assumption: it may recover and continue the test case (as
+ stateful testing does when a rule's assumption fails, by skipping the
+ action), or give up on the case and mark it INVALID.
  */
 hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
