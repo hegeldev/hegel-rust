@@ -609,6 +609,12 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
+            hegel_new_collection(ctx, tc, 5, 3, &mut id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("min_size <= max_size"));
+        assert!(last_error(ctx).contains("[5, 3]"));
+        assert_eq!(
             hegel_new_pool(ctx, tc, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );

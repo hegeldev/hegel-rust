@@ -493,6 +493,40 @@ fn float_draws_respect_spec_and_validate_arguments() {
                     ctx,
                     tc,
                     64,
+                    0.0,
+                    1.0,
+                    true,
+                    false,
+                    false,
+                    false,
+                    f64::from_bits(1),
+                    &mut out,
+                ),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("allow_nan=true"));
+            assert_eq!(
+                hegel_generate_float(
+                    ctx,
+                    tc,
+                    64,
+                    0.0,
+                    1.0,
+                    false,
+                    true,
+                    false,
+                    false,
+                    f64::from_bits(1),
+                    &mut out,
+                ),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("allow_infinity=true"));
+            assert_eq!(
+                hegel_generate_float(
+                    ctx,
+                    tc,
+                    64,
                     2.0,
                     1.0,
                     false,
