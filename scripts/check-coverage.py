@@ -338,12 +338,8 @@ def _run_lcov_phase(cargo_args: list[str], output: Path, label: str) -> None:
     """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`."""
     print(f"  Cleaning previous coverage data ({label})...")
     # Fully remove the coverage build tree, not just the profile data
-    # (`cargo llvm-cov clean`). The two passes need *different*
-    # instrumentation — the proc-macros' compile-time execution is only
-    # captured when hegel-macros is rebuilt as an instrumented build
-    # dependency, which won't happen if the second pass reuses the first
-    # pass's `--workspace` build. A fresh build per pass keeps each pass's
-    # coverage faithful. (Peak disk stays at one build tree, not two.)
+    # (`cargo llvm-cov clean`), so a stale build with different
+    # instrumentation can never leak into this run's coverage.
     import shutil
 
     shutil.rmtree(Path("target/llvm-cov-target"), ignore_errors=True)

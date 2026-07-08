@@ -481,8 +481,16 @@ pub fn naive_weeks() -> NaiveWeekGenerator {
     // back into the extremes.
     NaiveWeekGenerator {
         date_gen: naive_dates()
-            .min_value(NaiveDate::MIN.checked_add_days(chrono::Days::new(7)).unwrap())
-            .max_value(NaiveDate::MAX.checked_sub_days(chrono::Days::new(7)).unwrap()),
+            .min_value(
+                NaiveDate::MIN
+                    .checked_add_days(chrono::Days::new(7))
+                    .unwrap(),
+            )
+            .max_value(
+                NaiveDate::MAX
+                    .checked_sub_days(chrono::Days::new(7))
+                    .unwrap(),
+            ),
         start_gen: Weekday::default_generator(),
     }
 }

@@ -15,8 +15,8 @@ OUT="$ROOT/target/c-examples"
 mkdir -p "$OUT"
 
 # System libraries the Rust standard library needs when libhegel is
-# linked statically. Stable on Linux; differs on macOS (no -ldl, the
-# libc has it built in), so we adjust per platform.
+# linked statically. macOS has no separate librt (its libc absorbs the
+# others), so only Linux gets -lrt.
 case "$(uname -s)" in
     Darwin)
         STATIC_DEPS=(-lpthread -lm -ldl)

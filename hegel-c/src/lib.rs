@@ -1103,9 +1103,7 @@ fn install_worker_panic_hook() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if IS_HEGEL_WORKER.try_with(|f| f.get()).unwrap_or(false) {
-                // nocov start
-                return;
-                // nocov end
+                return; // nocov
             }
             prev(info);
         }));
@@ -1164,8 +1162,9 @@ pub unsafe extern "C" fn hegel_run_start(
                         // nocov start
                         if let WorkerMessage::TestCase { ds, .. } = returned {
                             ds.mark_complete(&TestCaseResult::Valid);
-                        } // nocov end
-                        return; // nocov
+                        }
+                        return;
+                        // nocov end
                     }
                     let _ = ack_rx.recv();
                 })
@@ -1177,7 +1176,8 @@ pub unsafe extern "C" fn hegel_run_start(
                 Err(payload) => Err(format!(
                     "Engine panic: {}",
                     crate::panic::panic_message(&payload)
-                )), // nocov end
+                )),
+                // nocov end
             };
             let _ = to_caller.send(WorkerMessage::Done(result));
         });
@@ -1188,7 +1188,8 @@ pub unsafe extern "C" fn hegel_run_start(
         Err(e) => {
             set_last_error(ctx, &format!("hegel_run_start: spawn failed: {}", e));
             return HEGEL_E_BACKEND;
-        } // nocov end
+            // nocov end
+        }
     };
 
     let run = Box::into_raw(Box::new(HegelRun {

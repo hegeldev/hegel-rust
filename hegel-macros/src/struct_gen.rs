@@ -65,20 +65,22 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
 
-    let with_method_impls = field_names.iter().zip(field_types.iter()).map(
-        |(field_name, field_type)| {
-            quote! {
-                /// Set a custom generator for this field.
-                pub fn #field_name<G>(mut self, generator: G) -> Self
-                where
-                    G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
-                {
-                    self.#field_name = generator.boxed();
-                    self
+    let with_method_impls =
+        field_names
+            .iter()
+            .zip(field_types.iter())
+            .map(|(field_name, field_type)| {
+                quote! {
+                    /// Set a custom generator for this field.
+                    pub fn #field_name<G>(mut self, generator: G) -> Self
+                    where
+                        G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
+                    {
+                        self.#field_name = generator.boxed();
+                        self
+                    }
                 }
-            }
-        },
-    );
+            });
 
     let generate_fields = field_names.iter().map(|name| {
         quote! {

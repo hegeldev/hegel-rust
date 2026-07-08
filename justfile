@@ -17,8 +17,11 @@ check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.
 
-    # --locked tells cargo not to update the lockfile. this makes sure we use the lockfile we just generated
-    # and don't regenerate it for non-minimal versions.
+    # Generate the minimal-versions lockfile (requires nightly), then test against
+    # exactly that lockfile (--locked stops cargo regenerating it for non-minimal
+    # versions). Note this rewrites the checked-in Cargo.lock; restore it with
+    # `git checkout Cargo.lock` afterwards.
+    cargo generate-lockfile -Z minimal-versions
     HEGEL_RUNNING_TESTS_WITH_RUST_NIGHTLY=1 RUST_BACKTRACE=1 cargo test --locked --all-features
 
 format:

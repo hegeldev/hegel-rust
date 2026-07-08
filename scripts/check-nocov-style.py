@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-SOURCE_DIRS = [Path("src"), Path("hegel-macros/src")]
+SOURCE_DIRS = [Path("src"), Path("hegel-macros/src"), Path("hegel-c/src")]
 
 nocov_inline_re = re.compile(r"//\s*nocov\b")
 nocov_start_re = re.compile(r"//\s*nocov\s+start\b")
