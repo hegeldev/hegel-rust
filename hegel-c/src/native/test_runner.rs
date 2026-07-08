@@ -1454,37 +1454,19 @@ impl<'a> Engine<'a> {
                 .filter(|(slice, _)| comments.contains_key(slice))
                 .collect();
             chunks_by_start.sort_by_key(|&(slice, _)| slice);
-            let mut n_same_failures_together = 0usize;
-            for _ in 0..EXPLAIN_ATTEMPTS {
-                if std::time::Instant::now() >= deadline {
-                    break;
+            match self.explain_together(
+                origin,
+                nodes,
+                &values,
+                &chunks_by_start,
+                deadline,
+                &mut rng,
+            ) {
+                Ok(Some(note)) => {
+                    comments.insert((0, 0), note);
                 }
-                let mut new_choices: Vec<ChoiceValue> = Vec::new();
-                let mut prev_end = 0usize;
-                for ((start, end), pool) in &chunks_by_start {
-                    new_choices.extend_from_slice(&values[prev_end..*start]);
-                    let pick = rng.random_range(0..pool.len());
-                    new_choices.extend(pool[pick].iter().cloned());
-                    prev_end = *end;
-                }
-                new_choices.extend_from_slice(&values[prev_end..]);
-
-                let result = self.explain_test_function(&new_choices);
-                if self.interesting.get(origin).map(|n| n.as_slice()) != Some(nodes) {
-                    return Vec::new();
-                }
-                if result.status == Status::Valid {
-                    comments.insert((0, 0), EXPLAIN_TOGETHER_SOMETIMES.to_string());
-                    break;
-                }
-                if result.status == Status::Interesting && result.origin.as_deref() == Some(origin)
-                {
-                    n_same_failures_together += 1;
-                    if n_same_failures_together >= EXPLAIN_SAME_FAILURES_NEEDED {
-                        comments.insert((0, 0), EXPLAIN_TOGETHER_ALWAYS.to_string());
-                        break;
-                    }
-                }
+                Ok(None) => {}
+                Err(TargetMoved) => return Vec::new(),
             }
         }
 
@@ -1499,7 +1481,61 @@ impl<'a> Engine<'a> {
         out.sort_by_key(|c| (c.start, c.end));
         out
     }
+
+    /// The explain phase's closing round: re-vary every commented slice at
+    /// once, splicing randomly chosen previously observed chunks into each,
+    /// and report which whole-test note applies — "sometimes passed" on the
+    /// first passing run, "always failed" after
+    /// [`EXPLAIN_SAME_FAILURES_NEEDED`] same-origin failures, or nothing if
+    /// neither verdict is reached before the attempts or the deadline run
+    /// out. `Err(TargetMoved)` means an attempt stumbled on a smaller
+    /// counterexample, invalidating every note computed so far.
+    fn explain_together(
+        &mut self,
+        origin: &str,
+        nodes: &[ChoiceNode],
+        values: &[ChoiceValue],
+        chunks_by_start: &[(ExplainSlice, Vec<Vec<ChoiceValue>>)],
+        deadline: std::time::Instant,
+        rng: &mut EngineRng,
+    ) -> Result<Option<String>, TargetMoved> {
+        let mut n_same_failures_together = 0usize;
+        for _ in 0..EXPLAIN_ATTEMPTS {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            let mut new_choices: Vec<ChoiceValue> = Vec::new();
+            let mut prev_end = 0usize;
+            for ((start, end), pool) in chunks_by_start {
+                new_choices.extend_from_slice(&values[prev_end..*start]);
+                let pick = rng.random_range(0..pool.len());
+                new_choices.extend(pool[pick].iter().cloned());
+                prev_end = *end;
+            }
+            new_choices.extend_from_slice(&values[prev_end..]);
+
+            let result = self.explain_test_function(&new_choices);
+            if self.interesting.get(origin).map(|n| n.as_slice()) != Some(nodes) {
+                return Err(TargetMoved);
+            }
+            if result.status == Status::Valid {
+                return Ok(Some(EXPLAIN_TOGETHER_SOMETIMES.to_string()));
+            }
+            if result.status == Status::Interesting && result.origin.as_deref() == Some(origin) {
+                n_same_failures_together += 1;
+                if n_same_failures_together >= EXPLAIN_SAME_FAILURES_NEEDED {
+                    return Ok(Some(EXPLAIN_TOGETHER_ALWAYS.to_string()));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
+
+/// Sentinel error from [`Engine::explain_together`]: an experiment replaced
+/// the shrink target with a smaller counterexample, so the explain notes no
+/// longer describe the example that will be reported.
+struct TargetMoved;
 
 fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
     if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis())

@@ -1148,9 +1148,7 @@ impl RunResult {
                 require_ok(hegel_c::hegel_failure_comment(
                     ctx, f, i, &mut start, &mut end, &mut text,
                 ));
-                let text = cstr_opt(text).unwrap_or_else(|| {
-                    crate::control::hegel_internal_error!("comment {i} has no text")
-                });
+                let text = cstr_opt(text).unwrap_or_default();
                 explain_comments.push((start, end, text));
             }
             require_ok(hegel_c::hegel_failure_free(ctx, f));

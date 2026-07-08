@@ -157,6 +157,41 @@ fn disabling_the_explain_phase_disables_annotations() {
 }
 
 #[test]
+fn explain_output_is_deterministic_and_well_formed() {
+    fn body(tc: hegel::TestCase) {
+        let v: Vec<(i64, Option<bool>)> = tc.draw(
+            gs::vecs(hegel::tuples!(gs::integers(), gs::optional(gs::booleans())))
+                .min_size(2)
+                .max_size(4),
+        );
+        let s: String = tc.draw(gs::text().max_size(3));
+        assert!(v[0].0 < 0 || s.len() > 5, "boom");
+    }
+    let first = failing_lines(body);
+    let second = failing_lines(body);
+    assert_eq!(first, second, "derandomized replays must print identically");
+    assert!(
+        first
+            .iter()
+            .any(|line| line.contains("// or any other generated value")),
+        "this failure has freely variable structure: {first:?}"
+    );
+    for line in &first {
+        if let Some(position) = line.find("//") {
+            assert!(
+                position == 0 || line[..position].ends_with("  "),
+                "a comment is set off by two spaces or starts the line: {line:?}"
+            );
+            let comment = &line[position..];
+            assert!(
+                comment == "// or any other generated value" || comment.starts_with("// The test "),
+                "comments extend to the end of their line: {line:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn annotations_inside_silent_draws_are_dropped() {
     let lines = failing_lines(|tc| {
         let _hidden: i32 = tc.draw_silent(gs::integers());

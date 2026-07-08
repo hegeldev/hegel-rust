@@ -700,6 +700,306 @@ fn explain_handles_slices_that_change_the_test_cases_length() {
     );
 }
 
+/// Build an engine whose `run_case` runs `body`, like [`with_counting_ctx`],
+/// but derandomized so explain experiments draw a fixed random stream.
+fn with_seeded_ctx<T, B>(mut body: T, after: B)
+where
+    T: FnMut(&dyn DataSource) -> TestCaseResult,
+    B: FnOnce(&mut Engine<'_>),
+{
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new().database(None).derandomize(true);
+    let mut ctx = Engine::new(&settings, None, &mut run_case);
+    after(&mut ctx);
+}
+
+fn crafted_span(start: usize, end: usize, discarded: bool) -> Span {
+    Span {
+        start,
+        end,
+        label: "0".to_string(),
+        depth: 0,
+        parent: None,
+        discarded,
+    }
+}
+
+fn far_deadline() -> std::time::Instant {
+    std::time::Instant::now() + Duration::from_secs(300)
+}
+
+#[test]
+fn explain_returns_nothing_when_the_deadline_has_already_passed() {
+    with_seeded_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => boom("deadline"),
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(&[ChoiceValue::Boolean(false)], None, 0);
+            assert_eq!(run.status, Status::Interesting);
+            let origin = run.origin.clone().unwrap();
+            let spans = Spans::from(run.spans.clone());
+            let deadline = std::time::Instant::now() - Duration::from_secs(1);
+            let comments = ctx.explain(&origin, &run.nodes, &spans, deadline);
+            assert!(comments.is_empty(), "{comments:?}");
+        },
+    );
+}
+
+#[test]
+fn explain_skips_attempts_the_test_reports_as_overruns() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(flag) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if flag {
+                return TestCaseResult::Overrun;
+            }
+            boom("overrun-skip")
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(
+        failures[0].comments,
+        vec![ExplainComment {
+            start: 0,
+            end: 1,
+            text: EXPLAIN_NOTE.to_string(),
+        }],
+        "overrunning attempts neither count nor disprove"
+    );
+}
+
+#[test]
+fn explain_skips_attempts_whose_realigned_span_cannot_be_found_and_bails_when_the_target_moves() {
+    with_seeded_ctx(
+        |ds| {
+            let Ok(flag) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if flag {
+                let Ok(_wide) = rint(ds, 0, 100) else {
+                    return TestCaseResult::Overrun;
+                };
+            } else {
+                let Ok(_narrow) = rbool(ds) else {
+                    return TestCaseResult::Overrun;
+                };
+            }
+            boom("realign")
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(
+                &[
+                    ChoiceValue::Boolean(true),
+                    ChoiceValue::Integer(BigInt::from(5)),
+                ],
+                None,
+                0,
+            );
+            assert_eq!(run.status, Status::Interesting);
+            let origin = run.origin.clone().unwrap();
+            let crafted = Spans::from(vec![
+                crafted_span(9, 10, true),
+                crafted_span(9, 10, true),
+                crafted_span(0, 1, false),
+            ]);
+            let comments = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
+            assert!(
+                comments.is_empty(),
+                "a false attempt is a smaller counterexample, invalidating the notes: {comments:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn explain_skips_attempts_whose_realigned_end_precedes_the_slice() {
+    with_seeded_ctx(
+        |ds| {
+            let Ok(_flag) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(gate) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            let mut inner = 0;
+            if gate > 50 {
+                let Ok(k) = rint(ds, 0, 100) else {
+                    return TestCaseResult::Overrun;
+                };
+                inner = k;
+            }
+            if inner > 50 {
+                let Ok(_extra) = rint(ds, 0, 100) else {
+                    return TestCaseResult::Overrun;
+                };
+            }
+            let Ok(_tail) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            boom("clamp")
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(
+                &[
+                    ChoiceValue::Boolean(false),
+                    ChoiceValue::Integer(BigInt::from(60)),
+                    ChoiceValue::Integer(BigInt::from(51)),
+                    ChoiceValue::Integer(BigInt::from(7)),
+                    ChoiceValue::Boolean(false),
+                ],
+                None,
+                0,
+            );
+            assert_eq!(run.status, Status::Interesting);
+            assert_eq!(run.nodes.len(), 5);
+            let origin = run.origin.clone().unwrap();
+            let crafted = Spans::from(vec![crafted_span(2, 3, false)]);
+            let comments = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
+            assert!(
+                comments.is_empty(),
+                "an attempt below the gate is skipped by the realignment clamp, \
+                 but its execution records a shorter counterexample, so the \
+                 notes are invalidated: {comments:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn explain_drops_every_note_when_the_together_round_finds_a_smaller_counterexample() {
+    with_seeded_ctx(
+        |ds| {
+            let Ok(a) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(b) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if a == b {
+                boom("matched")
+            } else {
+                boom("mismatched")
+            }
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(
+                &[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+                None,
+                0,
+            );
+            assert_eq!(run.status, Status::Interesting);
+            let origin = run.origin.clone().unwrap();
+            assert!(origin.contains("matched"), "{origin}");
+            let spans = Spans::from(run.spans.clone());
+            let comments = ctx.explain(&origin, &run.nodes, &spans, far_deadline());
+            assert!(
+                comments.is_empty(),
+                "varying each draw alone fails differently, but varying them \
+                 together reaches [false, false] — a smaller counterexample \
+                 with this origin — invalidating the notes: {comments:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn explain_together_can_end_without_a_verdict() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(a) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(b) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            if a == 0 || b == 0 {
+                boom("zeroed")
+            } else {
+                boom("elsewhere")
+            }
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    let zeroed = failures
+        .iter()
+        .find(|f| f.origin.contains("zeroed"))
+        .unwrap();
+    assert_eq!(
+        zeroed.comments,
+        vec![
+            ExplainComment {
+                start: 0,
+                end: 1,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+            ExplainComment {
+                start: 1,
+                end: 2,
+                text: EXPLAIN_NOTE.to_string(),
+            },
+        ],
+        "each draw alone varies freely while the other is zero, but varying \
+         both together mostly fails elsewhere, so no whole-test note is earned"
+    );
+}
+
+#[test]
+fn explain_together_stops_at_an_expired_deadline() {
+    with_seeded_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => boom("together-deadline"),
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(&[ChoiceValue::Boolean(false)], None, 0);
+            let origin = run.origin.clone().unwrap();
+            let values: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let chunks = vec![((0usize, 1usize), vec![vec![ChoiceValue::Boolean(true)]])];
+            let mut rng = ctx.rng_spawn();
+            let deadline = std::time::Instant::now() - Duration::from_secs(1);
+            let note =
+                ctx.explain_together(&origin, &run.nodes, &values, &chunks, deadline, &mut rng);
+            assert!(matches!(note, Ok(None)));
+        },
+    );
+}
+
+#[test]
+fn explain_together_bails_when_a_smaller_counterexample_appears() {
+    with_seeded_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => boom("together-bail"),
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |ctx| {
+            let run = ctx.cached_test_function(&[ChoiceValue::Boolean(true)], None, 0);
+            let origin = run.origin.clone().unwrap();
+            let values: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let chunks = vec![((0usize, 1usize), vec![vec![ChoiceValue::Boolean(false)]])];
+            let mut rng = ctx.rng_spawn();
+            let note = ctx.explain_together(
+                &origin,
+                &run.nodes,
+                &values,
+                &chunks,
+                far_deadline(),
+                &mut rng,
+            );
+            assert!(matches!(note, Err(TargetMoved)));
+        },
+    );
+}
+
 #[test]
 fn slow_shrink_warning_mentions_shrinking() {
     let w = slow_shrink_warning();
