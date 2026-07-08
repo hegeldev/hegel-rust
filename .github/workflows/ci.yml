@@ -75,6 +75,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
@@ -121,6 +124,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
@@ -162,6 +168,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run C bindings test recipe
