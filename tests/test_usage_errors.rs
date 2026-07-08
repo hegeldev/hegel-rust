@@ -106,6 +106,46 @@ fn vec_max_size_below_min_size_is_a_clean_usage_error() {
 }
 
 #[test]
+fn duration_min_above_u64_nanos_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        let _: Duration = tc.draw(gs::durations().min_value(Duration::from_secs(u64::MAX)));
+    });
+    assert_clean_usage_error(&msg, "largest generatable Duration");
+}
+
+#[test]
+fn uuid_version_outside_1_to_5_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        let _ = tc.draw(gs::uuids().version(9));
+    });
+    assert_clean_usage_error(&msg, "version must be between 1 and 5");
+}
+
+#[test]
+fn hashset_min_size_above_distinct_pool_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        let _: std::collections::HashSet<i64> =
+            tc.draw(gs::hashsets(gs::sampled_from(vec![1_i64, 2, 3])).min_size(5));
+    });
+    assert_clean_usage_error(
+        &msg,
+        "min_size 5 is larger than the 3 distinct values the element generator can produce",
+    );
+}
+
+#[test]
+fn hashmap_min_size_above_distinct_key_pool_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        let _: std::collections::HashMap<i64, bool> =
+            tc.draw(gs::hashmaps(gs::sampled_from(vec![1_i64, 2, 3]), gs::booleans()).min_size(5));
+    });
+    assert_clean_usage_error(
+        &msg,
+        "min_size 5 is larger than the 3 distinct keys the key generator can produce",
+    );
+}
+
+#[test]
 fn sampled_from_empty_drawn_inline_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
         let _: i32 = tc.draw(gs::sampled_from(Vec::<i32>::new()));

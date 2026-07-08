@@ -75,6 +75,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
@@ -121,6 +124,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
@@ -162,6 +168,9 @@ jobs:
       - name: Exclude workspace from Windows Defender
         if: runner.os == 'Windows'
         shell: pwsh
+        # Purely a speed optimization, and the Defender provider is
+        # occasionally unavailable on runners — never fail the job over it.
+        continue-on-error: true
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run C bindings test recipe
@@ -210,13 +219,11 @@ jobs:
           persist-credentials: false
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal && rustup default nightly
-      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: ./.github/actions/install-tools
         with:
           tools: just
 
-      - name: Generate lockfile
-        run: cargo generate-lockfile -Z minimal-versions
       - name: Run tests
         run: just check-tests-minimal-versions
 
@@ -366,7 +373,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, docs, coverage, nix, miri]
+    needs: [lint, test, test-all-features, test-minimal-versions, test-c-bindings, compile-examples, docs, coverage, nix, miri]
     runs-on: ubuntu-latest
     permissions:
       contents: write

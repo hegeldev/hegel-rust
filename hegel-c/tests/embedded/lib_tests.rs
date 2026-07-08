@@ -45,7 +45,7 @@ unsafe fn finish(
         ok(hegel_mark_complete(
             ctx,
             tc,
-            hegel_status_t::HEGEL_STATUS_VALID,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
             ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, tc));
@@ -101,7 +101,7 @@ fn mark_complete_waits_for_an_in_flight_operation() {
             ok(hegel_mark_complete(
                 ctx,
                 tc,
-                hegel_status_t::HEGEL_STATUS_VALID,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
                 ptr::null(),
             ));
         });
@@ -122,7 +122,12 @@ fn completion_is_reported_before_concurrent_use() {
         let (ctx, s, run, tc) = start_run_and_first_case();
 
         assert_eq!(
-            hegel_mark_complete(ctx, tc, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
 

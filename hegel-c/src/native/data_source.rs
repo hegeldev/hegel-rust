@@ -74,9 +74,9 @@ impl NativeDataSource {
     /// Read the `tc.target()` observations the test body recorded.
     ///
     /// Used by the targeting phase in `test_runner` to read back per-label
-    /// scores after a test case completes. A non-mutating clone, like
-    /// [`Self::take_nodes`]/[`Self::take_spans`]: the handle may still be shared
-    /// with a run-owned [`crate::HegelTestCase`], so reading it must not mutate it.
+    /// scores after a test case completes. Returns a clone without mutating
+    /// the shared state: the handle may still be shared with a run-owned
+    /// [`crate::HegelTestCase`], so reading it must not perturb it.
     pub fn take_target_observations(handle: &NativeTestCaseHandle) -> HashMap<String, f64> {
         handle
             .lock()
@@ -267,7 +267,9 @@ impl DataSource for NativeDataSource {
 
     fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let state = ManyState::new(min_size as usize, max_size.map(|n| n as usize));
+            let min_size = usize::try_from(min_size).unwrap_or(usize::MAX);
+            let max_size = max_size.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+            let state = ManyState::new(min_size, max_size);
             Ok(ntc.new_collection(state))
         })
     }
@@ -300,16 +302,14 @@ impl DataSource for NativeDataSource {
 
     fn new_state_machine(
         &self,
-        rule_names: &[&str],
-        invariant_names: &[&str],
+        rule_names: Vec<String>,
+        invariant_names: Vec<String>,
     ) -> Result<i64, DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        let rules = rule_names.iter().map(|s| s.to_string()).collect();
-        let invariants = invariant_names.iter().map(|s| s.to_string()).collect();
         self.with_ntc(|ntc| {
             let mut machines = ntc
                 .family()
@@ -318,7 +318,7 @@ impl DataSource for NativeDataSource {
                 .unwrap_or_else(|e| e.into_inner());
             let id = machines.len() as i64;
             machines.push(Arc::new(std::sync::Mutex::new(
-                crate::native::core::NativeStateMachine::new(rules, invariants),
+                crate::native::core::NativeStateMachine::new(rule_names, invariant_names),
             )));
             Ok(id)
         })

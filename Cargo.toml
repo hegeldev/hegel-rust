@@ -5,7 +5,7 @@ members = [".", "hegel-macros", "hegel-c"]
 name = "hegeltest"
 version = "0.24.2"
 edition = "2024"
-# if you bump this, also bump ci.yml and hegel-macros/Cargo.toml
+# if you bump this, also bump ci.yml, hegel-macros/Cargo.toml, and hegel-c/Cargo.toml
 rust-version = "1.86"
 exclude = [
   "/.claude",

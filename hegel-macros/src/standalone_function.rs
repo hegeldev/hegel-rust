@@ -30,7 +30,7 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
     if func.sig.inputs.is_empty() {
         return syn::Error::new_spanned(
             &func.sig,
-            "#[hegel::standalone_function] functions must take at least one parameter of type hegel::TestCase (as the first parameter).",
+            "#[hegel::standalone_function] functions must take at least one parameter of type ::hegel::TestCase (as the first parameter).",
         )
         .to_compile_error();
     }
@@ -90,16 +90,16 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
     let new_body: TokenStream = quote! {
         {
             let __hegel_settings = #settings_expr;
-            if __hegel_settings.has_phase(hegel::Phase::Explicit) {
+            if __hegel_settings.has_phase(::hegel::Phase::Explicit) {
                 #(#explicit_blocks)*
             }
 
-            hegel::Hegel::new(move |#tc_pat: #tc_ty| #body)
+            ::hegel::Hegel::new(move |#tc_pat: #tc_ty| #body)
             .settings(__hegel_settings)
             .__database_key(format!("{}::{}", module_path!(), #fn_name))
-            .test_location(hegel::TestLocation {
+            .test_location(::hegel::TestLocation {
                 function: #fn_name.to_string(),
-                file: file!().to_string(),
+                file: file!().replace('\\', "/"),
                 class: module_path!().to_string(),
                 begin_line: line!(),
             })

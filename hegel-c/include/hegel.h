@@ -152,82 +152,6 @@ typedef enum {
 } hegel_result_t;
 
 /*
- How the engine should treat the run: a full property-test loop or a
- single test case.
-
- - `HEGEL_MODE_TEST_RUN`: the engine drives a full
-   generate / shrink / replay loop until `max_examples` or the
-   choice tree is exhausted.
- - `HEGEL_MODE_SINGLE_TEST_CASE`: the engine produces exactly one
-   test case and stops, with no shrinking. Useful for replaying a
-   stored counterexample or running an exploratory probe.
- */
-typedef enum {
-    HEGEL_MODE_TEST_RUN = 0,
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-} hegel_mode_t;
-
-/*
- Which source of randomness the engine draws from. Set via
- `hegel_settings_set_backend`.
-
- - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
-   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
-   `HEGEL_BACKEND_DEFAULT`.
- - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
-   reproducible from the seed and shrinking / replay work as usual.
- - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
-   every draw (falling back to an OS-seeded PRNG on platforms without
-   it). Intended for running under Antithesis, whose fuzzer controls
-   `/dev/urandom`; you almost certainly don't want it otherwise.
- */
-typedef enum {
-    HEGEL_BACKEND_AUTO = 0,
-    HEGEL_BACKEND_DEFAULT = 1,
-    HEGEL_BACKEND_URANDOM = 2,
-} hegel_backend_t;
-
-/*
- Verbosity of engine-emitted output (logs, per-case traces). Set via
- `hegel_settings_set_verbosity`.
-
- - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
- - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
- - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
-   panic diagnostics as they happen.
- - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
-   shrinker trace output.
- */
-typedef enum {
-    HEGEL_VERBOSITY_QUIET = 0,
-    HEGEL_VERBOSITY_NORMAL = 1,
-    HEGEL_VERBOSITY_VERBOSE = 2,
-    HEGEL_VERBOSITY_DEBUG = 3,
-} hegel_verbosity_t;
-
-/*
- Outcome of a single test case. Passed to `hegel_mark_complete`.
-
- - `HEGEL_STATUS_VALID`: the test body ran to completion without
-   finding an interesting outcome (the property held).
- - `HEGEL_STATUS_INVALID`: an `assume` / precondition rejected this
-   draw; the engine should discard it without counting it against
-   the test-cases budget.
- - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
-   test case (typically because a `hegel_generate_*` draw returned
-   `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
- - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
-   a candidate counterexample. Pass a stable origin string to
-   `hegel_mark_complete` so the shrinker can identify the bug.
- */
-typedef enum {
-    HEGEL_STATUS_VALID = 0,
-    HEGEL_STATUS_INVALID = 1,
-    HEGEL_STATUS_OVERRUN = 2,
-    HEGEL_STATUS_INTERESTING = 3,
-} hegel_status_t;
-
-/*
  Aggregate outcome of a finished run, read via `hegel_run_result_status`.
 
  - `HEGEL_RUN_STATUS_PASSED`: the property held across every generated
@@ -458,6 +382,82 @@ typedef enum {
 } hegel_label_t;
 
 /*
+ How the engine should treat the run: a full property-test loop or a
+ single test case.
+
+ - `HEGEL_MODE_TEST_RUN`: the engine drives a full
+   generate / shrink / replay loop until `max_examples` or the
+   choice tree is exhausted.
+ - `HEGEL_MODE_SINGLE_TEST_CASE`: the engine produces exactly one
+   test case and stops, with no shrinking. Useful for replaying a
+   stored counterexample or running an exploratory probe.
+ */
+typedef enum {
+    HEGEL_MODE_TEST_RUN = 0,
+    HEGEL_MODE_SINGLE_TEST_CASE = 1,
+} hegel_mode_t;
+
+/*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_set_backend`.
+
+ - `HEGEL_BACKEND_AUTO`: choose automatically (the default) —
+   `HEGEL_BACKEND_URANDOM` when running inside Antithesis, otherwise
+   `HEGEL_BACKEND_DEFAULT`.
+ - `HEGEL_BACKEND_DEFAULT`: expand a single seeded PRNG. Runs are
+   reproducible from the seed and shrinking / replay work as usual.
+ - `HEGEL_BACKEND_URANDOM`: read fresh entropy from `/dev/urandom` on
+   every draw (falling back to an OS-seeded PRNG on platforms without
+   it). Intended for running under Antithesis, whose fuzzer controls
+   `/dev/urandom`; you almost certainly don't want it otherwise.
+ */
+typedef enum {
+    HEGEL_BACKEND_AUTO = 0,
+    HEGEL_BACKEND_DEFAULT = 1,
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
+
+/*
+ Verbosity of engine-emitted output (logs, per-case traces). Set via
+ `hegel_settings_set_verbosity`.
+
+ - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
+ - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
+ - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
+   panic diagnostics as they happen.
+ - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
+   shrinker trace output.
+ */
+typedef enum {
+    HEGEL_VERBOSITY_QUIET = 0,
+    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_VERBOSE = 2,
+    HEGEL_VERBOSITY_DEBUG = 3,
+} hegel_verbosity_t;
+
+/*
+ Outcome of a single test case. Passed to `hegel_mark_complete`.
+
+ - `HEGEL_STATUS_VALID`: the test body ran to completion without
+   finding an interesting outcome (the property held).
+ - `HEGEL_STATUS_INVALID`: an `assume` / precondition rejected this
+   draw; the engine should discard it without counting it against
+   the test-cases budget.
+ - `HEGEL_STATUS_OVERRUN`: the engine ran out of choice budget mid
+   test case (typically because a `hegel_generate_*` draw returned
+   `HEGEL_E_STOP_TEST`); treat the case as inconclusive.
+ - `HEGEL_STATUS_INTERESTING`: the property failed and this draw is
+   a candidate counterexample. Pass a stable origin string to
+   `hegel_mark_complete` so the shrinker can identify the bug.
+ */
+typedef enum {
+    HEGEL_STATUS_VALID = 0,
+    HEGEL_STATUS_INVALID = 1,
+    HEGEL_STATUS_OVERRUN = 2,
+    HEGEL_STATUS_INTERESTING = 3,
+} hegel_status_t;
+
+/*
  Opaque error-reporting context.
 
  libhegel records the diagnostic for a failed call on a context the caller
@@ -497,11 +497,18 @@ typedef struct hegel_failure_t hegel_failure_t;
  In-flight property-test run.
 
  `hegel_run_start` returns one of these. The caller pulls test cases
- out via `hegel_next_test_case` until it returns NULL, then reads the
- aggregated outcome via `hegel_run_result`, and finally frees the
- handle with `hegel_run_free`. The engine runs on a separate worker
- thread inside libhegel; the handle owns the channel that ferries
- test cases between caller and worker.
+ out via `hegel_next_test_case` until it writes NULL through its out
+ parameter, then reads the aggregated outcome via `hegel_run_result`,
+ and finally frees the handle with `hegel_run_free`. The engine runs
+ on a separate worker thread inside libhegel; the handle owns the
+ channel that ferries test cases between caller and worker.
+
+ Unlike test-case handles (which detect and reject concurrent use),
+ a run handle must only be used from one thread at a time: calling
+ `hegel_next_test_case`, `hegel_run_result`, or `hegel_run_free`
+ concurrently on the same run is undefined behavior. In particular,
+ do not free a run from a garbage-collector finalizer thread while
+ another thread may still be using it.
  */
 typedef struct hegel_run_t hegel_run_t;
 
@@ -525,6 +532,12 @@ typedef struct hegel_run_result_t hegel_run_result_t;
  `hegel_settings_*` family of setters, hand to `hegel_run_start`, then
  free with `hegel_settings_free`. Settings can be reused across
  multiple runs; the engine reads them at `hegel_run_start` time.
+
+ A settings handle may be shared across threads once configured — e.g.
+ built once and then handed to `hegel_run_start` from several threads
+ concurrently. The `hegel_settings_set_*` setters mutate the handle, so
+ each setter call requires exclusive access: do not call one concurrently
+ with any other use of the same handle.
  */
 typedef struct hegel_settings_t hegel_settings_t;
 
@@ -590,8 +603,10 @@ typedef struct {
 } hegel_generate_string_result_t;
 
 /*
- A drawn Gregorian calendar date: `year` in `[1, 9999]`, `month` in
- `[1, 12]`, `day` in `[1, days-in-month]`.
+ A drawn proleptic Gregorian calendar date: `year` in
+ `[-999999, 999999]` (bounded by the range passed to
+ `hegel_generate_date`), `month` in `[1, 12]`, `day` in
+ `[1, days-in-month]`.
  */
 typedef struct {
     int32_t year;
@@ -656,8 +671,16 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  Allocate a new settings handle initialised with libhegel's defaults
  (100 test cases, all phases enabled, normal verbosity, no seed,
  the default disk database under `.hegel/`), writing it into
- `*out_settings`. Must be paired with a `hegel_settings_free` call. Returns
- `HEGEL_E_INVALID_ARG` if `out_settings` is NULL.
+ `*out_settings`. When a CI environment is detected (via `CI`,
+ `GITHUB_ACTIONS`, and similar environment variables) the defaults
+ change: the database is disabled and derandomization is enabled. Use
+ the explicit setters to override either. Must be paired with a
+ `hegel_settings_free` call. Returns `HEGEL_E_INVALID_ARG` if
+ `out_settings` is NULL.
+
+ See `hegel_settings_t` for the threading contract: a configured handle
+ may be shared across threads, but each setter call requires exclusive
+ access.
  */
 hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
 
@@ -669,14 +692,16 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
 /*
  Set whether the engine should drive a full run loop or stop after
- one test case. See `hegel_mode_t`.
+ one test case. `mode` is a `hegel_mode_t` value; the parameter is typed
+ as `uint32_t` so an out-of-range value from a miscast argument is a
+ reportable `HEGEL_E_INVALID_ARG` instead of undefined behavior.
  */
-hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx,
-                                       hegel_settings_t *s,
-                                       hegel_mode_t mode);
+hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx, hegel_settings_t *s, uint32_t mode);
 
 /*
- Select the engine's randomness backend. See `hegel_backend_t`.
+ Select the engine's randomness backend. `backend` is a `hegel_backend_t`
+ value; the parameter is typed as `uint32_t` so an out-of-range value is a
+ reportable `HEGEL_E_INVALID_ARG` instead of undefined behavior.
 
  `HEGEL_BACKEND_AUTO` is the default and leaves the automatic choice in
  place; `HEGEL_BACKEND_DEFAULT` / `HEGEL_BACKEND_URANDOM` pin an explicit
@@ -686,7 +711,7 @@ hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx,
  */
 hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
                                           hegel_settings_t *s,
-                                          hegel_backend_t backend);
+                                          uint32_t backend);
 
 /*
  Maximum number of valid test cases to run before declaring the
@@ -698,11 +723,11 @@ hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
 
 /*
- Set the engine's output verbosity. See `hegel_verbosity_t`.
+ Set the engine's output verbosity. `v` is a `hegel_verbosity_t` value;
+ the parameter is typed as `uint32_t` so an out-of-range value is a
+ reportable `HEGEL_E_INVALID_ARG` instead of undefined behavior.
  */
-hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx,
-                                            hegel_settings_t *s,
-                                            hegel_verbosity_t v);
+hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx, hegel_settings_t *s, uint32_t v);
 
 /*
  Set the RNG seed. When `has_seed = true`, `seed` is used to
@@ -771,7 +796,9 @@ hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
  Suppress (disable) a set of health checks, given as a bitwise OR of
  `hegel_health_check_t` values. The default is "no suppression"; use this
  when you know a check is going to fire and accept the underlying behavior
- (e.g. you intentionally have a high rejection rate).
+ (e.g. you intentionally have a high rejection rate). Each call replaces
+ the full set of suppressed checks, so passing 0 clears any previous
+ suppression.
  */
 hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
                                                         hegel_settings_t *s,
@@ -986,7 +1013,8 @@ hegel_result_t hegel_collection_more(hegel_context_t *ctx,
  Tell the engine the last element it produced for this collection
  is not acceptable (e.g. would create a duplicate in a set), so it
  should try a different one. `why` is an optional human-readable
- rejection reason (NULL is allowed).
+ rejection reason (NULL is allowed); it is validated but currently
+ unused, reserved for future rejection diagnostics.
  */
 hegel_result_t hegel_collection_reject(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1029,10 +1057,11 @@ hegel_result_t hegel_pool_add(hegel_context_t *ctx,
  draws.
 
  On success writes the chosen variable id into `*out_variable_id` and
- returns `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` if the pool currently
- has no active variables — the caller should guard against that (e.g.
- only draw when it knows it has added at least one variable) or treat
- it like any other budget-exhaustion outcome.
+ returns `HEGEL_OK`. Returns `HEGEL_E_ASSUME` if the pool currently
+ has no active variables — the caller should treat that like any other
+ failed assumption: it may recover and continue the test case (as
+ stateful testing does when a rule's assumption fails, by skipping the
+ action), or give up on the case and mark it INVALID.
  */
 hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
@@ -1503,10 +1532,14 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
  it waits for that operation to finish and then completes. A NULL `tc`
  returns `HEGEL_E_INVALID_HANDLE`; a non-UTF-8 `origin` returns
  `HEGEL_E_INVALID_ARG`.
+
+ `status` is a `hegel_status_t` value; the parameter is typed as
+ `uint32_t` so an out-of-range value is a reportable
+ `HEGEL_E_INVALID_ARG` instead of undefined behavior.
  */
 hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
-                                   hegel_status_t status,
+                                   uint32_t status,
                                    const char *origin);
 
 /*

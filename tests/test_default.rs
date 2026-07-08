@@ -75,6 +75,12 @@ fn test_default_hashmap() {
 }
 
 #[test]
+fn test_default_hashset() {
+    check_can_generate_examples(gs::default::<std::collections::HashSet<i32>>());
+    check_can_generate_examples(gs::default::<std::collections::HashSet<String>>());
+}
+
+#[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
 

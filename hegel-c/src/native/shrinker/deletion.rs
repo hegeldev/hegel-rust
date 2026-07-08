@@ -252,9 +252,12 @@ impl<'a> Shrinker<'a> {
     /// region and then `find_integer`s the largest repeat count that
     /// still keeps the candidate interesting.
     ///
-    /// Each find_integer probe runs against a fixed snapshot taken when
-    /// the probe started, so the repeat semantics are stable regardless
-    /// of intervening shrink-target updates.
+    /// The leftward walk probes against the *live* shrink target, so each
+    /// accepted step compounds (Hypothesis's `offset_left` does the same);
+    /// probing a fixed snapshot instead would re-include the region the
+    /// previous step just deleted, and the walk would stall after one step.
+    /// The final repeat-count probe runs against a fixed snapshot so the
+    /// repeat semantics are well-defined.
     ///
     /// This is `delete_chunks` rewritten as five named passes — one for
     /// each `n in 1..=5` — and gives O(log k) test-function calls when
@@ -266,19 +269,16 @@ impl<'a> Shrinker<'a> {
         }
         let mut i = 0;
         while i + n <= self.current_nodes.len() {
-            let snapshot = self.current_nodes.clone();
-            if !self.run_node_program(&snapshot, i, n, 1)? {
+            if !self.run_node_program_live(i, n, 1)? {
                 i += 1;
                 continue;
             }
-            let snapshot = self.current_nodes.clone();
-            let starting = i.min(snapshot.len());
+            let starting = i;
             let left_offset = find_integer_r(|k| {
                 if k * n > starting {
                     return Ok(false);
                 }
-                let pos = starting - k * n;
-                self.run_node_program(&snapshot, pos, n, 1)
+                self.run_node_program_live(starting - k * n, n, 1)
             })?;
             let start = starting.saturating_sub(left_offset * n);
 
@@ -288,6 +288,17 @@ impl<'a> Shrinker<'a> {
             i = start.saturating_add(n);
         }
         Ok(())
+    }
+
+    /// [`Self::run_node_program`] against the current shrink target.
+    fn run_node_program_live(
+        &mut self,
+        i: usize,
+        program_len: usize,
+        repeats: usize,
+    ) -> ShrinkResult<bool> {
+        let original = self.current_nodes.clone();
+        self.run_node_program(&original, i, program_len, repeats)
     }
 
     /// Apply the "delete n consecutive nodes" program `repeats` times at

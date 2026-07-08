@@ -59,6 +59,13 @@ pub enum EngineRng {
 
 impl EngineRng {
     /// A PRNG seeded deterministically from `seed`.
+    ///
+    /// The stream is `rand::SmallRng`'s, which is not guaranteed stable
+    /// across `rand` releases or between 32- and 64-bit targets — so a seed
+    /// reproduces a run on the same build, not across arbitrary
+    /// architectures or dependency bumps. `seeded_stream_is_pinned` in the
+    /// rng tests pins a few literal outputs so a silent stream change on a
+    /// `rand` upgrade is caught rather than quietly breaking stored seeds.
     pub fn seeded(seed: u64) -> Self {
         EngineRng::Prng(SmallRng::seed_from_u64(seed))
     }

@@ -625,7 +625,7 @@ fn match_seq_min_repeat_zero_width_item_at_min() {
         max: u32::MAX,
         item: sub(vec![]),
     }];
-    assert_eq!(match_seq(&ops, 0, &chars(""), 0, &groups), None);
+    assert_eq!(match_seq(&ops, 0, &chars(""), 0, &groups), Some(0));
 }
 
 #[test]
@@ -669,7 +669,8 @@ fn build_in_set_negated_ascii_only_excludes_nonascii() {
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     let cache = Mutex::new(HashMap::new());
-    let mut state = ignorecase_state(&cache);
+    let char_cache = Mutex::new(HashMap::new());
+    let mut state = ignorecase_state(&cache, &char_cache);
     let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
@@ -685,12 +686,20 @@ fn compile_rejects_unparseable_patterns() {
     assert!(CompiledRegex::compile("a+b?", None).is_ok());
 }
 
-fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> {
+fn ignorecase_state<'a>(
+    cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
+    char_cache: &'a Mutex<HashMap<CharKey, Arc<[char]>>>,
+) -> GenState<'a> {
     GenState {
         groups: HashMap::new(),
         flags: SRE_FLAG_IGNORECASE,
+        fullmatch: false,
+        pending_anchors: Vec::new(),
+        pending_asserts: Vec::new(),
         pending_lookaheads: Vec::new(),
+        needs_whole_match: false,
         in_cache: cache,
+        char_cache,
     }
 }
 
@@ -698,9 +707,10 @@ fn ignorecase_state(cache: &Mutex<HashMap<InKey, Arc<[char]>>>) -> GenState<'_> 
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     use crate::native::rng::EngineRng;
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
         assert_eq!(out, "ß", "seed {seed} emitted a non-matching case variant");
@@ -712,9 +722,10 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     use crate::native::rng::EngineRng;
     let mut seen = std::collections::HashSet::new();
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..50 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
         seen.insert(out);
@@ -733,9 +744,10 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
         (0x307, 0x307),
     ]));
     let cache = Mutex::new(HashMap::new());
+    let char_cache = Mutex::new(HashMap::new());
     for seed in 0..100 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let mut state = ignorecase_state(&cache);
+        let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(
             &mut ntc,
@@ -756,4 +768,210 @@ fn generate_regex_handles_huge_character_class_ranges() {
     let re = CompiledRegex::compile("[\\x20-\\U0010FFFF]", None).unwrap();
     let s = generate_regex(&mut ntc, &re, false).unwrap();
     assert!(!s.is_empty());
+}
+
+#[test]
+fn generate_regex_word_boundaries_hold_in_the_final_string() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile(r"\bfoo\b", None).unwrap();
+    let mut produced = 0;
+    for seed in 0..300 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, false) else {
+            continue;
+        };
+        produced += 1;
+        let cs = chars(&s);
+        let matched = (0..cs.len().saturating_sub(2)).any(|i| {
+            cs[i..i + 3] == ['f', 'o', 'o']
+                && is_word_boundary(&cs, i)
+                && is_word_boundary(&cs, i + 3)
+        });
+        assert!(matched, "seed {seed}: {s:?} contains no \\bfoo\\b match");
+    }
+    assert!(produced > 0, "every draw was rejected");
+}
+
+#[test]
+fn generate_regex_end_anchor_inside_branch_holds_in_the_final_string() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("foo$|bar", None).unwrap();
+    let mut produced = 0;
+    for seed in 0..300 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, false) else {
+            continue;
+        };
+        produced += 1;
+        assert!(
+            s.contains("bar") || s.ends_with("foo") || s.ends_with("foo\n"),
+            "seed {seed}: {s:?} matches neither branch"
+        );
+    }
+    assert!(produced > 0, "every draw was rejected");
+}
+
+#[test]
+fn generate_regex_fullmatch_lookahead_does_not_emit_the_assertion_body() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?=a)ab", None).unwrap();
+    let mut produced = 0;
+    for seed in 0..100 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, true) else {
+            continue;
+        };
+        produced += 1;
+        assert_eq!(s, "ab", "seed {seed}: {s:?} is not a fullmatch of (?=a)ab");
+    }
+    assert!(produced > 0, "every draw was rejected");
+}
+
+#[test]
+fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("a*+a", None).unwrap();
+    for seed in 0..100 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        for fullmatch in [false, true] {
+            let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000));
+            let ntc_ref = if fullmatch { &mut ntc2 } else { &mut ntc };
+            if let Ok(s) = generate_regex(ntc_ref, &re, fullmatch) {
+                panic!(
+                    "seed {seed} fullmatch={fullmatch}: a*+a produced {s:?}, but no string matches it"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
+    use crate::native::rng::EngineRng;
+    let alphabet = Some(IntervalSet::new(vec![
+        ('I' as u32, 'I' as u32),
+        ('a' as u32, 'a' as u32),
+        ('i' as u32, 'i' as u32),
+        ('x' as u32, 'x' as u32),
+        (0x130, 0x130),
+        (0x307, 0x307),
+    ]));
+    let re = CompiledRegex::compile("(?i)[^\u{130}a]", alphabet).unwrap();
+    let mut produced = 0;
+    for seed in 0..100 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, true) else {
+            continue;
+        };
+        produced += 1;
+        assert_eq!(
+            s, "x",
+            "seed {seed}: {s:?} is case-equal to an excluded char"
+        );
+    }
+    assert!(produced > 0, "every draw was rejected");
+}
+
+#[test]
+fn match_seq_max_repeat_counts_zero_width_iterations_toward_min() {
+    let groups = HashMap::new();
+    let optional_a = sub(vec![OpCode::MaxRepeat {
+        min: 0,
+        max: 1,
+        item: sub(vec![lit('a')]),
+    }]);
+    let pattern = [OpCode::MaxRepeat {
+        min: 3,
+        max: 3,
+        item: optional_a,
+    }];
+    assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
+    assert_eq!(match_seq(&pattern, 0, &chars("aa"), 0, &groups), Some(2));
+}
+
+#[test]
+fn match_seq_min_repeat_counts_zero_width_iterations_toward_min() {
+    let groups = HashMap::new();
+    let optional_a = sub(vec![OpCode::MaxRepeat {
+        min: 0,
+        max: 1,
+        item: sub(vec![lit('a')]),
+    }]);
+    let pattern = [OpCode::MinRepeat {
+        min: 3,
+        max: 3,
+        item: optional_a,
+    }];
+    assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
+}
+
+#[test]
+fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?<=a)b", None).unwrap();
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        assert!(
+            generate_regex(&mut ntc, &re, true).is_err(),
+            "a fixed-width lookbehind can never hold at the start of a fullmatch"
+        );
+    }
+
+    let re = CompiledRegex::compile("(?<=a*)b", None).unwrap();
+    let mut produced = 0;
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        if let Ok(s) = generate_regex(&mut ntc, &re, true) {
+            produced += 1;
+            assert_eq!(s, "b");
+        }
+    }
+    assert!(produced > 0, "an empty-matching lookbehind body must pass");
+}
+
+#[test]
+fn generate_regex_end_anchor_with_no_newline_in_alphabet_does_not_pad() {
+    use crate::native::rng::EngineRng;
+    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]));
+    let re = CompiledRegex::compile("a$", alphabet).unwrap();
+    let mut produced = 0;
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let Ok(s) = generate_regex(&mut ntc, &re, false) else {
+            continue;
+        };
+        produced += 1;
+        assert!(s.ends_with('a'), "no newline available to pad with: {s:?}");
+    }
+    assert!(produced > 0);
+}
+
+#[test]
+fn generate_regex_multiline_caret_in_the_middle_generates_nothing() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?m)a^b", None).unwrap();
+    for seed in 0..20 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        assert!(
+            generate_regex(&mut ntc, &re, false).is_err(),
+            "a mid-pattern ^ preceded by a literal can never match"
+        );
+    }
+}
+
+#[test]
+fn match_seq_possessive_repeat_counts_zero_width_iterations_toward_min() {
+    let groups = HashMap::new();
+    let optional_a = sub(vec![OpCode::MaxRepeat {
+        min: 0,
+        max: 1,
+        item: sub(vec![lit('a')]),
+    }]);
+    let pattern = [OpCode::PossessiveRepeat {
+        min: 3,
+        max: 3,
+        item: optional_a,
+    }];
+    assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
+    assert_eq!(match_seq(&pattern, 0, &chars("aa"), 0, &groups), Some(2));
 }

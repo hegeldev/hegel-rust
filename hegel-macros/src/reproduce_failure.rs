@@ -26,7 +26,7 @@ pub fn expand_reproduce_failure(_attr: TokenStream, item: TokenStream) -> TokenS
              Write:\n  \
                #[hegel::test]\n  \
                #[hegel::reproduce_failure(\"<blob>\")]\n  \
-               fn my_test(tc: hegel::TestCase) { ... }",
+               fn my_test(tc: ::hegel::TestCase) { ... }",
         )
         .to_compile_error()
     } else {

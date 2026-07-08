@@ -278,13 +278,20 @@ impl StringChoice {
     }
 
     /// The simplest sequence of codepoints of length `min_size`, built
-    /// from repeated [`simplest_codepoint`].
+    /// from repeated [`simplest_codepoint`]. An empty alphabet is legal when
+    /// `min_size == 0` (the empty string is then the choice's only value).
     pub fn simplest(&self) -> Vec<u32> {
+        if self.min_size == 0 {
+            return Vec::new();
+        }
         vec![self.simplest_codepoint(); self.min_size]
     }
 
     /// Second-simplest codepoint sequence, used for type-punning during replay.
     pub fn unit(&self) -> Vec<u32> {
+        if self.intervals.is_empty() {
+            return self.simplest();
+        }
         let simplest_cp = self.simplest_codepoint();
         let second_cp = self.key_to_codepoint(1);
         match second_cp {
@@ -367,7 +374,10 @@ impl StringChoice {
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
         use crate::native::bignum::{BigUint, Zero};
         let alpha = BigUint::from(self.alpha_size());
-        hegel_internal_assert!(!alpha.is_zero(), "StringChoice::from_index: empty alphabet");
+        hegel_internal_assert!(
+            !alpha.is_zero() || self.max_size == 0,
+            "StringChoice::from_index: empty alphabet with nonzero max_size"
+        );
         let mut remaining = index;
         for length in self.min_size..=self.max_size {
             let bucket_size = alpha.pow(length as u32);
@@ -479,11 +489,16 @@ impl FloatChoice {
             return s;
         }
         let base = float_to_index(s.abs());
-        let is_neg = s.is_sign_negative();
         for offset in 1u64..4 {
             let v_mag = index_to_float(base + offset);
-            let v = if is_neg { -v_mag } else { v_mag };
-            if !v.is_nan() && self.validate(v) {
+            for v in [v_mag, -v_mag] {
+                if !v.is_nan() && self.validate(v) {
+                    return v;
+                }
+            }
+        }
+        for v in [self.min_value, self.max_value, -s] {
+            if !v.is_nan() && v.to_bits() != s.to_bits() && self.validate(v) {
                 return v;
             }
         }
@@ -873,28 +888,50 @@ impl std::hash::Hash for ChoiceValue {
     }
 }
 
+/// `base^exp`, saturating at `u128::MAX`, in `O(log exp)` multiplications.
+fn saturating_pow(mut base: u128, mut exp: usize) -> u128 {
+    let mut result: u128 = 1;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = result.saturating_mul(base);
+        }
+        exp >>= 1;
+        if exp > 0 {
+            base = base.saturating_mul(base);
+        }
+    }
+    result
+}
+
 /// `Σ_{len=min_size..=max_size} alphabet^len` — the number of distinct
 /// sequences over an `alphabet`-symbol set — saturating at `cap`.
 ///
 /// Backs [`ChoiceKind::max_children_saturating`] for the `Bytes` / `String`
 /// kinds: it accumulates in `u128` and returns `cap` the instant the running
 /// total reaches it, so a huge `max_size` never forces a multi-hundred-bit
-/// `BigUint`. `saturating_mul` pins `power` at `u128::MAX` once the alphabet
-/// outgrows the word, which then drives `total` to `cap` on the next term.
+/// `BigUint`. The degenerate alphabets get closed forms and the sum starts
+/// directly at `alphabet^min_size`, so a huge `min_size` (the draws layer
+/// imposes no size cap) costs `O(log min_size)` rather than a spin up to it;
+/// for `alphabet >= 2` the running total then reaches any realistic `cap`
+/// within a bounded number of doublings.
 fn sequence_max_children_saturating(
     alphabet: u128,
     min_size: usize,
     max_size: usize,
     cap: u128,
 ) -> u128 {
+    if alphabet == 0 {
+        return u128::from(min_size == 0).min(cap);
+    }
+    if alphabet == 1 {
+        return ((max_size - min_size) as u128 + 1).min(cap);
+    }
     let mut total: u128 = 0;
-    let mut power: u128 = 1;
-    for len in 0..=max_size {
-        if len >= min_size {
-            total = total.saturating_add(power);
-            if total >= cap {
-                return cap;
-            }
+    let mut power = saturating_pow(alphabet, min_size);
+    for _ in min_size..=max_size {
+        total = total.saturating_add(power);
+        if total >= cap {
+            return cap;
         }
         power = power.saturating_mul(alphabet);
     }

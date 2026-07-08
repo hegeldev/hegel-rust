@@ -304,29 +304,29 @@ impl<'a> Shrinker<'a> {
     /// geometrically growing `k` via `find_integer`, this pass reaches the
     /// minimum in `O(log k)` probes.
     pub(super) fn lower_integers_together(&mut self) -> ShrinkResult<()> {
-        let int_indices: Vec<usize> = self
-            .current_nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for pair_idx in 0..int_indices.len() {
+        let mut pair_idx = 0;
+        loop {
             for gap in 1..=3 {
+                let int_indices: Vec<usize> = self
+                    .current_nodes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, n)| {
+                        if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if pair_idx >= int_indices.len() {
+                    return Ok(());
+                }
                 if pair_idx + gap >= int_indices.len() {
                     break;
                 }
                 let i = int_indices[pair_idx];
                 let j = int_indices[pair_idx + gap];
-                if i >= self.current_nodes.len() || j >= self.current_nodes.len() {
-                    break;
-                }
 
                 let (ic_i, v_i) = match (
                     self.current_nodes[i].kind.as_ref(),
@@ -334,7 +334,7 @@ impl<'a> Shrinker<'a> {
                 ) {
                     (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
                     _ => unreachable!(
-                        "int_indices is rebuilt on entry; kind-pun between iterations would have re-filtered i out"
+                        "int_indices was rebuilt from current_nodes this iteration, so i is an Integer node"
                     ),
                 };
                 let v_j = match &self.current_nodes[j].value {
@@ -370,8 +370,8 @@ impl<'a> Shrinker<'a> {
                     })?;
                 }
             }
+            pair_idx += 1;
         }
-        Ok(())
     }
 
     /// Try shrinking duplicate integer values simultaneously.
@@ -500,7 +500,7 @@ impl<'a> Shrinker<'a> {
                 }
                 if live_base(self) > lo {
                     find_integer_r(|n| {
-                        let attempt = live_base(self) - BigInt::from(2u64 * n as u64);
+                        let attempt = live_base(self) - BigInt::from(2u128 * n as u128);
                         group_replace(self, &attempt)
                     })?;
                 }
@@ -523,7 +523,7 @@ impl<'a> Shrinker<'a> {
                 let neg_hi = -&lo;
                 if live_base(self) < neg_hi {
                     find_integer_r(|n| {
-                        let attempt = live_base(self) + BigInt::from(2u64 * n as u64);
+                        let attempt = live_base(self) + BigInt::from(2u128 * n as u128);
                         group_replace(self, &attempt)
                     })?;
                 }

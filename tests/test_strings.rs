@@ -920,6 +920,51 @@ mod regex_tests {
     }
 
     #[test]
+    fn test_text_with_large_min_size_and_no_max_still_varies_length() {
+        assert_all_examples(gs::text().min_size(150), |s: &String| {
+            (150..=250).contains(&s.chars().count())
+        });
+    }
+
+    #[test]
+    fn test_binary_with_large_min_size_and_no_max_still_varies_length() {
+        assert_all_examples(gs::binary().min_size(150), |b: &Vec<u8>| {
+            (150..=250).contains(&b.len())
+        });
+    }
+
+    #[test]
+    fn test_builder_calls_after_a_draw_are_not_ignored() {
+        Hegel::new(|tc| {
+            let g = gs::text();
+            let _: String = tc.draw(&g);
+            let g = g.max_size(2);
+            let s: String = tc.draw(&g);
+            assert!(
+                s.chars().count() <= 2,
+                "a builder call after a draw was ignored by the cached handle: {s:?}"
+            );
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_word_boundaries_hold_in_generated_strings() {
+        fn is_word(c: char) -> bool {
+            c == '_' || c.is_alphanumeric()
+        }
+        assert_all_examples(gs::from_regex(r"\bfoo\b"), |s: &String| {
+            let cs: Vec<char> = s.chars().collect();
+            (0..cs.len().saturating_sub(2)).any(|i| {
+                cs[i..i + 3] == ['f', 'o', 'o']
+                    && (i == 0 || !is_word(cs[i - 1]))
+                    && (i + 3 == cs.len() || !is_word(cs[i + 3]))
+            })
+        });
+    }
+
+    #[test]
     fn test_impossible_negative_lookahead() {
         assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
     }

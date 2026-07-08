@@ -98,7 +98,12 @@ fn clones_and_root_free_independently_in_any_order() {
 
         // Complete via the surviving clone, then free it (the last handle).
         assert_eq!(
-            hegel_mark_complete(ctx, c2, hegel_status_t::HEGEL_STATUS_VALID, ptr::null()),
+            hegel_mark_complete(
+                ctx,
+                c2,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null()
+            ),
             HEGEL_OK
         );
         assert_eq!(hegel_test_case_free(ctx, c2), HEGEL_OK);
@@ -150,7 +155,7 @@ fn two_clones_used_concurrently_then_freed() {
         ok(hegel_mark_complete(
             ctx,
             root,
-            hegel_status_t::HEGEL_STATUS_VALID,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
             ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, c1));
@@ -191,7 +196,7 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
                     let rc = hegel_mark_complete(
                         tctx,
                         cp.0,
-                        hegel_status_t::HEGEL_STATUS_VALID,
+                        hegel_status_t::HEGEL_STATUS_VALID as u32,
                         ptr::null(),
                     );
                     ok(hegel_context_free(tctx));
@@ -245,9 +250,9 @@ fn full_run_generates_fails_and_shrinks() {
             // Always interesting when a value is drawn; OVERRUN otherwise. This
             // makes the engine shrink toward the minimal failing example.
             let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
-                hegel_status_t::HEGEL_STATUS_INTERESTING
+                hegel_status_t::HEGEL_STATUS_INTERESTING as u32
             } else {
-                hegel_status_t::HEGEL_STATUS_OVERRUN
+                hegel_status_t::HEGEL_STATUS_OVERRUN as u32
             };
             ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
             ok(hegel_test_case_free(ctx, tc));

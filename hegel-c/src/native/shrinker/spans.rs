@@ -86,6 +86,7 @@ impl<'a> Shrinker<'a> {
 
             let (is_interesting, actual_nodes, actual_spans) =
                 self.run_test_fn(ShrinkRun::Full(&attempt))?;
+            self.calls += 1;
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
                 self.accept_improvement(actual_nodes, actual_spans);
                 i += 1;

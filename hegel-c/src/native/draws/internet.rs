@@ -146,7 +146,7 @@ pub(crate) fn generate_domain(
         }
         let label = draw_dns_label(ntc, MAX_LABEL_LEN)?;
         if domain.len() + 1 + label.len() > max_length {
-            break;
+            continue;
         }
         let mut next = String::with_capacity(label.len() + 1 + domain.len());
         next.push_str(&label);

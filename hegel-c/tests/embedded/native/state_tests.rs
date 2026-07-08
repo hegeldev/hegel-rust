@@ -24,109 +24,6 @@ fn spans_get_mut_returns_none_out_of_bounds() {
 }
 
 #[test]
-fn spans_get_signed_positive_index() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 2,
-        label: "a".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    spans.push(Span {
-        start: 2,
-        end: 4,
-        label: "b".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert_eq!(spans.get_signed(0).unwrap().label, "a");
-    assert_eq!(spans.get_signed(1).unwrap().label, "b");
-}
-
-#[test]
-fn spans_get_signed_negative_index() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 2,
-        label: "first".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    spans.push(Span {
-        start: 2,
-        end: 4,
-        label: "last".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert_eq!(spans.get_signed(-1).unwrap().label, "last");
-    assert_eq!(spans.get_signed(-2).unwrap().label, "first");
-}
-
-#[test]
-fn spans_get_signed_out_of_range_returns_none() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 1,
-        label: "only".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert!(spans.get_signed(1).is_none());
-    assert!(spans.get_signed(-2).is_none());
-    assert!(spans.get_signed(100).is_none());
-}
-
-#[test]
-fn spans_children_returns_direct_children() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 10,
-        label: "root".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    spans.push(Span {
-        start: 0,
-        end: 5,
-        label: "child1".to_string(),
-        depth: 1,
-        parent: Some(0),
-        discarded: false,
-    });
-    spans.push(Span {
-        start: 5,
-        end: 10,
-        label: "child2".to_string(),
-        depth: 1,
-        parent: Some(0),
-        discarded: false,
-    });
-    spans.push(Span {
-        start: 0,
-        end: 3,
-        label: "grandchild".to_string(),
-        depth: 2,
-        parent: Some(1),
-        discarded: false,
-    });
-    let children = spans.children(0);
-    assert_eq!(children, vec![1, 2]);
-    let children1 = spans.children(1);
-    assert_eq!(children1, vec![3]);
-}
-
-#[test]
 fn spans_trivial_handles_simplest_forced_and_oob() {
     use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
     let kind = ChoiceKind::Boolean(BooleanChoice);
@@ -237,41 +134,6 @@ fn spans_index_usize() {
 }
 
 #[test]
-fn spans_index_i64_positive() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 1,
-        label: "pos".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert_eq!(spans[0i64].label, "pos");
-}
-
-#[test]
-fn spans_index_i64_negative() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 1,
-        label: "neg".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert_eq!(spans[-1i64].label, "neg");
-}
-
-#[test]
-#[should_panic(expected = "out of range")]
-fn spans_index_i64_out_of_range_panics() {
-    let spans = Spans::new();
-    let _ = spans[0i64];
-}
-
-#[test]
 fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
     let prefix = vec![ChoiceValue::Integer(BigInt::from(9))];
     let mut tc = NativeTestCase::for_choices_and_template(
@@ -365,24 +227,6 @@ fn spans_as_slice_returns_slice() {
     let sl = spans.as_slice();
     assert_eq!(sl.len(), 1);
     assert_eq!(sl[0].label, "a");
-}
-
-#[test]
-fn spans_as_mut_slice_allows_mutation() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 1,
-        label: "mutable".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    {
-        let sl = spans.as_mut_slice();
-        sl[0].discarded = true;
-    }
-    assert!(spans.get(0).unwrap().discarded);
 }
 
 struct NoopObserver;
@@ -987,6 +831,19 @@ fn biased_string_sample_caps_constant_pool_probability() {
 }
 
 #[test]
+fn biased_string_sample_empty_alphabet_returns_empty_string() {
+    let sc = StringChoice {
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![]).into(),
+        min_size: 0,
+        max_size: 0,
+    };
+    let mut rng = EngineRng::seeded(7);
+    for _ in 0..200 {
+        assert_eq!(biased_string_sample(&sc, &mut rng), Vec::<u32>::new());
+    }
+}
+
+#[test]
 fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let fc = FloatChoice {
         min_value: -f64::MAX,
@@ -1182,6 +1039,24 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
 }
 
 #[test]
+fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
+    let choices = vec![ChoiceValue::String(Vec::new())];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
+    assert_eq!(s, "");
+}
+
+#[test]
+fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
+    let choices = vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(5))];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
+    assert_eq!(s, "");
+}
+
+#[test]
 fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
@@ -1192,4 +1067,31 @@ fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
     let msg = payload.downcast_ref::<String>().unwrap();
     assert!(msg.contains("empty alphabet"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn weighted_boolean_sample_keeps_true_reachable_for_tiny_p() {
+    let mut rng = EngineRng::seeded(3);
+    let trues = (0..20_000)
+        .filter(|_| weighted_boolean_sample(1e-300, &mut rng))
+        .count();
+    assert!(trues > 0, "true must stay reachable for any p > 0");
+    assert!(trues < 400, "tiny p must stay rare, got {trues}/20000");
+}
+
+#[test]
+fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
+    let mut spans = Spans::new();
+    spans.push(Span {
+        start: 5,
+        end: 7,
+        label: "stale".to_string(),
+        depth: 0,
+        parent: None,
+        discarded: false,
+    });
+    assert!(
+        !spans.trivial(0, &[]),
+        "a span past the end of the nodes must not count as trivial"
+    );
 }

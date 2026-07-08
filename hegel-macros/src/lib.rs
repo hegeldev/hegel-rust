@@ -43,7 +43,15 @@ pub fn standalone_function(attr: TokenStream, item: TokenStream) -> TokenStream 
 }
 
 #[proc_macro_attribute]
-pub fn composite(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn composite(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "#[hegel::composite] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
     let input = parse_macro_input!(item as ItemFn);
     composite::expand_composite(input).into()
 }
@@ -92,7 +100,15 @@ pub fn reproduce_failure(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn state_machine(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "#[hegel::state_machine] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
     let block = parse_macro_input!(item as ItemImpl);
     stateful::expand_state_machine(block).into()
 }

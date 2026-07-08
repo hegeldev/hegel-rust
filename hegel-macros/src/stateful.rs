@@ -21,7 +21,15 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
         .map(|m| {
             let name_str = m.name.to_string();
             let name = &m.name;
-            let attrs = &m.attrs;
+            // Forward the method's attributes (cfg gates, user attribute
+            // macros, ...) onto the generated vec entry, except doc
+            // comments: those would land on an expression and trip
+            // unused_doc_comments in the user's crate.
+            let attrs: Vec<&Attribute> = m
+                .attrs
+                .iter()
+                .filter(|a| !a.path().is_ident("doc"))
+                .collect();
             quote! {
                 #(#attrs)*
                 ::hegel::stateful::Rule::new(#name_str, Self::#name)
@@ -61,11 +69,11 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
     quote! {
         #block
         impl #impl_generics ::hegel::stateful::StateMachine for #block_type #where_clause {
-            fn rules(&self) -> Vec<::hegel::stateful::Rule<Self>> {
-                vec![ #( #rule_entries ),* ]
+            fn rules(&self) -> ::std::vec::Vec<::hegel::stateful::Rule<Self>> {
+                ::std::vec![ #( #rule_entries ),* ]
             }
-            fn invariants(&self) -> Vec<::hegel::stateful::Rule<Self>> {
-                vec![ #( #invariant_entries ),* ]
+            fn invariants(&self) -> ::std::vec::Vec<::hegel::stateful::Rule<Self>> {
+                ::std::vec![ #( #invariant_entries ),* ]
             }
         }
     }

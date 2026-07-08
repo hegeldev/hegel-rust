@@ -174,6 +174,13 @@ where
     /// contain most of a small alphabet. Port of Hypothesis's
     /// `UniqueSampledListStrategy`.
     fn draw_from_pool(&self, tc: &TestCase, mut remaining: Vec<T>) -> HashSet<T> {
+        if self.min_size > remaining.len() {
+            invalid_argument!(
+                "Cannot generate a set: min_size {} is larger than the {} distinct values the element generator can produce",
+                self.min_size,
+                remaining.len()
+            );
+        }
         let effective_max = self
             .max_size
             .map_or(remaining.len(), |m| m.min(remaining.len()));
@@ -260,6 +267,71 @@ where
             }
         }
         tc.start_span(labels::MAP);
+        let map = match self.enumerated_key_pool() {
+            Some(pool) => self.draw_from_key_pool(tc, pool),
+            None => self.draw_by_rejection(tc),
+        };
+        tc.stop_span(false);
+        map
+    }
+}
+
+impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT>
+where
+    K: Generator<KT>,
+    V: Generator<VT>,
+    KT: Eq + std::hash::Hash,
+{
+    /// The distinct values of an enumerable key generator, in first
+    /// occurrence order, when there are few enough of them to draw without
+    /// replacement. Mirrors [`HashSetGenerator::enumerated_pool`].
+    fn enumerated_key_pool(&self) -> Option<Vec<KT>> {
+        let values = self.keys.enumerate_values()?;
+        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
+            return None;
+        }
+        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut pool: Vec<KT> = Vec::new();
+        for v in values {
+            let bucket = by_hash.entry(fingerprint(&v)).or_default();
+            if bucket.iter().any(|&i| pool[i] == v) {
+                continue;
+            }
+            bucket.push(pool.len());
+            pool.push(v);
+        }
+        Some(pool)
+    }
+
+    /// Draw keys as indices into a shrinking pool of the remaining values,
+    /// avoiding the coupon-collector problem when the map must contain most
+    /// of a small key alphabet; each key's value is drawn right after it.
+    fn draw_from_key_pool(&self, tc: &TestCase, mut remaining: Vec<KT>) -> HashMap<KT, VT> {
+        if self.min_size > remaining.len() {
+            invalid_argument!(
+                "Cannot generate a map: min_size {} is larger than the {} distinct keys the key generator can produce",
+                self.min_size,
+                remaining.len()
+            );
+        }
+        let effective_max = self
+            .max_size
+            .map_or(remaining.len(), |m| m.min(remaining.len()));
+        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
+        let mut map = HashMap::new();
+        loop {
+            if remaining.is_empty() || !collection.more() {
+                break;
+            }
+            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
+            let key = remaining.remove(j);
+            let value = self.values.do_draw(tc);
+            map.insert(key, value);
+        }
+        map
+    }
+
+    fn draw_by_rejection(&self, tc: &TestCase) -> HashMap<KT, VT> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
@@ -275,7 +347,6 @@ where
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
-        tc.stop_span(false);
         map
     }
 }

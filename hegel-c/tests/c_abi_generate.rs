@@ -61,7 +61,7 @@ unsafe fn complete_valid(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
         ok(hegel_mark_complete(
             ctx,
             tc,
-            hegel_status_t::HEGEL_STATUS_VALID,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
             ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
@@ -636,7 +636,7 @@ fn float_draws_respect_spec_and_validate_arguments() {
                 ok(hegel_mark_complete(
                     ctx,
                     tc,
-                    hegel_status_t::HEGEL_STATUS_OVERRUN,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
                     ptr::null(),
                 ));
                 ok(hegel_c::hegel_test_case_free(ctx, tc));
@@ -1199,7 +1199,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
                     ok(hegel_mark_complete(
                         ctx,
                         tc,
-                        hegel_status_t::HEGEL_STATUS_VALID,
+                        hegel_status_t::HEGEL_STATUS_VALID as u32,
                         ptr::null(),
                     ));
                 }
@@ -1207,7 +1207,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
                     ok(hegel_mark_complete(
                         ctx,
                         tc,
-                        hegel_status_t::HEGEL_STATUS_INVALID,
+                        hegel_status_t::HEGEL_STATUS_INVALID as u32,
                         ptr::null(),
                     ));
                 }
@@ -1274,7 +1274,7 @@ fn generate_string_validates_handles_and_reports_stop_test() {
         ok(hegel_mark_complete(
             ctx,
             tc,
-            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
             ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
@@ -1488,7 +1488,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                 ok(hegel_mark_complete(
                     ctx,
                     tc,
-                    hegel_status_t::HEGEL_STATUS_OVERRUN,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
                     ptr::null(),
                 ));
                 ok(hegel_c::hegel_test_case_free(ctx, tc));
@@ -1575,7 +1575,7 @@ fn structured_draws_after_overrun_report_stop_test() {
         ok(hegel_mark_complete(
             ctx,
             tc,
-            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
             ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
@@ -1657,7 +1657,7 @@ fn typed_draws_after_overrun_report_stop_test() {
         ok(hegel_mark_complete(
             ctx,
             tc,
-            hegel_status_t::HEGEL_STATUS_OVERRUN,
+            hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
             ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));

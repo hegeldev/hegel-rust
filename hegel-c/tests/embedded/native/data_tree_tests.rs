@@ -234,6 +234,30 @@ fn simulate_puns_out_of_range_prefix_to_unit() {
 }
 
 #[test]
+fn simulate_full_puns_original_simplest_to_new_simplest_with_prefix_nodes() {
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[int_node(0, 10, 0)], Status::Valid, &[]);
+    record_tree(&mut root, &[int_node(0, 10, 1)], Status::Interesting, &[]);
+
+    let choices = vec![ChoiceValue::Integer(BigInt::from(100))];
+    let prefix_nodes = vec![int_node(100, 200, 100)];
+
+    let with_nodes = simulate_full(&root, &choices, Some(&prefix_nodes)).unwrap();
+    assert_eq!(
+        with_nodes.status,
+        Status::Valid,
+        "a stale value equal to its original kind's simplest puns to the new kind's simplest"
+    );
+
+    let bare = simulate_full(&root, &choices, None).unwrap();
+    assert_eq!(
+        bare.status,
+        Status::Interesting,
+        "a bare replay has no original-kind information and puns to unit"
+    );
+}
+
+#[test]
 fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     use crate::native::core::choices::{BytesChoice, FloatChoice, StringChoice};
     use crate::native::intervalsets::IntervalSet;
@@ -309,7 +333,7 @@ fn record_and_simulate_roundtrip_with_clone_nodes() {
     assert!(record_tree(&mut root, &nodes, Status::Interesting, &[]).is_none());
 
     let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-    let outcome = simulate_full(&root, &values).unwrap();
+    let outcome = simulate_full(&root, &values, None).unwrap();
     assert_eq!(outcome.status, Status::Interesting);
     assert_eq!(outcome.nodes.len(), 3);
     let ChoiceValue::Clone(record) = &outcome.nodes[1].value else {
@@ -359,7 +383,7 @@ fn simulate_ignores_trailing_unread_child_values() {
         ChoiceValue::Boolean(true),
         ChoiceValue::Boolean(true),
     ])];
-    let outcome = simulate_full(&root, &longer).unwrap();
+    let outcome = simulate_full(&root, &longer, None).unwrap();
     assert_eq!(outcome.status, Status::Valid);
     let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
         panic!("expected a clone node");
@@ -593,6 +617,7 @@ fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
     let outcome = simulate_full(
         &root,
         &[clone_prefix_value(vec![ChoiceValue::Boolean(false)])],
+        None,
     )
     .unwrap();
     assert_eq!(outcome.status, Status::Valid);
@@ -617,7 +642,7 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(true),
     ])]);
-    let outcome = simulate_full(&root, &[candidate]).unwrap();
+    let outcome = simulate_full(&root, &[candidate], None).unwrap();
     assert_eq!(outcome.status, Status::Valid);
     let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
         panic!("expected a clone node");
@@ -656,6 +681,7 @@ fn span_events_inside_clone_streams_are_reconstructed() {
     let outcome = simulate_full(
         &root,
         &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])],
+        None,
     )
     .unwrap();
     let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {

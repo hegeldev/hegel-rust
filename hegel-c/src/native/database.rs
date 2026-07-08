@@ -87,7 +87,7 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
     }
 
     fn save(&self, key: &[u8], value: &[u8]) {
-        if key_hash(key) != self.metakeys_hash {
+        if key_hash(key) != self.metakeys_hash && !self.key_path(key).exists() {
             self.save(METAKEYS_NAME, key);
         }
         let dir = self.key_path(key);
@@ -136,7 +136,9 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
             self.save(dst, value);
             return;
         }
-        let _ = std::fs::remove_dir(self.key_path(src));
+        if std::fs::remove_dir(self.key_path(src)).is_ok() && key_hash(src) != self.metakeys_hash {
+            self.delete(METAKEYS_NAME, src);
+        }
     }
 }
 
@@ -150,12 +152,18 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
 /// of arbitrary bytes.  FNV-1a is fine here because we only need
 /// collision-avoidance, not cryptographic security.
 pub(super) fn fnv_hex(s: &[u8]) -> String {
+    format!("{:016x}", fnv1a(s))
+}
+
+/// The FNV-1a 64-bit hash of `s` as a raw `u64` (also used to derive
+/// derandomized RNG seeds from test names).
+pub(super) fn fnv1a(s: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &byte in s {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    format!("{hash:016x}")
+    hash
 }
 
 /// Binary encoding of a `ChoiceValue` slice.

@@ -189,6 +189,7 @@ impl<'a> Engine<'a> {
                         .db()
                         .map(|db| db.fetch(&secondary_key))
                         .unwrap_or_default();
+                    extra.retain(|e| !values.contains(e));
                     let shortfall = desired_size - values.len();
                     if extra.len() > shortfall {
                         for i in 0..shortfall {
@@ -221,7 +222,13 @@ impl<'a> Engine<'a> {
                     if run.status == Status::Interesting {
                         if i < primary_count {
                             found_interesting_in_primary = true;
-                            if run.nodes.len() != stored_choices.len() {
+                            if run.nodes.len() != stored_choices.len()
+                                || run
+                                    .nodes
+                                    .iter()
+                                    .zip(&stored_choices)
+                                    .any(|(node, stored)| node.value != *stored)
+                            {
                                 replay_aligned = false;
                             }
                         } else {
@@ -308,13 +315,13 @@ impl<'a> Engine<'a> {
                     break;
                 }
 
-                let batch_rng = self.rng.spawn();
+                let case_rng = self.rng.spawn();
                 let prefix =
                     crate::native::data_tree::generate_novel_prefix(&self.tree_root, &mut self.rng);
                 let ntc = if prefix.is_empty() {
-                    NativeTestCase::new_random(batch_rng)
+                    NativeTestCase::new_random(case_rng)
                 } else {
-                    NativeTestCase::for_probe(&prefix, batch_rng, BUFFER_SIZE)
+                    NativeTestCase::for_probe(&prefix, case_rng, BUFFER_SIZE)
                 };
                 if verbosity == Verbosity::Verbose {
                     eprintln!("Running test case");
@@ -486,8 +493,13 @@ impl<'a> Engine<'a> {
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, _) = self.test_function(verify_ntc);
-                if verify.status != Status::Interesting {
+                let (verify, mismatch) = self.test_function(verify_ntc);
+                if let Some(msg) = mismatch {
+                    return Err(RunError::NonDeterministic(msg));
+                }
+                if verify.status != Status::Interesting
+                    || verify.origin.as_deref() != Some(origin.as_str())
+                {
                     return Err(RunError::Flaky(flaky_diagnostic()));
                 }
 
@@ -545,7 +557,6 @@ impl<'a> Engine<'a> {
                 );
             }
             log_phase("Shrink", "End");
-        } else if self.interesting.is_empty() && verbosity == Verbosity::Debug {
         } else if replay_aligned && verbosity == Verbosity::Debug {
             eprintln!("Skipping shrink: reused aligned database replay");
         }
@@ -608,12 +619,12 @@ impl<'a> Engine<'a> {
 /// `min(first_bug + 1000, last_bug * 2)`, with a minimum-call floor
 /// (`MIN_TEST_CALLS`) so very-cheap tests still produce a few extra probes.
 ///
-/// Special case: if `interesting` was populated from the **database** via
-/// the Reuse phase (i.e. no bug was found in generation, so `first_bug_at`
-/// is `None`), we stop immediately — the user already had this example
-/// stored, so re-running the generation loop just to look for more bugs is
-/// wasted work. The replay-logic test (`test_does_not_shrink_on_replay`)
-/// pins this behaviour at exactly 2 calls (replay + final replay).
+/// A bug replayed from the **database** never reaches this heuristic: the
+/// generation loop is gated on `!found_in_reuse` at the call site, so the
+/// stored example is not followed by a fresh generation pass at all. The
+/// replay-logic test (`test_does_not_shrink_on_replay`) pins this behaviour
+/// at exactly 2 calls (replay + final replay). The `first_bug_at == None`
+/// branch below is therefore a defensive default, not the reuse path.
 const MIN_TEST_CALLS: u64 = 10;
 const POST_BUG_EXTRA_CALLS: u64 = 1000;
 
@@ -1079,7 +1090,9 @@ impl<'a> Engine<'a> {
         extend: usize,
     ) -> RunResult {
         if extend == 0 {
-            if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices) {
+            if let Some(out) =
+                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)
+            {
                 return RunResult {
                     status: out.status,
                     nodes: out.nodes,
@@ -1203,19 +1216,10 @@ fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
         EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        EngineRng::seeded(hash_string(key))
+        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
     } else {
         EngineRng::from_os()
     }
-}
-
-fn hash_string(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in s.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 #[cfg(test)]

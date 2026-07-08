@@ -8,7 +8,7 @@
 //! panic; `crate::test_case::TestCase::mark_complete` translates them into a
 //! `hegel_mark_complete` status (plus, for a failure, its bug origin), and the
 //! richer failure data (panic message, reproduce blob) is read back out of the
-//! run result afterward.
+//! run result afterward as a `crate::ffi::Failure`.
 
 /// A single failing test case the lifecycle has classified.
 ///
@@ -18,20 +18,12 @@
 /// failure.
 #[derive(Debug, Clone)]
 pub struct Failure {
-    /// The raw panic message from the failing test (the string passed to
-    /// `panic!`). Used as-is for the legacy single-failure outer panic message.
-    pub panic_message: String,
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
     /// `take_panic_info` returns nothing). Passed to the engine through
     /// `hegel_mark_complete` so it can group test cases by which bug they
     /// trigger and shrink each origin to its own minimal counterexample.
     pub origin: String,
-    /// A base64 "failure blob" encoding the minimal counterexample's choice
-    /// sequence. Populated by the lifecycle from the run result for a failing
-    /// run; `None` while a case is still in flight. Paste into
-    /// `#[hegel::reproduce_failure("…")]` to replay it.
-    pub reproduce_blob: Option<String>,
 }
 
 /// Result of running a single test case.

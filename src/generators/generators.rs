@@ -81,6 +81,7 @@ pub trait Generator<T> {
         Filtered {
             source: self,
             predicate,
+            enumerated: std::sync::OnceLock::new(),
             _phantom: PhantomData,
         }
     }
@@ -187,7 +188,27 @@ where
 pub struct Filtered<T, F, G> {
     source: G,
     predicate: F,
+    /// The source's enumerated values with the predicate applied, computed
+    /// once: for an enumerable source like `sampled_from`, re-enumerating
+    /// (which clones the whole element vector) on every draw is the dominant
+    /// cost of a filtered draw.
+    enumerated: std::sync::OnceLock<Option<Vec<T>>>,
     _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T, F, G> Filtered<T, F, G>
+where
+    T: Clone + Send + Sync,
+    G: Generator<T>,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn enumerated(&self) -> &Option<Vec<T>> {
+        self.enumerated.get_or_init(|| {
+            self.source
+                .enumerate_values()
+                .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
+        })
+    }
 }
 
 impl<T, F, G> Generator<T> for Filtered<T, F, G>
@@ -197,7 +218,7 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(valid) = self.enumerate_values() {
+        if let Some(valid) = self.enumerated() {
             if valid.is_empty() {
                 invalid_argument!(
                     "Unsatisfiable filter: all values from the source generator \
@@ -221,9 +242,7 @@ where
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.source
-            .enumerate_values()
-            .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
+        self.enumerated().clone()
     }
 }
 

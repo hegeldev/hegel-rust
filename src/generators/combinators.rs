@@ -58,6 +58,14 @@ impl<T> Generator<T> for OneOfGenerator<'_, T> {
         tc.stop_span(false);
         result
     }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        let mut all = Vec::new();
+        for g in &self.generators {
+            all.extend(g.enumerate_values()?);
+        }
+        Some(all)
+    }
 }
 
 /// Choose from multiple generators of the same type.

@@ -92,9 +92,12 @@ impl ExplicitTestCase {
         let debug_normalized: String = debug.chars().filter(|c| !c.is_whitespace()).collect();
 
         if source_normalized == debug_normalized {
-            eprintln!("let {} = {};", name, source);
+            crate::test_case::emit_verbose_line(&format!("let {} = {};", name, source));
         } else {
-            eprintln!("let {} = {}; // = {}", name, source, debug);
+            crate::test_case::emit_verbose_line(&format!(
+                "let {} = {}; // = {}",
+                name, source, debug
+            ));
         }
 
         match boxed.downcast::<T>() {

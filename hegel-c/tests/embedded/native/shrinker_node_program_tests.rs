@@ -54,6 +54,48 @@ fn node_program_two_deletes_pairs_adaptively() {
     assert!(shrinker.current_nodes.is_empty());
 }
 
+/// Deletable positions that only become deletable after the step to their
+/// right lands: the leftward walk must probe the live target so accepted
+/// steps compound, clearing the whole region in one invocation.
+#[test]
+fn node_program_left_extension_accumulates_across_accepted_steps() {
+    fn values(nodes: &[ChoiceNode]) -> Vec<i128> {
+        nodes
+            .iter()
+            .map(|n| match &n.value {
+                ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
+                _ => unreachable!(),
+            })
+            .collect()
+    }
+    let initial = vec![
+        int_node(1),
+        int_node(2),
+        int_node(3),
+        int_node(4),
+        int_node(42),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run| match run {
+            ShrinkRun::Full(nodes) => {
+                let vals = values(nodes);
+                let ok = vals.last() == Some(&42)
+                    && vals[..vals.len() - 1] == [1, 2, 3, 4][..vals.len() - 1];
+                (ok, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    shrinker.node_program(1).unwrap();
+    assert_eq!(
+        values(&shrinker.current_nodes),
+        vec![42],
+        "one invocation should clear the whole right-to-left deletable region"
+    );
+}
+
 #[test]
 fn node_program_respects_predicate_rejecting_partial_deletes() {
     let initial = vec![

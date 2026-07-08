@@ -39,7 +39,24 @@ def check() -> int:
     violations: list[str] = []
 
     for rs_file in sorted(TESTS_ROOT.rglob("*.rs")):
-        for lineno, line in enumerate(rs_file.read_text().splitlines(), 1):
+        text = rs_file.read_text()
+        # Join rustfmt-wrapped imports so a multi-line
+        # `use hegel::generators::{\n    booleans,\n};` still matches the
+        # single-line patterns; record the original line number of the first
+        # physical line of each joined statement.
+        lines = text.splitlines()
+        logical: list[tuple[int, str]] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            start = i
+            if re.match(r"\s*use\b", line):
+                while "{" in line and "}" not in line and i + 1 < len(lines):
+                    i += 1
+                    line = line + " " + lines[i].strip()
+            logical.append((start + 1, line))
+            i += 1
+        for lineno, line in logical:
             brace = BRACE_IMPORT_RE.search(line)
             if brace and brace_import_violates(brace.group(1)):
                 violations.append(f"  {rs_file}:{lineno}: {line.strip()}")

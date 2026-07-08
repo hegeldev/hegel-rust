@@ -222,6 +222,7 @@ impl Settings {
     ///
     /// Health checks detect common issues like excessive filtering or slow
     /// tests. Use this to suppress specific checks when they are expected.
+    /// Replaces any previously configured suppressions, like [`Settings::phases`].
     ///
     /// # Example
     ///
@@ -236,7 +237,7 @@ impl Settings {
     /// }
     /// ```
     pub fn suppress_health_check(mut self, checks: impl IntoIterator<Item = HealthCheck>) -> Self {
-        self.suppress_health_check.extend(checks);
+        self.suppress_health_check = checks.into_iter().collect();
         self
     }
 

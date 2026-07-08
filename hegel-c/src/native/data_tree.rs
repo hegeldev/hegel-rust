@@ -233,6 +233,8 @@ pub(crate) fn record_tree_full(
     for first in nodes {
         let parent_ptr = *path.last().unwrap();
         // SAFETY: `parent_ptr` is either the original `tree_root` or a
+        // pointer derived from the previous `or_insert_with` borrow; no
+        // other live `&mut` aliases the node.
         let node = unsafe { &mut *parent_ptr };
         match &node.kind {
             Some(expected_kind) if *expected_kind != first.kind => {
@@ -268,6 +270,7 @@ pub(crate) fn record_tree_full(
     }
     for (depth, events) in by_pos.into_iter().enumerate() {
         // SAFETY: `path[depth]` is a unique pointer into the tree; no other
+        // live reference aliases it here.
         let node = unsafe { &mut *path[depth] };
         node.span_events = events;
     }
@@ -292,6 +295,7 @@ pub(crate) fn record_tree_full(
 
     while let Some(p) = path.pop() {
         // SAFETY: `p` is the just-popped pointer; no other live
+        // reference exists to that node at this point.
         let node = unsafe { &mut *p };
         node.check_exhausted();
     }
@@ -519,9 +523,10 @@ pub(crate) fn generate_novel_prefix(
 ///   always yields the single recorded (forced) value; the prefix cursor
 ///   still advances past the skipped slot.
 /// * At an unforced position whose prefix value fails the requested kind's
-///   validation, the draw puns to `kind.unit()` (there is no original-kind
-///   information for a bare `for_choices` replay, so the `simplest()` branch
-///   never applies).
+///   validation, the draw puns exactly as `resolve_choice` would: to the new
+///   kind's `simplest()` when the original nodes are supplied and the stale
+///   value equals its original kind's `simplest()`, and to `kind.unit()`
+///   otherwise.
 ///
 /// Returns `Some(status)` when the walk reaches a recorded conclusion
 /// (either because a previous run terminated exactly here, or because it
@@ -536,7 +541,7 @@ pub(crate) fn generate_novel_prefix(
 /// [`record_tree`]), so `EarlyStop` is never returned.
 #[cfg(test)]
 pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
-    simulate_full(tree_root, choices).map(|o| o.status)
+    simulate_full(tree_root, choices, None).map(|o| o.status)
 }
 
 /// As [`simulate`], but returns the *entire* recorded outcome — realised nodes,
@@ -552,6 +557,7 @@ pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Opt
 pub(crate) fn simulate_full(
     tree_root: &DataTreeNode,
     choices: &[ChoiceValue],
+    prefix_nodes: Option<&[ChoiceNode]>,
 ) -> Option<SimulatedOutcome> {
     let mut current = tree_root;
     let mut nodes: Vec<ChoiceNode> = Vec::new();
@@ -585,7 +591,14 @@ pub(crate) fn simulate_full(
             let realised = if kind.validate(&choices[i]) {
                 choices[i].clone()
             } else {
-                kind.unit()
+                let is_simplest = prefix_nodes
+                    .and_then(|pn| pn.get(i))
+                    .is_some_and(|pn| choices[i] == pn.kind.simplest());
+                if is_simplest {
+                    kind.simplest()
+                } else {
+                    kind.unit()
+                }
             };
             let next = current.children.get(&ChoiceValueKey::from(&realised))?;
             (realised, next.as_ref())

@@ -88,12 +88,14 @@ pub struct TextGenerator {
 impl TextGenerator {
     /// Set the minimum length in characters.
     pub fn min_size(mut self, min_size: usize) -> Self {
+        self.handle = OnceLock::new();
         self.min_size = min_size;
         self
     }
 
     /// Set the maximum length in characters.
     pub fn max_size(mut self, max_size: usize) -> Self {
+        self.handle = OnceLock::new();
         self.max_size = Some(max_size);
         self
     }
@@ -104,6 +106,7 @@ impl TextGenerator {
     /// Mutually exclusive with the character filtering methods like `codec`,
     /// `categories`, `min_codepoint`, etc.
     pub fn alphabet(mut self, chars: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields = CharacterFields {
             codec: None,
             min_codepoint: None,
@@ -119,6 +122,7 @@ impl TextGenerator {
 
     /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
     pub fn codec(mut self, codec: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.codec = Some(codec.to_string());
         self
@@ -126,6 +130,7 @@ impl TextGenerator {
 
     /// Set the minimum Unicode codepoint.
     pub fn min_codepoint(mut self, min_codepoint: u32) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.min_codepoint = Some(min_codepoint);
         self
@@ -133,6 +138,7 @@ impl TextGenerator {
 
     /// Set the maximum Unicode codepoint.
     pub fn max_codepoint(mut self, max_codepoint: u32) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.max_codepoint = Some(max_codepoint);
         self
@@ -142,6 +148,7 @@ impl TextGenerator {
     ///
     /// Mutually exclusive with [`exclude_categories`](Self::exclude_categories).
     pub fn categories(mut self, categories: &[&str]) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.categories = Some(categories.iter().map(|s| s.to_string()).collect());
         self
@@ -151,6 +158,7 @@ impl TextGenerator {
     ///
     /// Mutually exclusive with [`categories`](Self::categories).
     pub fn exclude_categories(mut self, exclude_categories: &[&str]) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.exclude_categories =
             Some(exclude_categories.iter().map(|s| s.to_string()).collect());
@@ -159,6 +167,7 @@ impl TextGenerator {
 
     /// Always include these specific characters, even if excluded by other filters.
     pub fn include_characters(mut self, include_characters: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.include_characters = Some(include_characters.to_string());
         self
@@ -166,6 +175,7 @@ impl TextGenerator {
 
     /// Always exclude these specific characters.
     pub fn exclude_characters(mut self, exclude_characters: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.exclude_characters = Some(exclude_characters.to_string());
         self
@@ -181,7 +191,13 @@ impl TextGenerator {
                     invalid_argument!("Cannot have max_size < min_size");
                 }
             }
-            let max_size = self.max_size.unwrap_or(self.min_size.max(DEFAULT_MAX_SIZE));
+            let max_size = self
+                .max_size
+                .unwrap_or(if self.min_size > DEFAULT_MAX_SIZE {
+                    self.min_size + DEFAULT_MAX_SIZE
+                } else {
+                    DEFAULT_MAX_SIZE
+                });
             self.char_fields
                 .build_text_handle(self.min_size as u64, max_size as u64)
         })
@@ -217,18 +233,21 @@ pub struct CharactersGenerator {
 impl CharactersGenerator {
     /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
     pub fn codec(mut self, codec: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.codec = Some(codec.to_string());
         self
     }
 
     /// Set the minimum Unicode codepoint.
     pub fn min_codepoint(mut self, min_codepoint: u32) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.min_codepoint = Some(min_codepoint);
         self
     }
 
     /// Set the maximum Unicode codepoint.
     pub fn max_codepoint(mut self, max_codepoint: u32) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.max_codepoint = Some(max_codepoint);
         self
     }
@@ -237,6 +256,7 @@ impl CharactersGenerator {
     ///
     /// Mutually exclusive with [`exclude_categories`](Self::exclude_categories).
     pub fn categories(mut self, categories: &[&str]) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.categories = Some(categories.iter().map(|s| s.to_string()).collect());
         self
     }
@@ -245,6 +265,7 @@ impl CharactersGenerator {
     ///
     /// Mutually exclusive with [`categories`](Self::categories).
     pub fn exclude_categories(mut self, exclude_categories: &[&str]) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.exclude_categories =
             Some(exclude_categories.iter().map(|s| s.to_string()).collect());
         self
@@ -252,12 +273,14 @@ impl CharactersGenerator {
 
     /// Always include these specific characters, even if excluded by other filters.
     pub fn include_characters(mut self, include_characters: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.include_characters = Some(include_characters.to_string());
         self
     }
 
     /// Always exclude these specific characters.
     pub fn exclude_characters(mut self, exclude_characters: &str) -> Self {
+        self.handle = OnceLock::new();
         self.char_fields.exclude_characters = Some(exclude_characters.to_string());
         self
     }
@@ -314,12 +337,14 @@ pub struct RegexGenerator {
 impl RegexGenerator {
     /// Set whether the entire string must match the pattern, not just contain a match.
     pub fn fullmatch(mut self, fullmatch: bool) -> Self {
+        self.handle = OnceLock::new();
         self.fullmatch = fullmatch;
         self
     }
 
     /// Constrain which characters may appear in generated strings.
     pub fn alphabet(mut self, alphabet: CharactersGenerator) -> Self {
+        self.handle = OnceLock::new();
         self.alphabet = Some(alphabet);
         self
     }
@@ -378,7 +403,13 @@ impl Generator<Vec<u8>> for BinaryGenerator {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        let max_size = self.max_size.unwrap_or(self.min_size.max(DEFAULT_MAX_SIZE));
+        let max_size = self
+            .max_size
+            .unwrap_or(if self.min_size > DEFAULT_MAX_SIZE {
+                self.min_size + DEFAULT_MAX_SIZE
+            } else {
+                DEFAULT_MAX_SIZE
+            });
         tc.generate_bytes(self.min_size, max_size)
     }
 }
@@ -444,6 +475,7 @@ pub struct DomainGenerator {
 impl DomainGenerator {
     /// Set the maximum length (must be between 4 and 255).
     pub fn max_length(mut self, max_length: usize) -> Self {
+        self.handle = OnceLock::new();
         self.max_length = max_length;
         self
     }
@@ -607,6 +639,11 @@ impl UuidsGenerator {
 
 impl Generator<String> for UuidsGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
+        if let Some(v) = self.version {
+            if !(1..=5).contains(&v) {
+                invalid_argument!("UUID version must be between 1 and 5, got {v}");
+            }
+        }
         let b = tc.generate_uuid(self.version);
         format!(
             "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",

@@ -183,3 +183,47 @@ fn unexpected_code_unwinds_as_an_internal_error() {
     assert!(msg.contains("unexpected code -3"), "{msg}");
     assert!(msg.contains("Internal error in hegel"), "{msg}");
 }
+
+/// Once a collection has answered `false`, further `more()` calls keep
+/// answering `false` without touching the engine.
+#[test]
+fn collection_more_after_finished_stays_false() {
+    let (_run, tc) = emitting_test_case();
+    let mut collection = Collection::new(&tc, 0, Some(3));
+    while collection.more() {
+        tc.draw(gs::booleans());
+    }
+    assert!(!collection.more());
+}
+
+/// `reject()` drops the last element from a live collection's size budget,
+/// and is a no-op once the collection has finished.
+#[test]
+fn collection_reject_live_and_after_finished() {
+    let (_run, tc) = emitting_test_case();
+    let mut collection = Collection::new(&tc, 1, Some(3));
+    assert!(
+        collection.more(),
+        "min_size 1 guarantees a first element before any rejection"
+    );
+    tc.draw(gs::booleans());
+    collection.reject(Some("rejected by the test"));
+    while collection.more() {
+        tc.draw(gs::booleans());
+    }
+    collection.reject(Some("after finished"));
+    assert!(!collection.more());
+}
+
+#[test]
+fn with_output_override_restores_the_sink_on_panic() {
+    let sink: OutputSink = std::sync::Arc::new(|_line: &str| {});
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_output_override(sink, || panic!("boom"));
+    }));
+    assert!(result.is_err());
+    assert!(
+        current_output_sink().is_none(),
+        "a panicking capture closure must not leave its sink installed"
+    );
+}

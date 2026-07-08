@@ -96,7 +96,7 @@ where
             }
             "--database" => {
                 let value = next_value(&args, &mut i, "--database")?;
-                if value == "disabled" || value == "none" {
+                if value == "disabled" {
                     settings = settings.database(None);
                 } else {
                     settings = settings.database(Some(value));

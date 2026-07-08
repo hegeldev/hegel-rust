@@ -323,24 +323,16 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
             Some(ChoiceValue::Boolean(new))
         }
         (ChoiceValue::Bytes(b), ChoiceKind::Bytes(kind)) => {
-            let mut v: i128 = 0;
-            for &byte in b {
-                v = (v << 8) | byte as i128;
-            }
-            let new_v = v.saturating_add(delta);
-            if new_v < 0 {
+            use crate::native::bignum::{BigInt, Sign};
+            let v = BigInt::from_bytes_be(Sign::Plus, b);
+            let new_v = v + BigInt::from(delta);
+            if new_v.sign() == Sign::Minus {
                 return None;
             }
-            let mut new_bytes = Vec::new();
-            let mut x = new_v;
-            if x == 0 {
+            let (_, mut new_bytes) = new_v.to_bytes_be();
+            if new_bytes.is_empty() {
                 new_bytes.push(0u8);
             }
-            while x > 0 {
-                new_bytes.push((x & 0xff) as u8);
-                x >>= 8;
-            }
-            new_bytes.reverse();
             while new_bytes.len() < b.len() {
                 new_bytes.insert(0, 0);
             }

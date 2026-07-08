@@ -110,6 +110,7 @@ impl<'a> Shrinker<'a> {
                         attempt[i] = attempt[i].with_value(ChoiceValue::Float(f64::NAN));
                         let (is_interesting, actual_nodes, actual_spans) =
                             self.run_test_fn(ShrinkRun::Full(&attempt))?;
+                        self.calls += 1;
                         if is_interesting
                             && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)
                         {

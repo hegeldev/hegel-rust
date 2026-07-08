@@ -890,6 +890,81 @@ fn should_generate_more_stops_without_bug_markers() {
 }
 
 #[test]
+fn shrink_verify_with_a_different_origin_is_flaky() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                boom("origin A")
+            } else {
+                boom("origin B")
+            }
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::Flaky(msg)) => {
+            assert!(msg.contains("Flaky test detected"), "got: {msg}");
+        }
+        other => panic!("expected RunError::Flaky, got {other:?}"),
+    }
+}
+
+#[test]
+fn shrink_verify_surfaces_generator_nondeterminism() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // The body draws a boolean and fails on true; after the first failure it
+    // permanently switches the follow-up draw's kind. With
+    // report_multiple_failures(false), generation stops at that first
+    // failure, so the very next execution is the pre-shrink verification
+    // replay — which must surface the kind mismatch as nondeterminism.
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();

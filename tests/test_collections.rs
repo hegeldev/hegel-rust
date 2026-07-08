@@ -614,11 +614,7 @@ mod sampled_from {
             let expected: HashSet<i64> = (0..50).collect();
             assert_eq!(keys, expected);
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
-        )
+        .settings(Settings::new().database(None))
         .run();
     }
 
@@ -629,6 +625,35 @@ mod sampled_from {
                 tc.draw(gs::hashsets(gs::sampled_from(vec![0_i64, 0, 1])).min_size(2));
             let expected: HashSet<i64> = [0, 1].into_iter().collect();
             assert_eq!(x, expected);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_dicts_with_sampled_keys_beyond_the_pool_bound_fall_back_to_rejection() {
+        Hegel::new(|tc| {
+            let x: HashMap<i64, ()> = tc.draw(
+                gs::hashmaps(
+                    gs::sampled_from((0..10_001).collect::<Vec<i64>>()),
+                    gs::just(()),
+                )
+                .max_size(3),
+            );
+            assert!(x.len() <= 3);
+        })
+        .settings(Settings::new().test_cases(5).database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_dicts_with_duplicated_source_keys() {
+        Hegel::new(|tc| {
+            let x: HashMap<i64, ()> = tc
+                .draw(gs::hashmaps(gs::sampled_from(vec![0_i64, 0, 1]), gs::just(())).min_size(2));
+            let keys: HashSet<i64> = x.keys().copied().collect();
+            let expected: HashSet<i64> = [0, 1].into_iter().collect();
+            assert_eq!(keys, expected);
         })
         .settings(Settings::new().database(None))
         .run();

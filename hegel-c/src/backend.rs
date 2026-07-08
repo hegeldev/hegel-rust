@@ -130,8 +130,8 @@ pub trait DataSource: Send + Sync {
     /// id. Errors with `InvalidArgument` if `rule_names` is empty.
     fn new_state_machine(
         &self,
-        rule_names: &[&str],
-        invariant_names: &[&str],
+        rule_names: Vec<String>,
+        invariant_names: Vec<String>,
     ) -> Result<i64, DataSourceError>;
 
     /// Draw the index of the next rule to run, in `[0, num_rules)`.
