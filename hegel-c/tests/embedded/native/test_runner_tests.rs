@@ -623,6 +623,35 @@ fn explain_reports_when_commented_parts_sometimes_pass_together() {
 }
 
 #[test]
+fn explain_keeps_clone_choices_fixed_instead_of_sampling_them() {
+    let failures = explore_failures(
+        |ds| {
+            let Ok(clone) = ds.clone_stream() else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(_cloned_draw) = rint(&*clone, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            let Ok(_direct_draw) = rint(ds, I32_MIN, I32_MAX) else {
+                return TestCaseResult::Overrun;
+            };
+            boom("always fails")
+        },
+        None,
+        Duration::from_secs(300),
+    );
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0]
+            .comments
+            .iter()
+            .all(|c| (c.start, c.end) == (0, 0) || c.text == EXPLAIN_NOTE),
+        "{:?}",
+        failures[0].comments
+    );
+}
+
+#[test]
 fn explain_is_skipped_when_shrinking_times_out() {
     let failures = explore_failures(
         |ds| {

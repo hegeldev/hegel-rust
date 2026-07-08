@@ -147,7 +147,7 @@ fn test_failing_test_output() {
     assert_matches_regex(
         &output.stderr,
         concat!(
-            r"let draw_1 = -?\d+;\n",
+            r"let draw_1 = -?\d+;(?:  // or any other generated value)?\n",
             r"thread '.*' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
             r"(?:Property test failed: )?intentional failure: -?\d+",
         ),
@@ -193,7 +193,7 @@ fn test_failing_test_output_with_backtrace() {
         &format!(
             concat!(
                 r"(?s)",
-                r"let draw_1 = -?\d+;\n",
+                r"let draw_1 = -?\d+;(?:  // or any other generated value)?\n",
                 r"thread 'main' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
                 r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
@@ -231,7 +231,7 @@ fn test_failing_test_output_with_full_backtrace() {
         &format!(
             concat!(
                 r"(?s)",
-                r"let draw_1 = -?\d+;\n",
+                r"let draw_1 = -?\d+;(?:  // or any other generated value)?\n",
                 r"thread 'main' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
                 r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",

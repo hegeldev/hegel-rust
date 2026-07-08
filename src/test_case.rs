@@ -123,6 +123,20 @@ pub(crate) struct TestCaseGlobalData {
     /// the middle of the draw's `let … = …;` line, so they are buffered here
     /// and flushed — in order — once the enclosing draw completes.
     pending_notes: Mutex<Vec<(usize, String)>>,
+    /// Explain-phase annotations for this test case, keyed by the choice
+    /// slice `[start, end)` of the shrunk counterexample they describe.
+    /// Populated by the lifecycle before the final replay of an explained
+    /// failure and consumed — each at most once — by
+    /// [`PrintableGenerator::draw_and_print`]'s region tracking; empty
+    /// everywhere else, which is what keeps the tracking free for ordinary
+    /// test cases.
+    explain_comments: Mutex<HashMap<(u64, u64), String>>,
+    /// The whole-test "varied together" note, waiting in a deferred hole at
+    /// the top of the document. It is filled in when the first slice
+    /// annotation actually renders: a note about "commented parts" would
+    /// only confuse if every commented slice belonged to unprinted machinery
+    /// draws (silent draws, loop bookkeeping) and no comment is visible.
+    explain_together: Mutex<Option<(crate::pretty::DeferredPrinter, String)>>,
 }
 
 /// The width drawn-value documents are laid out to.
@@ -391,6 +405,8 @@ impl TestCase {
                 }),
                 printer: OnceLock::new(),
                 pending_notes: Mutex::new(Vec::new()),
+                explain_comments: Mutex::new(HashMap::new()),
+                explain_together: Mutex::new(None),
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -413,6 +429,67 @@ impl TestCase {
     pub(crate) fn with_draw_state<R>(&self, f: impl FnOnce(&mut DrawState) -> R) -> R {
         let mut guard = self.global.draw_state.lock();
         f(&mut guard)
+    }
+
+    /// Install the failure's explain-phase annotations before the final
+    /// replay. Slice notes go into the table that
+    /// [`PrintableGenerator::draw_and_print`]'s region tracking consumes as
+    /// the replay's draws print; the whole-test note (the marker slice
+    /// `(0, 0)`) reserves a deferred hole at the top of the document and only
+    /// appears — as a leading `// …` line — once a slice annotation actually
+    /// renders.
+    pub(crate) fn set_explain_comments(&self, comments: Vec<(u64, u64, String)>) {
+        let mut together = None;
+        {
+            let mut table = self.global.explain_comments.lock();
+            for (start, end, text) in comments {
+                if (start, end) == (0, 0) {
+                    together = Some(text);
+                } else {
+                    table.insert((start, end), text);
+                }
+            }
+        }
+        if let Some(text) = together {
+            self.with_printer(|printer| {
+                let slot = printer.deferred();
+                *self.global.explain_together.lock() = Some((slot, text));
+            });
+        }
+    }
+
+    /// Open an explain-annotation region: the choice index a printed region
+    /// starts at, or `None` when there are no annotations to match (every
+    /// test case except the final replay of an explained failure).
+    pub(crate) fn explain_region_start(&self) -> Option<u64> {
+        if self.global.explain_comments.lock().is_empty() {
+            return None;
+        }
+        Some(self.choice_count())
+    }
+
+    /// Close an explain-annotation region: if the choice slice it consumed
+    /// carries an annotation, attach it as a comment at the printer's current
+    /// position. Each annotation is consumed at most once, so exactly one of
+    /// several regions with identical extent (e.g. a chain of delegating
+    /// generators) reports it.
+    pub(crate) fn explain_region_finish(&self, region: Option<u64>, printer: &mut PrettyPrinter) {
+        let Some(start) = region else { return };
+        let end = self.choice_count();
+        let comment = self.global.explain_comments.lock().remove(&(start, end));
+        if let Some(text) = comment {
+            printer.comment(&text);
+            if let Some((mut slot, note)) = self.global.explain_together.lock().take() {
+                slot.text(&format!("// {note}\n"));
+            }
+        }
+    }
+
+    /// The number of choices this test case's stream has recorded so far.
+    fn choice_count(&self) -> u64 {
+        self.handle
+            .choice_count()
+            .unwrap_or_else(|rc| raise_for_rc(rc))
     }
 
     /// Draw a value from a generator.
@@ -475,7 +552,7 @@ impl TestCase {
             printer.text(&" ".repeat(indent));
             printer.shift_indent(indent as isize);
             printer.text(&format!("let {display_name} = "));
-            let value = generator.do_draw_and_print(self, printer);
+            let value = generator.draw_and_print(self, printer);
             printer.text(";");
             printer.shift_indent(-(indent as isize));
             printer.hard_break();

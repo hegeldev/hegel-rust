@@ -95,8 +95,9 @@ fn snapshot_loop_with_multiple_draws_per_iteration() {
         });
     }));
     insta::assert_snapshot!(output, @"
+    // The test always failed when commented parts were varied together.
     // Repetition #1
-      let x_1 = 0;
+      let x_1 = 0;  // or any other generated value
       let y_1 = 5;
     ");
 }

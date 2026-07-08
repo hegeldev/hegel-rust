@@ -92,7 +92,7 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = self.elements.do_draw_and_print(tc, speculation.printer());
+            let element = self.elements.draw_and_print(tc, speculation.printer());
             if let Some(eq_fn) = &self.unique_by {
                 if result.iter().any(|existing| eq_fn(existing, &element)) {
                     speculation.abort();
@@ -545,7 +545,7 @@ where
             }
             key.pretty_print(printer);
             printer.text(": ");
-            let value = self.values.do_draw_and_print(tc, printer);
+            let value = self.values.draw_and_print(tc, printer);
             map.insert(key, value);
         }
         map
@@ -568,7 +568,7 @@ where
                     }
                     entry.key().pretty_print(printer);
                     printer.text(": ");
-                    let value = self.values.do_draw_and_print(tc, printer);
+                    let value = self.values.draw_and_print(tc, printer);
                     entry.insert(value);
                 }
             }
@@ -651,7 +651,7 @@ impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerat
                 printer.text(",");
                 printer.breakable(" ");
             }
-            self.element.do_draw_and_print(tc, printer)
+            self.element.draw_and_print(tc, printer)
         });
         printer.end_group(1, "]");
         tc.stop_span(false);

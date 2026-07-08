@@ -21,7 +21,14 @@ where
                     Settings::new()
                         .test_cases(20)
                         .database(None)
-                        .derandomize(true),
+                        .derandomize(true)
+                        .phases([
+                            hegel::Phase::Explicit,
+                            hegel::Phase::Reuse,
+                            hegel::Phase::Generate,
+                            hegel::Phase::Target,
+                            hegel::Phase::Shrink,
+                        ]),
                 )
                 .run();
         });

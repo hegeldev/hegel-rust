@@ -91,7 +91,7 @@ impl<'a, T, B: PrintableGenerator<T>> PrintableGenerator<T> for OneOfGenerator<'
             .min_value(0)
             .max_value(self.generators.len() - 1)
             .do_draw(tc);
-        let result = self.generators[index].do_draw_and_print(tc, printer);
+        let result = self.generators[index].draw_and_print(tc, printer);
         tc.stop_span(false);
         result
     }
@@ -174,7 +174,7 @@ where
         tc.start_span(labels::OPTIONAL);
         let result = if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
-            let value = self.inner.do_draw_and_print(tc, printer);
+            let value = self.inner.draw_and_print(tc, printer);
             printer.end_group(5, ")");
             Some(value)
         } else {

@@ -237,6 +237,7 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
+    explain_comments: Vec<(u64, u64, String)>,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -253,6 +254,9 @@ pub(crate) fn run_test_case(
 
     let c_tc = Arc::new(c_tc);
     let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
+    if should_emit && !explain_comments.is_empty() {
+        tc.set_explain_comments(explain_comments);
+    }
     let reporter = tc.child(0);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
@@ -462,7 +466,15 @@ pub(crate) fn drive<F>(
     }
 
     while let Some(c_tc) = run.next_test_case() {
-        run_test_case(c_tc, &mut test_fn, false, mode, verbosity, &output);
+        run_test_case(
+            c_tc,
+            &mut test_fn,
+            false,
+            mode,
+            verbosity,
+            &output,
+            Vec::new(),
+        );
     }
 
     let result = run.result();
@@ -491,16 +503,23 @@ pub(crate) fn drive<F>(
                 if multiple && !quiet {
                     output.line("");
                 }
-                let blob = result
-                    .failure(index)
+                let failure = result.failure(index);
+                let blob = failure
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
-                let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output);
+                let (tc_result, payload, diagnostic) = run_test_case(
+                    c_tc,
+                    &mut test_fn,
+                    true,
+                    mode,
+                    verbosity,
+                    &output,
+                    failure.explain_comments,
+                );
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -542,8 +561,15 @@ fn drive_single_case(
     let c_tc = run
         .next_test_case()
         .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) =
-        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity, output);
+    let (result, payload, diagnostic) = run_test_case(
+        c_tc,
+        test_fn,
+        true,
+        Mode::SingleTestCase,
+        verbosity,
+        output,
+        Vec::new(),
+    );
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
         if let Some(diagnostic) = diagnostic {
@@ -588,6 +614,7 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
+        Vec::new(),
     );
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);

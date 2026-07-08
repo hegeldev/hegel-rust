@@ -1258,6 +1258,13 @@ fn nodes_end_with(nodes: &[ChoiceNode], suffix: &[ChoiceNode]) -> bool {
 /// phase varies.
 type ExplainSlice = (usize, usize);
 
+/// Whether the explain phase may sample a fresh value for this choice.
+/// Forced choices must keep their value, and clone choices have no domain to
+/// sample from (their value is a record of another stream).
+fn explain_variable(node: &ChoiceNode) -> bool {
+    !node.was_forced && !matches!(node.kind.as_ref(), crate::native::core::ChoiceKind::Clone)
+}
+
 /// The explain phase — a port of Hypothesis's `Shrinker._explain`.
 ///
 /// After an origin's shrink fixpoint, each span of the minimal
@@ -1321,7 +1328,7 @@ impl<'a> Engine<'a> {
             .filter(|s| !s.discarded)
             .map(|s| (s.start, s.end.min(nodes.len())))
             .filter(|&(start, end)| start < end)
-            .filter(|&(start, end)| nodes[start..end].iter().any(|n| !n.was_forced))
+            .filter(|&(start, end)| nodes[start..end].iter().any(explain_variable))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -1376,10 +1383,10 @@ impl<'a> Engine<'a> {
                     nodes[start..end]
                         .iter()
                         .map(|n| {
-                            if n.was_forced {
-                                n.value.clone()
-                            } else {
+                            if explain_variable(n) {
                                 n.kind.random_value(&mut rng)
+                            } else {
+                                n.value.clone()
                             }
                         })
                         .collect()

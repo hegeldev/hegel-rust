@@ -403,6 +403,18 @@ impl CTestCase {
         CTestCase { raw }
     }
 
+    /// The number of choices this handle's stream has recorded so far.
+    /// Snapshotting it around a draw yields the choice slice the draw
+    /// consumed, which is what matches printed regions to explain-phase
+    /// annotations on the final replay.
+    pub(crate) fn choice_count(&self) -> Result<u64, hegel_result_t> {
+        let mut out: u64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_choice_count(ctx, self.raw, &mut out)
+        });
+        rc_to_value(rc, out)
+    }
+
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
     pub(crate) fn generate_integer(
         &self,
@@ -1112,8 +1124,8 @@ impl RunResult {
 
     /// The `index`-th distinct failure; `index` must be less than
     /// [`failure_count`](Self::failure_count) (libhegel rejects an
-    /// out-of-range index). The blob is copied out and the libhegel failure
-    /// snapshot released before returning.
+    /// out-of-range index). The blob and explain annotations are copied out
+    /// and the libhegel failure snapshot released before returning.
     pub(crate) fn failure(&self, index: usize) -> Failure {
         let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
         // SAFETY: self.raw is this snapshot's live pointer; &mut f is valid.
@@ -1122,14 +1134,31 @@ impl RunResult {
         }));
         let mut blob: *const c_char = ptr::null();
         // SAFETY: f is the failure snapshot allocated above; it is freed
-        // exactly once, after the blob has been copied out by cstr_opt.
-        let reproduce_blob = with_context(|ctx| unsafe {
+        // exactly once, after the blob and comments have been copied out.
+        with_context(|ctx| unsafe {
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
             let reproduce_blob = cstr_opt(blob);
+            let mut count = 0usize;
+            require_ok(hegel_c::hegel_failure_comment_count(ctx, f, &mut count));
+            let mut explain_comments = Vec::with_capacity(count);
+            for i in 0..count {
+                let mut start = 0u64;
+                let mut end = 0u64;
+                let mut text: *const c_char = ptr::null();
+                require_ok(hegel_c::hegel_failure_comment(
+                    ctx, f, i, &mut start, &mut end, &mut text,
+                ));
+                let text = cstr_opt(text).unwrap_or_else(|| {
+                    crate::control::hegel_internal_error!("comment {i} has no text")
+                });
+                explain_comments.push((start, end, text));
+            }
             require_ok(hegel_c::hegel_failure_free(ctx, f));
-            reproduce_blob
-        });
-        Failure { reproduce_blob }
+            Failure {
+                reproduce_blob,
+                explain_comments,
+            }
+        })
     }
 }
 
@@ -1142,10 +1171,13 @@ impl Drop for RunResult {
 
 /// A distinct failure read out of a finished run.
 ///
-/// The client needs only the reproduce blob: it replays the blob to produce
-/// the diagnostic and re-raise the test's own panic.
+/// Carries the reproduce blob the client replays to produce the diagnostic
+/// and re-raise the test's own panic, plus the explain phase's annotations —
+/// `(start, end, text)` choice slices of the shrunk counterexample — for the
+/// replay to attach to the printed regions that consumed them.
 pub(crate) struct Failure {
     pub(crate) reproduce_blob: Option<String>,
+    pub(crate) explain_comments: Vec<(u64, u64, String)>,
 }
 
 fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {
@@ -1219,6 +1251,7 @@ fn phases_bitmask(phases: &[Phase]) -> u32 {
             Phase::Generate => hegel_c::hegel_phase_t::HEGEL_PHASE_GENERATE as u32,
             Phase::Target => hegel_c::hegel_phase_t::HEGEL_PHASE_TARGET as u32,
             Phase::Shrink => hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK as u32,
+            Phase::Explain => hegel_c::hegel_phase_t::HEGEL_PHASE_EXPLAIN as u32,
         };
     }
     mask

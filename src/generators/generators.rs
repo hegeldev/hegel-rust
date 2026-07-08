@@ -189,6 +189,28 @@ pub trait PrintableGenerator<T>: Generator<T> {
     #[doc(hidden)]
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
 
+    /// Produce a value, printing its representation as one tracked region.
+    ///
+    /// This is how a compositional printable generator invokes an inner
+    /// generator (and how [`TestCase::draw`] invokes its argument): the
+    /// choice slice the region consumes is matched against the failure's
+    /// explain-phase annotations on the final replay, so a comment like
+    /// `// or any other generated value` can attach to exactly the printed
+    /// part it describes — a single list element, one field of a struct.
+    /// Away from the final replay of an explained failure the wrapper adds
+    /// nothing and simply delegates.
+    ///
+    /// Do not override; implement `do_draw_and_print`. A generator that
+    /// merely forwards to an inner printable generator without printing or
+    /// drawing anything itself should delegate `do_draw_and_print` directly
+    /// rather than calling this, so the region isn't doubled.
+    fn draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        let region = tc.explain_region_start();
+        let value = self.do_draw_and_print(tc, printer);
+        tc.explain_region_finish(region, printer);
+        value
+    }
+
     /// Convert this generator into a type-erased boxed printable generator,
     /// as accepted by [`one_of!`](crate::one_of).
     fn boxed_printable<'a>(self) -> BoxedPrintableGenerator<'a, T>
@@ -357,7 +379,7 @@ where
         tc.start_span(labels::FLAT_MAP);
         let intermediate = self.source.do_draw(tc);
         let next_gen = (self.f)(intermediate);
-        let result = next_gen.do_draw_and_print(tc, printer);
+        let result = next_gen.draw_and_print(tc, printer);
         tc.stop_span(false);
         result
     }
@@ -453,7 +475,7 @@ where
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let mut speculation = printer.speculate();
-            let value = self.source.do_draw_and_print(tc, speculation.printer());
+            let value = self.source.draw_and_print(tc, speculation.printer());
             if (self.predicate)(&value) {
                 speculation.commit();
                 tc.stop_span(false);

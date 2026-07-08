@@ -47,8 +47,7 @@ impl HealthCheck {
 /// shrinking, which is useful when you only need to find a counterexample
 /// quickly and don't need the minimal one.
 ///
-/// Corresponds to a subset of `hypothesis.Phase` (the `explain` phase is not
-/// yet supported in hegel-rust).
+/// Corresponds to `hypothesis.Phase`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Phase {
     /// Run explicit test cases added via `#[hegel::explicit_test_case]`.
@@ -61,6 +60,12 @@ pub enum Phase {
     Target,
     /// Shrink failing examples to a minimal counterexample.
     Shrink,
+    /// Attempt to explain why the test failed: after shrinking, the engine
+    /// varies each part of the minimal counterexample, and parts whose value
+    /// turns out to be irrelevant are annotated with
+    /// `// or any other generated value` in the reported failing example.
+    /// Requires [`Phase::Shrink`].
+    Explain,
 }
 
 /// Controls the test execution mode.
@@ -160,6 +165,7 @@ impl Settings {
                 Phase::Generate,
                 Phase::Target,
                 Phase::Shrink,
+                Phase::Explain,
             ],
             report_multiple_failures: false,
             print_blob: false,
@@ -218,7 +224,7 @@ impl Settings {
 
     /// Set which test lifecycle phases to run.
     ///
-    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink]`.
+    /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink, Phase::Explain]`.
     ///
     /// Example — skip shrinking (useful when you only need a witness, not a
     /// minimal counterexample):

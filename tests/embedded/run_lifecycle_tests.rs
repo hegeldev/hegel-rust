@@ -167,6 +167,7 @@ fn run_one_case(
         Mode::TestRun,
         verbosity,
         &RunOutput::resolve(),
+        Vec::new(),
     )
 }
 

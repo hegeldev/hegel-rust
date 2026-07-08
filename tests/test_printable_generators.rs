@@ -10,9 +10,13 @@ use common::utils::printed_draw_lines;
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::{self as gs, Generator};
-use hegel::{Hegel, Settings, Verbosity};
+use hegel::{Hegel, Phase, Settings, Verbosity};
 
 /// Run a failing property and capture the final replay's draw/note lines.
+///
+/// The explain phase is disabled so the assertions here pin the printed
+/// *shapes* alone; how explain annotations attach to those shapes is covered
+/// by `tests/test_explain.rs`.
 fn failing_lines<F>(body: F) -> Vec<String>
 where
     F: FnMut(hegel::TestCase) + 'static,
@@ -37,7 +41,14 @@ where
                         .test_cases(50)
                         .database(None)
                         .verbosity(verbosity)
-                        .derandomize(true),
+                        .derandomize(true)
+                        .phases([
+                            Phase::Explicit,
+                            Phase::Reuse,
+                            Phase::Generate,
+                            Phase::Target,
+                            Phase::Shrink,
+                        ]),
                 )
                 .run();
         });
