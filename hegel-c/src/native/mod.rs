@@ -8,6 +8,7 @@ pub mod database;
 pub mod draws;
 pub mod floats;
 pub mod intervalsets;
+pub mod printer;
 pub mod re;
 pub mod rng;
 pub mod shrinker;

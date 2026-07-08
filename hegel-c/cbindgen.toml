@@ -111,6 +111,7 @@ include = [
 "HegelRunResult" = "hegel_run_result_t"
 "HegelFailure" = "hegel_failure_t"
 "HegelStringGenerator" = "hegel_string_generator_t"
+"HegelPrinter" = "hegel_printer_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic
