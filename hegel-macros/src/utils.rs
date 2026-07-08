@@ -109,6 +109,67 @@ pub(crate) fn make_method_ident(name: &str, span: proc_macro2::Span) -> syn::Ide
     }
 }
 
+/// The pieces of a derive input's generics the generated code needs, split
+/// once so `struct_gen` and `enum_gen` thread them identically.
+pub(crate) struct GenericsParts<'a> {
+    /// The declared parameters with their bounds (`T: Clone, const N: usize`),
+    /// for declaration positions. The generated generator prepends its own
+    /// `'a` lifetime before these.
+    pub gen_params: &'a syn::punctuated::Punctuated<syn::GenericParam, syn::token::Comma>,
+    /// The bare parameter names (`T, N`), for use positions.
+    pub param_uses: Vec<proc_macro2::TokenStream>,
+    /// Just the type parameters' idents, for `T: 'a` / `T: 'static` bounds.
+    pub type_param_idents: Vec<&'a syn::Ident>,
+    /// The input's `where` clause predicates, appended to every generated
+    /// `where` clause.
+    pub user_predicates: Vec<&'a syn::WherePredicate>,
+    /// The `<T, N>` type-argument tokens for naming the derived type itself
+    /// (empty for a non-generic type).
+    pub ty_generics: proc_macro2::TokenStream,
+}
+
+/// Split a derive input's generics into [`GenericsParts`]. Lifetime
+/// parameters are rejected: a borrowing type cannot promise the `'static`
+/// generator `DefaultGenerator` requires.
+pub(crate) fn split_generics(generics: &syn::Generics) -> Result<GenericsParts<'_>, syn::Error> {
+    if let Some(lt) = generics.lifetimes().next() {
+        return Err(syn::Error::new_spanned(
+            lt,
+            "#[derive(DefaultGenerator)] does not support lifetime parameters: a borrowing \
+             type cannot be produced by the 'static generator DefaultGenerator requires",
+        ));
+    }
+    let param_uses = generics
+        .params
+        .iter()
+        .map(|p| match p {
+            syn::GenericParam::Type(t) => {
+                let ident = &t.ident;
+                quote! { #ident }
+            }
+            syn::GenericParam::Const(c) => {
+                let ident = &c.ident;
+                quote! { #ident }
+            }
+            syn::GenericParam::Lifetime(_) => unreachable!("lifetimes rejected above"),
+        })
+        .collect();
+    let type_param_idents = generics.type_params().map(|t| &t.ident).collect();
+    let user_predicates = generics
+        .where_clause
+        .as_ref()
+        .map(|w| w.predicates.iter().collect())
+        .unwrap_or_default();
+    let (_, ty_generics, _) = generics.split_for_impl();
+    Ok(GenericsParts {
+        gen_params: &generics.params,
+        param_uses,
+        type_param_idents,
+        user_predicates,
+        ty_generics: quote! { #ty_generics },
+    })
+}
+
 /// Generator DefaultGenerator + Send + Sync bounds for a set of types.
 pub(crate) fn default_gen_bounds(
     types: &[&syn::Type],

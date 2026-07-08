@@ -18,16 +18,6 @@ use syn::{Data, DeriveInput, ItemFn, ItemImpl, parse_macro_input};
 pub fn derive_generator(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    if !input.generics.params.is_empty() {
-        return syn::Error::new_spanned(
-            &input.generics,
-            "#[derive(DefaultGenerator)] does not support generic types: the generated \
-             generator has no way to pick concrete generators for the type parameters. \
-             Implement DefaultGenerator by hand for the concrete instantiations you need.",
-        )
-        .to_compile_error()
-        .into();
-    }
     match &input.data {
         Data::Struct(data) => struct_gen::derive_struct_generator(&input, data),
         Data::Enum(data) => enum_gen::derive_enum_generator(&input, data),
