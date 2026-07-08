@@ -140,6 +140,7 @@ include = [
 "HegelCollection" = "hegel_collection_t"
 "HegelPool" = "hegel_pool_t"
 "HegelStateMachine" = "hegel_state_machine_t"
+"HegelPrinter" = "hegel_printer_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic
