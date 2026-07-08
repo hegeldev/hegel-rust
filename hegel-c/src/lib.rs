@@ -390,7 +390,8 @@ pub type hegel_output_callback_t =
 /// still returns its usual error code, there is just nothing to read back.
 ///
 /// Besides error reporting, a context carries the output destination for the
-/// runs and test cases created with it — see `hegel_context_set_output`.
+/// runs and test cases created and driven with it — see
+/// `hegel_context_set_output`.
 pub struct HegelContext {
     last_error: CString,
     output: Option<OutputTarget>,
@@ -399,9 +400,9 @@ pub struct HegelContext {
 /// The output callback registered on a `HegelContext` with
 /// `hegel_context_set_output`, paired with its `user_data` pointer.
 ///
-/// A copy of this pair is snapshotted off the context whenever a run or blob
-/// replay is created, and travels to the engine's worker thread inside the
-/// run's settings.
+/// A copy of this pair is resolved off the context when a run or blob replay
+/// is created (becoming its inherited destination, see [`OutputCell`]) and
+/// again by every later call that carries the run or one of its test cases.
 #[derive(Copy, Clone)]
 struct OutputTarget {
     callback: unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize),
@@ -416,18 +417,19 @@ unsafe impl Send for OutputTarget {}
 unsafe impl Sync for OutputTarget {}
 
 impl OutputTarget {
+    /// Deliver one line of output to this target's callback.
+    fn emit(self, line: &str) {
+        let line = cstring_lossy(line);
+        unsafe { (self.callback)(self.user_data, line.as_ptr(), line.as_bytes().len()) };
+    }
+
     /// The engine-facing [`Output`] that delivers each line to this target.
     ///
-    /// The closure binds `self` as a whole before touching its fields:
-    /// capturing the fields individually (RFC 2229 disjoint capture) would
-    /// capture a bare `*mut c_void` and lose [`OutputTarget`]'s `Send + Sync`
-    /// impls, which the sink's bounds require.
+    /// The closure captures `self` as a whole (via the by-value `emit`
+    /// receiver) rather than its fields individually, which would capture a
+    /// bare `*mut c_void` and lose [`OutputTarget`]'s `Send + Sync` impls.
     fn as_output(self) -> Output {
-        Output::callback(move |line| {
-            let target = self;
-            let line = cstring_lossy(line);
-            unsafe { (target.callback)(target.user_data, line.as_ptr(), line.as_bytes().len()) };
-        })
+        Output::callback(move |line| self.emit(line))
     }
 }
 
@@ -438,6 +440,61 @@ unsafe fn output_from_ctx(ctx: *const HegelContext) -> Output {
     match unsafe { ctx.as_ref() }.and_then(|c| c.output) {
         Some(target) => target.as_output(),
         None => Output::stderr(),
+    }
+}
+
+/// The live output destination of a run (or standalone `from_blob` test
+/// case), shared between the handles the caller drives and the engine worker
+/// that emits through it.
+///
+/// `inherited` is the destination resolved from the creating context
+/// (`hegel_run_start` / `hegel_test_case_from_blob`) and never changes.
+/// `current` is re-resolved from the context passed to every later call that
+/// carries the run or one of its test cases: a callback set on that context
+/// is used in place of the inherited destination (which is not updated,
+/// merely not used), and a context with no callback — including a NULL
+/// context — falls back to `inherited`. The engine emits from its worker
+/// thread, so each line goes to whichever destination was resolved most
+/// recently.
+struct OutputCell {
+    inherited: Output,
+    current: Mutex<Option<OutputTarget>>,
+}
+
+impl OutputCell {
+    /// A fresh cell whose current destination is `inherited`.
+    fn new(inherited: Output) -> Arc<Self> {
+        Arc::new(OutputCell {
+            inherited,
+            current: Mutex::new(None),
+        })
+    }
+
+    /// The engine-facing [`Output`] sink: each line the engine emits is
+    /// routed to the cell's destination as resolved at emission time.
+    fn as_output(self: &Arc<Self>) -> Output {
+        let cell = Arc::clone(self);
+        Output::callback(move |line| cell.line(line))
+    }
+
+    /// Emit one line to the currently resolved destination.
+    fn line(&self, line: &str) {
+        let current = *self.current.lock();
+        match current {
+            Some(target) => target.emit(line),
+            None => self.inherited.line(line),
+        }
+    }
+
+    /// Re-resolve the destination from the context making the current call:
+    /// the context's registered callback, or a fall-back to the inherited
+    /// destination when it has none (including for a NULL `ctx`).
+    ///
+    /// # Safety
+    ///
+    /// `ctx` must be NULL or a pointer to a live `HegelContext`.
+    unsafe fn resolve_from(&self, ctx: *const HegelContext) {
+        *self.current.lock() = unsafe { ctx.as_ref() }.and_then(|c| c.output);
     }
 }
 
@@ -452,7 +509,7 @@ pub extern "C" fn hegel_context_new() -> *mut HegelContext {
 }
 
 /// Redirect engine-emitted output (verbose / debug progress traces, warnings)
-/// for the runs and test cases subsequently created with `ctx`, instead of
+/// for the runs and test cases created or driven with `ctx`, instead of
 /// writing it to stderr.
 ///
 /// `callback` is invoked once per line of output; `user_data` is passed
@@ -461,16 +518,25 @@ pub extern "C" fn hegel_context_new() -> *mut HegelContext {
 /// `line` argument is NUL-terminated UTF-8 of `len` bytes (not counting the
 /// terminator), without a trailing newline; the buffer is owned by libhegel
 /// and valid only for the duration of the call — copy it to keep it. Passing
-/// a NULL `callback` resets the context to the default stderr output
-/// (`user_data` is ignored).
+/// a NULL `callback` unsets the context's callback (`user_data` is ignored),
+/// like `hegel_context_unset_output`.
 ///
-/// The destination is snapshotted when a run (`hegel_run_start`) or blob
-/// replay (`hegel_test_case_from_blob`) is created, so changing it later
-/// only affects subsequently created ones. The engine emits output from a
-/// worker thread inside libhegel, so the callback must be safe to invoke
-/// from a thread other than the one that registered it, and it — along with
-/// whatever `user_data` points to — must stay valid until every run started
-/// while it was installed has been freed with `hegel_run_free`.
+/// A run (`hegel_run_start`) or standalone test case
+/// (`hegel_test_case_from_blob`) *inherits* the destination registered on the
+/// creating context. Afterwards, every call that passes a context together
+/// with the run or one of its test cases re-resolves the destination from
+/// that context: a callback registered on it is used in place of the
+/// inherited destination (which is not modified, merely not used), and a
+/// context with no callback — including a NULL `ctx` — falls back to the
+/// inherited destination. A run driven through fresh (say, thread-local)
+/// contexts with no callback of their own therefore keeps printing to the
+/// callback installed when it was created. The engine emits output from a
+/// worker thread inside libhegel: each line goes to the most recently
+/// resolved destination, and the callback must be safe to invoke from a
+/// thread other than the one that registered it. The callback — along with
+/// whatever `user_data` points to — must stay valid until every run and test
+/// case whose output was routed to it (at creation or by a later call) has
+/// been freed.
 ///
 /// This sets only the *destination*; how much output the engine emits is
 /// controlled by `hegel_settings_set_verbosity`. Returns
@@ -491,6 +557,18 @@ pub unsafe extern "C" fn hegel_context_set_output(
         user_data,
     });
     HEGEL_OK
+}
+
+/// Unset the output callback registered on `ctx` with
+/// `hegel_context_set_output`, returning the context to its default
+/// behaviour: runs and test cases subsequently created with it write to
+/// stderr, and calls made with it on existing runs and test cases fall back
+/// to the destination those inherited at creation. Equivalent to passing a
+/// NULL `callback` to `hegel_context_set_output`. Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `ctx`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_context_unset_output(ctx: *mut HegelContext) -> hegel_result_t {
+    unsafe { hegel_context_set_output(ctx, None, ptr::null_mut()) }
 }
 
 /// Free a context previously returned by `hegel_context_new`. Safe to call
@@ -603,6 +681,11 @@ struct FamilyShared {
     /// completion `compare_exchange` in [`Self::complete`], which is what
     /// guarantees send-once.
     ack: Option<mpsc::Sender<()>>,
+    /// The output destination of the run this family belongs to (shared with
+    /// the run handle and its worker), or the standalone cell of a
+    /// `hegel_test_case_from_blob` family. Re-resolved from the context
+    /// passed to every call that carries one of the family's handles.
+    output: Arc<OutputCell>,
 }
 
 impl FamilyShared {
@@ -702,6 +785,11 @@ pub struct HegelRun {
     /// `from_worker`. Stops `hegel_next_test_case` from blocking forever
     /// on the second post-completion call.
     drained: bool,
+    /// The run's output destination, shared with the worker (which emits
+    /// through it) and with every test-case family the run produces.
+    /// Re-resolved from the context passed to every call that carries the
+    /// run or one of its test cases.
+    output: Arc<OutputCell>,
 }
 
 /// Aggregated outcome of a finished run. `hegel_run_result` writes a
@@ -1222,9 +1310,10 @@ fn install_worker_panic_hook() {
 /// The engine runs on a worker thread inside libhegel; this function
 /// returns immediately after spawning it. The caller does not need to
 /// hold the settings handle alive — `hegel_run_start` snapshots the
-/// settings it needs. The run also snapshots `ctx`'s output destination
-/// (see `hegel_context_set_output`): the engine's output for this run keeps
-/// going to the callback installed at start time, for the life of the run.
+/// settings it needs. The run also inherits `ctx`'s output destination
+/// (see `hegel_context_set_output`): the engine's output for this run goes
+/// to the callback installed at start time, unless a later call driving the
+/// run or one of its test cases passes a context with a callback of its own.
 ///
 /// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
@@ -1247,7 +1336,8 @@ pub unsafe extern "C" fn hegel_run_start(
         set_last_error(ctx, "hegel_run_start: settings pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    let settings = handle.inner.clone().output(unsafe { output_from_ctx(ctx) });
+    let output = OutputCell::new(unsafe { output_from_ctx(ctx) });
+    let settings = handle.inner.clone().output(output.as_output());
     let database_key = handle.database_key.clone();
 
     let (to_caller, from_worker) = mpsc::channel::<WorkerMessage>();
@@ -1307,6 +1397,7 @@ pub unsafe extern "C" fn hegel_run_start(
         current_family: None,
         result: None,
         drained: false,
+        output,
     }));
     unsafe { *out_run = run };
     HEGEL_OK
@@ -1335,6 +1426,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
         set_last_error(ctx, "hegel_next_test_case: run pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
+    unsafe { run.output.resolve_from(ctx) };
     if out_test_case.is_null() {
         set_last_error(ctx, "hegel_next_test_case: out parameter is null");
         return HEGEL_E_INVALID_ARG;
@@ -1363,7 +1455,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
 
     match run.from_worker.recv() {
         Ok(WorkerMessage::TestCase { ds, ack }) => {
-            let family = new_family(ds, Some(ack));
+            let family = new_family(ds, Some(ack), Arc::clone(&run.output));
             let case = handle_from_family(Arc::clone(&family));
             run.current_family = Some(family);
             unsafe { *out_test_case = case };
@@ -1408,6 +1500,7 @@ pub unsafe extern "C" fn hegel_run_result(
         set_last_error(ctx, "hegel_run_result: run pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
+    unsafe { run.output.resolve_from(ctx) };
     if out_result.is_null() {
         set_last_error(ctx, "hegel_run_result: out parameter is null");
         return HEGEL_E_INVALID_ARG;
@@ -1464,6 +1557,7 @@ pub unsafe extern "C" fn hegel_run_free(
         return HEGEL_OK;
     }
     let mut run = unsafe { Box::from_raw(run) };
+    unsafe { run.output.resolve_from(ctx) };
 
     run.abort.store(true, Ordering::Release);
 
@@ -1537,7 +1631,8 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         set_last_error(ctx, "hegel_test_case_from_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
     };
-    let settings = handle.inner.clone().output(unsafe { output_from_ctx(ctx) });
+    let output = OutputCell::new(unsafe { output_from_ctx(ctx) });
+    let settings = handle.inner.clone().output(output.as_output());
     let Some(ds) = data_source_for_blob(&settings, blob) else {
         set_last_error(
             ctx,
@@ -1546,7 +1641,7 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         );
         return HEGEL_E_INVALID_ARG;
     };
-    let tc = handle_from_family(new_family(ds, None));
+    let tc = handle_from_family(new_family(ds, None, output));
     unsafe { *out_test_case = tc };
     HEGEL_OK
 }
@@ -1582,7 +1677,9 @@ pub unsafe extern "C" fn hegel_test_case_free(
     // SAFETY: `tc` is a non-null handle from a `hegel_*` constructor that the
     // caller is freeing exactly once; reconstituting the `Box` drops this
     // handle and its reference to the family.
-    drop(unsafe { Box::from_raw(tc) });
+    let tc = unsafe { Box::from_raw(tc) };
+    unsafe { tc.family.output.resolve_from(ctx) };
+    drop(tc);
     HEGEL_OK
 }
 
@@ -1639,17 +1736,20 @@ pub unsafe extern "C" fn hegel_test_case_clone(
     HEGEL_OK
 }
 
-/// Allocate a fresh family from a data source and optional run ack. `ack` is
+/// Allocate a fresh family from a data source, optional run ack, and the
+/// output cell of the run (or standalone test case) it belongs to. `ack` is
 /// `Some` for a run-owned family (the worker blocks on it until completion),
 /// `None` for a standalone (`from_blob`) family.
 fn new_family(
     ds: Box<dyn DataSource + Send + Sync>,
     ack: Option<mpsc::Sender<()>>,
+    output: Arc<OutputCell>,
 ) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
         ack,
+        output,
     })
 }
 
@@ -1675,7 +1775,9 @@ fn handle_from_stream(
 }
 
 /// Resolve a test-case handle for a per-test-case primitive, returning the
-/// handle and its locked per-instance state.
+/// handle and its locked per-instance state. Re-resolves the family's output
+/// destination from `ctx` (see `hegel_context_set_output`) as soon as the
+/// handle checks out, whether or not the call then errors.
 ///
 /// Takes a *shared* reference (never `&mut`: two threads racing the same
 /// handle pointer would make `&mut` instant UB, whereas `&HegelTestCase` is
@@ -1695,6 +1797,7 @@ unsafe fn tc_guard<'a>(
         set_last_error(ctx, &format!("{fn_name}: test case pointer is null"));
         return Err(HEGEL_E_INVALID_HANDLE);
     };
+    unsafe { tc.family.output.resolve_from(ctx) };
     if tc.family.completed.load(Ordering::Acquire) {
         set_last_error(ctx, &format!("{fn_name}: test case is already complete"));
         return Err(HEGEL_E_ALREADY_COMPLETE);
@@ -1716,7 +1819,8 @@ unsafe fn tc_guard<'a>(
 /// `try_lock`. Completion is first-caller-wins and always succeeds, so an
 /// in-flight operation on the same handle is waited for rather than reported
 /// as `HEGEL_E_CONCURRENT_USE`. Returns `HEGEL_E_INVALID_HANDLE` for a null
-/// pointer.
+/// pointer. Re-resolves the family's output destination from `ctx` like
+/// [`tc_guard`] does.
 unsafe fn tc_lock<'a>(
     ctx: *mut HegelContext,
     fn_name: &str,
@@ -1726,6 +1830,7 @@ unsafe fn tc_lock<'a>(
         set_last_error(ctx, &format!("{fn_name}: test case pointer is null"));
         return Err(HEGEL_E_INVALID_HANDLE);
     };
+    unsafe { tc.family.output.resolve_from(ctx) };
     Ok((tc, tc.local.lock()))
 }
 

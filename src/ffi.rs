@@ -239,10 +239,12 @@ unsafe extern "C" fn engine_output_trampoline(
 }
 
 /// Install `sink` as `ctx`'s engine-output destination, run `f`, and restore
-/// the default. The engine snapshots the destination when a run or blob
-/// replay is created, so the installation only needs to span the creating
-/// call; `user_data` is `sink_ptr`, which the caller keeps alive for as long
-/// as the engine can emit through it. A `None` `sink_ptr` leaves the context
+/// the default. A run or blob replay inherits the destination from the
+/// creating context, and every context this crate passes to later calls has
+/// no callback of its own — the engine then falls back to that inherited
+/// destination — so the installation only needs to span the creating call;
+/// `user_data` is `sink_ptr`, which the caller keeps alive for as long as
+/// the engine can emit through it. A `None` `sink_ptr` leaves the context
 /// alone (output stays on stderr).
 fn with_engine_output<R>(
     ctx: *mut hegel_c::HegelContext,
@@ -263,8 +265,9 @@ fn with_engine_output<R>(
     }
     let result = f();
     if sink_ptr.is_some() {
-        // SAFETY: ctx is this thread's live context; a NULL callback resets
-        // it to the default stderr output.
+        // SAFETY: ctx is this thread's live context; a NULL callback unsets
+        // its output callback, so later calls made with it fall back to each
+        // run's inherited destination.
         require_ok(unsafe { hegel_c::hegel_context_set_output(ctx, None, ptr::null_mut()) });
     }
     result

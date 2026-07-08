@@ -17,7 +17,7 @@ use common::ok;
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_context_set_output, hegel_failure_free,
+    hegel_context_new, hegel_context_set_output, hegel_context_unset_output, hegel_failure_free,
     hegel_failure_reproduction_blob, hegel_generate_integer, hegel_mark_complete,
     hegel_next_test_case, hegel_run_free, hegel_run_result, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
@@ -234,7 +234,10 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
 /// runs at debug verbosity, so the engine invokes the callback — a raw
 /// function pointer with a raw `user_data` pointer — from its worker thread
 /// on every progress line, and Miri checks that cross-thread path for
-/// use-after-free and data races too.
+/// use-after-free and data races too. After each completed case the callback
+/// is unset (`hegel_context_unset_output`), so later calls fall back to the
+/// destination the run inherited at start — the same callback — exercising
+/// both sides of the per-call output re-resolution under Miri.
 #[test]
 fn full_run_generates_fails_and_shrinks() {
     let lines = AtomicUsize::new(0);
@@ -275,6 +278,7 @@ fn full_run_generates_fails_and_shrinks() {
             };
             ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
             ok(hegel_test_case_free(ctx, tc));
+            ok(hegel_context_unset_output(ctx));
         }
 
         let mut res: *mut HegelRunResult = ptr::null_mut();
