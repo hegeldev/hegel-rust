@@ -248,14 +248,16 @@ fn unique_vec_rejections_never_corrupt_verbose_output() {
     }
 }
 
-#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
+#[derive(hegel::DefaultGenerator)]
 struct Sonar {
+    #[allow(dead_code)]
     active: bool,
+    #[allow(dead_code)]
     depth: u8,
 }
 
 #[test]
-fn derived_generators_print_via_pretty_printable() {
+fn derived_generators_print_compositionally_without_pretty_printable() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::default::<Sonar>());
         panic!("boom");
@@ -264,6 +266,66 @@ fn derived_generators_print_via_pretty_printable() {
         lines,
         vec!["let draw_1 = Sonar { active: false, depth: 0 };"]
     );
+}
+
+#[derive(hegel::DefaultGenerator)]
+enum Signal {
+    Quiet,
+    Level {
+        #[allow(dead_code)]
+        db: u8,
+    },
+    Pair(#[allow(dead_code)] bool, #[allow(dead_code)] u8),
+}
+
+#[test]
+fn derived_enum_generators_print_every_variant_shape() {
+    let unit = failing_lines(|tc| {
+        let _ = tc.draw(gs::default::<Signal>());
+        panic!("boom");
+    });
+    assert_eq!(unit, vec!["let draw_1 = Signal::Quiet;"]);
+
+    let named = failing_lines(|tc| {
+        let signal: Signal = tc.draw(gs::default::<Signal>());
+        assert!(!matches!(signal, Signal::Level { .. }), "boom");
+    });
+    assert_eq!(named, vec!["let draw_1 = Signal::Level { db: 0 };"]);
+
+    let tuple = failing_lines(|tc| {
+        let signal: Signal = tc.draw(gs::default::<Signal>());
+        assert!(!matches!(signal, Signal::Pair(..)), "boom");
+    });
+    assert_eq!(tuple, vec!["let draw_1 = Signal::Pair(false, 0);"]);
+}
+
+#[derive(Clone, hegel::DefaultGenerator, hegel::PrettyPrintable)]
+enum Depth {
+    Surface,
+    Dive { meters: u8, staged: bool },
+    Split(u8, bool),
+}
+
+#[test]
+fn derived_generator_printing_matches_derived_pretty_printable() {
+    for force in [
+        (|d: &Depth| matches!(d, Depth::Surface)) as fn(&Depth) -> bool,
+        |d| matches!(d, Depth::Dive { .. }),
+        |d| matches!(d, Depth::Split(..)),
+    ] {
+        let captured: Arc<Mutex<Option<Depth>>> = Arc::new(Mutex::new(None));
+        let saved = captured.clone();
+        let lines = failing_lines(move |tc| {
+            let depth: Depth = tc.draw(gs::default::<Depth>());
+            let hit = force(&depth);
+            *saved.lock().unwrap() = Some(depth);
+            assert!(!hit, "boom");
+        });
+        let value = captured.lock().unwrap().take().unwrap();
+        let mut printer = hegel::PrettyPrinter::new(79);
+        hegel::PrettyPrintable::pretty_print(&value, &mut printer);
+        assert_eq!(lines, vec![format!("let draw_1 = {};", printer.value())]);
+    }
 }
 
 #[test]

@@ -102,66 +102,14 @@ pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenS
 
 /// Emit the printing statements for one struct or enum-variant shape.
 /// `label` is the leading name (`Point`, `Shape::Circle`), and `accessors`
-/// are expressions evaluating to `&FieldType` for each field in order.
+/// are expressions evaluating to `&FieldType` for each field in order. The
+/// layout itself comes from [`crate::utils::print_shape`], which the
+/// `DefaultGenerator` derive shares so a derived generator prints values in
+/// exactly this format.
 fn print_shape(label: &str, fields: &Fields, accessors: &[TokenStream]) -> TokenStream {
-    match fields {
-        Fields::Unit => quote! { __printer.text(#label); },
-        Fields::Named(named) if named.named.is_empty() => {
-            let text = format!("{label} {{}}");
-            quote! { __printer.text(#text); }
-        }
-        Fields::Named(named) => {
-            let open = format!("{label} {{");
-            let steps =
-                named
-                    .named
-                    .iter()
-                    .zip(accessors)
-                    .enumerate()
-                    .map(|(index, (field, accessor))| {
-                        let prefix = format!("{}: ", field.ident.as_ref().unwrap());
-                        let separator = if index > 0 {
-                            quote! {
-                                __printer.text(",");
-                                __printer.breakable(" ");
-                            }
-                        } else {
-                            quote! {}
-                        };
-                        quote! {
-                            #separator
-                            __printer.text(#prefix);
-                            ::hegel::PrettyPrintable::pretty_print(#accessor, __printer);
-                        }
-                    });
-            quote! {
-                __printer.begin_group(4, #open);
-                __printer.breakable(" ");
-                #(#steps)*
-                __printer.end_group(4, " }");
-            }
-        }
-        Fields::Unnamed(_) => {
-            let open = format!("{label}(");
-            let steps = accessors.iter().enumerate().map(|(index, accessor)| {
-                let separator = if index > 0 {
-                    quote! {
-                        __printer.text(",");
-                        __printer.breakable(" ");
-                    }
-                } else {
-                    quote! {}
-                };
-                quote! {
-                    #separator
-                    ::hegel::PrettyPrintable::pretty_print(#accessor, __printer);
-                }
-            });
-            quote! {
-                __printer.begin_group(1, #open);
-                #(#steps)*
-                __printer.end_group(1, ")");
-            }
-        }
-    }
+    let actions: Vec<TokenStream> = accessors
+        .iter()
+        .map(|accessor| quote! { ::hegel::PrettyPrintable::pretty_print(#accessor, __printer); })
+        .collect();
+    crate::utils::print_shape(label, fields, &actions)
 }

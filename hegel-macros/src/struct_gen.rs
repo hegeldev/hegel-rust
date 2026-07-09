@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
-use crate::utils::{GenericsParts, default_gen_bounds, split_generics};
+use crate::utils::{GenericsParts, default_gen_bounds, print_shape, split_generics};
 
 /// Derive Generator for a struct.
 pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
@@ -71,13 +71,13 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         .zip(field_types.iter())
         .map(|(name, ty)| {
             quote! {
-                #name: ::hegel::generators::BoxedGenerator<'a, #ty>
+                #name: ::hegel::generators::BoxedPrintableGenerator<'a, #ty>
             }
         });
 
     let new_field_inits = field_types.iter().map(|ty| {
         quote! {
-            <#ty as ::hegel::generators::DefaultGenerator>::default_generator().boxed()
+            <#ty as ::hegel::generators::DefaultGenerator>::default_generator().boxed_printable()
         }
     });
 
@@ -94,11 +94,18 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             .map(|(field_name, field_type)| {
                 quote! {
                     /// Set a custom generator for this field.
+                    ///
+                    /// The generator must be printable; wrap a plain
+                    /// [`Generator`](::hegel::generators::Generator) with
+                    /// [`print_as_value`](::hegel::generators::Generator::print_as_value)
+                    /// or
+                    /// [`print_with`](::hegel::generators::Generator::print_with)
+                    /// if it is not.
                     pub fn #field_name<G>(mut self, generator: G) -> Self
                     where
-                        G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
+                        G: ::hegel::generators::PrintableGenerator<#field_type> + Send + Sync + 'a,
                     {
-                        self.#field_name = generator.boxed();
+                        self.#field_name = generator.boxed_printable();
                         self
                     }
                 }
@@ -112,9 +119,20 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
 
+    let print_actions: Vec<_> = field_names
+        .iter()
+        .map(|field_name| {
+            quote! {
+                let #field_name = self.#field_name.draw_and_print(__tc, __printer);
+            }
+        })
+        .collect();
+    let print_body = print_shape(&name.to_string(), &data.fields, &print_actions);
+
     let expanded = quote! {
         const _: () = {
             use ::hegel::generators::Generator as _;
+            use ::hegel::generators::PrintableGenerator as _;
 
             pub struct #generator_name<'a, #gen_params>
             where
@@ -175,16 +193,19 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             where
                 #(#user_predicates,)*
                 #(#type_param_idents: 'a,)*
-                #self_ty: ::hegel::PrettyPrintable,
             {
                 fn do_draw_and_print(
                     &self,
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    let __value = ::hegel::generators::Generator::do_draw(self, __tc);
-                    ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
-                    __value
+                    __tc.start_span(::hegel::generators::labels::FIXED_DICT);
+                    #print_body
+                    let __result = #name {
+                        #(#field_names,)*
+                    };
+                    __tc.stop_span(false);
+                    __result
                 }
             }
 

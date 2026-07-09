@@ -6,7 +6,7 @@ use syn::{DeriveInput, Fields, Variant};
 
 use crate::utils::{
     GenericsParts, default_gen_bounds, is_valid_method_name, make_method_ident, pascal_to_snake,
-    split_generics,
+    print_shape, split_generics,
 };
 
 /// Extract all field types from a variant.
@@ -122,7 +122,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         .iter()
         .map(|field_name| {
             quote! {
-                pub #field_name: ::hegel::generators::BoxedGenerator<'a, #self_ty>
+                pub #field_name: ::hegel::generators::BoxedPrintableGenerator<'a, #self_ty>
             }
         })
         .collect();
@@ -135,7 +135,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             let variant_generator_name = format_ident!("{}{}Generator", enum_name, variant_name);
 
             quote! {
-                #field_name: #variant_generator_name::new().boxed()
+                #field_name: #variant_generator_name::new().boxed_printable()
             }
         })
         .collect();
@@ -164,10 +164,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         pub fn #field_name<F, G>(mut self, configure: F) -> Self
                         where
                             F: FnOnce(#variant_generator_name<'a, #(#param_uses,)*>) -> G,
-                            G: ::hegel::generators::Generator<#self_ty> + Send + Sync + 'a,
+                            G: ::hegel::generators::PrintableGenerator<#self_ty> + Send + Sync + 'a,
                             #(#bounds,)*
                         {
-                            self.#field_name = configure(#variant_generator_name::new()).boxed();
+                            self.#field_name =
+                                configure(#variant_generator_name::new()).boxed_printable();
                             self
                         }
                     }
@@ -188,7 +189,8 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         .zip(field_types.iter())
                         .map(|(gtp, ft)| {
                             quote! {
-                                #gtp: ::hegel::generators::Generator<#ft> + Send + Sync + 'a
+                                #gtp: ::hegel::generators::PrintableGenerator<#ft>
+                                    + Send + Sync + 'a
                             }
                         })
                         .collect();
@@ -205,10 +207,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         pub fn #with_method_name<F, G>(mut self, configure: F) -> Self
                         where
                             F: FnOnce(#variant_generator_name<'a, #(#param_uses,)*>) -> G,
-                            G: ::hegel::generators::Generator<#self_ty> + Send + Sync + 'a,
+                            G: ::hegel::generators::PrintableGenerator<#self_ty> + Send + Sync + 'a,
                             #(#with_bounds,)*
                         {
-                            self.#field_name = configure(#variant_generator_name::new()).boxed();
+                            self.#field_name =
+                                configure(#variant_generator_name::new()).boxed_printable();
                             self
                         }
                     };
@@ -224,9 +227,9 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                             #(#bounds,)*
                         {
                             self.#field_name = #variant_generator_name {
-                                #(#field_indices: #gen_param_names.boxed(),)*
+                                #(#field_indices: #gen_param_names.boxed_printable(),)*
                                 #variant_phantom_init
-                            }.boxed();
+                            }.boxed_printable();
                             self
                         }
 
@@ -318,6 +321,24 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         })
         .collect();
 
+    let print_match_arms: Vec<_> = variants
+        .iter()
+        .enumerate()
+        .map(|(i, variant)| {
+            let variant_name = &variant.ident;
+            match &variant.fields {
+                Fields::Unit => {
+                    let label = format!("{enum_name}::{variant_name}");
+                    quote! { #i => { __printer.text(#label); #enum_name::#variant_name } }
+                }
+                _ => {
+                    let field_name = variant_to_field[&variant.ident.to_string()];
+                    quote! { #i => self.#field_name.draw_and_print(__tc, __printer) }
+                }
+            }
+        })
+        .collect();
+
     let generate_trait_impl = if data_variants.is_empty() {
         quote! {
             impl<'a, #gen_params> ::hegel::generators::Generator<#self_ty>
@@ -330,6 +351,25 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     let index: usize = #variant_index_draw;
                     match index {
                         #(#unit_variant_match_arms,)*
+                        _ => unreachable!("Unknown variant index: {}", index),
+                    }
+                }
+            }
+
+            impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                for #generator_name<'a, #(#param_uses,)*>
+            where
+                #(#user_predicates,)*
+                #(#type_param_idents: 'a,)*
+            {
+                fn do_draw_and_print(
+                    &self,
+                    __tc: &::hegel::TestCase,
+                    __printer: &mut ::hegel::PrettyPrinter,
+                ) -> #self_ty {
+                    let index: usize = #variant_index_draw;
+                    match index {
+                        #(#print_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
                     }
                 }
@@ -349,6 +389,29 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 
                     let __result = match index {
                         #(#generate_match_arms,)*
+                        _ => unreachable!("Unknown variant index: {}", index),
+                    };
+                    __tc.stop_span(false);
+                    __result
+                }
+            }
+
+            impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
+                for #generator_name<'a, #(#param_uses,)*>
+            where
+                #(#user_predicates,)*
+                #(#type_param_idents: 'a,)*
+            {
+                fn do_draw_and_print(
+                    &self,
+                    __tc: &::hegel::TestCase,
+                    __printer: &mut ::hegel::PrettyPrinter,
+                ) -> #self_ty {
+                    __tc.start_span(::hegel::generators::labels::ENUM_VARIANT);
+                    let index: usize = #variant_index_draw;
+
+                    let __result = match index {
+                        #(#print_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
                     };
                     __tc.stop_span(false);
@@ -381,30 +444,13 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         #[allow(non_camel_case_types, non_snake_case)]
         const _: () = {
             use ::hegel::generators::Generator as _;
+            use ::hegel::generators::PrintableGenerator as _;
 
             #(#variant_generators)*
 
             #generator_struct
 
             #generate_trait_impl
-
-            impl<'a, #gen_params> ::hegel::generators::PrintableGenerator<#self_ty>
-                for #generator_name<'a, #(#param_uses,)*>
-            where
-                #(#user_predicates,)*
-                #(#type_param_idents: 'a,)*
-                #self_ty: ::hegel::PrettyPrintable,
-            {
-                fn do_draw_and_print(
-                    &self,
-                    __tc: &::hegel::TestCase,
-                    __printer: &mut ::hegel::PrettyPrinter,
-                ) -> #self_ty {
-                    let __value = ::hegel::generators::Generator::do_draw(self, __tc);
-                    ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
-                    __value
-                }
-            }
 
             #default_generator_impl
         };
@@ -461,11 +507,19 @@ fn generate_variant_generator(
                 .map(|(field_name, field_type)| {
                     quote! {
                         /// Set a custom generator for this field.
+                        ///
+                        /// The generator must be printable; wrap a plain
+                        /// [`Generator`](::hegel::generators::Generator) with
+                        /// [`print_as_value`](::hegel::generators::Generator::print_as_value)
+                        /// or
+                        /// [`print_with`](::hegel::generators::Generator::print_with)
+                        /// if it is not.
                         pub fn #field_name<G>(mut self, generator: G) -> Self
                         where
-                            G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
+                            G: ::hegel::generators::PrintableGenerator<#field_type>
+                                + Send + Sync + 'a,
                         {
-                            self.#field_name = generator.boxed();
+                            self.#field_name = generator.boxed_printable();
                             self
                         }
                     }
@@ -476,7 +530,10 @@ fn generate_variant_generator(
                 .iter()
                 .zip(field_types.iter())
                 .map(|(field_name, field_type)| {
-                    quote! { #field_name: ::hegel::generators::BoxedGenerator<'a, #field_type> }
+                    quote! {
+                        #field_name:
+                            ::hegel::generators::BoxedPrintableGenerator<'a, #field_type>
+                    }
                 })
                 .collect();
 
@@ -485,7 +542,7 @@ fn generate_variant_generator(
                 .zip(field_types.iter())
                 .map(|(field_name, field_type)| {
                     quote! {
-                        #field_name: <#field_type as ::hegel::generators::DefaultGenerator>::default_generator().boxed()
+                        #field_name: <#field_type as ::hegel::generators::DefaultGenerator>::default_generator().boxed_printable()
                     }
                 })
                 .collect();
@@ -498,6 +555,17 @@ fn generate_variant_generator(
                     quote! { #field_name: self.#field_name.do_draw(__tc) }
                 })
                 .collect();
+
+            let label = format!("{enum_name}::{variant_name}");
+            let print_actions: Vec<_> = field_names
+                .iter()
+                .map(|field_name| {
+                    quote! {
+                        let #field_name = self.#field_name.draw_and_print(__tc, __printer);
+                    }
+                })
+                .collect();
+            let print_body = print_shape(&label, &variant.fields, &print_actions);
 
             quote! {
                 #[doc = #struct_doc]
@@ -558,16 +626,16 @@ fn generate_variant_generator(
                 where
                     #(#user_predicates,)*
                     #(#type_param_idents: 'a,)*
-                    #self_ty: ::hegel::PrettyPrintable,
                 {
                     fn do_draw_and_print(
                         &self,
                         __tc: &::hegel::TestCase,
                         __printer: &mut ::hegel::PrettyPrinter,
                     ) -> #self_ty {
-                        let __value = ::hegel::generators::Generator::do_draw(self, __tc);
-                        ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
-                        __value
+                        #print_body
+                        #enum_name::#variant_name {
+                            #(#field_names,)*
+                        }
                     }
                 }
             }
@@ -582,7 +650,10 @@ fn generate_variant_generator(
                 .iter()
                 .zip(field_types.iter())
                 .map(|(field_idx, field_type)| {
-                    quote! { #field_idx: ::hegel::generators::BoxedGenerator<'a, #field_type> }
+                    quote! {
+                        #field_idx:
+                            ::hegel::generators::BoxedPrintableGenerator<'a, #field_type>
+                    }
                 })
                 .collect();
 
@@ -591,7 +662,7 @@ fn generate_variant_generator(
                 .zip(field_types.iter())
                 .map(|(field_idx, field_type)| {
                     quote! {
-                        #field_idx: <#field_type as ::hegel::generators::DefaultGenerator>::default_generator().boxed()
+                        #field_idx: <#field_type as ::hegel::generators::DefaultGenerator>::default_generator().boxed_printable()
                     }
                 })
                 .collect();
@@ -604,11 +675,19 @@ fn generate_variant_generator(
                 .map(|(field_idx, field_type)| {
                     quote! {
                         /// Set a custom generator for this field.
+                        ///
+                        /// The generator must be printable; wrap a plain
+                        /// [`Generator`](::hegel::generators::Generator) with
+                        /// [`print_as_value`](::hegel::generators::Generator::print_as_value)
+                        /// or
+                        /// [`print_with`](::hegel::generators::Generator::print_with)
+                        /// if it is not.
                         pub fn #field_idx<G>(mut self, generator: G) -> Self
                         where
-                            G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
+                            G: ::hegel::generators::PrintableGenerator<#field_type>
+                                + Send + Sync + 'a,
                         {
-                            self.#field_idx = generator.boxed();
+                            self.#field_idx = generator.boxed_printable();
                             self
                         }
                     }
@@ -621,6 +700,21 @@ fn generate_variant_generator(
                     quote! { self.#field_idx.do_draw(__tc) }
                 })
                 .collect();
+
+            let label = format!("{enum_name}::{variant_name}");
+            let print_idents: Vec<_> = (0..field_types.len())
+                .map(|i| format_ident!("__field{i}"))
+                .collect();
+            let print_actions: Vec<_> = print_idents
+                .iter()
+                .zip(field_indices.iter())
+                .map(|(ident, field_idx)| {
+                    quote! {
+                        let #ident = self.#field_idx.draw_and_print(__tc, __printer);
+                    }
+                })
+                .collect();
+            let print_body = print_shape(&label, &variant.fields, &print_actions);
 
             quote! {
                 #[doc = #struct_doc]
@@ -679,16 +773,14 @@ fn generate_variant_generator(
                 where
                     #(#user_predicates,)*
                     #(#type_param_idents: 'a,)*
-                    #self_ty: ::hegel::PrettyPrintable,
                 {
                     fn do_draw_and_print(
                         &self,
                         __tc: &::hegel::TestCase,
                         __printer: &mut ::hegel::PrettyPrinter,
                     ) -> #self_ty {
-                        let __value = ::hegel::generators::Generator::do_draw(self, __tc);
-                        ::hegel::PrettyPrintable::pretty_print(&__value, __printer);
-                        __value
+                        #print_body
+                        #enum_name::#variant_name(#(#print_idents,)*)
                     }
                 }
             }

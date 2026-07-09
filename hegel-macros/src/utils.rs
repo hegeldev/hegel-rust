@@ -170,7 +170,11 @@ pub(crate) fn split_generics(generics: &syn::Generics) -> Result<GenericsParts<'
     })
 }
 
-/// Generator DefaultGenerator + Send + Sync bounds for a set of types.
+/// DefaultGenerator + printable + Send + Sync bounds for a set of types.
+///
+/// The default generators are printable: `#[derive(DefaultGenerator)]`
+/// stores each field's generator as a `BoxedPrintableGenerator` so the
+/// derived generator can print field-by-field as it draws.
 pub(crate) fn default_gen_bounds(
     types: &[&syn::Type],
     lifetime: proc_macro2::TokenStream,
@@ -180,10 +184,87 @@ pub(crate) fn default_gen_bounds(
         .map(|ty| {
             quote! {
                 #ty: ::hegel::generators::DefaultGenerator,
-                <#ty as ::hegel::generators::DefaultGenerator>::Generator: Send + Sync + #lifetime
+                <#ty as ::hegel::generators::DefaultGenerator>::Generator:
+                    ::hegel::generators::PrintableGenerator<#ty> + Send + Sync + #lifetime
             }
         })
         .collect()
+}
+
+/// Emit the printing statements for one struct or enum-variant shape,
+/// matching the layout `#[derive(PrettyPrintable)]` produces: braced shapes
+/// as `Label { field: value, … }` with block indentation of 4 when broken,
+/// tuple shapes as `Label(value, …)` with continuation indentation of 1.
+///
+/// `label` is the leading name (`Point`, `Shape::Circle`); `actions` are
+/// statement blocks that print each field's value — for the `PrettyPrintable`
+/// derive a `pretty_print` call, for the `DefaultGenerator` derive a
+/// draw-and-print of the field's generator — in declaration order.
+pub(crate) fn print_shape(
+    label: &str,
+    fields: &syn::Fields,
+    actions: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    match fields {
+        syn::Fields::Unit => quote! { __printer.text(#label); },
+        syn::Fields::Named(named) if named.named.is_empty() => {
+            let text = format!("{label} {{}}");
+            quote! { __printer.text(#text); }
+        }
+        syn::Fields::Named(named) => {
+            let open = format!("{label} {{");
+            let steps =
+                named
+                    .named
+                    .iter()
+                    .zip(actions)
+                    .enumerate()
+                    .map(|(index, (field, action))| {
+                        let prefix = format!("{}: ", field.ident.as_ref().unwrap());
+                        let separator = if index > 0 {
+                            quote! {
+                                __printer.text(",");
+                                __printer.breakable(" ");
+                            }
+                        } else {
+                            quote! {}
+                        };
+                        quote! {
+                            #separator
+                            __printer.text(#prefix);
+                            #action
+                        }
+                    });
+            quote! {
+                __printer.begin_group(4, #open);
+                __printer.breakable(" ");
+                #(#steps)*
+                __printer.end_group(4, " }");
+            }
+        }
+        syn::Fields::Unnamed(_) => {
+            let open = format!("{label}(");
+            let steps = actions.iter().enumerate().map(|(index, action)| {
+                let separator = if index > 0 {
+                    quote! {
+                        __printer.text(",");
+                        __printer.breakable(" ");
+                    }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    #separator
+                    #action
+                }
+            });
+            quote! {
+                __printer.begin_group(1, #open);
+                #(#steps)*
+                __printer.end_group(1, ")");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

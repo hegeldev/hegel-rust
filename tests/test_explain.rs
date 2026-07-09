@@ -157,6 +157,29 @@ fn disabling_the_explain_phase_disables_annotations() {
 }
 
 #[test]
+fn derived_generator_fields_are_annotated_individually() {
+    #[derive(hegel::DefaultGenerator)]
+    struct Sonar {
+        depth: i64,
+        #[allow(dead_code)]
+        label: bool,
+    }
+    let lines = failing_lines(|tc| {
+        let sonar: Sonar = tc.draw(gs::default::<Sonar>());
+        assert!(sonar.depth < 0, "boom");
+    });
+    assert_eq!(
+        lines,
+        vec![
+            "let draw_1 = Sonar {",
+            "    depth: 0,",
+            "    label: false  // or any other generated value",
+            "};",
+        ]
+    );
+}
+
+#[test]
 fn explain_output_is_deterministic_and_well_formed() {
     fn body(tc: hegel::TestCase) {
         let v: Vec<(i64, Option<bool>)> = tc.draw(
