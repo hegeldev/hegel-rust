@@ -66,8 +66,7 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
             // would otherwise compile and silently mutate a copy.
             if has_rule || has_invariant {
                 let borrows_self = method.sig.receiver().is_some_and(|receiver| {
-                    receiver.reference.is_some()
-                        || matches!(&*receiver.ty, syn::Type::Reference(_))
+                    receiver.reference.is_some() || matches!(&*receiver.ty, syn::Type::Reference(_))
                 });
                 if !borrows_self {
                     return syn::Error::new_spanned(
