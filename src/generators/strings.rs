@@ -580,47 +580,120 @@ pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
     }
 }
 
-/// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].
-pub struct DateGenerator;
+/// Generator for date strings in `YYYY-MM-DD` format. Created by
+/// [`date_strings()`].
+pub struct DateStringGenerator;
 
-impl Generator<String> for DateGenerator {
+impl Generator<String> for DateStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         format_date(tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE))
     }
 }
 
-/// Generate date strings in YYYY-MM-DD format.
-pub fn dates() -> DateGenerator {
-    DateGenerator
+/// Generate date `String`s in `YYYY-MM-DD` format (years 1–9999), matching
+/// Python's `date.isoformat()`.
+///
+/// This generator is not configurable. For typed date values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_dates()`) or [`extras::jiff`](crate::extras::jiff) (`dates()`).
+pub fn date_strings() -> DateStringGenerator {
+    DateStringGenerator
 }
 
-/// Generator for time strings in HH:MM:SS format. Created by [`times()`].
-pub struct TimeGenerator;
+/// Deprecated alias for [`DateStringGenerator`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `DateStringGenerator` (it generates `String`s); \
+            for typed dates see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub type DateGenerator = DateStringGenerator;
 
-impl Generator<String> for TimeGenerator {
+/// Deprecated alias for [`date_strings()`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `date_strings()` (it generates `String`s); \
+            for typed dates see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub fn dates() -> DateStringGenerator {
+    date_strings()
+}
+
+/// Generator for time strings in `HH:MM:SS[.ffffff]` format. Created by
+/// [`time_strings()`].
+pub struct TimeStringGenerator;
+
+impl Generator<String> for TimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND))
     }
 }
 
-/// Generate time strings in HH:MM:SS format.
-pub fn times() -> TimeGenerator {
-    TimeGenerator
+/// Generate time `String`s in `HH:MM:SS` format, matching Python's
+/// `time.isoformat()`: a fractional `.ffffff` part (microseconds) is
+/// appended iff it is non-zero.
+///
+/// This generator is not configurable. For typed time values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_times()`) or [`extras::jiff`](crate::extras::jiff) (`times()`).
+pub fn time_strings() -> TimeStringGenerator {
+    TimeStringGenerator
 }
 
-/// Generator for ISO 8601 datetime strings. Created by [`datetimes()`].
-pub struct DateTimeGenerator;
+/// Deprecated alias for [`TimeStringGenerator`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `TimeStringGenerator` (it generates `String`s); \
+            for typed times see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub type TimeGenerator = TimeStringGenerator;
 
-impl Generator<String> for DateTimeGenerator {
+/// Deprecated alias for [`time_strings()`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `time_strings()` (it generates `String`s); \
+            for typed times see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub fn times() -> TimeStringGenerator {
+    time_strings()
+}
+
+/// Generator for ISO 8601 datetime strings. Created by [`datetime_strings()`].
+pub struct DateTimeStringGenerator;
+
+impl Generator<String> for DateTimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME);
         format!("{}T{}", format_date(dt.date), format_time(dt.time))
     }
 }
 
-/// Generate ISO 8601 datetime strings.
-pub fn datetimes() -> DateTimeGenerator {
-    DateTimeGenerator
+/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.ffffff]`,
+/// years 1–9999), matching Python's `datetime.isoformat()`.
+///
+/// This generator is not configurable. For typed datetime values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_datetimes()` / `datetimes()`) or
+/// [`extras::jiff`](crate::extras::jiff) (`datetimes()`).
+pub fn datetime_strings() -> DateTimeStringGenerator {
+    DateTimeStringGenerator
+}
+
+/// Deprecated alias for [`DateTimeStringGenerator`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `DateTimeStringGenerator` (it generates `String`s); for typed \
+            datetimes see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub type DateTimeGenerator = DateTimeStringGenerator;
+
+/// Deprecated alias for [`datetime_strings()`].
+#[deprecated(
+    since = "0.26.0",
+    note = "renamed to `datetime_strings()` (it generates `String`s); for typed \
+            datetimes see `hegel::extras::chrono` or `hegel::extras::jiff`"
+)]
+pub fn datetimes() -> DateTimeStringGenerator {
+    datetime_strings()
 }
 
 /// Generator for UUID strings in canonical hyphenated form. Created by [`uuids()`].
@@ -669,7 +742,8 @@ impl Generator<String> for UuidsGenerator {
     }
 }
 
-/// Generate UUID strings in canonical hyphenated form.
+/// Generate UUID `String`s in canonical hyphenated form, e.g.
+/// `"a70f446c-05e3-42a9-a31b-f0d0545d6316"`.
 ///
 /// See [`UuidsGenerator`] for builder methods.
 pub fn uuids() -> UuidsGenerator {

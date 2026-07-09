@@ -40,11 +40,17 @@ pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
-    BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
-    EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator, Ipv6AddressGenerator, RegexGenerator,
-    TextGenerator, TimeGenerator, UrlGenerator, UuidsGenerator, binary, characters, dates,
-    datetimes, domains, emails, from_regex, ip_addresses, text, times, urls, uuids,
+    BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
+    DomainGenerator, EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator,
+    Ipv6AddressGenerator, RegexGenerator, TextGenerator, TimeStringGenerator, UrlGenerator,
+    UuidsGenerator, binary, characters, date_strings, datetime_strings, domains, emails,
+    from_regex, ip_addresses, text, time_strings, urls, uuids,
 };
+// Deprecated aliases for the *_strings generators; re-exported separately so
+// the deprecation attributes are the only thing `#[allow(deprecated)]` here
+// silences.
+#[allow(deprecated)]
+pub use strings::{DateGenerator, DateTimeGenerator, TimeGenerator, dates, datetimes, times};
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]
 pub use tuples::{
