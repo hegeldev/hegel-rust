@@ -255,17 +255,26 @@ pub use hegel_c::__bench;
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
 ///
-/// For enums, the generated generator has:
-/// - `default_<VariantName>()` - methods returning default variant generators
-/// - `<VariantName>(generator)` - builder methods to customize variant generation
+/// For enums, the generated generator draws one of the variants at random.
+/// Unit variants need no configuration; every data-carrying variant gets
+/// builder methods named after the variant (snake_cased):
+/// - for a struct variant like `Active { since: String }`, a method
+///   `.active(|g| ...)` whose closure receives that variant's generator
+///   (with a `<field>(generator)` builder per field, like a struct) and
+///   returns the generator to use for the variant;
+/// - for a tuple variant like `Error(i32, String)`, a method
+///   `.error(g0, g1)` taking one generator per field positionally, plus a
+///   closure form `.error_with(|g| ...)` mirroring the struct-variant
+///   method, where the variant generator's fields are configured with
+///   `._0(...)`, `._1(...)`, etc.
 ///
 /// # Struct Example
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::DefaultGenerator;
-/// use hegel::generators::{self as gs, DefaultGenerator as _, Generator as _};
+/// use hegel::generators as gs;
 ///
-/// #[derive(DefaultGenerator)]
+/// #[derive(Debug, DefaultGenerator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -281,21 +290,27 @@ pub use hegel_c::__bench;
 ///
 /// # Enum Example
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::DefaultGenerator;
-/// use hegel::generators::{self as gs, DefaultGenerator as _, Generator as _};
+/// use hegel::generators as gs;
 ///
-/// #[derive(DefaultGenerator)]
+/// #[derive(Debug, DefaultGenerator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
-///     Error { code: i32, message: String },
+///     Error(i32, String),
 /// }
 ///
 /// #[hegel::test]
 /// fn generates_statuses(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Status>()
-///         .active(|g| g.since(gs::text().max_size(20)));
+///         // Struct variant: configure through a closure over the
+///         // variant's own generator.
+///         .active(|g| g.since(gs::text().max_size(20)))
+///         // Tuple variant: pass one generator per field...
+///         .error(gs::integers::<i32>().min_value(400).max_value(599), gs::text())
+///         // ...or use the closure form with positional field builders.
+///         .error_with(|g| g._0(gs::just(500)));
 ///     let status: Status = tc.draw(generator);
 /// }
 /// ```
