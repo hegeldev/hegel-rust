@@ -12,6 +12,19 @@ const SURROGATE_CATEGORIES: &[&str] = &["Cs", "C"];
 /// Default upper bound for string/byte sizes when the caller doesn't set one.
 const DEFAULT_MAX_SIZE: usize = 100;
 
+/// Codec names accepted by [`TextGenerator::codec`] and
+/// [`CharactersGenerator::codec`], mirroring the engine's supported set.
+const SUPPORTED_CODECS: &[&str] = &["ascii", "latin-1", "iso-8859-1", "utf-8"];
+
+/// Validate a codec name eagerly. The engine rejects unknown codecs too, but
+/// only when the alphabet is built on first draw; checking here surfaces the
+/// mistake at the `.codec(...)` call site instead.
+fn check_codec(codec: &str) {
+    if !SUPPORTED_CODECS.contains(&codec) {
+        invalid_argument!("invalid codec: {codec}");
+    }
+}
+
 /// Shared character filtering fields used by both [`TextGenerator`] and
 /// [`CharactersGenerator`].
 struct CharacterFields {
@@ -120,8 +133,24 @@ impl TextGenerator {
         self
     }
 
-    /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
+    /// Restrict to characters encodable in the named codec.
+    ///
+    /// Supported values, and what each means for Rust strings:
+    ///
+    /// - `"ascii"` — codepoints `U+0000..=U+007F`; equivalent to
+    ///   `.max_codepoint(0x7F)`.
+    /// - `"latin-1"` (alias `"iso-8859-1"`) — codepoints `U+0000..=U+00FF`;
+    ///   equivalent to `.max_codepoint(0xFF)`.
+    /// - `"utf-8"` — no restriction: every Rust `char` is UTF-8-encodable
+    ///   (surrogates are structurally excluded from `char`), so this is a
+    ///   no-op.
+    ///
+    /// The codec's codepoint range intersects with any bounds set via
+    /// [`min_codepoint`](Self::min_codepoint) /
+    /// [`max_codepoint`](Self::max_codepoint). Any other codec name is a
+    /// usage error, reported when `.codec(...)` is called.
     pub fn codec(mut self, codec: &str) -> Self {
+        check_codec(codec);
         self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.codec = Some(codec.to_string());
@@ -231,8 +260,24 @@ pub struct CharactersGenerator {
 }
 
 impl CharactersGenerator {
-    /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
+    /// Restrict to characters encodable in the named codec.
+    ///
+    /// Supported values, and what each means for Rust `char`s:
+    ///
+    /// - `"ascii"` — codepoints `U+0000..=U+007F`; equivalent to
+    ///   `.max_codepoint(0x7F)`.
+    /// - `"latin-1"` (alias `"iso-8859-1"`) — codepoints `U+0000..=U+00FF`;
+    ///   equivalent to `.max_codepoint(0xFF)`.
+    /// - `"utf-8"` — no restriction: every Rust `char` is UTF-8-encodable
+    ///   (surrogates are structurally excluded from `char`), so this is a
+    ///   no-op.
+    ///
+    /// The codec's codepoint range intersects with any bounds set via
+    /// [`min_codepoint`](Self::min_codepoint) /
+    /// [`max_codepoint`](Self::max_codepoint). Any other codec name is a
+    /// usage error, reported when `.codec(...)` is called.
     pub fn codec(mut self, codec: &str) -> Self {
+        check_codec(codec);
         self.handle = OnceLock::new();
         self.char_fields.codec = Some(codec.to_string());
         self
