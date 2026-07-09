@@ -325,8 +325,9 @@ pub fn characters() -> CharactersGenerator {
 
 /// Generator for strings matching a regex pattern. Created by [`from_regex()`].
 ///
-/// By default generates strings that contain a match. Use [`fullmatch()`](Self::fullmatch)
-/// to require the entire string to match.
+/// By default the entire string matches the pattern. Use
+/// [`fullmatch(false)`](Self::fullmatch) to generate strings that merely
+/// contain a match.
 pub struct RegexGenerator {
     pattern: String,
     fullmatch: bool,
@@ -335,7 +336,8 @@ pub struct RegexGenerator {
 }
 
 impl RegexGenerator {
-    /// Set whether the entire string must match the pattern, not just contain a match.
+    /// Set whether the entire string must match the pattern (the default), or
+    /// merely contain a match.
     pub fn fullmatch(mut self, fullmatch: bool) -> Self {
         self.handle = OnceLock::new();
         self.fullmatch = fullmatch;
@@ -370,7 +372,7 @@ impl Generator<String> for RegexGenerator {
 pub fn from_regex(pattern: &str) -> RegexGenerator {
     RegexGenerator {
         pattern: pattern.to_string(),
-        fullmatch: false,
+        fullmatch: true,
         alphabet: None,
         handle: OnceLock::new(),
     }
