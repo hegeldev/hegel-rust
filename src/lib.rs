@@ -308,7 +308,7 @@ pub use hegel_macros::DefaultGenerator;
 /// of the returned factory function. The function must have an explicit
 /// return type.
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::generators as gs;
 ///
 /// #[hegel::composite]
@@ -342,7 +342,7 @@ pub use hegel_macros::explicit_test_case;
 /// Paste that attribute **below** `#[hegel::test]` and the next run will
 /// decode the blob's choice sequence and run *only* that example.
 ///
-/// ```ignore
+/// ```no_run
 /// #[hegel::test]
 /// #[hegel::reproduce_failure("AAEC…")]
 /// fn my_test(tc: hegel::TestCase) {
@@ -354,7 +354,7 @@ pub use hegel_macros::explicit_test_case;
 /// The argument is any expression that resolves to a base64 blob — a string
 /// literal, or a `const`/`static`/variable holding one:
 ///
-/// ```ignore
+/// ```no_run
 /// const REGRESSION: &str = "AAEC…";
 ///
 /// #[hegel::test]
@@ -366,7 +366,7 @@ pub use hegel_macros::explicit_test_case;
 /// the **first** one replays — the rest are bookkeeping. Delete them one by
 /// one as the failures are fixed:
 ///
-/// ```ignore
+/// ```no_run
 /// #[hegel::test]
 /// #[hegel::reproduce_failure("AAEC…")] // replayed
 /// #[hegel::reproduce_failure("AAED…")] // kept for later
@@ -395,7 +395,10 @@ pub use hegel_macros::state_machine;
 ///
 /// The `#[test]` attribute is added automatically and must not be present on the function.
 ///
-/// ```ignore
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::generators::integers;
+///
 /// #[hegel::test]
 /// fn my_test(tc: TestCase) {
 ///     let x: i32 = tc.draw(integers());
@@ -405,7 +408,10 @@ pub use hegel_macros::state_machine;
 ///
 /// You can set settings using attributes on [`test`], corresponding to methods on [`Settings`]:
 ///
-/// ```ignore
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::generators::integers;
+///
 /// #[hegel::test(test_cases = 500)]
 /// fn test_runs_many_more_times(tc: TestCase) {
 ///     let x: i32 = tc.draw(integers());
@@ -415,11 +421,13 @@ pub use hegel_macros::state_machine;
 ///
 /// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
 ///
-/// ```ignore
+/// ```no_run
 /// #[tokio::test]
 /// #[hegel::test]
-/// async fn my_async_test() {
-///     // ...
+/// async fn my_async_test(tc: hegel::TestCase) {
+///     let x: bool = tc.draw(hegel::generators::booleans());
+///     let handle = tokio::spawn(async move { x });
+///     assert_eq!(handle.await.unwrap(), x);
 /// }
 /// ```
 pub use hegel_macros::test;
@@ -436,7 +444,7 @@ pub use hegel_macros::test;
 /// `--test-cases`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
 /// `--suppress-health-check`, `-h` / `--help`.
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;
 ///
@@ -456,7 +464,7 @@ pub use hegel_macros::main;
 /// with the `TestCase` parameter removed, and its body is run as an
 /// [`FnMut`] closure inside [`Hegel::run`].
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;
 ///

@@ -267,7 +267,7 @@ fn hegel_date(d: NaiveDate) -> hegel_c::hegel_date_t {
 ///     let min = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
 ///     let max = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
 ///     let d = tc.draw(chrono_gs::naive_dates().min_value(min).max_value(max));
-///     assert_eq!(d.iso_week().year(), 2024);
+///     assert!(d >= min && d <= max);
 /// }
 /// ```
 pub fn naive_dates() -> NaiveDateGenerator {

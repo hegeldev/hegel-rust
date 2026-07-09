@@ -357,11 +357,14 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use hegel::generators as gs;
 /// use std::collections::HashMap;
 ///
-/// let map: HashMap<i32, String> = tc.draw(gs::hashmaps(gs::integers(), gs::text()));
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let map: HashMap<i32, String> = tc.draw(gs::hashmaps(gs::integers(), gs::text()));
+/// }
 /// ```
 pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     keys: K,
