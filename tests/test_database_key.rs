@@ -93,7 +93,7 @@ mod replay_logic {
     use std::sync::{Arc, Mutex};
 
     use hegel::generators as gs;
-    use hegel::{Hegel, Settings, TestCase};
+    use hegel::{Hegel, Phase, Settings, TestCase};
 
     fn run_expecting_failure<F>(f: F)
     where
@@ -137,7 +137,18 @@ mod replay_logic {
                     Settings::new()
                         .database(Some(db_path))
                         .derandomize(false)
-                        .test_cases(1000),
+                        .test_cases(1000)
+                        // The explain phase re-runs the test on an aligned
+                        // replay (annotations are recomputed, not stored), so
+                        // exclude it to pin the shrink skip's exact two
+                        // executions: the reuse replay and the final replay.
+                        .phases([
+                            Phase::Explicit,
+                            Phase::Reuse,
+                            Phase::Generate,
+                            Phase::Target,
+                            Phase::Shrink,
+                        ]),
                 )
                 .__database_key("test_does_not_shrink_on_replay".to_string())
                 .run();

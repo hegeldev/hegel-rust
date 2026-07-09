@@ -592,8 +592,39 @@ impl<'a> Engine<'a> {
                 ));
             }
             log_phase("Shrink", "End");
-        } else if replay_aligned && verbosity == Verbosity::Debug {
-            output.line("Skipping shrink: reused aligned database replay");
+        } else if replay_aligned {
+            if verbosity == Verbosity::Debug {
+                output.line("Skipping shrink: reused aligned database replay");
+            }
+            // The replayed failure is already shrunk, but its explain
+            // annotations are not stored in the database: recompute them so
+            // a re-run reports the same comments as the run that found the
+            // failure.
+            if settings.phases.contains(&Phase::Shrink) && settings.phases.contains(&Phase::Explain)
+            {
+                let explain_deadline = std::time::Instant::now() + shrink_budget;
+                let mut origins: Vec<String> = self.interesting.keys().cloned().collect();
+                origins.sort();
+                for origin in origins {
+                    let nodes = self.interesting.get(&origin).cloned().unwrap_or_default();
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    let verify_ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
+                    let (verify, mismatch) = self.test_function(verify_ntc);
+                    if let Some(msg) = mismatch {
+                        return Err(RunError::NonDeterministic(msg));
+                    }
+                    if verify.status != Status::Interesting
+                        || verify.origin.as_deref() != Some(origin.as_str())
+                    {
+                        return Err(RunError::Flaky(flaky_diagnostic()));
+                    }
+                    let spans = Spans::from(verify.spans);
+                    let comments = self.explain(&origin, &verify.nodes, &spans, explain_deadline);
+                    if !comments.is_empty() {
+                        self.slice_comments.insert(origin, comments);
+                    }
+                }
+            }
         }
 
         if let (Some(db), Some(key)) = (self.db(), database_key) {

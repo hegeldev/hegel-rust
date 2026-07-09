@@ -1404,7 +1404,17 @@ fn reuse_found_bug_skips_generation_entirely() {
         Settings::new()
             .database(Some(path.clone()))
             .test_cases(200)
-            .verbosity(Verbosity::Quiet),
+            .verbosity(Verbosity::Quiet)
+            // The explain phase re-runs the test on an aligned replay
+            // (annotations are recomputed, not stored), so exclude it to pin
+            // the reuse replay as the only execution.
+            .phases([
+                Phase::Explicit,
+                Phase::Reuse,
+                Phase::Generate,
+                Phase::Target,
+                Phase::Shrink,
+            ]),
         "k",
         |ds| {
             calls.fetch_add(1, Ordering::SeqCst);
