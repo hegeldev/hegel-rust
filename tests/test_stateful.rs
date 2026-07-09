@@ -153,6 +153,48 @@ fn test_draw_domain(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+/// Regression test: the module docs promise invariants can take `&self`,
+/// but the macro used to register methods as bare `fn(&mut M, TestCase)`
+/// pointers, so a `&self` invariant failed to compile inside generated code.
+/// Both `&self` and `&mut self` receivers must work, for rules and
+/// invariants alike.
+struct SharedReceiverMachine {
+    counter: u32,
+    observed: u32,
+}
+
+#[hegel::state_machine]
+impl SharedReceiverMachine {
+    #[rule]
+    fn bump(&mut self, _tc: TestCase) {
+        self.counter += 1;
+    }
+
+    #[rule]
+    fn observe(&self, _tc: TestCase) {
+        assert!(self.observed <= self.counter);
+    }
+
+    #[invariant]
+    fn counter_covers_observed(&self, _tc: TestCase) {
+        assert!(self.observed <= self.counter);
+    }
+
+    #[invariant]
+    fn record(&mut self, _tc: TestCase) {
+        self.observed = self.counter;
+    }
+}
+
+#[hegel::test]
+fn test_state_machine_with_shared_receivers(tc: TestCase) {
+    let m = SharedReceiverMachine {
+        counter: 0,
+        observed: 0,
+    };
+    hegel::stateful::run(m, tc);
+}
+
 mod stateful {
     use super::common::utils::expect_panic;
     use hegel::TestCase;
