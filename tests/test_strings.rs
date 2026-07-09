@@ -986,7 +986,7 @@ mod regex_tests {
     #[test]
     fn test_can_handle_boundaries_nested() {
         Hegel::new(|tc| {
-            let s: String = tc.draw(gs::from_regex(r"(\Afoo\Z)"));
+            let s: String = tc.draw(gs::from_regex(r"(\Afoo\Z)").fullmatch(false));
             assert_eq!(s, "foo");
         })
         .settings(Settings::new().database(None))
