@@ -583,6 +583,97 @@ fn value_can_be_read_repeatedly_and_interleaved_with_writes() {
     assert_eq!(p.value().unwrap(), "ab");
 }
 
+// gofmt-style layout: opening brace followed by a breakable, a trailing
+// if_break comma, and a breakable before the close, so the broken form puts
+// every element on its own line with a trailing comma and the close brace at
+// the outer indentation, while the flat form stays `{1, 2, 3}`.
+fn gofmt_list(p: &mut Printer, elements: &[&str]) {
+    p.begin_group(M, 0, "{").unwrap();
+    p.shift_indent(M, 4).unwrap();
+    for (i, e) in elements.iter().enumerate() {
+        if i == 0 {
+            p.breakable(M, "").unwrap();
+        } else {
+            p.text(M, ",").unwrap();
+            p.breakable(M, " ").unwrap();
+        }
+        p.text(M, e).unwrap();
+    }
+    p.shift_indent(M, -4).unwrap();
+    if !elements.is_empty() {
+        p.if_break(M, ",").unwrap();
+        p.breakable(M, "").unwrap();
+    }
+    p.end_group(M, 0, "}").unwrap();
+}
+
+#[test]
+fn if_break_renders_nothing_in_a_fitting_group() {
+    let mut p = printer(79);
+    gofmt_list(&mut p, &["1", "2", "3"]);
+    assert_eq!(p.value().unwrap(), "{1, 2, 3}");
+}
+
+#[test]
+fn if_break_emits_its_text_when_the_group_breaks_by_width() {
+    let mut p = printer(6);
+    gofmt_list(&mut p, &["1", "2", "3"]);
+    assert_eq!(p.value().unwrap(), "{\n    1,\n    2,\n    3,\n}");
+}
+
+#[test]
+fn if_break_emits_immediately_in_an_already_broken_group() {
+    let mut p = printer(4);
+    p.begin_group(M, 0, "{").unwrap();
+    p.text(M, "aaaaaa").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "b").unwrap();
+    p.if_break(M, ",").unwrap();
+    p.breakable(M, "").unwrap();
+    p.end_group(M, 0, "}").unwrap();
+    assert_eq!(p.value().unwrap(), "{aaaaaa\nb,\n}");
+}
+
+#[test]
+fn if_break_does_not_count_toward_width() {
+    let mut p = printer(9);
+    gofmt_list(&mut p, &["1", "2", "3"]);
+    assert_eq!(p.value().unwrap(), "{1, 2, 3}");
+}
+
+#[test]
+fn if_break_in_a_comment_forced_group_emits_before_the_close_break() {
+    let mut p = printer(79);
+    p.begin_group(M, 0, "{").unwrap();
+    p.shift_indent(M, 4).unwrap();
+    p.breakable(M, "").unwrap();
+    p.text(M, "1").unwrap();
+    p.comment(M, " // c").unwrap();
+    p.text(M, ",").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "2").unwrap();
+    p.shift_indent(M, -4).unwrap();
+    p.if_break(M, ",").unwrap();
+    p.breakable(M, "").unwrap();
+    p.end_group(M, 0, "}").unwrap();
+    assert_eq!(p.value().unwrap(), "{\n    1, // c\n    2,\n}");
+}
+
+#[test]
+fn comment_forced_close_break_is_not_doubled_after_an_explicit_breakable() {
+    let mut p = printer(79);
+    p.begin_group(M, 0, "{").unwrap();
+    p.shift_indent(M, 4).unwrap();
+    p.breakable(M, "").unwrap();
+    p.text(M, "1").unwrap();
+    p.comment(M, " // c").unwrap();
+    p.shift_indent(M, -4).unwrap();
+    p.if_break(M, ",").unwrap();
+    p.breakable(M, "").unwrap();
+    p.end_group(M, 0, "}").unwrap();
+    assert_eq!(p.value().unwrap(), "{\n    1, // c\n}");
+}
+
 #[test]
 fn comment_is_emitted_at_the_end_of_its_line() {
     let mut p = printer(79);

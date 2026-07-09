@@ -3374,6 +3374,41 @@ pub unsafe extern "C" fn hegel_printer_free(
     HEGEL_OK
 }
 
+/// Emit `len` bytes of UTF-8 at `text` only if the innermost group open at
+/// this point renders broken; a group that fits on one line renders nothing
+/// here. The text never counts toward width (measurement uses the flat
+/// form, which is empty).
+///
+/// This is how a layout expresses text that only the multi-line form needs
+/// — e.g. Go's mandatory trailing comma before a composite literal's
+/// closing brace: emit each element, then
+/// `hegel_printer_if_break(",")` and an empty `hegel_printer_breakable`
+/// before the `hegel_printer_end_group` that closes the literal.
+///
+/// The text must not contain newlines. Errors as `hegel_printer_text`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_if_break(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_if_break";
+    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().if_break(handle.target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
 /// Emit `len` bytes of UTF-8 at `text` as literal, unbreakable text.
 ///
 /// The text must not contain newlines: express line structure with

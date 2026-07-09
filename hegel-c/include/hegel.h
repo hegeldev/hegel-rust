@@ -1612,6 +1612,25 @@ hegel_result_t hegel_printer_new(hegel_context_t *ctx,
 hegel_result_t hegel_printer_free(hegel_context_t *ctx, hegel_printer_t *printer);
 
 /*
+ Emit `len` bytes of UTF-8 at `text` only if the innermost group open at
+ this point renders broken; a group that fits on one line renders nothing
+ here. The text never counts toward width (measurement uses the flat
+ form, which is empty).
+
+ This is how a layout expresses text that only the multi-line form needs
+ — e.g. Go's mandatory trailing comma before a composite literal's
+ closing brace: emit each element, then
+ `hegel_printer_if_break(",")` and an empty `hegel_printer_breakable`
+ before the `hegel_printer_end_group` that closes the literal.
+
+ The text must not contain newlines. Errors as `hegel_printer_text`.
+ */
+hegel_result_t hegel_printer_if_break(hegel_context_t *ctx,
+                                      hegel_printer_t *printer,
+                                      const uint8_t *text,
+                                      size_t len);
+
+/*
  Emit `len` bytes of UTF-8 at `text` as literal, unbreakable text.
 
  The text must not contain newlines: express line structure with

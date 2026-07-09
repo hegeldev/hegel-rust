@@ -112,6 +112,7 @@ pub enum Target {
 enum Cmd {
     Text(String),
     Breakable(String),
+    IfBreak(String),
     HardBreak,
     BeginGroup { indent: usize, open: String },
     EndGroup { dedent: usize, close: String },
@@ -132,6 +133,10 @@ enum Token {
         indent: isize,
         group: usize,
     },
+    IfBreak {
+        content: String,
+        group: usize,
+    },
     Comment {
         content: String,
     },
@@ -141,7 +146,7 @@ impl Token {
     fn width(&self) -> usize {
         match self {
             Token::Text { width, .. } | Token::Breakable { width, .. } => *width,
-            Token::Comment { .. } => 0,
+            Token::IfBreak { .. } | Token::Comment { .. } => 0,
         }
     }
 }
@@ -241,6 +246,16 @@ impl Printer {
     /// Emit a potential break point: renders as `sep` if the enclosing group
     /// fits on the line, and as a newline plus the current indentation if the
     /// group breaks.
+    /// Emit `s` only if the innermost group open at this point renders
+    /// broken; a group that fits on one line renders nothing here. `s` never
+    /// counts toward width (measurement uses the flat form, which is empty).
+    /// This is how a layout expresses text that only the multi-line form
+    /// needs — e.g. Go's mandatory trailing comma before a composite
+    /// literal's closing brace.
+    pub fn if_break(&mut self, target: Target, s: &str) -> Result<(), PrinterError> {
+        self.dispatch(target, Cmd::IfBreak(s.to_string()))
+    }
+
     pub fn breakable(&mut self, target: Target, sep: &str) -> Result<(), PrinterError> {
         self.dispatch(target, Cmd::Breakable(sep.to_string()))
     }
@@ -524,6 +539,7 @@ struct Renderer<'a> {
     force_break: Vec<bool>,
     out: String,
     output_width: usize,
+    at_line_start: bool,
     buffer: VecDeque<Token>,
     buffer_width: usize,
     pending_comments: String,
@@ -541,6 +557,7 @@ impl<'a> Renderer<'a> {
             force_break,
             out: String::new(),
             output_width: 0,
+            at_line_start: true,
             buffer: VecDeque::new(),
             buffer_width: 0,
             pending_comments: String::new(),
@@ -567,6 +584,7 @@ impl<'a> Renderer<'a> {
         match cmd {
             Cmd::Text(s) => self.text(s),
             Cmd::Breakable(sep) => self.breakable(sep),
+            Cmd::IfBreak(s) => self.if_break(s),
             Cmd::HardBreak => self.newline(),
             Cmd::BeginGroup { indent, open } => self.begin_group(*indent, open),
             Cmd::EndGroup { dedent, close } => return self.end_group(*dedent, close),
@@ -592,6 +610,9 @@ impl<'a> Renderer<'a> {
         if self.buffer.is_empty() {
             self.out.push_str(s);
             self.output_width += width;
+            if width > 0 {
+                self.at_line_start = false;
+            }
         } else {
             match self.buffer.back_mut() {
                 Some(Token::Text { content, width: w }) => {
@@ -626,6 +647,18 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn if_break(&mut self, s: &str) {
+        let group = *self.group_stack.last().unwrap();
+        if self.groups[group].want_break {
+            self.text(s);
+        } else {
+            self.buffer.push_back(Token::IfBreak {
+                content: s.to_string(),
+                group,
+            });
+        }
+    }
+
     fn comment(&mut self, s: &str) {
         if self.buffer.is_empty() {
             self.pending_comments.push_str(s);
@@ -647,6 +680,7 @@ impl<'a> Renderer<'a> {
         self.out.push('\n');
         self.out.push_str(&spaces(self.indentation));
         self.output_width = self.indentation.max(0) as usize;
+        self.at_line_start = true;
     }
 
     fn begin_group(&mut self, indent: usize, open: &str) {
@@ -677,7 +711,12 @@ impl<'a> Renderer<'a> {
         self.indentation -= dedent as isize;
         let id = self.group_stack.pop().unwrap();
         let close = if self.groups[id].comment {
-            self.newline();
+            // A breakable the client placed before the close has already
+            // started the fresh line; add the close's own break only when
+            // the close would otherwise share a line with content.
+            if !(self.buffer.is_empty() && self.at_line_start) {
+                self.newline();
+            }
             close.trim_start()
         } else {
             close
@@ -710,7 +749,7 @@ impl<'a> Renderer<'a> {
             }
             while matches!(
                 self.buffer.front(),
-                Some(Token::Text { .. } | Token::Comment { .. })
+                Some(Token::Text { .. } | Token::IfBreak { .. } | Token::Comment { .. })
             ) {
                 let token = self.buffer.pop_front().unwrap();
                 self.buffer_width -= token.width();
@@ -742,6 +781,19 @@ impl<'a> Renderer<'a> {
             Token::Text { content, width } => {
                 self.out.push_str(&content);
                 self.output_width += width;
+                if width > 0 {
+                    self.at_line_start = false;
+                }
+            }
+            Token::IfBreak { content, group } => {
+                if self.groups[group].want_break {
+                    let width = content.chars().count();
+                    self.out.push_str(&content);
+                    self.output_width += width;
+                    if width > 0 {
+                        self.at_line_start = false;
+                    }
+                }
             }
             Token::Comment { content } => {
                 self.pending_comments.push_str(&content);
@@ -758,12 +810,16 @@ impl<'a> Renderer<'a> {
                     self.out.push('\n');
                     self.out.push_str(&spaces(indent));
                     self.output_width = indent.max(0) as usize;
+                    self.at_line_start = true;
                 } else {
                     if self.groups[group].pending == 0 {
                         self.queue_remove(group);
                     }
                     self.out.push_str(&sep);
                     self.output_width += width;
+                    if width > 0 {
+                        self.at_line_start = false;
+                    }
                 }
             }
         }
