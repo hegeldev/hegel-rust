@@ -11,11 +11,11 @@ use hegel_c::{
     hegel_note, hegel_printer_abort_speculative, hegel_printer_begin_group,
     hegel_printer_begin_speculative, hegel_printer_breakable, hegel_printer_comment,
     hegel_printer_commit_speculative, hegel_printer_deferred, hegel_printer_end_group,
-    hegel_printer_free, hegel_printer_hard_break, hegel_printer_is_live, hegel_printer_new,
-    hegel_printer_resolve, hegel_printer_shift_indent, hegel_printer_text, hegel_printer_value,
-    hegel_printer_value_result_free, hegel_printer_value_result_t, hegel_run_free,
-    hegel_settings_free, hegel_status_t, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_printer,
+    hegel_printer_free, hegel_printer_hard_break, hegel_printer_if_break, hegel_printer_is_live,
+    hegel_printer_new, hegel_printer_resolve, hegel_printer_shift_indent, hegel_printer_text,
+    hegel_printer_value, hegel_printer_value_result_free, hegel_printer_value_result_t,
+    hegel_run_free, hegel_settings_free, hegel_status_t, hegel_test_case_clone,
+    hegel_test_case_free, hegel_test_case_printer,
 };
 use std::ptr;
 
@@ -130,6 +130,10 @@ fn deferred_slot_roundtrip_and_death() {
         assert!(last_error(ctx).contains("session ended"));
         assert_eq!(
             hegel_printer_breakable(ctx, slot, " ".as_ptr(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_printer_if_break(ctx, slot, ",".as_ptr(), 1),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(hegel_printer_hard_break(ctx, slot), HEGEL_E_INVALID_ARG);
@@ -331,6 +335,47 @@ fn text_arguments_are_validated() {
     }
 }
 
+// The gofmt-style layout the if_break primitive exists for: broken form
+// with a trailing comma and the close brace on its own line, flat form
+// without either.
+#[test]
+fn if_break_emits_trailing_text_only_in_the_broken_form() {
+    let ctx = hegel_context_new();
+    unsafe {
+        for (max_width, expected) in [(79, "{1, 2}"), (5, "{\n    1,\n    2,\n}")] {
+            let p = new_printer(ctx, max_width);
+            ok(hegel_printer_begin_group(ctx, p, 0, "{".as_ptr(), 1));
+            ok(hegel_printer_shift_indent(ctx, p, 4));
+            ok(hegel_printer_breakable(ctx, p, "".as_ptr(), 0));
+            text(ctx, p, "1,");
+            ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
+            text(ctx, p, "2");
+            ok(hegel_printer_shift_indent(ctx, p, -4));
+            ok(hegel_printer_if_break(ctx, p, ",".as_ptr(), 1));
+            ok(hegel_printer_breakable(ctx, p, "".as_ptr(), 0));
+            ok(hegel_printer_end_group(ctx, p, 0, "}".as_ptr(), 1));
+            assert_eq!(value(ctx, p), expected);
+            ok(hegel_printer_free(ctx, p));
+        }
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn if_break_rejects_bad_text() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let p = new_printer(ctx, 79);
+        assert_eq!(
+            hegel_printer_if_break(ctx, p, [0xff_u8].as_ptr(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("hegel_printer_if_break"));
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 #[test]
 fn null_handles_and_out_parameters_are_rejected() {
     let ctx = hegel_context_new();
@@ -346,6 +391,10 @@ fn null_handles_and_out_parameters_are_rejected() {
         );
         assert_eq!(
             hegel_printer_breakable(ctx, null, " ".as_ptr(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_printer_if_break(ctx, null, ",".as_ptr(), 1),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_printer_hard_break(ctx, null), HEGEL_E_INVALID_HANDLE);
