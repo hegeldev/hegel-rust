@@ -266,6 +266,15 @@ pub use hegel_c::__bench;
 /// Deriving only works on type definitions you own; for a struct defined in
 /// another crate, see [`derive_generator!`](crate::derive_generator) instead.
 ///
+/// The derived generator is a [`PrintableGenerator`]: it prints values
+/// field by field as it draws them, in the same Rust-expression format
+/// `#[derive(PrettyPrintable)]` produces, so the type itself needs no
+/// [`PrettyPrintable`] implementation. A type that wants a different
+/// printed representation implements [`DefaultGenerator`] by hand (e.g.
+/// with [`print_with`](generators::Generator::print_with)). Field
+/// generators — the defaults and anything passed to the builder methods —
+/// must themselves be printable.
+///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
 /// - for tuple structs, the builder methods are positional: `._0(generator)`,
@@ -287,10 +296,10 @@ pub use hegel_c::__bench;
 /// # Struct Example
 ///
 /// ```no_run
-/// use hegel::{DefaultGenerator, PrettyPrintable};
+/// use hegel::DefaultGenerator;
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, PrettyPrintable, DefaultGenerator)]
+/// #[derive(Debug, DefaultGenerator)]
 /// struct Person {
 ///     name: String,
 ///     age: u32,
@@ -313,10 +322,10 @@ pub use hegel_c::__bench;
 /// # Enum Example
 ///
 /// ```no_run
-/// use hegel::{DefaultGenerator, PrettyPrintable};
+/// use hegel::DefaultGenerator;
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, PrettyPrintable, DefaultGenerator)]
+/// #[derive(Debug, DefaultGenerator)]
 /// enum Status {
 ///     Pending,
 ///     Active { since: String },
