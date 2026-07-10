@@ -13,7 +13,7 @@ fn read_values(dir: &std::path::Path, label: &str) -> Vec<i64> {
 
 #[test]
 fn test_database_key_replays_failure() {
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = crate::common::project::scratch_tempdir();
     let db_path = temp_dir.path().join("database");
     std::fs::create_dir_all(&db_path).unwrap();
     let db_str = db_path.to_str().unwrap().replace('\\', "/");
@@ -98,7 +98,7 @@ mod replay_logic {
 
     #[test]
     fn test_does_not_shrink_on_replay() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
 
         let call_count: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -149,7 +149,7 @@ mod replay_logic {
 
     #[test]
     fn test_will_always_shrink_if_previous_example_does_not_replay() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
 
         let good: Arc<Mutex<std::collections::HashSet<i64>>> =
@@ -184,7 +184,7 @@ mod replay_logic {
 
     #[test]
     fn test_will_shrink_if_the_previous_example_does_not_look_right() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
 
         let last: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
@@ -254,7 +254,7 @@ mod replay_logic {
     /// failing example must already be on disk.
     #[test]
     fn test_failure_persisted_immediately_when_discovered() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
         let db_path_for_check = db_path.clone();
 
@@ -311,7 +311,7 @@ mod replay_logic {
     /// jump from 0 to N on the final replay alone.
     #[test]
     fn test_intermediate_shrinks_update_db_during_run() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
         let db_root = std::path::PathBuf::from(&db_path);
         let db_root_cl = db_root.clone();

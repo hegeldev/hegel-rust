@@ -23,7 +23,12 @@ fn require_antithesis_feature_does_not_panic_when_feature_enabled() {
 
 #[test]
 fn check_antithesis_output_dir_accepts_an_existing_directory() {
-    let dir = tempfile::TempDir::new().unwrap();
+    // PID-tagged like tests/common's scratch_tempdir(), so a dir orphaned by
+    // a killed run is swept by a later run instead of leaking forever.
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("hegel_rust_tmp_{}_", std::process::id()))
+        .tempdir()
+        .unwrap();
     assert!(check_antithesis_output_dir(dir.path().to_str().unwrap()));
 }
 

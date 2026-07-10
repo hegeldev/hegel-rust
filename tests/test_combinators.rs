@@ -736,7 +736,7 @@ mod nocover_flatmap {
 
     #[test]
     fn test_flatmap_retrieve_from_db() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::common::project::scratch_tempdir();
         let db_path = temp_dir.path().to_str().unwrap().to_string();
 
         let track: Arc<Mutex<Vec<Vec<f64>>>> = Arc::new(Mutex::new(Vec::new()));

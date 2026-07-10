@@ -112,7 +112,12 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
             std::env::remove_var(name);
         }
     }
-    let tmp = tempfile::TempDir::new().unwrap();
+    // PID-tagged like tests/common's scratch_tempdir(), so a dir orphaned by
+    // a killed run is swept by a later run instead of leaking forever.
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("hegel_rust_tmp_{}_", std::process::id()))
+        .tempdir()
+        .unwrap();
     let prev_cwd = std::env::current_dir().unwrap();
     std::env::set_current_dir(tmp.path()).unwrap();
 

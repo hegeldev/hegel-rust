@@ -73,8 +73,7 @@ fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
 fn db_replay_drops_corrupted_stored_entry() {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
-    use tempfile::TempDir;
-    let db_dir = TempDir::new().unwrap();
+    let db_dir = crate::common::project::scratch_tempdir();
     let key = b"db_replay_drops_corrupted_stored_entry";
     let mut prefixed = b"native:".to_vec();
     prefixed.extend_from_slice(key);
@@ -101,8 +100,7 @@ fn db_replay_drops_corrupted_stored_entry() {
 fn debug_verbosity_replay_aligned_emits_skipping_shrink_message() {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings, Verbosity};
-    use tempfile::TempDir;
-    let db_dir = TempDir::new().unwrap();
+    let db_dir = crate::common::project::scratch_tempdir();
     let db_path = db_dir.path().to_str().unwrap().to_string();
 
     let run_once = |verbosity: Verbosity| {

@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
-fn shared_target_dir() -> PathBuf {
+pub fn shared_target_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hegel-shared-target")
 }
 
@@ -54,13 +54,7 @@ pub fn pid_is_live(pid: u32) -> bool {
 /// removal errors are ignored (another test binary may be sweeping the same
 /// entries concurrently).
 pub fn sweep_stale_temp_artifacts(shared_target: &Path, is_live: &dyn Fn(u32) -> bool) {
-    let debug = shared_target.join("debug");
-    for dir in [
-        debug.clone(),
-        debug.join("deps"),
-        debug.join("incremental"),
-        debug.join(".fingerprint"),
-    ] {
+    for dir in artifact_dirs(shared_target) {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -72,12 +66,100 @@ pub fn sweep_stale_temp_artifacts(shared_target: &Path, is_live: &dyn Fn(u32) ->
             if pid == std::process::id() || is_live(pid) {
                 continue;
             }
-            let path = entry.path();
-            if path.is_dir() {
-                let _ = std::fs::remove_dir_all(&path);
-            } else {
-                let _ = std::fs::remove_file(&path);
+            remove_entry(&entry.path());
+        }
+    }
+}
+
+/// The directories of a cargo target dir in which a crate leaves artifacts.
+fn artifact_dirs(shared_target: &Path) -> [PathBuf; 4] {
+    let debug = shared_target.join("debug");
+    [
+        debug.clone(),
+        debug.join("deps"),
+        debug.join("incremental"),
+        debug.join(".fingerprint"),
+    ]
+}
+
+fn remove_entry(path: &Path) {
+    if path.is_dir() {
+        let _ = std::fs::remove_dir_all(path);
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Remove every artifact this crate left in the shared target directory.
+///
+/// A temp crate's name is unique per (process, counter), so its artifacts
+/// (`{crate}`, `{crate}.d`, `deps/{crate}-{hash}*`, fingerprint dirs, …) can
+/// never be reused by a later build — dropping them as soon as the project is
+/// done keeps a long test-binary run from accumulating one 10-25MB binary per
+/// `TempRustProject`. Matching requires a `-` or `.` right after the crate
+/// name so one temp crate can never sweep a longer-named sibling; removal
+/// errors are ignored (another sweep may run concurrently).
+pub fn remove_crate_artifacts(shared_target: &Path, crate_name: &str) {
+    for dir in artifact_dirs(shared_target) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let owned_by_crate = name == crate_name
+                || name
+                    .strip_prefix(crate_name)
+                    .is_some_and(|rest| rest.starts_with('-') || rest.starts_with('.'));
+            if owned_by_crate {
+                remove_entry(&entry.path());
             }
+        }
+    }
+}
+
+/// A temp directory in the system temp dir whose name embeds the owning PID
+/// (`hegel_rust_tmp_{pid}_{random}`), so that directories orphaned by killed
+/// runs — `TempDir`'s `Drop` never runs on SIGKILL — can be attributed to a
+/// dead process and swept by a later run instead of accumulating forever.
+pub fn scratch_tempdir() -> TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("hegel_rust_tmp_{}_", std::process::id()))
+        .tempdir()
+        .unwrap()
+}
+
+/// The PID embedded in a `hegel_rust_tmp_{pid}_{random}` scratch directory
+/// name, or `None` for anything that is not a scratch directory.
+pub fn scratch_dir_pid(dir_name: &str) -> Option<u32> {
+    let rest = dir_name.strip_prefix("hegel_rust_tmp_")?;
+    let (pid, _) = rest.split_once('_')?;
+    pid.parse().ok()
+}
+
+/// Remove scratch directories under `parent` whose owning process is gone.
+///
+/// The current process's directories are always kept, whatever `is_live`
+/// says; entries that are not directories are never touched (our scratch
+/// entries are always directories); removal errors are ignored (another test
+/// binary may be sweeping the same entries concurrently).
+pub fn sweep_stale_scratch_dirs(parent: &Path, is_live: &dyn Fn(u32) -> bool) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(scratch_dir_pid) else {
+            continue;
+        };
+        if pid == std::process::id() || is_live(pid) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
         }
     }
 }
@@ -142,6 +224,12 @@ pub struct TempRustProject {
     expect_failure: Option<String>,
 }
 
+impl Drop for TempRustProject {
+    fn drop(&mut self) {
+        remove_crate_artifacts(&shared_target_dir(), &self.crate_name);
+    }
+}
+
 pub struct RunOutput {
     pub status: ExitStatus,
     #[allow(dead_code)]
@@ -166,7 +254,7 @@ pub struct Invocation<'a> {
 
 impl TempRustProject {
     pub fn new() -> Self {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = scratch_tempdir();
         let project_path = temp_dir.path().to_path_buf();
 
         let id = PACKAGE_NAME_ID.fetch_add(1, Ordering::Relaxed);
@@ -222,6 +310,16 @@ impl TempRustProject {
     pub fn env_remove(mut self, key: &str) -> Self {
         self.env_removes.push(key.to_string());
         self
+    }
+
+    /// The root directory of the temp project.
+    pub fn path(&self) -> &Path {
+        &self.project_path
+    }
+
+    /// The unique (per process, per counter) name of the temp crate.
+    pub fn crate_name(&self) -> &str {
+        &self.crate_name
     }
 
     /// Begin a fresh invocation of this project. Use this when reusing one

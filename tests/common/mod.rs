@@ -7,10 +7,12 @@ static TEST_CWD: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::n
 #[cfg(not(miri))]
 #[ctor::ctor]
 fn chdir_to_isolated_tempdir() {
-    let tempdir = tempfile::Builder::new()
-        .prefix("hegel-rust-test-")
-        .tempdir()
-        .expect("Failed to create test cwd tempdir");
+    // Reclaim scratch dirs (temp projects, test cwds, …) orphaned in the
+    // system temp dir by runs that were killed before `TempDir`'s `Drop`
+    // could remove them.
+    project::sweep_stale_scratch_dirs(&std::env::temp_dir(), &project::pid_is_live);
+
+    let tempdir = project::scratch_tempdir();
     std::env::set_current_dir(tempdir.path()).expect("Failed to chdir into test cwd tempdir");
     let _ = TEST_CWD.set(tempdir);
 }

@@ -3,11 +3,10 @@
 mod common;
 
 use common::project::TempRustProject;
-use tempfile::TempDir;
 
 #[test]
 fn test_antithesis_jsonl_written_when_env_set() {
-    let output_dir = TempDir::new().unwrap();
+    let output_dir = crate::common::project::scratch_tempdir();
     let output_path = output_dir.path().to_str().unwrap().to_string();
 
     let code = r#"
@@ -79,7 +78,7 @@ fn my_test(tc: hegel::TestCase) {
 
 #[test]
 fn test_antithesis_panics_without_feature() {
-    let output_dir = TempDir::new().unwrap();
+    let output_dir = crate::common::project::scratch_tempdir();
     let output_path = output_dir.path().to_str().unwrap().to_string();
 
     let code = r#"
@@ -103,7 +102,7 @@ fn my_test(tc: hegel::TestCase) {
 /// after a full (potentially long) property run has completed.
 #[test]
 fn test_missing_antithesis_feature_fails_before_running_any_test_case() {
-    let output_dir = TempDir::new().unwrap();
+    let output_dir = crate::common::project::scratch_tempdir();
     let output_path = output_dir.path().to_str().unwrap().to_string();
 
     let code = r#"

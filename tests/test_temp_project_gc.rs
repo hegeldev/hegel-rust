@@ -1,8 +1,10 @@
-//! Tests for the stale-artifact sweep that keeps the shared
-//! `TempRustProject` target directory (`target/tmp/hegel-shared-target`)
-//! from growing without bound: temp crate names embed the owning test
-//! binary's PID, so artifacts from processes that no longer exist can be
-//! reclaimed.
+//! Tests for the garbage collection that keeps temp-project testing from
+//! leaking disk space: temp crate names and scratch directory names embed
+//! the owning test binary's PID, so artifacts in the shared target
+//! directory (`target/tmp/hegel-shared-target`) and scratch dirs in the
+//! system temp dir left behind by processes that no longer exist can be
+//! reclaimed, and each `TempRustProject` removes its own shared-target
+//! artifacts on drop.
 
 mod common;
 
@@ -37,7 +39,7 @@ fn dir_with_file(path: &Path) {
 
 #[test]
 fn sweep_removes_dead_pid_artifacts_and_keeps_everything_else() {
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = crate::common::project::scratch_tempdir();
     let target = tmp.path();
     let dead = "temp_hegel_test_1234_0";
     let live = "temp_hegel_test_4242_1";
@@ -91,8 +93,118 @@ fn sweep_removes_dead_pid_artifacts_and_keeps_everything_else() {
 }
 
 #[test]
+fn temp_project_dir_name_embeds_owning_pid() {
+    let project = common::project::TempRustProject::new();
+    let dir_name = project
+        .path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        dir_name.starts_with(&format!("hegel_rust_tmp_{}_", std::process::id())),
+        "temp project dir {dir_name:?} should embed the owning PID so that \
+         dirs left behind by killed runs can be attributed and swept"
+    );
+    assert_eq!(
+        project.path().parent().unwrap(),
+        std::env::temp_dir(),
+        "temp project dirs should live directly in the system temp dir"
+    );
+}
+
+#[test]
+fn dropping_a_project_removes_its_artifacts_from_the_shared_target() {
+    let project = common::project::TempRustProject::new();
+    let crate_name = project.crate_name().to_owned();
+    let target = common::project::shared_target_dir();
+
+    // Plant the artifacts a `cargo run` of this crate would leave behind.
+    let artifacts = [
+        target.join(format!("debug/{crate_name}")),
+        target.join(format!("debug/{crate_name}.d")),
+        target.join(format!("debug/deps/{crate_name}-abc123")),
+        target.join(format!("debug/deps/{crate_name}-abc123.d")),
+    ];
+    for path in &artifacts {
+        touch(path);
+    }
+    let artifact_dirs = [
+        target.join(format!("debug/incremental/{crate_name}-xyz789")),
+        target.join(format!("debug/.fingerprint/{crate_name}-abc123")),
+    ];
+    for path in &artifact_dirs {
+        dir_with_file(path);
+    }
+
+    // An artifact of a *different* temp crate whose name shares this one as a
+    // prefix must survive the drop.
+    let unrelated = target.join(format!("debug/deps/{crate_name}9-abc123"));
+    touch(&unrelated);
+
+    drop(project);
+
+    for path in artifacts.iter().chain(&artifact_dirs) {
+        assert!(
+            !path.exists(),
+            "dropping the project should remove its shared-target artifact: {}",
+            path.display()
+        );
+    }
+    assert!(unrelated.exists(), "prefix-sharing crate must be kept");
+    fs::remove_file(&unrelated).unwrap();
+}
+
+#[test]
+fn scratch_dir_pid_parses_scratch_dir_names() {
+    use common::project::scratch_dir_pid;
+    assert_eq!(scratch_dir_pid("hegel_rust_tmp_1234_Xy1Z9a"), Some(1234));
+    assert_eq!(scratch_dir_pid("hegel_rust_tmp_1_a"), Some(1));
+    assert_eq!(scratch_dir_pid(".tmpAbCdEf"), None);
+    assert_eq!(scratch_dir_pid("hegel_rust_tmp_"), None);
+    assert_eq!(scratch_dir_pid("hegel_rust_tmp_1234"), None);
+    assert_eq!(scratch_dir_pid("hegel_rust_tmp_notapid_x"), None);
+    assert_eq!(scratch_dir_pid("hegel-rust-test-Xy1Z9a"), None);
+}
+
+#[test]
+fn sweep_removes_dead_scratch_dirs_and_keeps_everything_else() {
+    use common::project::sweep_stale_scratch_dirs;
+
+    let tmp = crate::common::project::scratch_tempdir();
+    let parent = tmp.path();
+
+    let dead = parent.join("hegel_rust_tmp_1234_aaaaaa");
+    dir_with_file(&dead);
+
+    let kept_dirs = [
+        // A scratch dir whose owner is still running.
+        parent.join("hegel_rust_tmp_4242_bbbbbb"),
+        // Our own scratch dir is protected even when `is_live` denies our PID.
+        parent.join(format!("hegel_rust_tmp_{}_cccccc", std::process::id())),
+        // Not a scratch dir: someone else's temp dir.
+        parent.join(".tmpAbCdEf"),
+    ];
+    for path in &kept_dirs {
+        dir_with_file(path);
+    }
+    // A plain file that happens to share the naming scheme is not a scratch
+    // dir and must not be touched.
+    let kept_file = parent.join("hegel_rust_tmp_1234_ffffff");
+    touch(&kept_file);
+
+    sweep_stale_scratch_dirs(parent, &|pid| pid == 4242);
+
+    assert!(!dead.exists(), "dead scratch dir should have been swept");
+    for path in kept_dirs.iter().chain([&kept_file]) {
+        assert!(path.exists(), "should have been kept: {}", path.display());
+    }
+}
+
+#[test]
 fn sweep_of_a_missing_target_dir_is_a_no_op() {
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = crate::common::project::scratch_tempdir();
     sweep_stale_temp_artifacts(&tmp.path().join("does-not-exist"), &|_| false);
 }
 
