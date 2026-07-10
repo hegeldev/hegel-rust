@@ -1,0 +1,5 @@
+error: #[hegel::standalone_function] functions must not have a return type; the property test is expected to panic on failure and return `()` on success.
+ --> tests/ui/standalone_function_return_type.rs:4:29
+  |
+4 | fn bad(tc: hegel::TestCase) -> i32 {
+  |                             ^^^^^^

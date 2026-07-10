@@ -12,6 +12,9 @@ both crates' test trees:
 - `tests/common/**` (shared helper modules) likewise from their `mod.rs`.
 - `tests/embedded/**` files have no main.rs: each must be the target of a
   `#[cfg(test)] #[path = "…"]` include somewhere in the crate's `src/`.
+- Files that are explicit cargo targets (e.g. the `[[bin]]` fixtures under
+  `tests/fixtures/`, declared with `path = "tests/…"` in the crate's
+  Cargo.toml) are wired by cargo itself.
 """
 
 from __future__ import annotations
@@ -31,7 +34,23 @@ ROOTS: list[tuple[Path, list[Path]]] = [
 MOD_RE = re.compile(r"^\s*(?:pub\s+)?mod\s+(\w+)\s*;", re.MULTILINE)
 PATH_ATTR_RE = re.compile(r'#\[path\s*=\s*"([^"]+)"\s*\]')
 INCLUDE_RE = re.compile(r'include!\s*\(\s*"([^"]+)"\s*\)')
+TARGET_PATH_RE = re.compile(r'^path\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 EMBEDDED_MARKER = "tests/embedded/"
+
+
+def cargo_target_files(tests_root: Path) -> set[Path]:
+    """Files under `tests_root` that the crate's Cargo.toml wires up as
+    explicit targets (`path = "tests/…"` in a [[bin]]/[[test]]/[[bench]]
+    section) — cargo compiles these directly."""
+    manifest = tests_root.parent / "Cargo.toml"
+    if not manifest.exists():
+        return set()
+    targets: set[Path] = set()
+    for p in TARGET_PATH_RE.findall(manifest.read_text()):
+        candidate = (tests_root.parent / p).resolve()
+        if candidate.is_relative_to(tests_root.resolve()):
+            targets.add(candidate)
+    return targets
 
 
 def embedded_targets(src_roots: list[Path]) -> set[str]:
@@ -106,11 +125,23 @@ def check() -> int:
     for tests_root, src_roots in ROOTS:
         if not tests_root.is_dir():
             continue
+        target_files = cargo_target_files(tests_root)
         for lib_dir in sorted(tests_root.iterdir()):
             if not lib_dir.is_dir():
                 continue
             if lib_dir.name == "embedded":
                 check_embedded(lib_dir, src_roots, violations)
+                continue
+            if lib_dir.name == "ui":
+                # trybuild UI cases: the driver's `compile_fail("tests/ui/*.rs")`
+                # glob compiles every file, so none can be orphaned — but the
+                # driver itself must exist and reference the glob.
+                driver = tests_root / "test_ui.rs"
+                if not (driver.exists() and "tests/ui/" in driver.read_text()):
+                    violations.append(
+                        f"  {lib_dir}/: expected {driver} to reference "
+                        '"tests/ui/" via trybuild'
+                    )
                 continue
             main_rs = lib_dir / "main.rs"
             mod_rs = lib_dir / "mod.rs"
@@ -118,6 +149,16 @@ def check() -> int:
                 check_module_tree(lib_dir, main_rs, violations)
             elif mod_rs.exists():
                 check_module_tree(lib_dir, mod_rs, violations)
+            elif any(f.resolve() in target_files for f in lib_dir.rglob("*.rs")):
+                # A directory of explicit cargo targets (fixture binaries):
+                # every file must itself be a target declared in Cargo.toml.
+                for f in sorted(lib_dir.rglob("*.rs")):
+                    if f.resolve() not in target_files:
+                        violations.append(
+                            f"  {f}: not declared as a cargo target in "
+                            f"{tests_root.parent / 'Cargo.toml'} (add a [[bin]] "
+                            "entry, or wire it into a module tree)"
+                        )
             else:
                 violations.append(
                     f"  {lib_dir}/: has no main.rs (integration-test target) or "

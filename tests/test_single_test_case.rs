@@ -1,6 +1,6 @@
 mod common;
 
-use common::project::TempRustProject;
+use common::exec::fixture;
 use common::utils::expect_panic;
 use hegel::generators as gs;
 use hegel::{Mode, TestCase};
@@ -216,28 +216,12 @@ fn test_single_test_case_stateful_runs_forever() {
 
 #[test]
 fn test_hegel_main_macro_with_single_test_case() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[hegel::main]
-fn main(tc: hegel::TestCase) {
-    tc.draw(gs::booleans());
-}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .cargo_run(&["--", "--single-test-case"]);
+    fixture(env!("CARGO_BIN_EXE_fixture_main_simple"))
+        .arg("--single-test-case")
+        .run();
 }
 
 #[test]
 fn test_hegel_main_macro_without_args() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[hegel::main]
-fn main(tc: hegel::TestCase) {
-    tc.draw(gs::booleans());
-}
-"#;
-    TempRustProject::new().main_file(code).cargo_run(&[]);
+    fixture(env!("CARGO_BIN_EXE_fixture_main_simple")).run();
 }

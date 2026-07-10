@@ -9,7 +9,7 @@ mod common;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use common::project::TempRustProject;
+use common::exec::fixture;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase, Verbosity};
 
@@ -60,32 +60,16 @@ fn failing_run_preserves_a_custom_panic_payload() {
     assert_eq!(custom.0, 7);
 }
 
-const FAILING_BINARY_CODE: &str = r#"
-use hegel::{Hegel, Settings};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let _: bool = tc.draw(gs::booleans());
-        panic!("intentional failure");
-    })
-    .settings(Settings::new().database(None).derandomize(true))
-    .run();
-}
-"#;
-
 /// The failure message appears exactly once on stderr: in the diagnostic
 /// printed at the catch site. The closing re-raise skips the panic hook, so
 /// there is no second `thread 'main' panicked at ...` block and no
 /// `Property test failed:` framing.
 #[test]
 fn failing_binary_prints_the_failure_exactly_once() {
-    let output = TempRustProject::new()
-        .main_file(FAILING_BINARY_CODE)
-        .invoke()
+    let output = fixture(env!("CARGO_BIN_EXE_fixture_payload_failing"))
         .env_remove("RUST_BACKTRACE")
         .expect_failure("intentional failure")
-        .cargo_run(&[]);
+        .run();
     assert_eq!(
         output.stderr.matches("intentional failure").count(),
         1,

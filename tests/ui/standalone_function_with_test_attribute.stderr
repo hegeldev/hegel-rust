@@ -1,0 +1,5 @@
+error: #[hegel::standalone_function] cannot be combined with #[test]. Use #[hegel::test] for test functions.
+ --> tests/ui/standalone_function_with_test_attribute.rs:4:1
+  |
+4 | #[test]
+  | ^^^^^^^

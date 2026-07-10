@@ -1,118 +1,22 @@
 mod common;
 
-use common::project::TempRustProject;
-use common::utils::{assert_matches_regex, expect_panic};
+use common::exec::self_test;
+use common::utils::{assert_matches_regex, capture_hegel_output, expect_panic};
 use hegel::TestCase;
 use hegel::generators;
 
-#[test]
-fn test_explicit_test_case_on_bare_function() {
-    let code = r#"
-#[hegel::explicit_test_case(x = 42)]
-fn my_func(tc: hegel::TestCase) {
-    let _ = tc;
-}
+// The compile-error cases — the attribute on a bare function, above
+// `#[hegel::test]`, with bad syntax, with empty arguments, or without an
+// argument list — live in `tests/ui/explicit_test_case_*.rs`, where trybuild
+// pins their diagnostics.
 
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("can only be used together with.*hegel::test")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_explicit_test_case_wrong_order() {
-    let code = r#"
-#[hegel::explicit_test_case(x = 42)]
-#[hegel::test]
-fn my_test(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("must appear below.*hegel::test.*not above")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_explicit_test_case_bad_syntax() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[hegel::test]
-#[hegel::explicit_test_case(x = 42;)]
-fn my_test(tc: hegel::TestCase) {
-    let x: i32 = tc.draw(gs::integers());
-    let _ = x;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("expected `,`")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_explicit_test_case_empty_args() {
-    let code = r#"
-#[hegel::test]
-#[hegel::explicit_test_case()]
-fn my_test(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("requires at least one")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_explicit_test_case_no_parens() {
-    let code = r#"
-#[hegel::test]
-#[hegel::explicit_test_case]
-fn my_test(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("requires arguments")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_explicit_test_case_rejects_threading_body() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[hegel::test(test_cases = 1)]
-#[hegel::explicit_test_case(x = true)]
-fn my_test(tc: hegel::TestCase) {
-    let tc_clone = tc.clone();
-    let handle = std::thread::spawn(move || {
-        let _: bool = tc_clone.draw(gs::booleans());
-    });
-    handle.join().unwrap();
-    let _x: bool = tc.draw(gs::booleans());
-}
-"#;
-    TempRustProject::new()
-        .test_file("test_explicit_threading.rs", code)
-        .expect_failure("cannot be shared between threads safely")
-        .cargo_test(&["--test", "test_explicit_threading"]);
-}
+// The explicit test-case wrapper can never be smuggled onto another thread
+// (the old `rejects_threading_body` compile-failure test): its handle must
+// not become `Send` or `Sync`. `TestCase` is deliberately `Send` (worker
+// threads may draw from clones — see `fixture_threaded_rejects`), but must
+// never become `Sync`.
+static_assertions::assert_not_impl_any!(hegel::ExplicitTestCase: Send, Sync);
+static_assertions::assert_not_impl_any!(hegel::TestCase: Sync);
 
 #[hegel::test]
 #[hegel::explicit_test_case(x = true)]
@@ -339,129 +243,78 @@ fn test_explicit_double_consume_panics() {
 
 #[test]
 fn test_explicit_output_format_with_comment() {
-    let code = r#"
-use hegel::generators as gs;
-
-fn main() {
-    let etc = hegel::ExplicitTestCase::new()
-        .with_value("x", "compute()", 42i32);
-    etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
-        panic!("intentional");
+    let (lines, result) = capture_hegel_output(|| {
+        let etc = hegel::ExplicitTestCase::new().with_value("x", "compute()", 42i32);
+        etc.run(|tc: &hegel::ExplicitTestCase| {
+            let _: i32 = tc.__draw_named(generators::integers(), "x", false);
+            panic!("intentional");
+        });
     });
-}
-"#;
-    let output = TempRustProject::new()
-        .main_file(code)
-        .expect_failure("intentional")
-        .cargo_run(&[]);
-
-    assert_matches_regex(&output.stderr, r"let x = compute\(\); // = 42");
+    assert!(result.is_err(), "expected the explicit case to panic");
+    assert_matches_regex(&lines.join("\n"), r"let x = compute\(\); // = 42");
 }
 
 #[test]
 fn test_explicit_output_format_without_comment() {
-    let code = r#"
-use hegel::generators as gs;
-
-fn main() {
-    let etc = hegel::ExplicitTestCase::new()
-        .with_value("x", "42", 42i32);
-    etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
-        panic!("intentional");
+    let (lines, result) = capture_hegel_output(|| {
+        let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
+        etc.run(|tc: &hegel::ExplicitTestCase| {
+            let _: i32 = tc.__draw_named(generators::integers(), "x", false);
+            panic!("intentional");
+        });
     });
-}
-"#;
-    let output = TempRustProject::new()
-        .main_file(code)
-        .expect_failure("intentional")
-        .cargo_run(&[]);
-
-    assert_matches_regex(&output.stderr, r"let x = 42;");
+    assert!(result.is_err(), "expected the explicit case to panic");
+    let output = lines.join("\n");
+    assert_matches_regex(&output, r"let x = 42;");
     assert!(
-        !output.stderr.contains("// ="),
+        !output.contains("// ="),
         "Should not have comment when source matches debug. Actual: {}",
-        output.stderr
+        output
     );
 }
 
+/// Fixture for `test_explicit_notes_printed_on_panic`, run via self-exec:
+/// explicit-test-case notes are printed straight to stderr on panic, so a
+/// real subprocess is needed to observe them.
 #[test]
-fn test_explicit_notes_printed_on_panic() {
-    let code = r#"
-use hegel::generators as gs;
-
-fn main() {
-    let etc = hegel::ExplicitTestCase::new()
-        .with_value("x", "42", 42i32);
+#[ignore = "fixture: run via exec::self_test"]
+fn explicit_notes_fixture() {
+    let etc = hegel::ExplicitTestCase::new().with_value("x", "42", 42i32);
     etc.run(|tc: &hegel::ExplicitTestCase| {
-        let _: i32 = tc.__draw_named(gs::integers(), "x", false);
+        let _: i32 = tc.__draw_named(generators::integers(), "x", false);
         tc.note("important debug info");
         panic!("intentional");
     });
 }
-"#;
-    let output = TempRustProject::new()
-        .main_file(code)
-        .expect_failure("intentional")
-        .cargo_run(&[]);
 
+#[test]
+fn test_explicit_notes_printed_on_panic() {
+    let output = self_test("explicit_notes_fixture")
+        .expect_failure("intentional")
+        .run();
     assert_matches_regex(&output.stderr, "important debug info");
 }
 
-#[test]
-fn test_macro_explicit_case_output() {
-    let code = r#"
-use hegel::generators as gs;
-
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42i32)]
-fn test_explicit(tc: hegel::TestCase) {
-    let x: i32 = tc.draw(gs::integers());
+#[should_panic(expected = "fail: 42")]
+fn test_macro_explicit_case_output(tc: TestCase) {
+    let x: i32 = tc.draw(generators::integers());
     panic!("fail: {}", x);
 }
-"#;
-    TempRustProject::new()
-        .test_file("test_etc.rs", code)
-        .expect_failure("fail: 42")
-        .cargo_test(&["--test", "test_etc"]);
-}
-
-#[test]
-fn test_macro_explicit_case_with_struct() {
-    let code = r#"
-use hegel::generators as gs;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Point { x: i32, y: i32 }
 
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(p = Point { x: 3, y: 4 })]
-fn test_explicit(tc: hegel::TestCase) {
-    let p: Point = tc.draw(gs::just(Point { x: 0, y: 0 }));
+#[should_panic(expected = "fail: Point { x: 3, y: 4 }")]
+fn test_macro_explicit_case_with_struct(tc: TestCase) {
+    let p: Point = tc.draw(generators::just(Point { x: 0, y: 0 }));
     panic!("fail: {:?}", p);
 }
-"#;
-    TempRustProject::new()
-        .test_file("test_struct.rs", code)
-        .expect_failure(r"fail: Point \{ x: 3, y: 4 \}")
-        .cargo_test(&["--test", "test_struct"]);
-}
-
-#[test]
-fn test_macro_explicit_case_with_computed_expression() {
-    let code = r#"
-use hegel::generators as gs;
 
 #[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(n = vec![10i32, 20, 30].into_iter().sum::<i32>())]
-fn test_explicit(tc: hegel::TestCase) {
-    let n: i32 = tc.draw(gs::integers());
+#[should_panic(expected = "fail: 60")]
+fn test_macro_explicit_case_with_computed_expression(tc: TestCase) {
+    let n: i32 = tc.draw(generators::integers());
     panic!("fail: {}", n);
-}
-"#;
-    TempRustProject::new()
-        .test_file("test_computed.rs", code)
-        .expect_failure("fail: 60")
-        .cargo_test(&["--test", "test_computed"]);
 }

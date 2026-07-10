@@ -12,6 +12,10 @@ exclude = [
   "/.github",
   "/nix",
   "/RELEASE-sample.md",
+  # Test-only fixture binaries (see the [[bin]] targets below). Excluding the
+  # sources makes `cargo package` strip the [[bin]] targets from the published
+  # crate, so downstream builds and `cargo install` never see them.
+  "/tests/fixtures",
 ]
 license = "MIT"
 readme = "README.md"
@@ -33,6 +37,54 @@ name = "hegel"
 [[example]]
 name = "stack"
 doc-scrape-examples = true
+
+# Prebuilt fixture binaries for the end-to-end integration tests. Each is a
+# tiny `fn main` (or `#[hegel::main]`) program whose real-process behaviour —
+# CLI parsing, stderr layout, panic hooks, backtraces — the tests in `tests/`
+# assert on by spawning the binary via `env!("CARGO_BIN_EXE_…")`. Declaring
+# them as [[bin]] targets makes cargo build, cache, and (under cargo-llvm-cov)
+# instrument them like any other target: there are no uniquely-named temp
+# crates to compile at test time and no artifacts cargo doesn't own. The
+# sources are excluded from the published package (see `exclude` above).
+[[bin]]
+name = "fixture_basic_main"
+path = "tests/fixtures/basic_main.rs"
+
+[[bin]]
+name = "fixture_main_simple"
+path = "tests/fixtures/main_simple.rs"
+
+[[bin]]
+name = "fixture_main_failing"
+path = "tests/fixtures/main_failing.rs"
+
+[[bin]]
+name = "fixture_main_rewrite"
+path = "tests/fixtures/main_rewrite.rs"
+
+[[bin]]
+name = "fixture_main_explicit"
+path = "tests/fixtures/main_explicit.rs"
+
+[[bin]]
+name = "fixture_output_failing"
+path = "tests/fixtures/output_failing.rs"
+
+[[bin]]
+name = "fixture_report_failing"
+path = "tests/fixtures/report_failing.rs"
+
+[[bin]]
+name = "fixture_two_bugs"
+path = "tests/fixtures/two_bugs.rs"
+
+[[bin]]
+name = "fixture_payload_failing"
+path = "tests/fixtures/payload_failing.rs"
+
+[[bin]]
+name = "fixture_threaded_rejects"
+path = "tests/fixtures/threaded_rejects.rs"
 
 [dependencies]
 paste = "1.0"
@@ -76,6 +128,12 @@ is-terminal = "0.4.13"
 # with other macros for #[hegel::test] to work with #[tokio::test]. See
 # https://github.com/tokio-rs/tokio/pull/6497
 tokio = { version = "1.39", features = ["macros", "rt"] }
+# Compile-diagnostic UI tests (tests/test_ui.rs + tests/ui/*.rs): macro and
+# derive misuse must fail to compile with the pinned .stderr output.
+trybuild = "1.0.116"
+# Compile-time !Send/!Sync assertions (test-case handles must not be able to
+# cross threads) without pinning toolchain-dependent diagnostic text.
+static_assertions = "1.1.0"
 
 [[bench]]
 name = "biased_sample"

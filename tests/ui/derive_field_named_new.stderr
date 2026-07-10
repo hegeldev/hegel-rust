@@ -1,0 +1,5 @@
+error: field name `new` collides with the generated builder API of #[derive(DefaultGenerator)]; rename the field or implement DefaultGenerator by hand
+ --> tests/ui/derive_field_named_new.rs:6:5
+  |
+6 |     new: bool,
+  |     ^^^

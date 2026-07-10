@@ -1,50 +1,46 @@
 //! The `print_blob` setting controls whether a failing run prints a
 //! copy-pasteable `#[hegel::reproduce_failure("…")]` reproducer line.
 //!
-//! These run a failing `#[hegel::test]` in a subprocess (so its stderr can be
-//! captured) and assert the reproducer line is present when `print_blob` is
-//! set and absent otherwise.
+//! The reproducer line is written straight to stderr at the catch site, so
+//! these run an `#[ignore]`d failing fixture test in a subprocess (this same
+//! binary, via `exec::self_test`) and assert the line is present when
+//! `print_blob` is set and absent otherwise.
 
 mod common;
 
-use common::project::TempRustProject;
+use common::exec::self_test;
+use hegel::TestCase;
+use hegel::generators as gs;
 
 /// Marker printed by the reproducer line (see `run_lifecycle::reproducer_line`).
 const REPRODUCER_MARKER: &str = "To reproduce this failure";
 
-#[test]
-fn print_blob_true_prints_reproducer_line() {
-    let code = r#"
 #[hegel::test(print_blob = true)]
-fn my_test(tc: hegel::TestCase) {
-    use hegel::generators as gs;
+#[ignore = "fixture: run via exec::self_test"]
+fn print_blob_true_fixture(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers());
     assert!(x < 5, "x was {x}");
 }
-"#;
-    TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", code)
+
+#[hegel::test]
+#[ignore = "fixture: run via exec::self_test"]
+fn print_blob_default_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers());
+    assert!(x < 5, "x was {x}");
+}
+
+#[test]
+fn print_blob_true_prints_reproducer_line() {
+    self_test("print_blob_true_fixture")
         .expect_failure(REPRODUCER_MARKER)
-        .cargo_test(&["--test", "repro"]);
+        .run();
 }
 
 #[test]
 fn print_blob_default_suppresses_reproducer_line() {
-    let code = r#"
-#[hegel::test]
-fn my_test(tc: hegel::TestCase) {
-    use hegel::generators as gs;
-    let x: i32 = tc.draw(gs::integers());
-    assert!(x < 5, "x was {x}");
-}
-"#;
-    let out = TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", code)
-        .invoke()
+    let out = self_test("print_blob_default_fixture")
         .expect_failure("x was")
-        .cargo_test(&["--test", "repro"]);
+        .run();
     let combined = format!("{}\n{}", out.stdout, out.stderr);
     assert!(
         !combined.contains(REPRODUCER_MARKER),

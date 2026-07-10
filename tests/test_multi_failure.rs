@@ -15,7 +15,7 @@ mod common;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use common::project::TempRustProject;
+use common::exec::fixture;
 use common::utils::assert_matches_regex;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase, Verbosity};
@@ -161,25 +161,6 @@ fn test_report_multiple_failures_false_collapses_to_single_failure_panic() {
     );
 }
 
-const TWO_BUG_CODE: &str = r#"
-use hegel::{Hegel, Settings};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(40));
-        if x > 30 {
-            panic!("big branch: {}", x);
-        }
-        if x < 10 {
-            panic!("small branch: {}", x);
-        }
-    })
-    .settings(Settings::new().database(None).derandomize(true).test_cases(500).report_multiple_failures(true))
-    .run();
-}
-"#;
-
 /// Regression test for the multi-failure report's stderr layout. The draws
 /// of each final replay used to print live while the diagnostics were
 /// buffered and printed at the end, so a two-failure report came out as
@@ -193,19 +174,17 @@ fn main() {
 /// followed by its panic diagnostic.
 #[test]
 fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
-    let output = TempRustProject::new()
-        .main_file(TWO_BUG_CODE)
-        .invoke()
+    let output = fixture(env!("CARGO_BIN_EXE_fixture_two_bugs"))
         .env_remove("RUST_BACKTRACE")
         .expect_failure("Property-based test failed with 2 distinct failures.")
-        .cargo_run(&[]);
+        .run();
     let stderr = &output.stderr;
 
     let headline_pos = stderr
         .find("Property-based test failed with 2 distinct failures.")
         .unwrap();
     let first_draw_pos = stderr.find("let draw_1 = ").unwrap();
-    let first_diagnostic_pos = stderr.find("panicked at src").unwrap();
+    let first_diagnostic_pos = stderr.find("panicked at tests").unwrap();
     assert!(
         headline_pos < first_draw_pos && headline_pos < first_diagnostic_pos,
         "expected the failure-count headline before the per-failure blocks:\n{stderr}"
@@ -217,11 +196,11 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
             r"Property-based test failed with 2 distinct failures\.\n",
             r"\n",
             r"let draw_1 = \d+;\n",
-            r"thread '[^']+' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
+            r"thread '[^']+' \(\d+\) panicked at tests[/\\]fixtures[/\\]two_bugs\.rs:\d+:\d+:\n",
             r"(?:big|small) branch: \d+\n",
             r"\n",
             r"let draw_1 = \d+;\n",
-            r"thread '[^']+' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
+            r"thread '[^']+' \(\d+\) panicked at tests[/\\]fixtures[/\\]two_bugs\.rs:\d+:\d+:\n",
             r"(?:big|small) branch: \d+$",
         ),
     );

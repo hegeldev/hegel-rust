@@ -1,0 +1,5 @@
+error: #[derive(DefaultGenerator)] does not support lifetime parameters: a borrowing type cannot be produced by the 'static generator DefaultGenerator requires
+ --> tests/ui/derive_lifetime_param.rs:5:17
+  |
+5 | struct Borrowed<'a> {
+  |                 ^^

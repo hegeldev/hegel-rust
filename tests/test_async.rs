@@ -1,6 +1,5 @@
 mod common;
 
-use common::project::TempRustProject;
 use hegel::TestCase;
 use hegel::generators as gs;
 
@@ -12,18 +11,6 @@ async fn test_async_with_tokio(tc: TestCase) {
     assert_eq!(handle.await.unwrap(), x);
 }
 
-#[test]
-fn test_hegel_test_on_async_fn_without_wrapper_fails() {
-    let code = r#"
-#[hegel::test]
-async fn my_test(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("does not support bare interactions with async functions")
-        .cargo_run(&[]);
-}
+// `test_hegel_test_on_async_fn_without_wrapper_fails` lives in
+// `tests/ui/hegel_test_on_bare_async_fn.rs`: rejecting a bare async fn is a
+// compile-time diagnostic, pinned by trybuild.
