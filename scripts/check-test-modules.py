@@ -132,15 +132,16 @@ def check() -> int:
             if lib_dir.name == "embedded":
                 check_embedded(lib_dir, src_roots, violations)
                 continue
-            if lib_dir.name == "ui":
-                # trybuild UI cases: the driver's `compile_fail("tests/ui/*.rs")`
+            if lib_dir.name == "ui" or lib_dir.name.startswith("ui-"):
+                # trybuild UI cases: the driver's `compile_fail("tests/<dir>/*.rs")`
                 # glob compiles every file, so none can be orphaned — but the
                 # driver itself must exist and reference the glob.
                 driver = tests_root / "test_ui.rs"
-                if not (driver.exists() and "tests/ui/" in driver.read_text()):
+                needle = f"tests/{lib_dir.name}/"
+                if not (driver.exists() and needle in driver.read_text()):
                     violations.append(
                         f"  {lib_dir}/: expected {driver} to reference "
-                        '"tests/ui/" via trybuild'
+                        f'"{needle}" via trybuild'
                     )
                 continue
             main_rs = lib_dir / "main.rs"

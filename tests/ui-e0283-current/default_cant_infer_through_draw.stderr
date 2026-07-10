@@ -1,0 +1,16 @@
+error[E0283]: type annotations needed
+  --> tests/ui-e0283-current/default_cant_infer_through_draw.rs:11:9
+   |
+11 |     let _ = tc.draw(gs::default());
+   |         ^      ---- type must be known at this point
+   |
+   = note: the type must implement `std::fmt::Debug`
+note: required by a bound in `TestCase::draw`
+  --> src/test_case.rs
+   |
+   |     pub fn draw<T: std::fmt::Debug>(&self, generator: impl Generator<T>) -> T {
+   |                    ^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
+help: consider giving this pattern a type
+   |
+11 |     let _: /* Type */ = tc.draw(gs::default());
+   |          ++++++++++++

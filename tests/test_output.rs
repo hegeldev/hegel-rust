@@ -165,11 +165,12 @@ fn test_failing_test_output() {
 ///   `__covrec_*` coverage-record symbol or to no symbol at all
 ///   (`<unknown>`, seen on aarch64 coverage builds).
 ///
-/// The `at <file>:line:col` anchor is therefore what proves the right frame
-/// is present; `name` narrows the symbol text where it survives.
+/// The `at <file>:line[:col]` anchor is therefore what proves the right
+/// frame is present (Windows backtraces omit the column); `name` narrows the
+/// symbol text where it survives.
 fn frame_at(name: &str, file: &str) -> String {
     format!(
-        r"(?:[^\n]*(?:{name})[^\n]*|__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+:\d+\n"
+        r"(?:[^\n]*(?:{name})[^\n]*|__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+(?::\d+)?\n"
     )
 }
 
