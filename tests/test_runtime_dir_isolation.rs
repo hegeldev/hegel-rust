@@ -25,9 +25,10 @@ fn cwd_is_not_crate_root() {
 fn cwd_is_a_hegel_rust_test_tempdir() {
     let cwd = std::env::current_dir().unwrap();
     let name = cwd.file_name().unwrap().to_string_lossy();
-    assert!(
-        name.starts_with("hegel-rust-test-"),
-        "cwd {cwd:?} should be a tempdir whose name starts with hegel-rust-test-",
+    assert_eq!(
+        common::project::scratch_dir_pid(&name),
+        Some(std::process::id()),
+        "cwd {cwd:?} should be a scratch tempdir (hegel_rust_tmp_{{pid}}_…) owned by this process",
     );
 }
 
