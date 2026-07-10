@@ -167,6 +167,41 @@ fn test_draw_domain(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+mod cfg_rules_ignored {
+    // These attributes needs applied on the module level, as `#[hegel::state_machine]` expands
+    // to two blocks. Otherwise they would only apply to the first block produced.
+    #![allow(unexpected_cfgs)]
+    #![forbid(unused_doc_comments)]
+
+    use hegel::TestCase;
+
+    struct TestCfgRulesIgnored {
+        count: u32,
+    }
+
+    #[hegel::state_machine]
+    impl TestCfgRulesIgnored {
+        /// Adds 1 to the internal value
+        #[rule]
+        fn increment(&mut self, _tc: TestCase) {
+            self.count += 1;
+        }
+
+        /// This rule should never be run as `nonexistent_config` does not exist
+        #[cfg(nonexistent_config)]
+        #[rule]
+        fn panic(&mut self, _tc: TestCase) {
+            compile_error!("should be compiled out");
+        }
+    }
+
+    #[hegel::test]
+    fn test_cfg_rules_ignored(tc: TestCase) {
+        let m = TestCfgRulesIgnored { count: 0 };
+        hegel::stateful::run(m, tc);
+    }
+}
+
 mod stateful {
     use super::common::project::TempRustProject;
     use super::common::utils::expect_panic;
