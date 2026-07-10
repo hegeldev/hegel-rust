@@ -4,7 +4,7 @@ This release cleans up public-API defects found in a documentation-vs-behavior a
 
 Breaking changes:
 
-- The core string-returning date/time generators are renamed to say what they return: `gs::dates()`, `gs::times()`, and `gs::datetimes()` (which produce Python-isoformat `String`s, unlike the typed chrono/jiff generators of the same names) are now `gs::date_strings()`, `gs::time_strings()`, and `gs::datetime_strings()`, returning `DateStringGenerator`/`TimeStringGenerator`/`DateTimeStringGenerator`. The old function and type names remain as `#[deprecated]` aliases pointing at the new names and at `extras::chrono`/`extras::jiff` for typed, boundable values.
+- The core string-returning date/time generators are renamed to say what they return: `gs::dates()`, `gs::times()`, and `gs::datetimes()` (which produce Python-isoformat `String`s, unlike the typed chrono/jiff generators of the same names) are now `gs::date_strings()`, `gs::time_strings()`, and `gs::datetime_strings()`, returning `DateStringGenerator`/`TimeStringGenerator`/`DateTimeStringGenerator`. The old function and type names are removed; for typed, boundable values see `extras::chrono`/`extras::jiff`.
 - `hegel::extras::jiff::DateGenerator` and `TimeGenerator` are no longer fieldless unit structs; construct them with `dates()`/`times()`.
 - Unknown codec names passed to `text().codec(...)` or `characters().codec(...)` are rejected when the builder is called instead of on the first draw, so the error points at the mistake's call site.
 

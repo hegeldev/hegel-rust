@@ -46,11 +46,6 @@ pub use strings::{
     UuidsGenerator, binary, characters, date_strings, datetime_strings, domains, emails,
     from_regex, ip_addresses, text, time_strings, urls, uuids,
 };
-// Deprecated aliases for the *_strings generators; re-exported separately so
-// the deprecation attributes are the only thing `#[allow(deprecated)]` here
-// silences.
-#[allow(deprecated)]
-pub use strings::{DateGenerator, DateTimeGenerator, TimeGenerator, dates, datetimes, times};
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]
 pub use tuples::{

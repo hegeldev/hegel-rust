@@ -130,16 +130,6 @@ fn test_regex_with_alphabet() {
     );
 }
 
-/// The pre-rename names remain available as deprecated aliases and generate
-/// the same shape of string as the `*_strings` generators.
-#[test]
-#[allow(deprecated)]
-fn test_deprecated_date_time_string_aliases_still_generate() {
-    assert_all_examples(gs::dates(), |s: &String| s.split('-').count() == 3);
-    assert_all_examples(gs::times(), |s: &String| s.splitn(3, ':').count() == 3);
-    assert_all_examples(gs::datetimes(), |s: &String| s.contains('T'));
-}
-
 #[test]
 fn test_dates_format() {
     assert_all_examples(gs::date_strings(), |s: &String| {

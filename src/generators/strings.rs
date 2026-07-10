@@ -645,24 +645,6 @@ pub fn date_strings() -> DateStringGenerator {
     DateStringGenerator
 }
 
-/// Deprecated alias for [`DateStringGenerator`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `DateStringGenerator` (it generates `String`s); \
-            for typed dates see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub type DateGenerator = DateStringGenerator;
-
-/// Deprecated alias for [`date_strings()`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `date_strings()` (it generates `String`s); \
-            for typed dates see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub fn dates() -> DateStringGenerator {
-    date_strings()
-}
-
 /// Generator for time strings in `HH:MM:SS[.ffffff]` format. Created by
 /// [`time_strings()`].
 pub struct TimeStringGenerator;
@@ -684,24 +666,6 @@ pub fn time_strings() -> TimeStringGenerator {
     TimeStringGenerator
 }
 
-/// Deprecated alias for [`TimeStringGenerator`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `TimeStringGenerator` (it generates `String`s); \
-            for typed times see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub type TimeGenerator = TimeStringGenerator;
-
-/// Deprecated alias for [`time_strings()`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `time_strings()` (it generates `String`s); \
-            for typed times see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub fn times() -> TimeStringGenerator {
-    time_strings()
-}
-
 /// Generator for ISO 8601 datetime strings. Created by [`datetime_strings()`].
 pub struct DateTimeStringGenerator;
 
@@ -721,24 +685,6 @@ impl Generator<String> for DateTimeStringGenerator {
 /// [`extras::jiff`](crate::extras::jiff) (`datetimes()`).
 pub fn datetime_strings() -> DateTimeStringGenerator {
     DateTimeStringGenerator
-}
-
-/// Deprecated alias for [`DateTimeStringGenerator`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `DateTimeStringGenerator` (it generates `String`s); for typed \
-            datetimes see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub type DateTimeGenerator = DateTimeStringGenerator;
-
-/// Deprecated alias for [`datetime_strings()`].
-#[deprecated(
-    since = "0.26.0",
-    note = "renamed to `datetime_strings()` (it generates `String`s); for typed \
-            datetimes see `hegel::extras::chrono` or `hegel::extras::jiff`"
-)]
-pub fn datetimes() -> DateTimeStringGenerator {
-    datetime_strings()
 }
 
 /// Generator for UUID strings in canonical hyphenated form. Created by [`uuids()`].
