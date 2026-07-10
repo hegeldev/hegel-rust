@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.26.0 - 2026-07-09
+
+This release changes the default value of `fullmatch` in `from_regex` from `false` to `true`.
+
 ## 0.25.0 - 2026-07-08
 
 This release fixes a number of bugs found in a full review of the frontend, generators, and proc macros, alongside the engine fixes in the corresponding `hegeltest-c` release (whose regex, shrinking, and replay fixes all surface here — see its changelog).
