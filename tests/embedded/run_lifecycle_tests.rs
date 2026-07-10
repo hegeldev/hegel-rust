@@ -210,7 +210,7 @@ fn drive_multiple_failures_panics_with_the_count() {
             }
             panic!("boom B");
         },
-        &test_settings(),
+        &test_settings().report_multiple_failures(true),
     );
     assert!(
         msg.contains("2 distinct failures"),

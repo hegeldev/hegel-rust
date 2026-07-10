@@ -20,7 +20,7 @@ use common::utils::assert_matches_regex;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase, Verbosity};
 
-/// `#[hegel::test(report_multiple_failures = true, ...)]` (the default)
+/// `#[hegel::test(report_multiple_failures = true, ...)]`
 /// surfaces every distinct origin. With two panic sites in the body the
 /// outer re-raise must be the new
 /// `"Property-based test failed with 2 distinct failures."` panic — if the
@@ -44,8 +44,8 @@ fn test_macro_report_multiple_failures_true_surfaces_both(tc: TestCase) {
     }
 }
 
-/// `#[hegel::test(report_multiple_failures = false, ...)]` asks the engine
-/// to collapse multi-bug runs to a single failure, so the same body falls
+/// `#[hegel::test(report_multiple_failures = false, ...)]` (the default) asks
+/// the engine to collapse multi-bug runs to a single failure, so the same body falls
 /// into the single-failure re-raise path. The `expected` substring is
 /// chosen specifically so a multi-failure panic (`"Property-based test
 /// failed with N distinct failures."`) would not match and the test would
@@ -88,7 +88,8 @@ fn run_two_origin_failure(verbosity: Verbosity) -> String {
                 .database(None)
                 .derandomize(true)
                 .verbosity(verbosity)
-                .test_cases(500),
+                .test_cases(500)
+                .report_multiple_failures(true),
         )
         .run();
     }));
@@ -174,7 +175,7 @@ fn main() {
             panic!("small branch: {}", x);
         }
     })
-    .settings(Settings::new().database(None).derandomize(true).test_cases(500))
+    .settings(Settings::new().database(None).derandomize(true).test_cases(500).report_multiple_failures(true))
     .run();
 }
 "#;
@@ -232,6 +233,7 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
 /// below the primary boundary. Hypothesis records origins discovered while
 /// shrinking and shrinks them too; the runner must report both.
 #[hegel::test(
+    report_multiple_failures = true,
     derandomize = true,
     test_cases = 300u64,
     verbosity = hegel::Verbosity::Quiet,

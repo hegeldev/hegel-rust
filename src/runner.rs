@@ -161,7 +161,7 @@ impl Settings {
                 Phase::Target,
                 Phase::Shrink,
             ],
-            report_multiple_failures: true,
+            report_multiple_failures: false,
             print_blob: false,
             backend: None,
         }
@@ -274,12 +274,11 @@ impl Settings {
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
-    /// When `true` (the default), each distinct origin Hegel finds is surfaced
-    /// as its own diagnostic, and the final panic message reports the count of
-    /// distinct failures.  Setting this to `false` makes Hegel collapse a
-    /// multi-bug run to one example — useful when you have a flaky predicate
-    /// that triggers several superficially-distinct failures whose root cause
-    /// is the same, and the extra reports are just noise.
+    /// When `true`, each distinct origin Hegel finds is surfaced as its own
+    /// diagnostic, and the final panic message reports the count of distinct
+    /// failures.  When `false` (the default), Hegel collapses a multi-bug run
+    /// to one example — several superficially-distinct failures often share a
+    /// root cause, and the extra reports are just noise.
     ///
     /// Maps to Hypothesis's `report_multiple_bugs` setting.
     pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {

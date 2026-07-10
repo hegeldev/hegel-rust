@@ -25,17 +25,17 @@ fn test_settings_suppress_health_check_replaces() {
 }
 
 #[test]
-fn test_settings_report_multiple_failures_default_true() {
+fn test_settings_report_multiple_failures_default_false() {
     let s = Settings::new();
-    assert!(s.report_multiple_failures);
+    assert!(!s.report_multiple_failures);
 }
 
 #[test]
 fn test_settings_report_multiple_failures_setter() {
-    let s = Settings::new().report_multiple_failures(false);
-    assert!(!s.report_multiple_failures);
-    let s = s.report_multiple_failures(true);
+    let s = Settings::new().report_multiple_failures(true);
     assert!(s.report_multiple_failures);
+    let s = s.report_multiple_failures(false);
+    assert!(!s.report_multiple_failures);
 }
 
 #[test]

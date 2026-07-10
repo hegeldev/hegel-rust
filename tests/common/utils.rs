@@ -383,7 +383,8 @@ where
                 Settings::new()
                     .test_cases(test_cases)
                     .database(None)
-                    .derandomize(true),
+                    .derandomize(true)
+                    .report_multiple_failures(true),
             )
             .run();
         }));
