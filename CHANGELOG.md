@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.0 - 2026-07-10
+
+This release changes the default of `Settings::report_multiple_failures` from `true` to `false`.
+
 ## 0.26.0 - 2026-07-09
 
 This release changes the default value of `fullmatch` in `from_regex` from `false` to `true`.
