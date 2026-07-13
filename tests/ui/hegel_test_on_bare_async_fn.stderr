@@ -1,0 +1,5 @@
+error: #[hegel::test] does not support bare interactions with async functions. Put #[hegel::test] below an async test macro like #[tokio::test] instead.
+ --> tests/ui/hegel_test_on_bare_async_fn.rs:5:1
+  |
+5 | async fn my_test(tc: hegel::TestCase) {
+  | ^^^^^

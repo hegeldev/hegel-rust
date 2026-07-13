@@ -1,0 +1,6 @@
+error: #[hegel::reproduce_failure(...)] can only be used together with #[hegel::test].
+       Add #[hegel::test] above #[hegel::reproduce_failure(...)].
+ --> tests/ui/reproduce_failure_on_bare_function.rs:5:1
+  |
+5 | fn my_func(tc: hegel::TestCase) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -472,8 +472,7 @@ mod arbitrary_data {
     //! and the "dynamic draw inside `find()`" pattern ports as a `compose!`
     //! generator passed to `minimal()`.
 
-    use super::common::project::TempRustProject;
-    use super::common::utils::minimal;
+    use super::common::utils::{capture_hegel_output, minimal};
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
 
@@ -490,121 +489,93 @@ mod arbitrary_data {
 
     #[test]
     fn test_prints_on_failure() {
-        const CODE: &str = r#"
-use hegel::generators as gs;
-use hegel::{Hegel, Settings};
-
-fn main() {
-    Hegel::new(|tc| {
-        let xs: Vec<i64> = tc.draw(
-            gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
-        );
-        let y: i64 = tc.draw(gs::sampled_from(xs.clone()));
-        let mut xs = xs;
-        if let Some(pos) = xs.iter().position(|v| *v == y) {
-            xs.remove(pos);
-        }
-        if xs.contains(&y) {
-            panic!("PRINTS_ON_FAILURE");
-        }
-    })
-    .settings(Settings::new().database(None))
-    .run();
-}
-"#;
-
-        let output = TempRustProject::new()
-            .main_file(CODE)
-            .expect_failure("PRINTS_ON_FAILURE")
-            .cargo_run(&[]);
-
+        let (lines, result) = capture_hegel_output(|| {
+            Hegel::new(|tc| {
+                let xs: Vec<i64> =
+                    tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2));
+                let y: i64 = tc.draw(gs::sampled_from(xs.clone()));
+                let mut xs = xs;
+                if let Some(pos) = xs.iter().position(|v| *v == y) {
+                    xs.remove(pos);
+                }
+                if xs.contains(&y) {
+                    panic!("PRINTS_ON_FAILURE");
+                }
+            })
+            .settings(Settings::new().database(None))
+            .run();
+        });
+        assert!(result.is_err(), "expected the property to fail");
+        let output = lines.join("\n");
         assert!(
-            output.stderr.contains("let draw_1 = [0, 0];"),
-            "expected `let draw_1 = [0, 0];` in stderr:\n{}",
-            output.stderr
+            output.contains("let draw_1 = [0, 0];"),
+            "expected `let draw_1 = [0, 0];` in the captured report:\n{}",
+            output
         );
         assert!(
-            output.stderr.contains("let draw_2 = 0;"),
-            "expected `let draw_2 = 0;` in stderr:\n{}",
-            output.stderr
+            output.contains("let draw_2 = 0;"),
+            "expected `let draw_2 = 0;` in the captured report:\n{}",
+            output
         );
     }
 
     #[test]
     fn test_prints_labels_if_given_on_failure() {
-        const CODE: &str = r#"
-use hegel::generators as gs;
-use hegel::{Hegel, Settings};
-
-fn main() {
-    Hegel::new(|tc| {
-        let xs: Vec<i64> = tc.__draw_named(
-            gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
-            "some_numbers",
-            false,
-        );
-        let y: i64 = tc.__draw_named(gs::sampled_from(xs.clone()), "a_number", false);
-        let mut xs = xs;
-        if let Some(pos) = xs.iter().position(|v| *v == y) {
-            xs.remove(pos);
-        }
-        if xs.contains(&y) {
-            panic!("PRINTS_LABELS_ON_FAILURE");
-        }
-    })
-    .settings(Settings::new().database(None))
-    .run();
-}
-"#;
-
-        let output = TempRustProject::new()
-            .main_file(CODE)
-            .expect_failure("PRINTS_LABELS_ON_FAILURE")
-            .cargo_run(&[]);
-
+        let (lines, result) = capture_hegel_output(|| {
+            Hegel::new(|tc| {
+                let xs: Vec<i64> = tc.__draw_named(
+                    gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).min_size(2),
+                    "some_numbers",
+                    false,
+                );
+                let y: i64 = tc.__draw_named(gs::sampled_from(xs.clone()), "a_number", false);
+                let mut xs = xs;
+                if let Some(pos) = xs.iter().position(|v| *v == y) {
+                    xs.remove(pos);
+                }
+                if xs.contains(&y) {
+                    panic!("PRINTS_LABELS_ON_FAILURE");
+                }
+            })
+            .settings(Settings::new().database(None))
+            .run();
+        });
+        assert!(result.is_err(), "expected the property to fail");
+        let output = lines.join("\n");
         assert!(
-            output.stderr.contains("let some_numbers = [0, 0];"),
-            "expected `let some_numbers = [0, 0];` in stderr:\n{}",
-            output.stderr
+            output.contains("let some_numbers = [0, 0];"),
+            "expected `let some_numbers = [0, 0];` in the captured report:\n{}",
+            output
         );
         assert!(
-            output.stderr.contains("let a_number = 0;"),
-            "expected `let a_number = 0;` in stderr:\n{}",
-            output.stderr
+            output.contains("let a_number = 0;"),
+            "expected `let a_number = 0;` in the captured report:\n{}",
+            output
         );
     }
 
     #[test]
     fn test_given_twice_is_same() {
-        const CODE: &str = r#"
-use hegel::generators as gs;
-use hegel::{Hegel, Settings};
-
-fn main() {
-    Hegel::new(|tc| {
-        tc.draw(gs::integers::<i64>());
-        tc.draw(gs::integers::<i64>());
-        panic!("TWICE_IS_SAME");
-    })
-    .settings(Settings::new().database(None))
-    .run();
-}
-"#;
-
-        let output = TempRustProject::new()
-            .main_file(CODE)
-            .expect_failure("TWICE_IS_SAME")
-            .cargo_run(&[]);
-
+        let (lines, result) = capture_hegel_output(|| {
+            Hegel::new(|tc| {
+                tc.draw(gs::integers::<i64>());
+                tc.draw(gs::integers::<i64>());
+                panic!("TWICE_IS_SAME");
+            })
+            .settings(Settings::new().database(None))
+            .run();
+        });
+        assert!(result.is_err(), "expected the property to fail");
+        let output = lines.join("\n");
         assert!(
-            output.stderr.contains("let draw_1 = 0;"),
-            "expected `let draw_1 = 0;` in stderr:\n{}",
-            output.stderr
+            output.contains("let draw_1 = 0;"),
+            "expected `let draw_1 = 0;` in the captured report:\n{}",
+            output
         );
         assert!(
-            output.stderr.contains("let draw_2 = 0;"),
-            "expected `let draw_2 = 0;` in stderr:\n{}",
-            output.stderr
+            output.contains("let draw_2 = 0;"),
+            "expected `let draw_2 = 0;` in the captured report:\n{}",
+            output
         );
     }
 

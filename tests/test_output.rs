@@ -1,9 +1,9 @@
 mod common;
 
-use std::sync::OnceLock;
-
-use common::project::TempRustProject;
+use common::exec::fixture;
 use common::utils::assert_matches_regex;
+
+const OUTPUT_FAILING: &str = env!("CARGO_BIN_EXE_fixture_output_failing");
 
 #[test]
 fn debug_verbosity_failing_run_exercises_shrink_eprintlns() {
@@ -138,58 +138,48 @@ fn fnv_hex(s: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-const FAILING_TEST_CODE: &str = r#"
-use hegel::generators as gs;
-
-fn main() {
-    hegel::hegel(|tc| {
-        let x = tc.draw(gs::integers::<i32>());
-        panic!("intentional failure: {}", x);
-    });
-}
-"#;
-
-fn failing_project() -> &'static TempRustProject {
-    static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
-    PROJECT.get_or_init(|| TempRustProject::new().main_file(FAILING_TEST_CODE))
-}
-
 #[test]
 fn test_failing_test_output() {
-    let output = failing_project()
-        .invoke()
+    let output = fixture(OUTPUT_FAILING)
         .expect_failure("intentional failure")
-        .cargo_run(&[]);
+        .run();
 
     assert_matches_regex(
         &output.stderr,
         concat!(
             r"let draw_1 = -?\d+;\n",
-            r"thread '.*' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
+            r"thread '.*' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
             r"(?:Property test failed: )?intentional failure: -?\d+",
         ),
     );
 }
 
-/// A backtrace frame that should symbolize as `name`, tolerating the
-/// `-C instrument-coverage` artifact where the symbolizer resolves a frame
-/// to its `__covrec_*` coverage-record symbol — or to no symbol at all
-/// (`<unknown>`, seen on aarch64 coverage builds) — instead of the function
-/// name. Which frames lose their name is binary-layout luck, so any of the
-/// frames these tests assert on can be hit on a coverage build. The fallback
-/// alternatives are anchored to the frame's `at <file>` line, so the
-/// assertion still proves the right frame is present.
-fn frame_named(name: &str, file: &str) -> String {
-    format!(r"(?:{name}|(?:__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+:\d+\n)")
+/// A backtrace frame attributed to `file`, whose symbol matches `name` —
+/// tolerating the two ways the symbolizer can lose the pretty name:
+///
+/// - the fixture binary is built with the workspace's `[profile.dev]`
+///   (`opt-level = 1`, `debug = "line-tables-only"`), where closure and
+///   monomorphized frames symbolize with short names (`{closure#0}`, bare
+///   `main`, `run<…>`) rather than full `crate::module::fn` paths;
+/// - `-C instrument-coverage` builds, where a frame can resolve to its
+///   `__covrec_*` coverage-record symbol or to no symbol at all
+///   (`<unknown>`, seen on aarch64 coverage builds).
+///
+/// The `at <file>:line[:col]` anchor is therefore what proves the right
+/// frame is present (Windows backtraces omit the column); `name` narrows the
+/// symbol text where it survives.
+fn frame_at(name: &str, file: &str) -> String {
+    format!(
+        r"(?:[^\n]*(?:{name})[^\n]*|__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+(?::\d+)?\n"
+    )
 }
 
 #[test]
 fn test_failing_test_output_with_backtrace() {
-    let output = failing_project()
-        .invoke()
+    let output = fixture(OUTPUT_FAILING)
         .env("RUST_BACKTRACE", "1")
         .expect_failure("intentional failure")
-        .cargo_run(&[]);
+        .run();
 
     let closure_name = r"(?:\{closure#0\}|\{\{closure\}\}|closure\$0)";
     assert_matches_regex(
@@ -198,7 +188,7 @@ fn test_failing_test_output_with_backtrace() {
             concat!(
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
-                r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
+                r"thread 'main' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
                 r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
                 r".*",
@@ -212,23 +202,22 @@ fn test_failing_test_output_with_backtrace() {
                 r".*",
                 r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
             ),
-            user_closure = frame_named(
-                &format!(r"temp_hegel_test_\d+_\d+::main::{closure_name}\n"),
-                r"src[/\\]main\.rs",
+            user_closure = frame_at(closure_name, r"tests[/\\]fixtures[/\\]output_failing\.rs"),
+            hegel_internals = frame_at(r"run", r"src[/\\]runner\.rs"),
+            user_main = frame_at(
+                r"(?:fixture_output_failing::)?main",
+                r"tests[/\\]fixtures[/\\]output_failing\.rs",
             ),
-            hegel_internals = frame_named(r"hegel::runner::", r"src[/\\]runner\.rs"),
-            user_main = frame_named(r"temp_hegel_test_\d+_\d+::main\n", r"src[/\\]main\.rs"),
         ),
     );
 }
 
 #[test]
 fn test_failing_test_output_with_full_backtrace() {
-    let output = failing_project()
-        .invoke()
+    let output = fixture(OUTPUT_FAILING)
         .env("RUST_BACKTRACE", "full")
         .expect_failure("intentional failure")
-        .cargo_run(&[]);
+        .run();
 
     let closure_name = r"(?:\{closure#0\}|\{\{closure\}\}|closure\$0)";
     assert_matches_regex(
@@ -237,7 +226,7 @@ fn test_failing_test_output_with_full_backtrace() {
             concat!(
                 r"(?s)",
                 r"let draw_1 = -?\d+;\n",
-                r"thread 'main' \(\d+\) panicked at src[/\\]main\.rs:\d+:\d+:\n",
+                r"thread 'main' \(\d+\) panicked at tests[/\\]fixtures[/\\]output_failing\.rs:\d+:\d+:\n",
                 r"(?:Property test failed: )?intentional failure: -?\d+\n",
                 r"stack backtrace:\n",
                 r".*",
@@ -248,12 +237,12 @@ fn test_failing_test_output_with_full_backtrace() {
                 r"{user_main}",
                 r".*$",
             ),
-            user_closure = frame_named(
-                &format!(r"temp_hegel_test_\d+_\d+::main::{closure_name}"),
-                r"src[/\\]main\.rs",
+            user_closure = frame_at(closure_name, r"tests[/\\]fixtures[/\\]output_failing\.rs"),
+            hegel_internals = frame_at(r"run", r"src[/\\]runner\.rs"),
+            user_main = frame_at(
+                r"(?:fixture_output_failing::)?main",
+                r"tests[/\\]fixtures[/\\]output_failing\.rs",
             ),
-            hegel_internals = frame_named(r"hegel::runner::", r"src[/\\]runner\.rs"),
-            user_main = frame_named(r"temp_hegel_test_\d+_\d+::main\n", r"src[/\\]main\.rs"),
         ),
     );
     assert!(
@@ -264,36 +253,13 @@ fn test_failing_test_output_with_full_backtrace() {
 }
 
 mod reporting {
-    use std::sync::OnceLock;
-
-    use super::common::project::TempRustProject;
-
-    const FAILING_TEST_CODE: &str = r#"
-use hegel::{Hegel, Settings};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let _x: i64 = tc.draw(gs::integers());
-        panic!("intentional failure");
-    })
-    .settings(Settings::new().database(None))
-    .run();
-}
-"#;
-
-    fn failing_project() -> &'static TempRustProject {
-        static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
-        PROJECT.get_or_init(|| {
-            TempRustProject::new()
-                .main_file(FAILING_TEST_CODE)
-                .expect_failure("intentional failure")
-        })
-    }
+    use super::common::exec::fixture;
 
     #[test]
     fn test_prints_output_by_default() {
-        let output = failing_project().cargo_run(&[]);
+        let output = fixture(env!("CARGO_BIN_EXE_fixture_report_failing"))
+            .expect_failure("assertion failed")
+            .run();
         assert!(
             output.stderr.contains("let draw_1 = "),
             "Expected 'let draw_1 = ' in stderr (default failing-example output):\n{}",
@@ -306,61 +272,27 @@ mod verbosity {
     //! test_prints_initial_attempts_on_find is omitted: it uses hypothesis.find(),
     //! a public API with no hegel-rust counterpart.
 
-    use std::sync::OnceLock;
-
-    use super::common::project::TempRustProject;
+    use super::common::exec::{Cmd, fixture};
     use hegel::generators as gs;
     use hegel::{Hegel, Settings, Verbosity};
 
-    const VERBOSE_FAILING_CODE: &str = r#"
-use hegel::{Hegel, Settings, Verbosity};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let x: bool = tc.draw(gs::booleans());
-        assert!(x, "x should be true");
-    })
-    .settings(Settings::new().verbosity(Verbosity::Verbose).database(None))
-    .run();
-}
-"#;
-
-    fn verbose_failing_project() -> &'static TempRustProject {
-        static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
-        PROJECT.get_or_init(|| {
-            TempRustProject::new()
-                .main_file(VERBOSE_FAILING_CODE)
-                .expect_failure("")
-        })
-    }
-
-    const QUIET_FAILING_CODE: &str = r#"
-use hegel::{Hegel, Settings, Verbosity};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let x: bool = tc.draw(gs::booleans());
-        assert!(x, "x should be true");
-    })
-    .settings(Settings::new().verbosity(Verbosity::Quiet).database(None))
-    .run();
-}
-"#;
-
-    fn quiet_failing_project() -> &'static TempRustProject {
-        static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
-        PROJECT.get_or_init(|| {
-            TempRustProject::new()
-                .main_file(QUIET_FAILING_CODE)
-                .expect_failure("")
-        })
+    fn report_failing(verbosity: &str) -> Cmd {
+        // Quiet mode suppresses the report AND the closing re-raise skips
+        // the panic hook, so a quiet failing run legitimately prints
+        // nothing: only the nonzero exit status is expected (the empty
+        // pattern matches any output, as with the old spawned projects).
+        fixture(env!("CARGO_BIN_EXE_fixture_report_failing"))
+            .env("HEGEL_FIXTURE_VERBOSITY", verbosity)
+            .expect_failure(if verbosity == "quiet" {
+                ""
+            } else {
+                "assertion failed"
+            })
     }
 
     #[test]
     fn test_does_not_log_in_quiet_mode() {
-        let output = quiet_failing_project().cargo_run(&[]);
+        let output = report_failing("quiet").run();
         assert!(
             !output.stderr.contains("Running test case"),
             "Unexpected progress output in quiet mode:\n{}",
@@ -370,7 +302,7 @@ fn main() {
 
     #[test]
     fn test_includes_progress_in_verbose_mode() {
-        let output = verbose_failing_project().cargo_run(&[]);
+        let output = report_failing("verbose").run();
         assert!(
             output.stderr.contains("Running test case"),
             "Expected per-test-case progress output in verbose mode:\n{}",
@@ -398,12 +330,12 @@ fn main() {
 
     #[test]
     fn test_no_indexerror_in_quiet_mode_report_multiple() {
-        quiet_failing_project().cargo_run(&[]);
+        report_failing("quiet").run();
     }
 
     #[test]
     fn test_no_indexerror_in_quiet_mode_report_one() {
-        quiet_failing_project().cargo_run(&[]);
+        report_failing("quiet").run();
     }
 }
 
@@ -539,38 +471,14 @@ mod verbose_per_test_case_output {
 }
 
 mod debug_information {
-    use super::common::project::TempRustProject;
-    use std::sync::OnceLock;
-
-    const DEBUG_FAILING_CODE: &str = r#"
-use hegel::{Hegel, Settings, Verbosity};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let i: i64 = tc.draw(gs::integers::<i64>());
-        assert!(i < 10);
-    })
-    .settings(Settings::new()
-        .verbosity(Verbosity::Debug)
-        .test_cases(1000)
-        .database(None))
-    .run();
-}
-"#;
-
-    fn debug_failing_project() -> &'static TempRustProject {
-        static PROJECT: OnceLock<TempRustProject> = OnceLock::new();
-        PROJECT.get_or_init(|| {
-            TempRustProject::new()
-                .main_file(DEBUG_FAILING_CODE)
-                .expect_failure("assertion failed")
-        })
-    }
+    use super::common::exec::fixture;
 
     #[test]
     fn test_reports_passes() {
-        let output = debug_failing_project().cargo_run(&[]);
+        let output = fixture(env!("CARGO_BIN_EXE_fixture_report_failing"))
+            .env("HEGEL_FIXTURE_VERBOSITY", "debug")
+            .expect_failure("assertion failed")
+            .run();
         let stderr = &output.stderr;
 
         assert!(

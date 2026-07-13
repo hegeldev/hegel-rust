@@ -1,6 +1,5 @@
 mod common;
 
-use common::project::TempRustProject;
 use common::utils::{assert_all_examples, check_can_generate_examples};
 use hegel::generators as gs;
 use std::collections::HashMap;
@@ -122,20 +121,6 @@ fn test_default_supports_primitive_builder() {
     assert_all_examples(g, |n: &u32| *n >= 10 && *n <= 20);
 }
 
-#[test]
-fn test_default_cant_infer_through_draw() {
-    TempRustProject::new()
-        .main_file(
-            r#"
-use hegel::generators as gs;
-
-fn _check(tc: &hegel::TestCase) {
-    let _: i32 = tc.draw(gs::default());
-}
-
-fn main() {}
-"#,
-        )
-        .expect_failure("type annotations needed")
-        .cargo_run(&[]);
-}
+// `test_default_cant_infer_through_draw` lives in
+// `tests/ui/default_cant_infer_through_draw.rs`: inference failure through
+// `tc.draw(gs::default())` is a compile-time diagnostic, pinned by trybuild.
