@@ -3,9 +3,11 @@
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelSettings, HegelTestCase, hegel_context_last_error,
-    hegel_next_test_case, hegel_run_start, hegel_settings_new, hegel_settings_set_database,
+    hegel_next_test_case, hegel_output_callback_t, hegel_run_start, hegel_settings_new,
+    hegel_settings_set_database,
 };
 use std::ffi::CString;
+use std::os::raw::c_void;
 use std::ptr;
 
 /// Assert a call that should always succeed in these tests returned `HEGEL_OK`.
@@ -48,8 +50,23 @@ pub unsafe fn make_settings_no_db(ctx: *mut HegelContext) -> *mut HegelSettings 
 
 #[allow(dead_code)]
 pub unsafe fn start(ctx: *mut HegelContext, s: *const HegelSettings) -> *mut HegelRun {
+    unsafe { start_with_output(ctx, s, None, ptr::null_mut()) }
+}
+
+/// Like [`start`], but routing the run's engine output to `callback` /
+/// `user_data` (see `hegel_run_start`).
+#[allow(dead_code)]
+pub unsafe fn start_with_output(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    callback: hegel_output_callback_t,
+    user_data: *mut c_void,
+) -> *mut HegelRun {
     let mut run: *mut HegelRun = ptr::null_mut();
-    assert_eq!(unsafe { hegel_run_start(ctx, s, &mut run) }, HEGEL_OK);
+    assert_eq!(
+        unsafe { hegel_run_start(ctx, s, callback, user_data, &mut run) },
+        HEGEL_OK
+    );
     assert!(!run.is_null());
     run
 }

@@ -107,7 +107,8 @@ type FnSettingsDatabaseKey = unsafe extern "C" fn(*mut u8, *mut u8, *const c_cha
 type FnSettingsSeed = unsafe extern "C" fn(*mut u8, *mut u8, u64, bool) -> c_int;
 type FnSettingsDerandomize = unsafe extern "C" fn(*mut u8, *mut u8, bool) -> c_int;
 type FnSettingsBackend = unsafe extern "C" fn(*mut u8, *mut u8, CBackend) -> c_int;
-type FnRunStart = unsafe extern "C" fn(*mut u8, *const u8, *mut *mut u8) -> c_int;
+type FnRunStart =
+    unsafe extern "C" fn(*mut u8, *const u8, *const u8, *mut u8, *mut *mut u8) -> c_int;
 type FnNextTestCase = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
 type FnRunResult = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
 type FnRunResultFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
@@ -155,8 +156,14 @@ type FnRunResultFailureCount = unsafe extern "C" fn(*mut u8, *const u8, *mut usi
 type FnRunResultFailure = unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *mut u8) -> c_int;
 type FnFailureOrigin = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
 type FnFailureReproduceBlob = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
-type FnTestCaseFromBlob =
-    unsafe extern "C" fn(*mut u8, *const u8, *const c_char, *mut *mut u8) -> c_int;
+type FnTestCaseFromBlob = unsafe extern "C" fn(
+    *mut u8,
+    *const u8,
+    *const c_char,
+    *const u8,
+    *mut u8,
+    *mut *mut u8,
+) -> c_int;
 type FnTestCaseFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 
 struct Api<'a> {
@@ -282,7 +289,7 @@ impl Api<'_> {
     }
     unsafe fn run_start(&self, ctx: *mut u8, s: *const u8) -> *mut u8 {
         let mut run: *mut u8 = ptr::null_mut();
-        let rc = unsafe { (self.run_start)(ctx, s, &mut run) };
+        let rc = unsafe { (self.run_start)(ctx, s, ptr::null(), ptr::null_mut(), &mut run) };
         unsafe { self.expect_ok(ctx, rc, "hegel_run_start") };
         run
     }
@@ -389,7 +396,7 @@ impl Api<'_> {
         blob: *const c_char,
     ) -> *mut u8 {
         let mut tc: *mut u8 = ptr::null_mut();
-        unsafe { (self.test_case_from_blob)(ctx, s, blob, &mut tc) };
+        unsafe { (self.test_case_from_blob)(ctx, s, blob, ptr::null(), ptr::null_mut(), &mut tc) };
         tc
     }
 }

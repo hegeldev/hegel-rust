@@ -1,12 +1,11 @@
 /*
  * custom_output.c — demo of redirecting libhegel's output.
  *
- * Installs an output callback on the context with hegel_context_set_output,
- * runs a small passing property at debug verbosity, and checks the engine's
- * progress lines arrived at the callback (with the user_data pointer passed
- * through) instead of being written to stderr. This is the mechanism a
- * language binding uses to deliver engine output to its own test logger,
- * e.g. a Go testing.T.
+ * Passes an output callback to hegel_run_start, runs a small passing property
+ * at debug verbosity, and checks the engine's progress lines arrived at the
+ * callback (with the user_data pointer passed through) instead of being
+ * written to stderr. This is the mechanism a language binding uses to deliver
+ * engine output to its own test logger, e.g. a Go testing.T.
  *
  * Build (from this directory, after `cargo build -p hegeltest-c --release`):
  *
@@ -52,7 +51,6 @@ int main(void) {
     hegel_context_t *ctx = hegel_context_new();
 
     capture_t cap = {0, false};
-    HEGEL_CHECK(hegel_context_set_output, ctx, capture_line, &cap);
 
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
@@ -62,7 +60,7 @@ int main(void) {
     HEGEL_CHECK(hegel_settings_set_verbosity, ctx, s, HEGEL_VERBOSITY_DEBUG);
 
     hegel_run_t *run;
-    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
+    HEGEL_CHECK(hegel_run_start, ctx, s, capture_line, &cap, &run);
 
     while (true) {
         hegel_test_case_t *tc;

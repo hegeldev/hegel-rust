@@ -42,7 +42,7 @@ int main(void) {
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0x5ca1ab1e, true);
 
     hegel_run_t *run;
-    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
+    HEGEL_CHECK(hegel_run_start, ctx, s, NULL, NULL, &run);
 
     const int STEPS = 20;
     size_t total = 0;

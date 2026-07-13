@@ -17,14 +17,13 @@ use common::ok;
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_context_set_output, hegel_context_unset_output, hegel_failure_free,
-    hegel_failure_reproduction_blob, hegel_generate_integer, hegel_mark_complete,
-    hegel_next_test_case, hegel_run_free, hegel_run_result, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
-    hegel_settings_set_database, hegel_settings_set_seed, hegel_settings_set_test_cases,
-    hegel_settings_set_verbosity, hegel_start_span, hegel_status_t, hegel_stop_span,
-    hegel_test_case_clone, hegel_test_case_free, hegel_verbosity_t,
+    hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob, hegel_generate_integer,
+    hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_result,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
+    hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
+    hegel_settings_set_test_cases, hegel_settings_set_verbosity, hegel_start_span, hegel_status_t,
+    hegel_stop_span, hegel_test_case_clone, hegel_test_case_free, hegel_verbosity_t,
 };
 use std::ffi::{CString, c_void};
 use std::ptr;
@@ -53,7 +52,10 @@ unsafe fn one_case_run() -> (
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         ok(hegel_settings_set_seed(ctx, s, 1, true));
         let mut run: *mut HegelRun = ptr::null_mut();
-        assert_eq!(hegel_run_start(ctx, s, &mut run), HEGEL_OK);
+        assert_eq!(
+            hegel_run_start(ctx, s, None, ptr::null_mut(), &mut run),
+            HEGEL_OK
+        );
         let mut tc: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_next_test_case(ctx, run, &mut tc), HEGEL_OK);
         assert!(!tc.is_null());
@@ -230,24 +232,16 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
 /// count and the minimal `[0, 100]` integer keep the shrink tractable for
 /// Miri's interpreter, as the engine/shrinking tests in `test_miri` do.
 ///
-/// The run also installs an output callback (`hegel_context_set_output`) and
+/// The run is also started with an output callback (`hegel_run_start`) and
 /// runs at debug verbosity, so the engine invokes the callback — a raw
 /// function pointer with a raw `user_data` pointer — from its worker thread
 /// on every progress line, and Miri checks that cross-thread path for
-/// use-after-free and data races too. After each completed case the callback
-/// is unset (`hegel_context_unset_output`), so later calls fall back to the
-/// destination the run inherited at start — the same callback — exercising
-/// both sides of the per-call output re-resolution under Miri.
+/// use-after-free and data races too.
 #[test]
 fn full_run_generates_fails_and_shrinks() {
     let lines = AtomicUsize::new(0);
     unsafe {
         let ctx = hegel_context_new();
-        ok(hegel_context_set_output(
-            ctx,
-            Some(count_output_line),
-            (&raw const lines).cast_mut().cast(),
-        ));
         let mut s: *mut HegelSettings = ptr::null_mut();
         ok(hegel_settings_new(ctx, &mut s));
         let empty = CString::new("").unwrap();
@@ -260,7 +254,13 @@ fn full_run_generates_fails_and_shrinks() {
             hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
         ));
         let mut run: *mut HegelRun = ptr::null_mut();
-        ok(hegel_run_start(ctx, s, &mut run));
+        ok(hegel_run_start(
+            ctx,
+            s,
+            Some(count_output_line),
+            (&raw const lines).cast_mut().cast(),
+            &mut run,
+        ));
 
         loop {
             let mut tc: *mut HegelTestCase = ptr::null_mut();
@@ -278,7 +278,6 @@ fn full_run_generates_fails_and_shrinks() {
             };
             ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
             ok(hegel_test_case_free(ctx, tc));
-            ok(hegel_context_unset_output(ctx));
         }
 
         let mut res: *mut HegelRunResult = ptr::null_mut();

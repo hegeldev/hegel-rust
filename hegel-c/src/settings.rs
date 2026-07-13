@@ -78,11 +78,11 @@ pub enum Backend {
 /// is written.
 ///
 /// The default is stderr. [`Output::callback`] redirects every line to a
-/// caller-supplied sink instead — this is what backs the C ABI's
-/// `hegel_context_set_output`, letting embeddings (e.g. a Go `testing.T`)
-/// capture engine output in-process. Lines are delivered without a trailing
-/// newline. The engine emits from its worker thread, so the sink must be
-/// `Send + Sync`.
+/// caller-supplied sink instead — this is what backs the output callback the
+/// C ABI's `hegel_run_start` / `hegel_test_case_from_blob` accept, letting
+/// embeddings (e.g. a Go `testing.T`) capture engine output in-process. Lines
+/// are delivered without a trailing newline. The engine emits from its worker
+/// thread, so the sink must be `Send + Sync`.
 #[derive(Clone)]
 pub struct Output {
     sink: Option<OutputSink>,

@@ -1,28 +1,33 @@
-RELEASE_TYPE: patch
+RELEASE_TYPE: minor
 
-This patch adds `hegel_context_set_output` and `hegel_context_unset_output`,
-which redirect engine-emitted output (verbose / debug progress traces and
-warnings) to a caller-supplied callback instead of stderr
-([#355](https://github.com/hegeldev/hegel-rust/issues/355)):
+This release lets a caller redirect engine-emitted output (verbose / debug
+progress traces and warnings) to a callback instead of stderr, by choosing the
+destination per run or test case at creation
+([#355](https://github.com/hegeldev/hegel-rust/issues/355)).
+
+`hegel_run_start` and `hegel_test_case_from_blob` each take a new
+`hegel_output_callback_t callback` and `void *user_data` before the
+out-parameter. The callback is invoked once per line of output, with
+`user_data` passed through verbatim, so a binding can deliver engine output to
+its own test logger (say, a Go `testing.T`). A NULL `callback` keeps the
+output on stderr.
 
 ```c
 void deliver(void *user_data, const char *line, size_t len) { ... }
 
-hegel_context_set_output(ctx, deliver, my_logger);
+/* before */
+hegel_run_start(ctx, settings, &run);
+hegel_test_case_from_blob(ctx, settings, blob, &tc);
+
+/* after */
+hegel_run_start(ctx, settings, deliver, my_logger, &run);
+hegel_test_case_from_blob(ctx, settings, blob, deliver, my_logger, &tc);
 ```
 
-The callback is invoked once per line of output, together with the registered
-`user_data` pointer passed through verbatim, so a binding can deliver engine
-output to its own test logger (say, a Go `testing.T`) with a single
-library-wide callback.
-
-A run or standalone test case inherits the destination registered on the
-context it was created with, and every later call that passes a context
-together with the run or one of its test cases re-resolves the destination
-from that context: a callback registered on it is used instead of the
-inherited one, and a context with no callback falls back to the inherited
-destination — so a run keeps printing to its creation-time callback when
-driven through fresh (say, thread-local) contexts. `hegel_context_unset_output`
-(or a NULL callback) unsets a context's callback. The callback must be safe
-to invoke from libhegel's worker thread; see the header documentation for the
-full contract.
+The destination is fixed when the run or test case is created — the engine
+emits from its worker thread, and a run's output starts flowing the instant it
+starts, so a per-call setter could not capture it without a race. For a run,
+the callback (and whatever `user_data` points to) must stay valid until the run
+is freed; for a blob replay, whose only line is emitted during the creating
+call, it need not outlive that call. See the header documentation for the full
+contract.
