@@ -298,6 +298,7 @@ fn output_override_captures_engine_output() {
                 Settings::new()
                     .test_cases(2)
                     .database(None)
+                    .report_multiple_failures(true)
                     .verbosity(hegel::Verbosity::Debug),
             )
             .run();

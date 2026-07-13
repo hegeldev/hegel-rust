@@ -649,13 +649,18 @@ mod override_captures_run_output {
 
     #[test]
     fn multi_failure_headline_reaches_the_sink() {
-        let lines = collect_with(settings(Verbosity::Normal).test_cases(20), |tc| {
-            if tc.draw(gs::booleans()) {
-                panic!("first distinct bug");
-            } else {
-                panic!("second distinct bug");
-            }
-        });
+        let lines = collect_with(
+            settings(Verbosity::Normal)
+                .test_cases(20)
+                .report_multiple_failures(true),
+            |tc| {
+                if tc.draw(gs::booleans()) {
+                    panic!("first distinct bug");
+                } else {
+                    panic!("second distinct bug");
+                }
+            },
+        );
         assert!(
             lines
                 .iter()
