@@ -168,6 +168,12 @@ fn test_failing_test_output() {
 /// The `at <file>:line[:col]` anchor is therefore what proves the right
 /// frame is present (Windows backtraces omit the column); `name` narrows the
 /// symbol text where it survives.
+///
+/// A frame can also be inlined away entirely rather than merely losing its
+/// name: on aarch64 dev builds the fixture's trivial `main` is folded into
+/// the runtime's `fn()` call, leaving no `main` frame at all. Callers wrap
+/// such optional frames in `(?:…)?` so the assertion still holds where the
+/// frame survives (e.g. x86_64) without requiring it where it does not.
 fn frame_at(name: &str, file: &str) -> String {
     format!(
         r"(?:[^\n]*(?:{name})[^\n]*|__covrec_[0-9A-Fa-f]+u?|<unknown>)\n\s+at [^\n]*{file}:\d+(?::\d+)?\n"
@@ -198,7 +204,7 @@ fn test_failing_test_output_with_backtrace() {
                 r".*",
                 r"{hegel_internals}",
                 r".*",
-                r"{user_main}",
+                r"(?:{user_main})?",
                 r".*",
                 r"note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace\.",
             ),
@@ -234,7 +240,7 @@ fn test_failing_test_output_with_full_backtrace() {
                 r".*",
                 r"{hegel_internals}",
                 r".*",
-                r"{user_main}",
+                r"(?:{user_main})?",
                 r".*$",
             ),
             user_closure = frame_at(closure_name, r"tests[/\\]fixtures[/\\]output_failing\.rs"),
