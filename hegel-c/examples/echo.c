@@ -36,7 +36,7 @@ int main(void) {
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
 
     hegel_run_t *run;
-    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
+    HEGEL_CHECK(hegel_run_start, ctx, s, NULL, NULL, &run);
 
     size_t cases = 0;
     while (true) {

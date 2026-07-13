@@ -156,11 +156,18 @@ fn run_one_case(
 ) {
     init_panic_hook();
     let c_settings = SettingsHandle::build(&test_settings(), None);
-    let run = RunHandle::start(&c_settings).expect("the engine starts");
+    let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    run_test_case(c_tc, body, is_final, Mode::TestRun, verbosity)
+    run_test_case(
+        c_tc,
+        body,
+        is_final,
+        Mode::TestRun,
+        verbosity,
+        &RunOutput::resolve(),
+    )
 }
 
 fn run_case_capturing(

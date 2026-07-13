@@ -74,6 +74,54 @@ pub enum Backend {
     Urandom,
 }
 
+/// Where engine-emitted output (verbose / debug progress traces, warnings)
+/// is written.
+///
+/// The default is stderr. [`Output::callback`] redirects every line to a
+/// caller-supplied sink instead — this is what backs the output callback the
+/// C ABI's `hegel_run_start` / `hegel_test_case_from_blob` accept, letting
+/// embeddings (e.g. a Go `testing.T`) capture engine output in-process. Lines
+/// are delivered without a trailing newline. The engine emits from its worker
+/// thread, so the sink must be `Send + Sync`.
+#[derive(Clone)]
+pub struct Output {
+    sink: Option<OutputSink>,
+}
+
+/// A caller-supplied destination for engine output lines.
+type OutputSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+impl Output {
+    /// The default destination: each line goes to stderr via `eprintln!`.
+    pub fn stderr() -> Self {
+        Output { sink: None }
+    }
+
+    /// Deliver each line to `sink` instead of stderr.
+    pub fn callback(sink: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Output {
+            sink: Some(std::sync::Arc::new(sink)),
+        }
+    }
+
+    /// Emit one line of output to this destination.
+    pub(crate) fn line(&self, line: &str) {
+        match &self.sink {
+            Some(sink) => sink(line),
+            None => eprintln!("{line}"),
+        }
+    }
+}
+
+impl std::fmt::Debug for Output {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.sink {
+            Some(_) => f.write_str("Output(callback)"),
+            None => f.write_str("Output(stderr)"),
+        }
+    }
+}
+
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
@@ -99,6 +147,7 @@ pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) verbosity: Verbosity,
+    pub(crate) output: Output,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
@@ -119,6 +168,7 @@ impl Settings {
             mode: Mode::TestRun,
             test_cases: 100,
             verbosity: Verbosity::Normal,
+            output: Output::stderr(),
             seed: None,
             derandomize: in_ci,
             database: if in_ci {
@@ -177,6 +227,13 @@ impl Settings {
     /// Set the verbosity level.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    /// Set where engine-emitted output is written. Defaults to
+    /// [`Output::stderr`].
+    pub fn output(mut self, output: Output) -> Self {
+        self.output = output;
         self
     }
 

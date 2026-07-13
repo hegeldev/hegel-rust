@@ -15,8 +15,9 @@
 //! small and the control-flow policy stays with the test lifecycle.
 
 use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::os::raw::c_char;
 use std::ptr;
 
@@ -220,26 +221,72 @@ impl Drop for SettingsHandle {
     }
 }
 
+/// Engine-output trampoline passed to `hegel_run_start` /
+/// `hegel_test_case_from_blob`: `user_data` points at the [`OutputSink`] the
+/// run resolved at start, and each engine output line is forwarded to it. The
+/// engine invokes this from its worker thread; the sink is `Send + Sync`, and
+/// the pointee stays alive for as long as the engine can emit — owned by the
+/// [`RunHandle`] for a run, borrowed across the creating call for a blob
+/// replay (whose only line is emitted during it).
+unsafe extern "C" fn engine_output_trampoline(
+    user_data: *mut c_void,
+    line: *const c_char,
+    len: usize,
+) {
+    let sink = unsafe { &*user_data.cast::<OutputSink>() };
+    let bytes = unsafe { std::slice::from_raw_parts(line.cast::<u8>(), len) };
+    sink(&String::from_utf8_lossy(bytes));
+}
+
+/// The `(callback, user_data)` pair to pass to a creation call for output
+/// going to the [`OutputSink`] at `sink_ptr`, or `(None, null)` to leave
+/// output on stderr when `sink_ptr` is `None`. The pointee must stay valid
+/// for as long as the engine can emit through it (the caller's concern).
+fn output_args(
+    sink_ptr: Option<*const OutputSink>,
+) -> (hegel_c::hegel_output_callback_t, *mut c_void) {
+    match sink_ptr {
+        Some(p) => (Some(engine_output_trampoline), p.cast_mut().cast()),
+        None => (None, ptr::null_mut()),
+    }
+}
+
 /// Owns a `*mut HegelRun` and frees it on drop (which aborts and joins the
 /// engine worker if the run was not drained to completion).
 pub(crate) struct RunHandle {
     raw: *mut hegel_c::HegelRun,
+    /// The engine-output sink registered for this run, or `None` when the
+    /// run writes to stderr. The engine worker holds the raw `user_data`
+    /// pointer to this allocation for the life of the run, so it is freed
+    /// only in `Drop`, after `hegel_run_free` has joined the worker.
+    output: Option<*mut OutputSink>,
 }
 
 impl RunHandle {
-    /// Start a run. Returns `Err` with libhegel's diagnostic if the engine
-    /// could not be started.
-    pub(crate) fn start(settings: &SettingsHandle) -> Result<Self, String> {
+    /// Start a run whose engine output goes to `sink` (stderr when `None`).
+    /// Returns `Err` with libhegel's diagnostic if the engine could not be
+    /// started.
+    pub(crate) fn start(
+        settings: &SettingsHandle,
+        sink: Option<&OutputSink>,
+    ) -> Result<Self, String> {
+        let output = sink.map(|s| Box::into_raw(Box::new(s.clone())));
+        let (callback, user_data) = output_args(output.map(|p| p.cast_const()));
         let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
         // SAFETY: settings.as_ptr() is a live, non-null handle; &mut raw is a
-        // valid out-parameter.
+        // valid out-parameter. The trampoline contract (thread-safe callback,
+        // pointee outlives the engine's emissions) is upheld by holding the
+        // sink box in `output` until Drop, after the worker is joined.
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_run_start(ctx, settings.as_ptr(), &mut raw)
+            hegel_c::hegel_run_start(ctx, settings.as_ptr(), callback, user_data, &mut raw)
         });
+        // Construct the handle before checking rc so the error path (raw is
+        // still null, which hegel_run_free accepts) releases the sink box.
+        let run = RunHandle { raw, output };
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string()); // nocov
         }
-        Ok(RunHandle { raw })
+        Ok(run)
     }
 
     /// Pull the next test case the engine wants to run, or `None` when the run
@@ -276,6 +323,13 @@ impl Drop for RunHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from hegel_run_start and is freed exactly once;
         free_on_drop(|ctx| unsafe { hegel_c::hegel_run_free(ctx, self.raw) });
+        if let Some(p) = self.output {
+            // SAFETY: hegel_run_free joined the engine worker above, so
+            // nothing can invoke the trampoline with this pointer any more;
+            // the box came from Box::into_raw in `start` and is
+            // reconstituted and freed exactly once.
+            drop(unsafe { Box::from_raw(p) });
+        }
     }
 }
 
@@ -302,15 +356,31 @@ unsafe impl Send for CTestCase {}
 unsafe impl Sync for CTestCase {}
 
 impl CTestCase {
-    /// Build a standalone test case that replays a base64 failure blob. Owned
-    /// by the caller (freed on drop). Returns `Err` with libhegel's diagnostic
-    /// if the blob is null/non-UTF-8/undecodable.
-    pub(crate) fn from_blob(settings: &SettingsHandle, blob: &str) -> Result<Self, String> {
+    /// Build a standalone test case that replays a base64 failure blob, with
+    /// engine output (the debug-verbosity replay trace) going to `sink`
+    /// (stderr when `None`). Owned by the caller (freed on drop). Returns
+    /// `Err` with libhegel's diagnostic if the blob is
+    /// null/non-UTF-8/undecodable.
+    pub(crate) fn from_blob(
+        settings: &SettingsHandle,
+        blob: &str,
+        sink: Option<&OutputSink>,
+    ) -> Result<Self, String> {
         let c_blob = cstring_lossy(blob);
+        let (callback, user_data) = output_args(sink.map(ptr::from_ref));
         let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
-        // SAFETY: settings is live; c_blob is a valid NUL-terminated string;
+        // SAFETY: settings is live; c_blob is a valid NUL-terminated string.
+        // The blob-replay trace is emitted synchronously during this call, so
+        // borrowing `sink` for its duration satisfies the trampoline contract.
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_from_blob(ctx, settings.as_ptr(), c_blob.as_ptr(), &mut raw)
+            hegel_c::hegel_test_case_from_blob(
+                ctx,
+                settings.as_ptr(),
+                c_blob.as_ptr(),
+                callback,
+                user_data,
+                &mut raw,
+            )
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string());
