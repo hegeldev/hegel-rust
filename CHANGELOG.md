@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.1 - 2026-07-13
+
+This release updates the `hegeltest-c` dependency to 0.29.0.
+
 ## 0.27.0 - 2026-07-10
 
 This release changes the default of `Settings::report_multiple_failures` from `true` to `false`.
