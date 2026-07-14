@@ -12,6 +12,19 @@ const SURROGATE_CATEGORIES: &[&str] = &["Cs", "C"];
 /// Default upper bound for string/byte sizes when the caller doesn't set one.
 const DEFAULT_MAX_SIZE: usize = 100;
 
+/// Codec names accepted by [`TextGenerator::codec`] and
+/// [`CharactersGenerator::codec`], mirroring the engine's supported set.
+const SUPPORTED_CODECS: &[&str] = &["ascii", "latin-1", "iso-8859-1", "utf-8"];
+
+/// Validate a codec name eagerly. The engine rejects unknown codecs too, but
+/// only when the alphabet is built on first draw; checking here surfaces the
+/// mistake at the `.codec(...)` call site instead.
+fn check_codec(codec: &str) {
+    if !SUPPORTED_CODECS.contains(&codec) {
+        invalid_argument!("invalid codec: {codec}");
+    }
+}
+
 /// Shared character filtering fields used by both [`TextGenerator`] and
 /// [`CharactersGenerator`].
 struct CharacterFields {
@@ -120,8 +133,24 @@ impl TextGenerator {
         self
     }
 
-    /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
+    /// Restrict to characters encodable in the named codec.
+    ///
+    /// Supported values, and what each means for Rust strings:
+    ///
+    /// - `"ascii"` — codepoints `U+0000..=U+007F`; equivalent to
+    ///   `.max_codepoint(0x7F)`.
+    /// - `"latin-1"` (alias `"iso-8859-1"`) — codepoints `U+0000..=U+00FF`;
+    ///   equivalent to `.max_codepoint(0xFF)`.
+    /// - `"utf-8"` — no restriction: every Rust `char` is UTF-8-encodable
+    ///   (surrogates are structurally excluded from `char`), so this is a
+    ///   no-op.
+    ///
+    /// The codec's codepoint range intersects with any bounds set via
+    /// [`min_codepoint`](Self::min_codepoint) /
+    /// [`max_codepoint`](Self::max_codepoint). Any other codec name is a
+    /// usage error, reported when `.codec(...)` is called.
     pub fn codec(mut self, codec: &str) -> Self {
+        check_codec(codec);
         self.handle = OnceLock::new();
         self.char_param_called = true;
         self.char_fields.codec = Some(codec.to_string());
@@ -231,8 +260,24 @@ pub struct CharactersGenerator {
 }
 
 impl CharactersGenerator {
-    /// Restrict to characters encodable in this codec (e.g. `"ascii"`, `"utf-8"`, `"latin-1"`).
+    /// Restrict to characters encodable in the named codec.
+    ///
+    /// Supported values, and what each means for Rust `char`s:
+    ///
+    /// - `"ascii"` — codepoints `U+0000..=U+007F`; equivalent to
+    ///   `.max_codepoint(0x7F)`.
+    /// - `"latin-1"` (alias `"iso-8859-1"`) — codepoints `U+0000..=U+00FF`;
+    ///   equivalent to `.max_codepoint(0xFF)`.
+    /// - `"utf-8"` — no restriction: every Rust `char` is UTF-8-encodable
+    ///   (surrogates are structurally excluded from `char`), so this is a
+    ///   no-op.
+    ///
+    /// The codec's codepoint range intersects with any bounds set via
+    /// [`min_codepoint`](Self::min_codepoint) /
+    /// [`max_codepoint`](Self::max_codepoint). Any other codec name is a
+    /// usage error, reported when `.codec(...)` is called.
     pub fn codec(mut self, codec: &str) -> Self {
+        check_codec(codec);
         self.handle = OnceLock::new();
         self.char_fields.codec = Some(codec.to_string());
         self
@@ -580,47 +625,66 @@ pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
     }
 }
 
-/// Generator for date strings in YYYY-MM-DD format. Created by [`dates()`].
-pub struct DateGenerator;
+/// Generator for date strings in `YYYY-MM-DD` format. Created by
+/// [`date_strings()`].
+pub struct DateStringGenerator;
 
-impl Generator<String> for DateGenerator {
+impl Generator<String> for DateStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         format_date(tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE))
     }
 }
 
-/// Generate date strings in YYYY-MM-DD format.
-pub fn dates() -> DateGenerator {
-    DateGenerator
+/// Generate date `String`s in `YYYY-MM-DD` format (years 1–9999), matching
+/// Python's `date.isoformat()`.
+///
+/// This generator is not configurable. For typed date values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_dates()`) or [`extras::jiff`](crate::extras::jiff) (`dates()`).
+pub fn date_strings() -> DateStringGenerator {
+    DateStringGenerator
 }
 
-/// Generator for time strings in HH:MM:SS format. Created by [`times()`].
-pub struct TimeGenerator;
+/// Generator for time strings in `HH:MM:SS[.ffffff]` format. Created by
+/// [`time_strings()`].
+pub struct TimeStringGenerator;
 
-impl Generator<String> for TimeGenerator {
+impl Generator<String> for TimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND))
     }
 }
 
-/// Generate time strings in HH:MM:SS format.
-pub fn times() -> TimeGenerator {
-    TimeGenerator
+/// Generate time `String`s in `HH:MM:SS` format, matching Python's
+/// `time.isoformat()`: a fractional `.ffffff` part (microseconds) is
+/// appended iff it is non-zero.
+///
+/// This generator is not configurable. For typed time values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_times()`) or [`extras::jiff`](crate::extras::jiff) (`times()`).
+pub fn time_strings() -> TimeStringGenerator {
+    TimeStringGenerator
 }
 
-/// Generator for ISO 8601 datetime strings. Created by [`datetimes()`].
-pub struct DateTimeGenerator;
+/// Generator for ISO 8601 datetime strings. Created by [`datetime_strings()`].
+pub struct DateTimeStringGenerator;
 
-impl Generator<String> for DateTimeGenerator {
+impl Generator<String> for DateTimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
         let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME);
         format!("{}T{}", format_date(dt.date), format_time(dt.time))
     }
 }
 
-/// Generate ISO 8601 datetime strings.
-pub fn datetimes() -> DateTimeGenerator {
-    DateTimeGenerator
+/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.ffffff]`,
+/// years 1–9999), matching Python's `datetime.isoformat()`.
+///
+/// This generator is not configurable. For typed datetime values with
+/// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
+/// (`naive_datetimes()` / `datetimes()`) or
+/// [`extras::jiff`](crate::extras::jiff) (`datetimes()`).
+pub fn datetime_strings() -> DateTimeStringGenerator {
+    DateTimeStringGenerator
 }
 
 /// Generator for UUID strings in canonical hyphenated form. Created by [`uuids()`].
@@ -669,7 +733,8 @@ impl Generator<String> for UuidsGenerator {
     }
 }
 
-/// Generate UUID strings in canonical hyphenated form.
+/// Generate UUID `String`s in canonical hyphenated form, e.g.
+/// `"a70f446c-05e3-42a9-a31b-f0d0545d6316"`.
 ///
 /// See [`UuidsGenerator`] for builder methods.
 pub fn uuids() -> UuidsGenerator {

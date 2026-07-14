@@ -146,6 +146,38 @@ fn test_characters_categories_including_cs_supercat_panics() {
     );
 }
 
+/// Unknown codec names are rejected eagerly, when `.codec(...)` is called,
+/// rather than on first draw.
+#[test]
+fn test_text_unknown_codec_rejected_eagerly() {
+    expect_panic(
+        || {
+            let _ = gs::text().codec("not-a-real-codec");
+        },
+        "invalid codec: not-a-real-codec",
+    );
+}
+
+/// Same eager rejection for `characters()`.
+#[test]
+fn test_characters_unknown_codec_rejected_eagerly() {
+    expect_panic(
+        || {
+            let _ = gs::characters().codec("not-a-real-codec");
+        },
+        "invalid codec: not-a-real-codec",
+    );
+}
+
+/// All engine-supported codec names pass the client-side check.
+#[test]
+fn test_supported_codecs_accepted() {
+    for codec in ["ascii", "latin-1", "iso-8859-1", "utf-8"] {
+        check_draws(gs::text().codec(codec));
+        check_draws(gs::characters().codec(codec));
+    }
+}
+
 #[test]
 fn test_text_alphabet_with_codec() {
     expect_draw_panic(gs::text().alphabet("abc").codec("ascii"), "Cannot combine");

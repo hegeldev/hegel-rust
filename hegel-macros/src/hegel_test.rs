@@ -150,8 +150,17 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             #func
         }
     } else {
+        // `#[cfg_attr(test, ...)]` rather than a bare `#[test]`: rustc removes
+        // `#[test]` items entirely when not compiling in test mode, so the
+        // function body would never be type-checked outside `--test` builds.
+        // Doctests are the place that matters: a broken example inside a
+        // `#[hegel::test]` function would silently pass `cargo test --doc`.
+        // Under `cfg(test)` this expands to the same `#[test]` item as
+        // before; otherwise the function is kept (and type-checked) as a
+        // plain uncalled function.
         quote! {
-            #[test]
+            #[cfg_attr(test, ::core::prelude::v1::test)]
+            #[cfg_attr(not(test), allow(dead_code))]
             #func
         }
     }

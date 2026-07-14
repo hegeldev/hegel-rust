@@ -95,7 +95,7 @@ where
 /// use hegel::generators as gs;
 ///
 /// #[hegel::test]
-/// fn my_test(tc: &hegel::TestCase) {
+/// fn my_test(tc: hegel::TestCase) {
 ///     let value: i32 = tc.draw(hegel::one_of!(
 ///         gs::integers::<i32>().min_value(0).max_value(10),
 ///         gs::integers::<i32>().min_value(100).max_value(110),

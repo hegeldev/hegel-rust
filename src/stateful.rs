@@ -3,8 +3,9 @@
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
 //! methods annotated with `#[invariant]` become invariants (checked after each successful rule
-//! application). Rules must have signature `fn(&mut self, tc: TestCase)` and invariants must have
-//! signature `fn(&self, tc: TestCase)`.
+//! application). Both take a [`TestCase`] parameter and borrow the state machine: rules
+//! typically have signature `fn(&mut self, tc: TestCase)` and invariants
+//! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
 //! To run a state machine, call [`run()`] inside a Hegel test.
 //!
@@ -50,6 +51,11 @@
 //!         let element = element.unwrap();
 //!         self.stack.push(element);
 //!         assert_eq!(self.stack, initial);
+//!     }
+//!
+//!     #[invariant]
+//!     fn len_agrees_with_is_empty(&self, _: TestCase) {
+//!         assert_eq!(self.stack.is_empty(), self.stack.len() == 0);
 //!     }
 //! }
 //!

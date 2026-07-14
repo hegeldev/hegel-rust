@@ -132,7 +132,7 @@ fn test_regex_with_alphabet() {
 
 #[test]
 fn test_dates_format() {
-    assert_all_examples(gs::dates(), |s: &String| {
+    assert_all_examples(gs::date_strings(), |s: &String| {
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() != 3 || parts[0].len() != 4 {
             return false;
@@ -147,7 +147,7 @@ fn test_dates_format() {
 
 #[test]
 fn test_times_format() {
-    assert_all_examples(gs::times(), |s: &String| {
+    assert_all_examples(gs::time_strings(), |s: &String| {
         let parts: Vec<&str> = s.splitn(3, ':').collect();
         if parts.len() != 3 {
             return false;
@@ -166,7 +166,7 @@ fn test_times_format() {
 
 #[test]
 fn test_datetimes_format() {
-    assert_all_examples(gs::datetimes(), |s: &String| {
+    assert_all_examples(gs::datetime_strings(), |s: &String| {
         let parts: Vec<&str> = s.splitn(2, 'T').collect();
         if parts.len() != 2 {
             return false;
