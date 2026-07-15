@@ -77,6 +77,13 @@
 #include <stdbool.h>
 
 /*
+ Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
+ when the engine's step budget for the test case is exhausted: stop
+ running rules.
+ */
+#define HEGEL_STATE_MACHINE_DONE -1
+
+/*
  Result of a libhegel call.
 
  Every entry point returns one of these except `hegel_context_new` (which
@@ -1077,7 +1084,8 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  random subset of rules (at least one) and selection draws only from
  that subset. The caller drives execution: it asks
  `hegel_state_machine_next_rule` which rule to run at each step and
- applies it.
+ applies it, until that call signals that no more steps should
+ follow.
 
  On success writes the new machine's id into `*out_state_machine_id`
  and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
@@ -1101,8 +1109,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  of the test case, with restrictions that shrink away in minimal
  counterexamples.
 
- On success writes the chosen rule index into `*out_rule_index` and
- returns `HEGEL_OK`. `state_machine_id` must be an id returned by
+ `state_machine_id` must be an id returned by
  `hegel_new_state_machine` on this test case. Returns
  `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
  (the caller should abort the body and call `hegel_mark_complete`

@@ -629,4 +629,73 @@ fn main() {}
             runs.len()
         );
     }
+
+    /// Counts per test case how many times its single rule ran.
+    struct StepRecorderMachine {
+        counts: Arc<Mutex<Vec<u64>>>,
+        fail_assumption: bool,
+    }
+
+    impl StateMachine for StepRecorderMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("step", |m: &mut StepRecorderMachine, tc| {
+                *m.counts.lock().unwrap().last_mut().unwrap() += 1;
+                tc.assume(!m.fail_assumption);
+            })]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    fn run_step_recorder(fail_assumption: bool) -> Vec<u64> {
+        let counts: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let counts_in_test = Arc::clone(&counts);
+        Hegel::new(move |tc: TestCase| {
+            counts_in_test.lock().unwrap().push(0);
+            let m = StepRecorderMachine {
+                counts: Arc::clone(&counts_in_test),
+                fail_assumption,
+            };
+            hegel::stateful::run(m, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(100)
+                .database(None)
+                .derandomize(true),
+        )
+        .run();
+        let counts = counts.lock().unwrap();
+        counts.clone()
+    }
+
+    /// The engine owns the step cap: no test case runs more than 50 steps,
+    /// and the unbounded cap draw usually truncates to exactly 50.
+    #[test]
+    fn test_step_cap_is_50_most_of_the_time() {
+        let counts = run_step_recorder(false);
+        assert!(counts.iter().all(|&c| c <= 50));
+        let full = counts.iter().filter(|&&c| c == 50).count();
+        assert!(
+            full > counts.len() / 2,
+            "expected most of {} test cases to run exactly 50 steps, got {full}",
+            counts.len()
+        );
+    }
+
+    /// The step cap counts attempted rules, not successful ones, so even a
+    /// machine whose rules never get past their assumptions is bounded by
+    /// the engine's cap rather than retrying indefinitely.
+    #[test]
+    fn test_hopeless_machine_is_bounded_by_the_step_cap() {
+        let counts = run_step_recorder(true);
+        assert!(counts.iter().all(|&c| c <= 50));
+        let full = counts.iter().filter(|&&c| c == 50).count();
+        assert!(
+            full > counts.len() / 2,
+            "expected most of {} test cases to attempt exactly 50 rules, got {full}",
+            counts.len()
+        );
+    }
 }

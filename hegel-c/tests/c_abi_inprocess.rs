@@ -13,20 +13,20 @@ mod common;
 use common::{last_error, make_settings, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase, hegel_backend_t,
-    hegel_collection_more, hegel_collection_reject, hegel_context_free, hegel_context_last_error,
-    hegel_context_new, hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
-    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
-    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_generate, hegel_run_free, hegel_run_result,
-    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
-    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
-    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
-    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_next_rule,
-    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_version,
+    HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase,
+    hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
+    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
+    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
+    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
+    hegel_settings_set_mode, hegel_settings_set_phases,
+    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
+    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -1084,6 +1084,19 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_OK
         );
         assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
+        let mut steps = 1;
+        loop {
+            assert_eq!(
+                hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
+                HEGEL_OK
+            );
+            if rule_idx == HEGEL_STATE_MACHINE_DONE {
+                break;
+            }
+            assert_eq!(rule_idx, 0);
+            steps += 1;
+            assert!(steps <= 50, "the engine's step cap never exceeds 50");
+        }
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),

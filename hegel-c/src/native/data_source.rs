@@ -324,7 +324,10 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError> {
+    fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<Option<i64>, DataSourceError> {
         self.with_ntc(|ntc| {
             let machine = {
                 let machines = ntc

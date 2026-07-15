@@ -122,6 +122,7 @@ pub(crate) fn run_single_case(
 ) -> Option<Failure> {
     let mut rng = create_rng(settings, database_key);
     let ntc = NativeTestCase::new_random(rng.spawn());
+    ntc.family().set_state_machine_steps_unbounded();
     let (data_source, handle) = NativeDataSource::new(ntc);
     run_case(Box::new(data_source));
     match NativeDataSource::take_outcome(&handle) {

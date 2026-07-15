@@ -4,7 +4,8 @@
  * compose into the building block behind hegel-rust's
  * `hegel::stateful::run` — the engine decides which rule runs at each
  * step (applying swarm testing: each test case enables a random subset
- * of the rules), and the caller applies it.
+ * of the rules) and how many steps to run, and the caller applies each
+ * rule until the engine signals that no more steps should follow.
  *
  * Each test case models a tiny counter machine with three rules:
  *   - increment: counter += 1
@@ -44,7 +45,6 @@ int main(void) {
     hegel_run_t *run;
     HEGEL_CHECK(hegel_run_start, ctx, s, &run);
 
-    const int STEPS = 20;
     size_t total = 0;
     size_t rule_counts[NUM_RULES] = { 0 };
     bool ok = true;
@@ -66,11 +66,12 @@ int main(void) {
         int64_t counter = 0;
         bool overran = false;
         bool bad = false;
-        for (int step = 0; step < STEPS && !overran; step++) {
+        while (true) {
             int64_t rule;
             hegel_result_t rc = hegel_state_machine_next_rule(ctx, tc, machine, &rule);
             if (rc != HEGEL_OK) { overran = true; break; }
-            if (rule >= NUM_RULES) { bad = true; break; }
+            if (rule == HEGEL_STATE_MACHINE_DONE) break;
+            if (rule < 0 || rule >= NUM_RULES) { bad = true; break; }
             rule_counts[rule]++;
 
             switch (rule) {
