@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.1 - 2026-07-20
+
+This patch moves control over the lifecycle of stateful tests into the engine. Frontends no longer draw a step cap up front; instead, they poll for rules from the engine until they receive a termination signal. This is necessary groundwork for future work on concurrent stateful testing and better shrinking.
+
 ## 0.28.0 - 2026-07-14
 
 This release cleans up public-API defects found in a documentation-vs-behavior audit: docs that promised APIs that didn't exist now have the APIs (or accurate docs), and doc examples are compiled as part of the test suite.
