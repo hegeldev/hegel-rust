@@ -1,0 +1,15 @@
+error[E0283]: type annotations needed
+ --> tests/ui-e0283/default_cant_infer_through_draw.rs:11:21
+ |
+LL |     let _ = tc.draw(gs::default());
+ |                ---- ^^^^^^^^^^^^^ cannot infer type for type parameter `impl PrintableGenerator<T>` declared on the method `draw`
+ |                |
+ |                required by a bound introduced by this call
+ |
+ = note: cannot satisfy `_: PrintableGenerator<_>`
+ = help: the following types implement trait `PrintableGenerator<T>`:
+note: required by a bound in `TestCase::draw`
+ --> src/test_case.rs
+ |
+LL |     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
+ |                                           ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
