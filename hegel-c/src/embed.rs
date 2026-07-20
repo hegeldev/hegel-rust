@@ -9,34 +9,27 @@
 //! Embedding contexts that don't speak Rust panics — FFI consumers,
 //! alternative test harnesses, replay tooling — need a thinner entry point
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
-//! lets them drive it directly. That's what [`run_native`] is for.
+//! lets them drive it directly. That's what [`run_native_async`] is for:
+//! libhegel's C ABI (`hegel_run_start` / `hegel_next_test_case`) drives it
+//! one offered test case at a time.
 
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
 
-/// Drive the native test runner against a callback that receives the raw
-/// data source for each test case.
+/// Synchronous driver for [`run_native_async`], retained for tests: runs the
+/// whole exploration on the calling thread, invoking `run_case` once per
+/// test case the engine wants to run.
 ///
-/// `run_case` is invoked once per test case the engine wants to run. It
-/// receives a boxed [`DataSource`] for the test case; the callback uses this
-/// to generate values, open spans, observe targets, and ultimately call
-/// [`DataSource::mark_complete`] with the test case's outcome.
-///
-/// The callback **must** call [`DataSource::mark_complete`] on its data
-/// source before returning; the engine reads the outcome back through the
-/// data source rather than from the callback's return value.
-///
-/// The engine only *explores* — database replay, generation, and shrinking —
-/// and every test case is non-final. Each returned
-/// [`Failure`](crate::backend::Failure) carries the origin the engine grouped
-/// on plus a reproduce blob; the caller replays each blob (via
-/// `hegel_test_case_from_blob`) to produce the final report and the panic
-/// message. `Err` is a [`RunError`] — a failure of the run itself (health
-/// check, nondeterminism) rather than of any test case; the embedding reports
-/// it through its own error channel.
-#[doc(hidden)]
-pub fn run_native(
+/// `run_case` receives a boxed [`DataSource`](crate::backend::DataSource)
+/// for the test case; the callback uses this to generate values, open spans,
+/// observe targets, and ultimately call
+/// [`DataSource::mark_complete`](crate::backend::DataSource::mark_complete)
+/// with the test case's outcome. The callback **must** call `mark_complete`
+/// on its data source before returning; the engine reads the outcome back
+/// through the data source rather than from the callback's return value.
+#[cfg(test)]
+pub(crate) fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
     run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
@@ -46,10 +39,21 @@ pub fn run_native(
     crate::exchange::drive(&exchange, run, run_case)
 }
 
-/// The engine future behind [`run_native`]: dispatches on
-/// [`Mode`](crate::settings::Mode) and runs the whole exploration, offering
-/// each test case to the driver through `exchange`. Suspends only at those
-/// offers, so it can be driven with a no-op waker (see [`crate::exchange`]).
+/// Run the native test runner, offering each test case's raw data source to
+/// the driver through `exchange`.
+///
+/// Dispatches on [`Mode`](crate::settings::Mode) and runs the whole
+/// exploration. Suspends only at the offers, so it can be driven with a
+/// no-op waker (see [`crate::exchange`]).
+///
+/// The engine only *explores* — database replay, generation, and shrinking —
+/// and every test case is non-final. Each returned
+/// [`Failure`](crate::backend::Failure) carries the origin the engine grouped
+/// on plus a reproduce blob; the caller replays each blob (via
+/// `hegel_test_case_from_blob`) to produce the final report and the panic
+/// message. `Err` is a [`RunError`] — a failure of the run itself (health
+/// check, nondeterminism) rather than of any test case; the embedding reports
+/// it through its own error channel.
 pub(crate) async fn run_native_async(
     settings: &Settings,
     database_key: Option<&str>,

@@ -5,7 +5,8 @@
 //! its driver through the supplied [`CaseExchange`] (see [`crate::exchange`]
 //! for the alternation protocol), and returns the report — every distinct
 //! bug's shrunk counterexample as a [`Failure`] carrying the reproduce blob.
-//! The caller ([`crate::embed::run_native`], and ultimately the client)
+//! The caller ([`crate::embed::run_native_async`]'s driver, and ultimately
+//! the client)
 //! replays each blob to produce the final report. Every test case `explore`
 //! runs is non-final.
 //!

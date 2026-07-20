@@ -5,8 +5,9 @@
 //! [`DataSource`](crate::backend::DataSource) to its driver via
 //! [`CaseExchange::offer`]. The engine future never schedules wakeups — it is
 //! only ever resumed by its driver polling it again — so no executor is
-//! involved anywhere: [`drive`] runs a whole engine future to completion on
-//! the calling thread with a no-op waker.
+//! involved anywhere: drivers poll with a no-op waker on their own thread,
+//! one poll per test case (`hegel_next_test_case`) or in a loop to
+//! completion (the test-only `drive`).
 //!
 //! The protocol is strict alternation. Polling the engine future either
 //! returns `Ready` (the run is finished) or `Pending`, in which case the
@@ -19,7 +20,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 use crate::backend::DataSource;
 
@@ -90,14 +91,16 @@ impl Future for Offer<'_> {
 /// Run an engine future to completion on the calling thread, handing each
 /// test case it offers through `exchange` to `run_case`. `run_case` must
 /// finish the case — everything through `mark_complete` — before returning,
-/// upholding the alternation protocol.
+/// upholding the alternation protocol. Test-only: the C ABI drives the
+/// engine future one poll per `hegel_next_test_case` call instead.
+#[cfg(test)]
 pub(crate) fn drive<F: Future>(
     exchange: &CaseExchange,
     fut: F,
     mut run_case: impl FnMut(BoxedDataSource),
 ) -> F::Output {
     let mut fut = std::pin::pin!(fut);
-    let mut cx = Context::from_waker(Waker::noop());
+    let mut cx = Context::from_waker(std::task::Waker::noop());
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(out) => return out,
@@ -111,7 +114,10 @@ pub(crate) fn drive<F: Future>(
 #[cfg(test)]
 pub(crate) fn drive_no_yield<F: Future>(fut: F) -> F::Output {
     let mut fut = std::pin::pin!(fut);
-    match fut.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+    match fut
+        .as_mut()
+        .poll(&mut Context::from_waker(std::task::Waker::noop()))
+    {
         Poll::Ready(out) => out,
         Poll::Pending => unreachable!("future offered a test case but none was expected"),
     }
