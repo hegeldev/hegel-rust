@@ -334,21 +334,38 @@ class CoverageData:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _run_lcov_phase(cargo_args: list[str], output: Path, label: str) -> None:
-    """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`."""
+def _run_lcov_phase(
+    cargo_args: list[str],
+    output: Path,
+    label: str,
+    target_dir: Path | None = None,
+) -> None:
+    """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`.
+
+    `target_dir` redirects the whole cargo build (and therefore
+    cargo-llvm-cov's coverage tree, profile data, and the set of binary
+    objects it exports from) into its own directory, making the phase
+    hermetic: nothing another phase built can leak into its report.
+    """
     print(f"  Cleaning previous coverage data ({label})...")
     # Fully remove the coverage build tree, not just the profile data
     # (`cargo llvm-cov clean`), so a stale build with different
     # instrumentation can never leak into this run's coverage.
     import shutil
 
-    shutil.rmtree(Path("target/llvm-cov-target"), ignore_errors=True)
+    cov_tree = (target_dir or Path("target")) / "llvm-cov-target"
+    shutil.rmtree(cov_tree, ignore_errors=True)
+
+    env = os.environ.copy()
+    if target_dir is not None:
+        env["CARGO_TARGET_DIR"] = str(target_dir)
 
     print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
         ["cargo", "llvm-cov", *cargo_args, "--lcov", f"--output-path={output}"],
         capture_output=True,
         text=True,
+        env=env,
     )
     if result.stdout:
         print(result.stdout)
@@ -445,11 +462,28 @@ def _ensure_smoke_cdylib() -> None:
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
-    A single `--workspace` pass with every additive feature enabled. Running
-    the whole workspace (rather than hegeltest alone) covers the engine in
+    A `--workspace` pass with every additive feature enabled. Running the
+    whole workspace (rather than hegeltest alone) covers the engine in
     hegel-c/src — both through hegeltest driving it over the C ABI and through
     hegel-c's own embedded tests — instead of excluding hegel-c as a mere
     dependency, while still covering the hegeltest frontend.
+
+    A second pass then re-exports hegel-c's lib tests on their own, in a
+    hermetic target directory, and the two LCOV files are union-merged per
+    line. This is a correctness requirement, not belt-and-braces: the
+    workspace pass links two distinct compilations of hegel-c (the shared
+    rlib every other binary uses, and the crate's own `--test` build for its
+    embedded tests), and every `#[no_mangle] hegel_*` function has the *same*
+    coverage-record name but a *different* record hash in each. `llvm-cov`
+    resolves that collision by whichever object it reads the function's
+    mapping from and silently drops the other compilation's counts — so a
+    line inside a `no_mangle` function covered only by hegel-c's embedded
+    tests deterministically shows as uncovered in the workspace export. The
+    isolated pass sees only the lib test's own object (the hermetic target
+    directory is what guarantees that), where those counts resolve
+    correctly; merging at the LCOV line level is immune to record-name
+    collisions. Mangled functions are unaffected either way (their record
+    names are unique per compilation).
 
     hegel-macros is excluded from the report. It's a proc-macro crate whose
     code runs at the *compile* time of the test crates, which `cargo llvm-cov`
@@ -462,6 +496,7 @@ def run_coverage() -> Path:
     print("Running coverage analysis...")
     lcov_path = Path("lcov.info")
     raw_lcov = Path("lcov-all.info")
+    hegel_c_lib_lcov = Path("lcov-hegel-c-lib.info")
 
     _ensure_smoke_cdylib()
 
@@ -479,8 +514,15 @@ def run_coverage() -> Path:
         label="workspace, all features",
     )
 
-    print("  Normalising LCOV output...")
-    _merge_lcov([raw_lcov], lcov_path)
+    _run_lcov_phase(
+        cargo_args=["-p", "hegeltest-c", "--lib"],
+        output=hegel_c_lib_lcov,
+        label="hegel-c lib tests, isolated no_mangle records",
+        target_dir=Path("target/coverage-hegel-c-lib"),
+    )
+
+    print("  Merging LCOV output...")
+    _merge_lcov([raw_lcov, hegel_c_lib_lcov], lcov_path)
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)
