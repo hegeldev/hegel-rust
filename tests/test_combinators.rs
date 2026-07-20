@@ -28,6 +28,15 @@ fn test_one_of_enumerates_when_all_children_do() {
 
     let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]), gs::integers::<i64>());
     assert!(g.enumerate_values().is_none());
+
+    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]));
+    assert_eq!(g.enumerate_values(), Some(vec![1, 2]));
+
+    let g = gs::one_of(vec![
+        gs::sampled_from(vec![1_i64, 2]).boxed_printable(),
+        gs::sampled_from(vec![3_i64, 4]).boxed_printable(),
+    ]);
+    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
 }
 
 #[test]
@@ -100,6 +109,53 @@ fn test_one_of_with_different_types_via_map(tc: TestCase) {
 fn test_one_of_many(tc: TestCase) {
     let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed_printable())));
     assert!((0..10).contains(&value));
+}
+
+#[derive(Clone, PartialEq)]
+struct Opaque(i32);
+
+#[hegel::test]
+fn test_one_of_with_non_printable_components_draws_silently(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(1)),
+        gs::integers::<i32>().min_value(2).max_value(5).map(Opaque),
+    ));
+    assert!(value == Opaque(1) || (2..=5).contains(&value.0));
+}
+
+#[hegel::test]
+fn test_one_of_with_mixed_printable_and_non_printable_components(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(7)).print_with(|_, printer| printer.text("Opaque(7)")),
+        gs::just(Opaque(8)),
+    ));
+    assert!(value == Opaque(7) || value == Opaque(8));
+}
+
+#[hegel::test]
+fn test_one_of_single_component(tc: TestCase) {
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(42))), 42);
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(43),)), 43);
+    assert_eq!(tc.draw_silent(hegel::one_of!(gs::just(44))), 44);
+}
+
+#[hegel::test]
+fn test_one_of_twelve_components(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
+        gs::just(0),
+        gs::just(1),
+        gs::just(2),
+        gs::just(3),
+        gs::just(4),
+        gs::just(5),
+        gs::just(6),
+        gs::just(7),
+        gs::just(8),
+        gs::just(9),
+        gs::just(10),
+        gs::just(11),
+    ));
+    assert!((0..12).contains(&value));
 }
 
 #[hegel::test]

@@ -52,12 +52,14 @@ where
     SampledFromGenerator { elements }
 }
 
-/// Generator that chooses from multiple generators. Created by [`one_of()`] or [`one_of!`](crate::one_of).
+/// Generator that chooses from a runtime collection of boxed generators.
+/// Created by [`one_of()`]; the [`one_of!`](crate::one_of) macro instead
+/// builds an arity-specific generator that keeps its components unboxed.
 ///
 /// Generic over the stored generator type `B`: built from
-/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s (as `one_of!`
-/// does) it is itself printable; built from plain
-/// [`BoxedGenerator`](super::BoxedGenerator)s it can only be drawn silently.
+/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s it is itself
+/// printable; built from plain [`BoxedGenerator`](super::BoxedGenerator)s it
+/// can only be drawn silently.
 pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     generators: Vec<B>,
     _phantom: PhantomData<fn(&'a ()) -> T>,
@@ -117,10 +119,14 @@ where
     }
 }
 
-/// Choose from multiple generators of the same type.
+/// Choose from 1–12 generators of the same type.
 ///
-/// This macro automatically boxes each generator, providing a more ergonomic
-/// syntax than calling [`one_of`] directly.
+/// The component generators keep their concrete types (no boxing), so the
+/// result is a [`PrintableGenerator`] exactly when every component is one —
+/// usable with [`draw`](crate::TestCase::draw) in that case, and with
+/// [`draw_silent`](crate::TestCase::draw_silent) otherwise. For more than 12
+/// alternatives, or a number not known at compile time, box the generators
+/// and call [`one_of`] directly.
 ///
 /// # Example
 ///
@@ -137,12 +143,295 @@ where
 /// ```
 #[macro_export]
 macro_rules! one_of {
-    ($($generator:expr),+ $(,)?) => {
-        $crate::generators::one_of(vec![
-            $($crate::generators::PrintableGenerator::boxed_printable($generator)),+
-        ])
+    ($g1:expr $(,)?) => {
+        $crate::generators::one_of1($g1)
+    };
+    ($g1:expr, $g2:expr $(,)?) => {
+        $crate::generators::one_of2($g1, $g2)
+    };
+    ($g1:expr, $g2:expr, $g3:expr $(,)?) => {
+        $crate::generators::one_of3($g1, $g2, $g3)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr $(,)?) => {
+        $crate::generators::one_of4($g1, $g2, $g3, $g4)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr $(,)?) => {
+        $crate::generators::one_of5($g1, $g2, $g3, $g4, $g5)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr $(,)?) => {
+        $crate::generators::one_of6($g1, $g2, $g3, $g4, $g5, $g6)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr $(,)?) => {
+        $crate::generators::one_of7($g1, $g2, $g3, $g4, $g5, $g6, $g7)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr $(,)?) => {
+        $crate::generators::one_of8($g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr $(,)?) => {
+        $crate::generators::one_of9($g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr $(,)?) => {
+        $crate::generators::one_of10($g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr $(,)?) => {
+        $crate::generators::one_of11($g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10, $g11)
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr $(,)?) => {
+        $crate::generators::one_of12(
+            $g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10, $g11, $g12,
+        )
+    };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:expr),+ $(,)?) => {
+        compile_error!(
+            "one_of! supports at most 12 generators; for more, box them and call \
+             hegel::generators::one_of directly (e.g. \
+             one_of(vec![g1.boxed_printable(), g2.boxed_printable(), ...]))"
+        )
     };
 }
+
+/// Generator choosing from a single alternative. Created by
+/// [`one_of!`](crate::one_of); the 2–12 alternative forms are the
+/// macro-generated `OneOf2Generator` … `OneOf12Generator`.
+pub struct OneOf1Generator<G1, T> {
+    gen1: G1,
+    _phantom: PhantomData<fn(T)>,
+}
+
+impl<T, G1> Generator<T> for OneOf1Generator<G1, T>
+where
+    G1: Generator<T>,
+{
+    fn do_draw(&self, tc: &TestCase) -> T {
+        tc.start_span(labels::ONE_OF);
+        integers::<usize>().min_value(0).max_value(0).do_draw(tc);
+        let result = self.gen1.do_draw(tc);
+        tc.stop_span(false);
+        result
+    }
+
+    fn enumerate_values(&self) -> Option<Vec<T>> {
+        self.gen1.enumerate_values()
+    }
+}
+
+impl<T, G1> PrintableGenerator<T> for OneOf1Generator<G1, T>
+where
+    G1: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        tc.start_span(labels::ONE_OF);
+        integers::<usize>().min_value(0).max_value(0).do_draw(tc);
+        let result = self.gen1.draw_and_print(tc, printer);
+        tc.stop_span(false);
+        result
+    }
+}
+
+#[doc(hidden)]
+pub fn one_of1<T, G1: Generator<T>>(gen1: G1) -> OneOf1Generator<G1, T> {
+    OneOf1Generator {
+        gen1,
+        _phantom: PhantomData,
+    }
+}
+
+macro_rules! impl_one_of {
+    ($name:ident, $fn_name:ident, $max:expr,
+     $(($idx:tt, $field:ident, $G:ident)),+ ; ($last_field:ident, $last_G:ident)) => {
+        pub struct $name<$($G,)+ $last_G, T> {
+            $($field: $G,)+
+            $last_field: $last_G,
+            _phantom: PhantomData<fn(T)>,
+        }
+
+        impl<T, $($G,)+ $last_G> Generator<T> for $name<$($G,)+ $last_G, T>
+        where
+            $($G: Generator<T>,)+
+            $last_G: Generator<T>,
+        {
+            fn do_draw(&self, tc: &TestCase) -> T {
+                tc.start_span(labels::ONE_OF);
+                let index = integers::<usize>()
+                    .min_value(0)
+                    .max_value($max)
+                    .do_draw(tc);
+                let result = match index {
+                    $($idx => self.$field.do_draw(tc),)+
+                    _ => self.$last_field.do_draw(tc),
+                };
+                tc.stop_span(false);
+                result
+            }
+
+            fn enumerate_values(&self) -> Option<Vec<T>> {
+                let mut all = Vec::new();
+                $(all.extend(self.$field.enumerate_values()?);)+
+                all.extend(self.$last_field.enumerate_values()?);
+                Some(all)
+            }
+        }
+
+        impl<T, $($G,)+ $last_G> PrintableGenerator<T> for $name<$($G,)+ $last_G, T>
+        where
+            $($G: PrintableGenerator<T>,)+
+            $last_G: PrintableGenerator<T>,
+        {
+            fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+                tc.start_span(labels::ONE_OF);
+                let index = integers::<usize>()
+                    .min_value(0)
+                    .max_value($max)
+                    .do_draw(tc);
+                let result = match index {
+                    $($idx => self.$field.draw_and_print(tc, printer),)+
+                    _ => self.$last_field.draw_and_print(tc, printer),
+                };
+                tc.stop_span(false);
+                result
+            }
+        }
+
+        #[doc(hidden)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn $fn_name<T, $($G: Generator<T>,)+ $last_G: Generator<T>>(
+            $($field: $G,)+ $last_field: $last_G,
+        ) -> $name<$($G,)+ $last_G, T> {
+            $name {
+                $($field,)+
+                $last_field,
+                _phantom: PhantomData,
+            }
+        }
+    };
+}
+
+impl_one_of!(OneOf2Generator, one_of2, 1, (0, gen1, G1); (gen2, G2));
+impl_one_of!(
+    OneOf3Generator,
+    one_of3,
+    2,
+    (0, gen1, G1),
+    (1, gen2, G2);
+    (gen3, G3)
+);
+impl_one_of!(
+    OneOf4Generator,
+    one_of4,
+    3,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3);
+    (gen4, G4)
+);
+impl_one_of!(
+    OneOf5Generator,
+    one_of5,
+    4,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4);
+    (gen5, G5)
+);
+impl_one_of!(
+    OneOf6Generator,
+    one_of6,
+    5,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5);
+    (gen6, G6)
+);
+impl_one_of!(
+    OneOf7Generator,
+    one_of7,
+    6,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6);
+    (gen7, G7)
+);
+impl_one_of!(
+    OneOf8Generator,
+    one_of8,
+    7,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6),
+    (6, gen7, G7);
+    (gen8, G8)
+);
+impl_one_of!(
+    OneOf9Generator,
+    one_of9,
+    8,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6),
+    (6, gen7, G7),
+    (7, gen8, G8);
+    (gen9, G9)
+);
+impl_one_of!(
+    OneOf10Generator,
+    one_of10,
+    9,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6),
+    (6, gen7, G7),
+    (7, gen8, G8),
+    (8, gen9, G9);
+    (gen10, G10)
+);
+impl_one_of!(
+    OneOf11Generator,
+    one_of11,
+    10,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6),
+    (6, gen7, G7),
+    (7, gen8, G8),
+    (8, gen9, G9),
+    (9, gen10, G10);
+    (gen11, G11)
+);
+impl_one_of!(
+    OneOf12Generator,
+    one_of12,
+    11,
+    (0, gen1, G1),
+    (1, gen2, G2),
+    (2, gen3, G3),
+    (3, gen4, G4),
+    (4, gen5, G5),
+    (5, gen6, G6),
+    (6, gen7, G7),
+    (7, gen8, G8),
+    (8, gen9, G9),
+    (9, gen10, G10),
+    (10, gen11, G11);
+    (gen12, G12)
+);
 
 /// Generator that produces `Some(value)` or `None`. Created by [`optional()`].
 pub struct OptionalGenerator<G, T> {

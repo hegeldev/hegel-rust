@@ -133,6 +133,18 @@ fn structural_combinators_print_compositionally() {
     assert_eq!(lines, vec!["let draw_1 = 5;"]);
 
     let lines = failing_lines(|tc| {
+        let _ = tc.draw(hegel::one_of!(gs::just(9i32)));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 9;"]);
+
+    let lines = failing_lines(|tc| {
+        let v = tc.draw(hegel::one_of!(gs::just(5i32), gs::just(7i32)));
+        assert_ne!(v, 7);
+    });
+    assert_eq!(lines, vec!["let draw_1 = 7;"]);
+
+    let lines = failing_lines(|tc| {
         let _ = tc.draw(
             gs::integers::<i64>()
                 .min_value(1)
