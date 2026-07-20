@@ -62,7 +62,7 @@ where
 /// (the default) it can only be drawn silently.
 pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     generators: Vec<B>,
-    _phantom: PhantomData<fn(&'a ()) -> T>,
+    _phantom: PhantomData<&'a fn() -> T>,
 }
 
 fn draw_one_of<T>(tc: &TestCase, max_index: usize, pick: impl FnOnce(usize) -> T) -> T {
@@ -123,11 +123,11 @@ where
 /// Choose from 1–12 generators of the same type.
 ///
 /// The component generators keep their concrete types (no boxing), so the
-/// result is a nameable, arity-specific generator type mirroring
-/// [`tuples!`](crate::tuples): [`OneOf1Generator`](crate::generators::OneOf1Generator)
-/// through [`OneOf12Generator`](crate::generators::OneOf12Generator). For
-/// more than 12 alternatives, or a number not known at compile time, box
-/// the generators and call [`one_of`] directly.
+/// result is a [`PrintableGenerator`] exactly when every component is one —
+/// usable with [`draw`](crate::TestCase::draw) in that case, and with
+/// [`draw_silent`](crate::TestCase::draw_silent) otherwise. For more than 12
+/// alternatives, or a number not known at compile time, box the generators
+/// and call [`one_of`] directly.
 ///
 /// # Example
 ///
@@ -182,12 +182,11 @@ macro_rules! one_of {
             $g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10, $g11, $g12,
         )
     };
-    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:tt)+) => {
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:expr),+ $(,)?) => {
         compile_error!(
             "one_of! supports at most 12 generators; for more, box them and call \
-             hegel::generators::one_of directly, e.g. \
-             one_of(vec![g1.boxed(), g2.boxed(), ...]) with the \
-             hegel::generators::Generator trait in scope for .boxed()"
+             hegel::generators::one_of directly (e.g. \
+             one_of(vec![g1.boxed_printable(), g2.boxed_printable(), ...]))"
         )
     };
 }
@@ -196,7 +195,8 @@ macro_rules! impl_one_of {
     ($name:ident, $fn_name:ident, $arity:literal,
      $(($idx:tt, $field:ident, $G:ident)),* ; ($last_field:ident, $last_G:ident)) => {
         #[doc = concat!(
-            "The ", $arity, "-alternative generator created by [`one_of!`](crate::one_of)."
+            "The ", $arity, "-alternative generator created by [`one_of!`](crate::one_of); ",
+            "a [`PrintableGenerator`] exactly when every component is one."
         )]
         pub struct $name<$($G,)* $last_G, T> {
             $($field: $G,)*
@@ -221,6 +221,19 @@ macro_rules! impl_one_of {
                 $(all.extend(self.$field.enumerate_values()?);)*
                 all.extend(self.$last_field.enumerate_values()?);
                 Some(all)
+            }
+        }
+
+        impl<T, $($G,)* $last_G> PrintableGenerator<T> for $name<$($G,)* $last_G, T>
+        where
+            $($G: PrintableGenerator<T>,)*
+            $last_G: PrintableGenerator<T>,
+        {
+            fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+                draw_one_of(tc, $arity - 1, |index| match index {
+                    $($idx => self.$field.do_draw_and_print(tc, printer),)*
+                    _ => self.$last_field.do_draw_and_print(tc, printer),
+                })
             }
         }
 

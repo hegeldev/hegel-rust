@@ -1,4 +1,4 @@
-error: one_of! supports at most 12 generators; for more, box them and call hegel::generators::one_of directly, e.g. one_of(vec![g1.boxed(), g2.boxed(), ...]) with the hegel::generators::Generator trait in scope for .boxed()
+error: one_of! supports at most 12 generators; for more, box them and call hegel::generators::one_of directly (e.g. one_of(vec![g1.boxed_printable(), g2.boxed_printable(), ...]))
   --> tests/ui/one_of_too_many_generators.rs:15:13
    |
 15 |       tc.draw(hegel::one_of!(

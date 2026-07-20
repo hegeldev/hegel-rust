@@ -1,8 +1,8 @@
 mod common;
 
-use common::utils::{assert_all_examples, expect_panic, find_any};
+use common::utils::{assert_all_examples, find_any};
 use hegel::generators::{self as gs, Generator, PrintableGenerator};
-use hegel::{Hegel, Settings, TestCase};
+use hegel::TestCase;
 
 #[hegel::test]
 fn test_sampled_from_returns_element_from_list(tc: TestCase) {
@@ -33,8 +33,8 @@ fn test_one_of_enumerates_when_all_children_do() {
     assert_eq!(g.enumerate_values(), Some(vec![1, 2]));
 
     let g = gs::one_of(vec![
-        gs::sampled_from(vec![1_i64, 2]).boxed(),
-        gs::sampled_from(vec![3_i64, 4]).boxed(),
+        gs::sampled_from(vec![1_i64, 2]).boxed_printable(),
+        gs::sampled_from(vec![3_i64, 4]).boxed_printable(),
     ]);
     assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
 }
@@ -105,7 +105,7 @@ fn test_one_of_many(tc: TestCase) {
 struct Opaque(i32);
 
 #[hegel::test]
-fn test_one_of_with_non_debug_components_draws_silently(tc: TestCase) {
+fn test_one_of_with_non_printable_components_draws_silently(tc: TestCase) {
     let value = tc.draw_silent(hegel::one_of!(
         gs::just(Opaque(1)),
         gs::integers::<i32>().min_value(2).max_value(5).map(Opaque),
@@ -114,10 +114,38 @@ fn test_one_of_with_non_debug_components_draws_silently(tc: TestCase) {
 }
 
 #[hegel::test]
+fn test_one_of_with_mixed_printable_and_non_printable_components(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(7)).print_with(|_, printer| printer.text("Opaque(7)")),
+        gs::just(Opaque(8)),
+    ));
+    assert!(value == Opaque(7) || value == Opaque(8));
+}
+
+#[hegel::test]
 fn test_one_of_single_component(tc: TestCase) {
     assert_eq!(tc.draw(hegel::one_of!(gs::just(42))), 42);
     assert_eq!(tc.draw(hegel::one_of!(gs::just(43),)), 43);
     assert_eq!(tc.draw_silent(hegel::one_of!(gs::just(44))), 44);
+}
+
+#[hegel::test]
+fn test_one_of_twelve_components(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
+        gs::just(0),
+        gs::just(1),
+        gs::just(2),
+        gs::just(3),
+        gs::just(4),
+        gs::just(5),
+        gs::just(6),
+        gs::just(7),
+        gs::just(8),
+        gs::just(9),
+        gs::just(10),
+        gs::just(11),
+    ));
+    assert!((0..12).contains(&value));
 }
 
 #[hegel::test]
@@ -1091,14 +1119,14 @@ fn _one_of_generator_is_covariant_in_its_lifetime<'a>(
 }
 
 mod one_of_arity_dispatch {
-    use hegel::generators::{self as gs, Generator};
+    use hegel::generators::{self as gs, PrintableGenerator};
     use hegel::{Hegel, Settings, TestCase};
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     fn assert_every_alternative_reachable<G>(arity: i32, generator: G)
     where
-        G: Generator<i32> + Send + Sync + 'static,
+        G: PrintableGenerator<i32> + Send + Sync + 'static,
     {
         let seen: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
         let track = Arc::clone(&seen);
