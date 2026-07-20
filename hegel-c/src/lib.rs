@@ -1295,8 +1295,18 @@ pub unsafe extern "C" fn hegel_next_test_case(
         drop(family);
     }
 
+    unsafe { *out_test_case = advance_run(run) };
+    HEGEL_OK
+}
+
+/// Advance a run by one engine resumption: hand back the next test case's
+/// caller-owned handle (installing the run's own reference to its family), or
+/// return NULL after settling a finished run's result — including an engine
+/// panic, which is caught and stored as a run-level error. A run that already
+/// finished is left alone.
+fn advance_run(run: &mut HegelRun) -> *mut HegelTestCase {
     let Some(engine) = run.engine.as_mut() else {
-        return HEGEL_OK;
+        return ptr::null_mut();
     };
 
     match poll_engine(engine) {
@@ -1304,8 +1314,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
             let family = new_family(run.exchange.take());
             let case = handle_from_family(Arc::clone(&family));
             run.current_family = Some(family);
-            unsafe { *out_test_case = case };
-            HEGEL_OK
+            case
         }
         Ok(Poll::Ready(r)) => {
             run.result = Some(match r {
@@ -1313,7 +1322,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
             });
             run.engine = None;
-            HEGEL_OK
+            ptr::null_mut()
         }
         Err(payload) => {
             run.result = Some(HegelRunResult::from_error(&format!(
@@ -1321,7 +1330,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 crate::panic::panic_message(&payload)
             )));
             run.engine = None;
-            HEGEL_OK
+            ptr::null_mut()
         }
     }
 }
