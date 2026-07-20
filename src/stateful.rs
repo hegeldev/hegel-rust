@@ -68,11 +68,10 @@
 
 use crate::TestCase;
 use crate::control::{AssumeFailed, hegel_internal_assert};
-use crate::generators::{Generator, integers};
+use crate::generators::Generator;
 use crate::runner::Mode;
 use crate::test_case::raise_for_rc;
 use std::cell::RefCell;
-use std::cmp::min;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -253,26 +252,12 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
 
     let is_single = tc.mode() == Mode::SingleTestCase;
 
-    let step_cap = if is_single {
-        i64::MAX
-    } else {
-        let max_steps = 50;
-        let unbounded_step_cap = tc.draw_silent(integers::<i64>().min_value(1));
-        min(unbounded_step_cap, max_steps)
-    };
+    let mut steps_attempted: i64 = 0;
 
-    let mut steps_run_successfully = 0;
-    let mut steps_attempted = 0;
-    let mut step = 0;
-
-    while steps_run_successfully < step_cap
-        && (is_single
-            || steps_attempted < 10 * step_cap
-            || (steps_run_successfully == 0 && steps_attempted < 1000))
-    {
-        step += 1;
+    while is_single || steps_attempted < 1000 {
         let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
-            Ok(i) => i,
+            Ok(Some(i)) => i,
+            Ok(None) => break,
             Err(rc) => raise_for_rc(rc),
         };
         hegel_internal_assert!(
@@ -280,7 +265,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
             "state_machine_next_rule returned out-of-range rule index {rule_index}"
         );
         let rule = &rules[rule_index as usize];
-        tc.note(&format!("Step {}: {}", step, rule.name));
+        tc.note(&format!("Step {}: {}", steps_attempted + 1, rule.name));
 
         let rule_tc = tc.child(2);
         let thunk = || (rule.apply)(&mut m, rule_tc);
@@ -289,7 +274,6 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         steps_attempted += 1;
         match result {
             Ok(()) => {
-                steps_run_successfully += 1;
                 check_invariants(&mut m, &invariants, &tc);
             }
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {

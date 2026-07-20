@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use rand::{Rng, RngExt};
@@ -971,6 +971,10 @@ pub struct FamilyCore {
     /// own lock so two clones drawing rules concurrently serialize on the
     /// machine while drawing from their own streams.
     pub(crate) state_machines: Mutex<Vec<Arc<Mutex<NativeStateMachine>>>>,
+    /// When set, state machines draw no step cap and never report their
+    /// rule sequence as done. Set for single-test-case runs, which explore
+    /// one unbounded test case instead of many capped ones.
+    state_machine_steps_unbounded: AtomicBool,
 }
 
 impl FamilyCore {
@@ -985,7 +989,19 @@ impl FamilyCore {
             next_collection_id: AtomicI64::new(0),
             variable_pools: Mutex::new(Vec::new()),
             state_machines: Mutex::new(Vec::new()),
+            state_machine_steps_unbounded: AtomicBool::new(false),
         }
+    }
+
+    /// Make every state machine of this family run without a step cap.
+    pub(crate) fn set_state_machine_steps_unbounded(&self) {
+        self.state_machine_steps_unbounded
+            .store(true, Ordering::Relaxed);
+    }
+
+    /// Whether state machines of this family run without a step cap.
+    pub(crate) fn state_machine_steps_unbounded(&self) -> bool {
+        self.state_machine_steps_unbounded.load(Ordering::Relaxed)
     }
 
     /// The family's concluded status, or `None` while still running.

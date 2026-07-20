@@ -134,8 +134,12 @@ pub trait DataSource: Send + Sync {
         invariant_names: Vec<String>,
     ) -> Result<i64, DataSourceError>;
 
-    /// Draw the index of the next rule to run, in `[0, num_rules)`.
-    fn state_machine_next_rule(&self, state_machine_id: i64) -> Result<i64, DataSourceError>;
+    /// Draw the index of the next rule to run, in `[0, num_rules)`, or
+    /// `None` once the test case has run enough steps.
+    fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<Option<i64>, DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.
     ///

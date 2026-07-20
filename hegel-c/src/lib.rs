@@ -2072,7 +2072,8 @@ unsafe fn names_from_c_array(
 /// random subset of rules (at least one) and selection draws only from
 /// that subset. The caller drives execution: it asks
 /// `hegel_state_machine_next_rule` which rule to run at each step and
-/// applies it.
+/// applies it, until that call signals that no more steps should
+/// follow.
 ///
 /// On success writes the new machine's id into `*out_state_machine_id`
 /// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
@@ -2131,6 +2132,11 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     }
 }
 
+/// Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
+/// when the engine's step budget for the test case is exhausted: stop
+/// running rules.
+pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
+
 /// Draw the index of the next rule to run, in `[0, num_rules)`, letting
 /// the engine choose (and shrink) the rule sequence. Swarm testing is
 /// applied per test case: a random subset of rules is enabled on the
@@ -2138,8 +2144,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
 /// of the test case, with restrictions that shrink away in minimal
 /// counterexamples.
 ///
-/// On success writes the chosen rule index into `*out_rule_index` and
-/// returns `HEGEL_OK`. `state_machine_id` must be an id returned by
+/// `state_machine_id` must be an id returned by
 /// `hegel_new_state_machine` on this test case. Returns
 /// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
 /// (the caller should abort the body and call `hegel_mark_complete`
@@ -2161,8 +2166,12 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         return HEGEL_E_INVALID_ARG;
     }
     match tc.stream.state_machine_next_rule(state_machine_id) {
-        Ok(index) => {
+        Ok(Some(index)) => {
             unsafe { *out_rule_index = index };
+            HEGEL_OK
+        }
+        Ok(None) => {
+            unsafe { *out_rule_index = HEGEL_STATE_MACHINE_DONE };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
