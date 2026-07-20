@@ -31,6 +31,11 @@ pub use collections::{
 pub use combinators::{
     OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
 };
+#[doc(hidden)]
+pub use combinators::{
+    one_of1, one_of2, one_of3, one_of4, one_of5, one_of6, one_of7, one_of8, one_of9, one_of10,
+    one_of11, one_of12,
+};
 pub use compose::ComposedGenerator;
 #[doc(hidden)]
 pub use compose::fnv1a_hash;
