@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::native::core::{
     BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
 };
-use crate::native::shrinker::find_integer;
+use crate::native::shrinker::search::FindInteger;
 use crate::native::test_runner::{Engine, RunResult};
 
 /// Per-label best score and the choice sequence that produced it.
@@ -112,18 +112,18 @@ impl Optimiser<'_, '_> {
     /// extra values from a fresh RNG instead of overrunning the prefix.
     /// Mirrors Hypothesis's `cached_test_function(choices, extend="full")`
     /// in `optimiser.py::attempt_replace`.
-    fn run_trial(&mut self, choices: &[ChoiceValue]) -> Option<RunResult> {
+    async fn run_trial(&mut self, choices: &[ChoiceValue]) -> Option<RunResult> {
         if self.budget_exhausted() {
             return None;
         }
         let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE);
-        let (run, _mismatch) = self.engine.test_function(ntc);
+        let (run, _mismatch) = self.engine.test_function(ntc).await;
         Some(run)
     }
 
     /// Hill-climb every target until no further improvements are found or
     /// the budget is exhausted. Mirrors `engine.py::optimise_targets`.
-    pub(crate) fn optimise_targets(&mut self) {
+    pub(crate) async fn optimise_targets(&mut self) {
         let mut targets: Vec<String> = self
             .engine
             .targeting
@@ -137,7 +137,7 @@ impl Optimiser<'_, '_> {
             let prev_calls = self.engine.calls;
             let mut any_improvements = false;
             for target in &targets {
-                let imps = self.hill_climb(target, max_improvements);
+                let imps = self.hill_climb(target, max_improvements).await;
                 if imps > 0 {
                     any_improvements = true;
                 }
@@ -152,7 +152,7 @@ impl Optimiser<'_, '_> {
     /// Walk the integer choices in `best_choices_for_target[target]` from
     /// the end backwards, hill-climbing each one in both directions.
     /// Mirrors `Optimiser._optimise_target`.
-    fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
+    async fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
         let start_choices = self
             .engine
             .targeting
@@ -160,7 +160,7 @@ impl Optimiser<'_, '_> {
             .get(target)
             .cloned()
             .expect("best_choices_for_target out of sync with best_observed_targets");
-        let trial = match self.run_trial(&start_choices) {
+        let trial = match self.run_trial(&start_choices).await {
             Some(t) => t,
             None => return 0,
         };
@@ -193,29 +193,37 @@ impl Optimiser<'_, '_> {
             let node = &current_nodes[idx];
             if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
                 let len_before = current_nodes.len();
-                find_integer(|k| {
-                    self.try_replace(
-                        target,
-                        &mut current_choices,
-                        &mut current_nodes,
-                        &mut current_score,
-                        &mut improvements,
-                        idx,
-                        k as i128,
-                    )
-                });
-                if idx < current_nodes.len() && current_nodes.len() == len_before {
-                    find_integer(|k| {
-                        self.try_replace(
+                let mut search = FindInteger::new();
+                while let Some(k) = search.probe() {
+                    let ok = self
+                        .try_replace(
                             target,
                             &mut current_choices,
                             &mut current_nodes,
                             &mut current_score,
                             &mut improvements,
                             idx,
-                            -(k as i128),
+                            k as i128,
                         )
-                    });
+                        .await;
+                    search.record(ok);
+                }
+                if idx < current_nodes.len() && current_nodes.len() == len_before {
+                    let mut search = FindInteger::new();
+                    while let Some(k) = search.probe() {
+                        let ok = self
+                            .try_replace(
+                                target,
+                                &mut current_choices,
+                                &mut current_nodes,
+                                &mut current_score,
+                                &mut improvements,
+                                idx,
+                                -(k as i128),
+                            )
+                            .await;
+                        search.record(ok);
+                    }
                 }
             }
             i -= 1;
@@ -231,7 +239,7 @@ impl Optimiser<'_, '_> {
     /// escaping local maxima, but they shouldn't keep the climber spinning
     /// forever). Returns `true` iff the trial was committed.
     #[allow(clippy::too_many_arguments)]
-    fn try_replace(
+    async fn try_replace(
         &mut self,
         target: &str,
         current_choices: &mut Vec<ChoiceValue>,
@@ -250,7 +258,7 @@ impl Optimiser<'_, '_> {
         };
         let mut trial_choices = current_choices.clone();
         trial_choices[idx] = new_val;
-        let trial = match self.run_trial(&trial_choices) {
+        let trial = match self.run_trial(&trial_choices).await {
             Some(t) => t,
             None => return false,
         };

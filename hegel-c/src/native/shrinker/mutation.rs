@@ -24,7 +24,7 @@ impl<'a> Shrinker<'a> {
     /// Try random mutations of a few positions to escape local optima.
     ///
     /// Port of Hypothesis's `shrinking/mutation.py::mutate_and_shrink`.
-    pub(super) fn mutate_and_shrink(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn mutate_and_shrink(&mut self) -> ShrinkResult<()> {
         if self.current_nodes.len() > MAX_MUTATE_NODES {
             return Ok(());
         }
@@ -67,7 +67,7 @@ impl<'a> Shrinker<'a> {
                 let max_size = crate::native::core::flattened_len(&self.current_nodes);
 
                 for _ in 0..=RANDOM_ATTEMPTS {
-                    self.probe(&prefix, max_size)?;
+                    self.probe(&prefix, max_size).await?;
                 }
 
                 let mut j_offset: usize = 1;
@@ -91,7 +91,7 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                     for _ in 0..RANDOM_ATTEMPTS {
-                        self.probe(&two_prefix, max_size)?;
+                        self.probe(&two_prefix, max_size).await?;
                     }
                 }
             }

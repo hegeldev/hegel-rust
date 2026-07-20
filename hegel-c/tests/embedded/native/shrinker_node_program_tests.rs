@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::node_program`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -21,14 +22,14 @@ fn int_node(value: i128) -> ChoiceNode {
 fn node_program_one_deletes_single_node_at_a_time() {
     let initial = vec![int_node(1), int_node(2), int_node(3), int_node(4)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.node_program(1).unwrap();
+    drive_no_yield(shrinker.node_program(1)).unwrap();
     assert!(shrinker.current_nodes.is_empty());
 }
 
@@ -43,14 +44,14 @@ fn node_program_two_deletes_pairs_adaptively() {
         int_node(6),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.node_program(2).unwrap();
+    drive_no_yield(shrinker.node_program(2)).unwrap();
     assert!(shrinker.current_nodes.is_empty());
 }
 
@@ -76,7 +77,7 @@ fn node_program_left_extension_accumulates_across_accepted_steps() {
         int_node(42),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let vals = values(nodes);
                 let ok = vals.last() == Some(&42)
@@ -88,7 +89,7 @@ fn node_program_left_extension_accumulates_across_accepted_steps() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(1).unwrap();
+    drive_no_yield(shrinker.node_program(1)).unwrap();
     assert_eq!(
         values(&shrinker.current_nodes),
         vec![42],
@@ -109,27 +110,27 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
 
     {
         let mut shrinker = Shrinker::with_probe(
-            Box::new(|run| match run {
+            Box::new(|run: ShrinkRun<'_>| match run {
                 ShrinkRun::Full(nodes) => (nodes.len() % 2 == 0, nodes.to_vec(), Spans::new()),
                 ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
             }),
             initial.clone(),
             Spans::new(),
         );
-        shrinker.node_program(1).unwrap();
+        drive_no_yield(shrinker.node_program(1)).unwrap();
         assert_eq!(shrinker.current_nodes.len(), 6);
     }
 
     {
         let mut shrinker = Shrinker::with_probe(
-            Box::new(|run| match run {
+            Box::new(|run: ShrinkRun<'_>| match run {
                 ShrinkRun::Full(nodes) => (nodes.len() % 2 == 0, nodes.to_vec(), Spans::new()),
                 ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
             }),
             initial,
             Spans::new(),
         );
-        shrinker.node_program(2).unwrap();
+        drive_no_yield(shrinker.node_program(2)).unwrap();
         assert_eq!(shrinker.current_nodes.len(), 0);
     }
 }
@@ -137,26 +138,26 @@ fn node_program_respects_predicate_rejecting_partial_deletes() {
 #[test]
 fn node_program_no_op_on_empty_or_too_long() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         Vec::new(),
         Spans::new(),
     );
-    shrinker.node_program(3).unwrap();
+    drive_no_yield(shrinker.node_program(3)).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 0);
 
     let initial = vec![int_node(1)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.node_program(0).unwrap();
+    drive_no_yield(shrinker.node_program(0)).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -175,7 +176,7 @@ fn node_program_deletes_short_ranges() {
         }
     }
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut idx = 0;
                 let mut interesting = false;
@@ -207,7 +208,7 @@ fn node_program_deletes_short_ranges() {
         Spans::new(),
     );
     for k in 1..=4 {
-        shrinker.node_program(k).unwrap();
+        drive_no_yield(shrinker.node_program(k)).unwrap();
     }
     assert!(
         shrinker.current_nodes.len() < initial_node_count(),
@@ -242,7 +243,7 @@ fn node_program_adaptively_deletes_long_false_run() {
         false,
     ));
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut realised: Vec<ChoiceNode> = Vec::new();
                 let mut interesting = false;
@@ -260,6 +261,6 @@ fn node_program_adaptively_deletes_long_false_run() {
         initial,
         Spans::new(),
     );
-    shrinker.node_program(1).unwrap();
+    drive_no_yield(shrinker.node_program(1)).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }

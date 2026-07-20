@@ -19,6 +19,8 @@ mod control;
 /// cbindgen:ignore
 mod embed;
 /// cbindgen:ignore
+mod exchange;
+/// cbindgen:ignore
 mod native;
 /// cbindgen:ignore
 mod panic;

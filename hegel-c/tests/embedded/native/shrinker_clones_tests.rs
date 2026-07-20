@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Spans};
@@ -78,7 +79,7 @@ fn int_at_path_at_least(nodes: &[ChoiceNode], path: &[usize], min: i128) -> bool
 fn nested_shrink_minimizes_values_inside_clone_nodes() {
     let initial = vec![clone_node(vec![int_node(47), bool_node(true)])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
                 int_at_path_at_least(nodes, &[0, 0], 10),
                 nodes.to_vec(),
@@ -89,7 +90,7 @@ fn nested_shrink_minimizes_values_inside_clone_nodes() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert_eq!(shrinker.current_nodes.len(), 1);
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(child.len(), 1);
@@ -103,7 +104,7 @@ fn nested_shrink_recurses_into_clones_inside_clones() {
         clone_node(vec![int_node(20), bool_node(true)]),
     ])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
                 int_at_path_at_least(nodes, &[0, 1, 0], 5),
                 nodes.to_vec(),
@@ -114,7 +115,7 @@ fn nested_shrink_recurses_into_clones_inside_clones() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert_eq!(shrinker.current_nodes.len(), 1);
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(child.len(), 2);
@@ -131,7 +132,7 @@ fn unconstrained_clone_nodes_are_deleted_outright() {
         clone_node(vec![int_node(9), bool_node(true), int_node(2)]),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
                 int_at_path_at_least(nodes, &[0], 3),
                 nodes.to_vec(),
@@ -142,7 +143,7 @@ fn unconstrained_clone_nodes_are_deleted_outright() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert_eq!(shrinker.current_nodes.len(), 1);
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
 }
@@ -151,7 +152,7 @@ fn unconstrained_clone_nodes_are_deleted_outright() {
 fn nested_shrink_tolerates_runs_that_drop_the_clone_node() {
     let initial = vec![clone_node(vec![int_node(12)])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 if int_at_path_at_least(nodes, &[0, 0], 10) {
                     (true, nodes.to_vec(), Spans::new())
@@ -164,7 +165,7 @@ fn nested_shrink_tolerates_runs_that_drop_the_clone_node() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(int_value(&child[0]), 10);
 }
@@ -179,14 +180,14 @@ fn values_only_clone_records_are_left_alone() {
         false,
     )];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial.clone(),
         Spans::new(),
     );
-    shrinker.shrink_clone_streams().unwrap();
+    drive_no_yield(shrinker.shrink_clone_streams()).unwrap();
     assert_eq!(shrinker.calls, 0);
     assert_eq!(shrinker.current_nodes, initial);
 }

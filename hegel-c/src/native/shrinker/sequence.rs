@@ -15,20 +15,22 @@ impl<'a> Shrinker<'a> {
     /// matters when earlier swaps cause structural changes (e.g. value
     /// punning on collection-bearing kinds) that would make the full
     /// sort's replace unreachable.
-    pub(super) fn sort_values(&mut self) -> ShrinkResult<()> {
-        self.sort_values_integers()?;
-        self.sort_values_booleans()
+    pub(super) async fn sort_values(&mut self) -> ShrinkResult<()> {
+        self.sort_values_integers().await?;
+        self.sort_values_booleans().await
     }
 
-    pub(super) fn sort_values_integers(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn sort_values_integers(&mut self) -> ShrinkResult<()> {
         self.try_sort_group(|k| matches!(k, ChoiceKind::Integer(_)))
+            .await
     }
 
-    pub(super) fn sort_values_booleans(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn sort_values_booleans(&mut self) -> ShrinkResult<()> {
         self.try_sort_group(|k| matches!(k, ChoiceKind::Boolean(_)))
+            .await
     }
 
-    fn try_sort_group<F>(&mut self, matches_kind: F) -> ShrinkResult<()>
+    async fn try_sort_group<F>(&mut self, matches_kind: F) -> ShrinkResult<()>
     where
         F: Fn(&ChoiceKind) -> bool,
     {
@@ -71,7 +73,7 @@ impl<'a> Shrinker<'a> {
                 .zip(sorted_values.iter())
                 .map(|(&i, v)| (i, v.clone()))
                 .collect();
-            if self.replace(&replacements)? {
+            if self.replace(&replacements).await? {
                 return Ok(());
             }
         }
@@ -102,7 +104,7 @@ impl<'a> Shrinker<'a> {
                 let mut swap = HashMap::new();
                 swap.insert(idx_prev, v_j);
                 swap.insert(idx_j, v_prev);
-                if self.replace(&swap)? {
+                if self.replace(&swap).await? {
                     j -= 1;
                     continue;
                 }
@@ -117,7 +119,7 @@ impl<'a> Shrinker<'a> {
     /// cases like list entries where each entry spans multiple choices
     /// (e.g. [continue, value]) and the sorting pass can't swap
     /// individual values without breaking structure.
-    pub(super) fn swap_adjacent_blocks(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn swap_adjacent_blocks(&mut self) -> ShrinkResult<()> {
         for block_size in 2usize..=8 {
             let mut i = 0;
             while i + 2 * block_size <= self.current_nodes.len() {
@@ -152,7 +154,7 @@ impl<'a> Shrinker<'a> {
                     swap.insert(i + k, block_b[k].clone());
                     swap.insert(j + k, block_a[k].clone());
                 }
-                self.replace(&swap)?;
+                self.replace(&swap).await?;
                 i += 1;
             }
         }

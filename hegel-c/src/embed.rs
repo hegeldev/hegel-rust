@@ -12,6 +12,7 @@
 //! lets them drive it directly. That's what [`run_native`] is for.
 
 use crate::backend::{DataSource, RunError, TestRunResult};
+use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
 
 /// Drive the native test runner against a callback that receives the raw
@@ -38,17 +39,31 @@ use crate::settings::{Settings, Verbosity};
 pub fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
-    mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+) -> Result<TestRunResult, RunError> {
+    let exchange = CaseExchange::new();
+    let run = run_native_async(settings, database_key, &exchange);
+    crate::exchange::drive(&exchange, run, run_case)
+}
+
+/// The engine future behind [`run_native`]: dispatches on
+/// [`Mode`](crate::settings::Mode) and runs the whole exploration, offering
+/// each test case to the driver through `exchange`. Suspends only at those
+/// offers, so it can be driven with a no-op waker (see [`crate::exchange`]).
+pub(crate) async fn run_native_async(
+    settings: &Settings,
+    database_key: Option<&str>,
+    exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, &mut run_case);
+            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });
     }
 
-    let failures = crate::native::test_runner::explore(settings, database_key, &mut run_case)?;
+    let failures = crate::native::test_runner::explore(settings, database_key, exchange).await?;
     Ok(TestRunResult { failures })
 }
 

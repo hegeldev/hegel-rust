@@ -4,7 +4,8 @@ use crate::native::bignum::{BigInt, Sign, Signed};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
-use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
+use super::search::{BinSearchDownBig, FindInteger};
+use super::{ShrinkResult, Shrinker};
 use crate::control::hegel_internal_debug_assert;
 
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
@@ -39,16 +40,17 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::replace`], which range-checks it and coerces it to the
     /// node's width (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
-    pub(super) fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
+    pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
         self.replace(&HashMap::from([(
             i,
             ChoiceValue::Integer(candidate.clone()),
         )]))
+        .await
     }
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
     /// range-checks and width-coerces each candidate.
-    pub(super) fn replace_two(
+    pub(super) async fn replace_two(
         &mut self,
         i: usize,
         vi: &BigInt,
@@ -59,10 +61,11 @@ impl<'a> Shrinker<'a> {
             (i, ChoiceValue::Integer(vi.clone())),
             (j, ChoiceValue::Integer(vj.clone())),
         ]))
+        .await
     }
 
     /// Replace blocks of choices with their simplest values.
-    pub(super) fn zero_choices(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn zero_choices(&mut self) -> ShrinkResult<()> {
         let mut k = self.current_nodes.len();
         while k > 0 {
             let mut i = 0;
@@ -74,7 +77,7 @@ impl<'a> Shrinker<'a> {
                     let replacements: HashMap<usize, ChoiceValue> = (i..i + k)
                         .map(|j| (j, self.current_nodes[j].kind.simplest()))
                         .collect();
-                    self.replace(&replacements)?;
+                    self.replace(&replacements).await?;
                     i += k;
                 }
             }
@@ -84,7 +87,7 @@ impl<'a> Shrinker<'a> {
     }
 
     /// For integer choices: try simplest, then flip negative to positive.
-    pub(super) fn swap_integer_sign(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn swap_integer_sign(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (
@@ -94,13 +97,14 @@ impl<'a> Shrinker<'a> {
                 let v = v.clone();
                 let simplest = ic.simplest();
                 if v != ic.simplest() {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]))?;
+                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]))
+                        .await?;
                 }
                 if i < self.current_nodes.len() {
                     if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
                         let v = v.clone();
                         if v.sign() == Sign::Minus {
-                            self.replace_int(i, &(-&v))?;
+                            self.replace_int(i, &(-&v)).await?;
                         }
                     }
                 }
@@ -121,7 +125,7 @@ impl<'a> Shrinker<'a> {
     /// the distance — predicates like `x & 0xff == 0x77` stall without it),
     /// the squeeze-into-one-byte probes, the shift-right descent, and
     /// multiple-subtraction, iterated to a fixpoint.
-    pub(super) fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let ic = match self.current_nodes[i].kind.as_ref() {
@@ -133,26 +137,31 @@ impl<'a> Shrinker<'a> {
             };
             let target = ic.clamped_shrink_towards();
 
-            self.try_at_distance(i, &ic, &target, &BigInt::from(0))?;
-            self.try_at_distance(i, &ic, &target, &BigInt::from(1))?;
+            self.try_at_distance(i, &ic, &target, &BigInt::from(0))
+                .await?;
+            self.try_at_distance(i, &ic, &target, &BigInt::from(1))
+                .await?;
 
             let base = self.distance_from(i, &target);
             let n_bits = base.bits();
-            find_integer_r(|k| {
-                if k as u64 >= n_bits {
-                    return Ok(false);
-                }
-                let keep = (n_bits - k as u64) as usize;
-                let masked = low_bits(&base, keep);
-                self.try_at_distance(i, &ic, &target, &masked)
-            })?;
+            let mut search = FindInteger::new();
+            while let Some(k) = search.probe() {
+                let ok = if k as u64 >= n_bits {
+                    false
+                } else {
+                    let keep = (n_bits - k as u64) as usize;
+                    let masked = low_bits(&base, keep);
+                    self.try_at_distance(i, &ic, &target, &masked).await?
+                };
+                search.record(ok);
+            }
 
             let base = self.distance_from(i, &target);
             if base.bits() > 8 {
                 let top = &base >> (base.bits() as usize - 8);
-                self.try_at_distance(i, &ic, &target, &top)?;
+                self.try_at_distance(i, &ic, &target, &top).await?;
                 let bottom = low_bits(&base, 8);
-                self.try_at_distance(i, &ic, &target, &bottom)?;
+                self.try_at_distance(i, &ic, &target, &bottom).await?;
             }
 
             loop {
@@ -161,19 +170,25 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let max_shift = before.bits() as usize + 1;
-                find_integer_r(|k| {
+                let mut search = FindInteger::new();
+                while let Some(k) = search.probe() {
                     let candidate = &before >> k.min(max_shift);
-                    self.try_at_distance(i, &ic, &target, &candidate)
-                })?;
+                    let ok = self.try_at_distance(i, &ic, &target, &candidate).await?;
+                    search.record(ok);
+                }
                 for step in [2u64, 1] {
                     let base = self.distance_from(i, &target);
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let sub = BigInt::from(step) * BigInt::from(n as u64);
-                        if sub > base {
-                            return Ok(false);
-                        }
-                        self.try_at_distance(i, &ic, &target, &(&base - &sub))
-                    })?;
+                        let ok = if sub > base {
+                            false
+                        } else {
+                            self.try_at_distance(i, &ic, &target, &(&base - &sub))
+                                .await?
+                        };
+                        search.record(ok);
+                    }
                 }
                 if self.distance_from(i, &target) == before {
                     break;
@@ -193,7 +208,7 @@ impl<'a> Shrinker<'a> {
     /// Probe node `i` at `target + d`, then — when that is rejected — at
     /// `target - d`. The sort key orders equal distances above-first, so the
     /// above side is always offered first.
-    fn try_at_distance(
+    async fn try_at_distance(
         &mut self,
         i: usize,
         ic: &IntegerChoice,
@@ -203,12 +218,12 @@ impl<'a> Shrinker<'a> {
         let above = target + d;
         let mut accepted = false;
         if ic.validate(&above) {
-            accepted = self.replace_int(i, &above)?;
+            accepted = self.replace_int(i, &above).await?;
         }
         if !accepted && d.sign() == Sign::Plus {
             let below = target - d;
             if ic.validate(&below) {
-                accepted = self.replace_int(i, &below)?;
+                accepted = self.replace_int(i, &below).await?;
             }
         }
         Ok(accepted)
@@ -220,7 +235,7 @@ impl<'a> Shrinker<'a> {
     /// value from i to j (or vice versa) while keeping the total sum
     /// constant. Useful for sum-type constraints where the minimal
     /// counterexample has one small and one large value.
-    pub(super) fn redistribute_integers(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn redistribute_integers(&mut self) -> ShrinkResult<()> {
         let int_indices: Vec<usize> = self
             .current_nodes
             .iter()
@@ -275,15 +290,17 @@ impl<'a> Shrinker<'a> {
                 let prev_dist = BigInt::from((&prev_i - &target_i).magnitude());
                 if prev_dist.sign() == Sign::Plus {
                     let on_low_side = prev_i < target_i;
-                    bin_search_down_big_r(BigInt::from(0), prev_dist.clone(), &mut |d| {
+                    let mut search = BinSearchDownBig::new(BigInt::from(0), prev_dist.clone());
+                    while let Some(d) = search.probe() {
                         let new_i = if on_low_side {
-                            &target_i - d
+                            &target_i - &d
                         } else {
-                            &target_i + d
+                            &target_i + &d
                         };
                         let new_j = &prev_j + (&prev_i - &new_i);
-                        self.replace_two(i, &new_i, j, &new_j)
-                    })?;
+                        let ok = self.replace_two(i, &new_i, j, &new_j).await?;
+                        search.record(ok);
+                    }
                 }
 
                 if pair_idx == 0 {
@@ -303,7 +320,7 @@ impl<'a> Shrinker<'a> {
     /// shrinker falls into a zig-zag trap. By probing `(v_i - k, v_j - k)` for
     /// geometrically growing `k` via `find_integer`, this pass reaches the
     /// minimum in `O(log k)` probes.
-    pub(super) fn lower_integers_together(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn lower_integers_together(&mut self) -> ShrinkResult<()> {
         let mut pair_idx = 0;
         loop {
             for gap in 1..=3 {
@@ -346,28 +363,34 @@ impl<'a> Shrinker<'a> {
 
                 if v_i > st_i {
                     let max_k = &v_i - &st_i;
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let k = BigInt::from(n as u64);
-                        if k > max_k {
-                            return Ok(false);
-                        }
-                        let new_i = &v_i - &k;
-                        let new_j = &v_j - &k;
-                        self.replace_two(i, &new_i, j, &new_j)
-                    })?;
+                        let ok = if k > max_k {
+                            false
+                        } else {
+                            let new_i = &v_i - &k;
+                            let new_j = &v_j - &k;
+                            self.replace_two(i, &new_i, j, &new_j).await?
+                        };
+                        search.record(ok);
+                    }
                 }
 
                 if v_i < st_i {
                     let max_k = &st_i - &v_i;
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let k = BigInt::from(n as u64);
-                        if k > max_k {
-                            return Ok(false);
-                        }
-                        let new_i = &v_i + &k;
-                        let new_j = &v_j + &k;
-                        self.replace_two(i, &new_i, j, &new_j)
-                    })?;
+                        let ok = if k > max_k {
+                            false
+                        } else {
+                            let new_i = &v_i + &k;
+                            let new_j = &v_j + &k;
+                            self.replace_two(i, &new_i, j, &new_j).await?
+                        };
+                        search.record(ok);
+                    }
                 }
             }
             pair_idx += 1;
@@ -384,7 +407,27 @@ impl<'a> Shrinker<'a> {
     /// All five choice kinds participate: every group tries the
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
-    pub(super) fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
+        async fn group_replace(
+            sh: &mut Shrinker<'_>,
+            valid: &[usize],
+            candidate: &BigInt,
+        ) -> ShrinkResult<bool> {
+            let current_valid: Vec<usize> = valid
+                .iter()
+                .copied()
+                .filter(|&i| i < sh.current_nodes.len())
+                .collect();
+            if current_valid.len() < 2 {
+                return Ok(false);
+            }
+            let replacements: HashMap<usize, ChoiceValue> = current_valid
+                .iter()
+                .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
+                .collect();
+            sh.replace(&replacements).await
+        }
+
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
             HashMap::new();
         for (i, node) in self.current_nodes.iter().enumerate() {
@@ -416,7 +459,7 @@ impl<'a> Shrinker<'a> {
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();
-                self.replace(&replacements)?;
+                self.replace(&replacements).await?;
             }
         }
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
@@ -461,29 +504,13 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
                     .collect();
-                self.replace(&replacements)?;
+                self.replace(&replacements).await?;
             }
 
             let cur_value = self.int_value_bigint(valid[0]);
 
-            let valid_capture = valid.clone();
-            let group_replace = |sh: &mut Shrinker<'_>, candidate: &BigInt| -> ShrinkResult<bool> {
-                let current_valid: Vec<usize> = valid_capture
-                    .iter()
-                    .copied()
-                    .filter(|&i| i < sh.current_nodes.len())
-                    .collect();
-                if current_valid.len() < 2 {
-                    return Ok(false);
-                }
-                let replacements: HashMap<usize, ChoiceValue> = current_valid
-                    .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
-                    .collect();
-                sh.replace(&replacements)
-            };
             let live_base = |sh: &Shrinker<'_>| -> BigInt {
-                match &sh.current_nodes[valid_capture[0]].value {
+                match &sh.current_nodes[valid[0]].value {
                     ChoiceValue::Integer(v) => v.clone(),
                     _ => unreachable!("group filter only retains Integer-kind members"),
                 }
@@ -493,45 +520,57 @@ impl<'a> Shrinker<'a> {
                 let dist = &cur_value - &lo;
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer_r(|k| {
+                    let mut search = FindInteger::new();
+                    while let Some(k) = search.probe() {
                         let candidate = &lo + (&dist >> k.min(max_shift));
-                        group_replace(self, &candidate)
-                    })?;
+                        let ok = group_replace(self, &valid, &candidate).await?;
+                        search.record(ok);
+                    }
                 }
                 if live_base(self) > lo {
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let attempt = live_base(self) - BigInt::from(2u128 * n as u128);
-                        group_replace(self, &attempt)
-                    })?;
+                        let ok = group_replace(self, &valid, &attempt).await?;
+                        search.record(ok);
+                    }
                 }
                 if live_base(self) > lo {
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let attempt = live_base(self) - BigInt::from(n as u64);
-                        group_replace(self, &attempt)
-                    })?;
+                        let ok = group_replace(self, &valid, &attempt).await?;
+                        search.record(ok);
+                    }
                 }
             } else if cur_value.sign() == Sign::Minus {
                 let lo = (-ic.simplest()).max(BigInt::from(0));
                 let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
                 if dist.sign() == Sign::Plus {
                     let max_shift = dist.bits() as usize + 1;
-                    find_integer_r(|k| {
+                    let mut search = FindInteger::new();
+                    while let Some(k) = search.probe() {
                         let candidate_abs = &lo + (&dist >> k.min(max_shift));
-                        group_replace(self, &(-&candidate_abs))
-                    })?;
+                        let ok = group_replace(self, &valid, &(-&candidate_abs)).await?;
+                        search.record(ok);
+                    }
                 }
                 let neg_hi = -&lo;
                 if live_base(self) < neg_hi {
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let attempt = live_base(self) + BigInt::from(2u128 * n as u128);
-                        group_replace(self, &attempt)
-                    })?;
+                        let ok = group_replace(self, &valid, &attempt).await?;
+                        search.record(ok);
+                    }
                 }
                 if live_base(self) < neg_hi {
-                    find_integer_r(|n| {
+                    let mut search = FindInteger::new();
+                    while let Some(n) = search.probe() {
                         let attempt = live_base(self) + BigInt::from(n as u64);
-                        group_replace(self, &attempt)
-                    })?;
+                        let ok = group_replace(self, &valid, &attempt).await?;
+                        search.record(ok);
+                    }
                 }
             }
         }
@@ -550,7 +589,7 @@ impl<'a> Shrinker<'a> {
     ///
     /// Always called after a successful pass that may have changed
     /// integer values; clears the change-tracking set on exit.
-    pub(crate) fn lower_common_node_offset(&mut self) -> ShrinkResult<()> {
+    pub(crate) async fn lower_common_node_offset(&mut self) -> ShrinkResult<()> {
         let mut changed: Vec<usize> = self.changed_nodes().iter().copied().collect();
         changed.sort_unstable();
         if changed.len() <= 1 {
@@ -604,25 +643,28 @@ impl<'a> Shrinker<'a> {
             .collect();
 
         for sign_multiplier in [1i128, -1] {
-            find_integer_r(|n| {
+            let mut search = FindInteger::new();
+            while let Some(n) = search.probe() {
                 let n_big = BigInt::from(n as u64);
-                if n_big > offset {
-                    return Ok(false);
-                }
-                let new_offset = &offset - &n_big;
-                let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
-                for k in 0..indices.len() {
-                    let new_distance = &new_offset + &residual[k];
-                    let effective_sign = signs[k] * sign_multiplier;
-                    let new_value = if effective_sign >= 0 {
-                        &ic_targets[k] + &new_distance
-                    } else {
-                        &ic_targets[k] - &new_distance
-                    };
-                    replacements.insert(indices[k], ChoiceValue::Integer(new_value));
-                }
-                self.replace(&replacements)
-            })?;
+                let ok = if n_big > offset {
+                    false
+                } else {
+                    let new_offset = &offset - &n_big;
+                    let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
+                    for k in 0..indices.len() {
+                        let new_distance = &new_offset + &residual[k];
+                        let effective_sign = signs[k] * sign_multiplier;
+                        let new_value = if effective_sign >= 0 {
+                            &ic_targets[k] + &new_distance
+                        } else {
+                            &ic_targets[k] - &new_distance
+                        };
+                        replacements.insert(indices[k], ChoiceValue::Integer(new_value));
+                    }
+                    self.replace(&replacements).await?
+                };
+                search.record(ok);
+            }
         }
         self.clear_change_tracking();
         Ok(())

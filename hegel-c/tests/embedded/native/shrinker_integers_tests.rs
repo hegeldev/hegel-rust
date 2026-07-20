@@ -6,6 +6,7 @@
 //! target converge onto it. The legacy pass was anchored at zero and never
 //! moved values lying between zero and the target.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -32,7 +33,7 @@ fn int_value(node: &ChoiceNode) -> i128 {
 
 fn accept_all(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -44,21 +45,21 @@ fn accept_all(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 #[test]
 fn integer_shrink_walks_up_to_shrink_towards_from_below() {
     let mut shrinker = accept_all(vec![int_node_st(3, 0, 1000, 100)]);
-    shrinker.binary_search_integer_towards_zero().unwrap();
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 100);
 }
 
 #[test]
 fn integer_shrink_descends_to_shrink_towards_from_above() {
     let mut shrinker = accept_all(vec![int_node_st(977, 0, 1000, 100)]);
-    shrinker.binary_search_integer_towards_zero().unwrap();
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 100);
 }
 
 #[test]
 fn integer_shrink_probes_both_sides_of_target_for_nonmonotonic_predicates() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = int_value(&nodes[0]) % 2 != 0;
                 (interesting, nodes.to_vec(), Spans::new())
@@ -68,7 +69,7 @@ fn integer_shrink_probes_both_sides_of_target_for_nonmonotonic_predicates() {
         vec![int_node_st(3, 0, 1000, 100)],
         Spans::new(),
     );
-    shrinker.binary_search_integer_towards_zero().unwrap();
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
     let v = int_value(&shrinker.current_nodes[0]);
     assert_eq!(
         (v - 100).unsigned_abs(),
@@ -80,7 +81,7 @@ fn integer_shrink_probes_both_sides_of_target_for_nonmonotonic_predicates() {
 #[test]
 fn integer_shrink_masks_high_bits_of_distance() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = int_value(&nodes[0]) % 256 == 0x77;
                 (interesting, nodes.to_vec(), Spans::new())
@@ -90,14 +91,14 @@ fn integer_shrink_masks_high_bits_of_distance() {
         vec![int_node_st(0x1000077, 0, i64::MAX as i128, 0)],
         Spans::new(),
     );
-    shrinker.binary_search_integer_towards_zero().unwrap();
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0x77);
 }
 
 #[test]
 fn redistribute_integers_moves_values_toward_shrink_towards() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let sum: i128 = nodes.iter().map(int_value).sum();
                 (sum == 200, nodes.to_vec(), Spans::new())
@@ -107,7 +108,7 @@ fn redistribute_integers_moves_values_toward_shrink_towards() {
         vec![int_node_st(3, 0, 1000, 100), int_node_st(197, 0, 1000, 100)],
         Spans::new(),
     );
-    shrinker.redistribute_integers().unwrap();
+    drive_no_yield(shrinker.redistribute_integers()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 100);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 100);
 }
@@ -115,7 +116,7 @@ fn redistribute_integers_moves_values_toward_shrink_towards() {
 #[test]
 fn lower_and_bump_accepts_relative_bump() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let a = int_value(&nodes[0]);
                 let b = int_value(&nodes[1]);
@@ -127,7 +128,7 @@ fn lower_and_bump_accepts_relative_bump() {
         vec![int_node_st(5, 0, 10, 0), int_node_st(0, 0, 10, 0)],
         Spans::new(),
     );
-    shrinker.lower_and_bump().unwrap();
+    drive_no_yield(shrinker.lower_and_bump()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 4);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 1);
 }

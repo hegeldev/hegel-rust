@@ -1,4 +1,5 @@
 use super::*;
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::Spans;
 use crate::native::core::choices::IntegerChoice;
@@ -37,14 +38,14 @@ fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
         float_node(5.0, -100.0, 100.0),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_numeric_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_numeric_pairs()).unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
@@ -60,14 +61,14 @@ fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
 fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
     let initial = vec![float_node(3.0, -100.0, 100.0), int_node(2, 1, 10)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_numeric_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_numeric_pairs()).unwrap();
     match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
@@ -106,7 +107,7 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats().unwrap();
+    drive_no_yield(shrinker.shrink_floats()).unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(f) => assert_eq!(f, f64::MAX),
         _ => unreachable!(),
@@ -143,7 +144,7 @@ fn as_integer_ratio_huge_value_overflows_to_none() {
 fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
     let initial = vec![float_node(-1e18, -1e20, 0.0)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting =
                     matches!(nodes[0].value, ChoiceValue::Float(v) if v < -1.0 && v.is_finite());
@@ -154,7 +155,7 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats().unwrap();
+    drive_no_yield(shrinker.shrink_floats()).unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(v) => assert!(v < -1.0 && v.is_finite()),
         _ => unreachable!(),
@@ -176,7 +177,7 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
     let v0 = -(1i64 << 60) as f64;
     let initial = vec![float_node(v0, -(1i128 << 61) as f64, -1.0)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = matches!(
                     nodes[0].value,
@@ -189,7 +190,7 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_floats().unwrap();
+    drive_no_yield(shrinker.shrink_floats()).unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Float(v) => assert_eq!(v, -3.0),
         _ => unreachable!(),

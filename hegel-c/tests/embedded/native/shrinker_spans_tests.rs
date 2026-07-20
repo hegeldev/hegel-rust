@@ -9,6 +9,7 @@
 //!   well-defined.
 //! * `Shrinker::clear_change_tracking` empties the set and rebaselines.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -52,7 +53,7 @@ fn consider_replaces_current_spans_on_improvement() {
     initial_spans.push(span(0, 2, "initial"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut spans = Spans::new();
                 spans.push(span(0, nodes.len(), "updated"));
@@ -66,7 +67,7 @@ fn consider_replaces_current_spans_on_improvement() {
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "initial");
 
     let smaller = vec![int_node(0), int_node(0)];
-    assert!(shrinker.consider(&smaller).unwrap());
+    assert!(drive_no_yield(shrinker.consider(&smaller)).unwrap());
     assert_eq!(shrinker.current_spans.len(), 1);
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "updated");
 }
@@ -78,7 +79,7 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
     initial_spans.push(span(0, 1, "kept"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut spans = Spans::new();
                 spans.push(span(0, nodes.len(), "would_be_replaced"));
@@ -90,11 +91,11 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
         initial_spans,
     );
 
-    assert!(shrinker.consider(&initial).unwrap());
+    assert!(drive_no_yield(shrinker.consider(&initial)).unwrap());
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
 
     let larger = vec![int_node(7)];
-    shrinker.consider(&larger).unwrap();
+    drive_no_yield(shrinker.consider(&larger)).unwrap();
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
 }
 
@@ -102,7 +103,7 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
 fn changed_nodes_accumulates_diff_against_checkpoint() {
     let initial = vec![int_node(10), int_node(10), int_node(10)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -111,15 +112,11 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
     );
     assert!(shrinker.changed_nodes().is_empty());
 
-    shrinker
-        .consider(&[int_node(0), int_node(10), int_node(10)])
-        .unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10), int_node(10)])).unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 1);
     assert!(shrinker.changed_nodes().contains(&0));
 
-    shrinker
-        .consider(&[int_node(0), int_node(10), int_node(0)])
-        .unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10), int_node(0)])).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&0));
     assert!(changed.contains(&2));
@@ -130,7 +127,7 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
 fn changed_nodes_clears_on_shape_change() {
     let initial = vec![int_node(5), int_node(5), int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -138,12 +135,10 @@ fn changed_nodes_clears_on_shape_change() {
         Spans::new(),
     );
 
-    shrinker
-        .consider(&[int_node(0), int_node(5), int_node(5)])
-        .unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(5), int_node(5)])).unwrap();
     assert!(!shrinker.changed_nodes().is_empty());
 
-    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
@@ -151,7 +146,7 @@ fn changed_nodes_clears_on_shape_change() {
 fn changed_nodes_clears_on_kind_change_in_place() {
     let initial = vec![int_node(5), int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(_) => {
                 let actual = vec![int_node(0), bool_node(false)];
                 (true, actual, Spans::new())
@@ -161,13 +156,13 @@ fn changed_nodes_clears_on_kind_change_in_place() {
         initial,
         Spans::new(),
     );
-    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
 #[test]
 fn forced_nodes_survive_every_shrinker_pass() {
-    use crate::native::shrinker::{ShrinkPass, Shrinker};
+    use crate::native::shrinker::{ShrinkPass, Shrinker, boxed_pass};
 
     let mut forced = int_node(7);
     forced.was_forced = true;
@@ -179,7 +174,7 @@ fn forced_nodes_survive_every_shrinker_pass() {
     };
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -187,18 +182,21 @@ fn forced_nodes_survive_every_shrinker_pass() {
         Spans::new(),
     );
     let mut passes = vec![
-        ShrinkPass::new("zero_choices", Box::new(|sh| sh.zero_choices())),
+        ShrinkPass::new("zero_choices", Box::new(|sh| boxed_pass(sh.zero_choices()))),
         ShrinkPass::new(
             "binary_search_integer_towards_zero",
-            Box::new(|sh| sh.binary_search_integer_towards_zero()),
+            Box::new(|sh| boxed_pass(sh.binary_search_integer_towards_zero())),
         ),
         ShrinkPass::new(
             "minimize_individual_choices",
-            Box::new(|sh| sh.minimize_individual_choices()),
+            Box::new(|sh| boxed_pass(sh.minimize_individual_choices())),
         ),
-        ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
+        ShrinkPass::new(
+            "shrink_duplicates",
+            Box::new(|sh| boxed_pass(sh.shrink_duplicates())),
+        ),
     ];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     let value = match &shrinker.current_nodes[snapshot_forced_idx].value {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
@@ -211,20 +209,20 @@ fn forced_nodes_survive_every_shrinker_pass() {
 fn clear_change_tracking_rebaselines_and_empties_set() {
     let initial = vec![int_node(10), int_node(10)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.consider(&[int_node(0), int_node(10)]).unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10)])).unwrap();
     assert!(shrinker.changed_nodes().contains(&0));
 
     shrinker.clear_change_tracking();
     assert!(shrinker.changed_nodes().is_empty());
 
-    shrinker.consider(&[int_node(0), int_node(0)]).unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&1));
     assert!(!changed.contains(&0));

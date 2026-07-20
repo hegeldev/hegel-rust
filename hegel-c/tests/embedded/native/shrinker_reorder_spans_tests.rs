@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::reorder_spans`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -36,14 +37,14 @@ fn reorder_spans_sorts_same_label_siblings() {
     spans.push(sib(1, 2, "item", None));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.reorder_spans().unwrap();
+    drive_no_yield(shrinker.reorder_spans()).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -64,7 +65,7 @@ fn reorder_spans_stops_when_deadline_passed() {
     spans.push(sib(1, 2, "item", None));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -72,7 +73,7 @@ fn reorder_spans_stops_when_deadline_passed() {
         spans,
     );
     shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
-    assert!(shrinker.reorder_spans().is_err());
+    assert!(drive_no_yield(shrinker.reorder_spans()).is_err());
     assert!(shrinker.timed_out);
 }
 
@@ -84,14 +85,14 @@ fn reorder_spans_skips_singleton_groups() {
     spans.push(sib(1, 2, "b", None));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.reorder_spans().unwrap();
+    drive_no_yield(shrinker.reorder_spans()).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -119,14 +120,14 @@ fn reorder_spans_handles_multi_node_siblings() {
     spans.push(sib(4, 6, "pair", None));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.reorder_spans().unwrap();
+    drive_no_yield(shrinker.reorder_spans()).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -146,13 +147,13 @@ fn reorder_spans_safe_with_stale_endpoints() {
     spans.push(sib(5, 10, "wide", None));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.reorder_spans().unwrap();
+    drive_no_yield(shrinker.reorder_spans()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

@@ -1,5 +1,6 @@
 //! Unit tests for the sequence-ordering shrink pass (`sort_values`).
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -44,14 +45,14 @@ fn int_values(shrinker: &Shrinker) -> Vec<i128> {
 fn sort_values_takes_the_full_sort_when_accepted() {
     let initial = vec![int_node(5), int_node(1), int_node(3)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.sort_values_integers().unwrap();
+    drive_no_yield(shrinker.sort_values_integers()).unwrap();
     assert_eq!(int_values(&shrinker), vec![1, 3, 5]);
 }
 
@@ -60,14 +61,14 @@ fn sort_values_takes_the_full_sort_when_accepted() {
 fn sort_values_sorts_booleans() {
     let initial = vec![bool_node(true), bool_node(false), bool_node(true)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.sort_values_booleans().unwrap();
+    drive_no_yield(shrinker.sort_values_booleans()).unwrap();
     let bools: Vec<bool> = shrinker
         .current_nodes
         .iter()
