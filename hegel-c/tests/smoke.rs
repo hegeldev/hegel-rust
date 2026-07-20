@@ -128,7 +128,7 @@ type FnNewStateMachine = unsafe extern "C" fn(
     usize,
     *mut i64,
 ) -> c_int;
-type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut u64) -> c_int;
+type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
 type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnStringGeneratorText = unsafe extern "C" fn(
@@ -623,7 +623,7 @@ fn caller_usage_errors_return_error_not_abort() {
             (a.pool_add)(ctx, tc, 9999, &mut var_id),
             HEGEL_E_INVALID_ARG
         );
-        let mut rule_idx = 0u64;
+        let mut rule_idx = 0i64;
         assert_eq!(
             (a.state_machine_next_rule)(ctx, tc, 9999, &mut rule_idx),
             HEGEL_E_INVALID_ARG
@@ -1042,16 +1042,19 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
 
             let mut overran = false;
             let mut current_run = 0usize;
-            let mut previous: Option<u64> = None;
+            let mut previous: Option<i64> = None;
             for _ in 0..25 {
-                let mut index: u64 = u64::MAX;
+                let mut index: i64 = i64::MAX;
                 let rc = (a.state_machine_next_rule)(ctx, tc, machine_id, &mut index);
                 if rc == HEGEL_E_STOP_TEST {
                     overran = true;
                     break;
                 }
                 assert_eq!(rc, HEGEL_OK, "state_machine_next_rule failed: rc={}", rc);
-                assert!(index < 3, "rule index {} out of range", index);
+                if index == -1 {
+                    break;
+                }
+                assert!((0..3).contains(&index), "rule index {} out of range", index);
                 saw_rule_draw = true;
                 current_run = if previous == Some(index) {
                     current_run + 1

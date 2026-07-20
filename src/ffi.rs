@@ -711,15 +711,22 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
+    /// Ask the engine for the next rule to run; `None` once the engine has
+    /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
     pub(crate) fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
-    ) -> Result<i64, hegel_result_t> {
+    ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
         });
-        rc_to_value(rc, out)
+        let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
+            None
+        } else {
+            Some(out)
+        };
+        rc_to_value(rc, index)
     }
 
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {

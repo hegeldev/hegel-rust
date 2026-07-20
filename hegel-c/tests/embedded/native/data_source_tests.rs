@@ -121,8 +121,12 @@ fn state_machine_next_rule_returns_in_range_indices() {
     let id = ds
         .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
         .unwrap();
+    assert!(ds.state_machine_next_rule(id).unwrap().unwrap() < 3);
     for _ in 0..20 {
-        assert!(ds.state_machine_next_rule(id).unwrap() < 3);
+        match ds.state_machine_next_rule(id).unwrap() {
+            Some(index) => assert!(index < 3),
+            None => break,
+        }
     }
 }
 
@@ -356,8 +360,10 @@ fn state_machines_are_shared_across_cloned_streams() {
         .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
         .unwrap();
     let child = ds.clone_stream().unwrap();
-    assert!(child.state_machine_next_rule(machine).unwrap() < 3);
-    assert!(ds.state_machine_next_rule(machine).unwrap() < 3);
+    assert!(child.state_machine_next_rule(machine).unwrap().unwrap() < 3);
+    if let Some(index) = ds.state_machine_next_rule(machine).unwrap() {
+        assert!(index < 3);
+    }
 }
 
 #[test]
