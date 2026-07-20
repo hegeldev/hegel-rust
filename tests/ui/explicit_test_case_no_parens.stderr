@@ -1,0 +1,6 @@
+error: #[hegel::explicit_test_case] requires arguments.
+       Usage: #[hegel::explicit_test_case(name = value, ...)]
+ --> tests/ui/explicit_test_case_no_parens.rs:5:1
+  |
+5 | #[hegel::explicit_test_case]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

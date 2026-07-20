@@ -234,19 +234,25 @@ impl std::fmt::Debug for TestCase {
     }
 }
 
-/// A callback invoked for each line of draw/note output during the final replay.
+/// A callback invoked for each line of run output — engine progress lines,
+/// draw/note output, verbose diagnostics, and the final failure report.
 pub(crate) type OutputSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 thread_local! {
     static OUTPUT_OVERRIDE: RefCell<Option<OutputSink>> = const { RefCell::new(None) };
 }
 
-/// Install a custom output sink for the duration of `f`, replacing the usual
-/// `eprintln!` behavior of draw and note output. Intended for tests that want
-/// to capture what a test case would print.
+/// Install a custom output sink for the duration of `f`, replacing stderr as
+/// the destination for all of Hegel's run output. Intended for tests that
+/// want to capture what a test run would print.
 ///
-/// While active, notes and draws from the final replay go to `sink` instead of
-/// stderr. Non-final test cases still drop their draw/note output as usual.
+/// A run started while the override is active resolves it once, at start,
+/// and routes everything through it for the run's lifetime: the engine's own
+/// progress lines (emitted from its worker thread), draw and note output —
+/// including from clones driven on other threads — verbose per-case
+/// diagnostics and stop reasons, and the final failure report with its
+/// reproducer line. Which of those exist at all is still governed by
+/// [`Verbosity`](crate::Verbosity); the override only changes where they go.
 #[doc(hidden)]
 pub fn with_output_override<R>(sink: OutputSink, f: impl FnOnce() -> R) -> R {
     struct Restore(Option<OutputSink>);
@@ -269,6 +275,11 @@ pub(crate) fn current_output_sink() -> Option<OutputSink> {
 
 /// Emit a single line of verbose runner output, going through the
 /// installed output sink if there is one and otherwise to stderr.
+///
+/// Resolves the sink thread-locally at emit time, so it is only correct for
+/// output produced synchronously on the thread that installed the override
+/// (e.g. an explicit test case). A run resolves its destination once up
+/// front instead — see [`RunOutput`].
 pub(crate) fn emit_verbose_line(msg: &str) {
     if let Some(sink) = current_output_sink() {
         sink(msg);
@@ -277,13 +288,69 @@ pub(crate) fn emit_verbose_line(msg: &str) {
     }
 }
 
+/// The output destination a run resolved when it started.
+///
+/// Resolved exactly once, on the thread that starts the run, from the
+/// installed override ([`with_output_override`]) — and then carried by the
+/// run itself. Everything the run emits later flows through this value,
+/// wherever it happens: the engine's worker thread and clones driven on
+/// other threads never see the starting thread's thread-local override, so
+/// resolving lazily at emit time would send their output to the wrong place.
+pub(crate) struct RunOutput {
+    sink: Option<OutputSink>,
+}
+
+impl RunOutput {
+    /// Resolve the destination for a run starting now on this thread: the
+    /// installed override if there is one, stderr otherwise.
+    pub(crate) fn resolve() -> Self {
+        RunOutput {
+            sink: current_output_sink(),
+        }
+    }
+
+    /// The resolved sink, for handing to the engine and to test cases;
+    /// `None` means stderr.
+    pub(crate) fn sink(&self) -> Option<&OutputSink> {
+        self.sink.as_ref()
+    }
+
+    /// Emit one line of output (no trailing newline).
+    pub(crate) fn line(&self, msg: &str) {
+        match &self.sink {
+            Some(sink) => sink(msg),
+            None => eprintln!("{msg}"),
+        }
+    }
+
+    /// Emit a pre-rendered, newline-terminated block exactly as it would
+    /// appear on stderr; the sink receives it as individual lines.
+    pub(crate) fn block(&self, text: &str) {
+        match &self.sink {
+            Some(sink) => {
+                for line in text.trim_end_matches('\n').split('\n') {
+                    sink(line);
+                }
+            }
+            None => eprint!("{text}"),
+        }
+    }
+}
+
 impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
     /// true on a non-quiet final replay or in verbose mode, where drawn
-    /// values and notes should be surfaced.
-    pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, mode: Mode) -> Self {
-        let override_sink = current_output_sink();
-        let on_draw: OutputSink = match override_sink {
+    /// values and notes should be surfaced. `sink` is the run's resolved
+    /// output destination ([`RunOutput::sink`]) — passed in rather than read
+    /// from the thread-local override so that a test case created here and
+    /// then driven from another thread still prints to the right place.
+    pub(crate) fn new(
+        handle: Arc<CTestCase>,
+        emit: bool,
+        mode: Mode,
+        sink: Option<OutputSink>,
+    ) -> Self {
+        let on_draw: OutputSink = match sink {
             Some(sink) if emit => sink,
             _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
             _ => Arc::new(|_| {}),

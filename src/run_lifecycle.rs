@@ -24,7 +24,7 @@ use crate::control::{
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
-use crate::test_case::TestCase;
+use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
 
@@ -222,9 +222,10 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
 /// shrinking can key on it, and the rendered diagnostic block (panic
 /// location, message, backtrace) is printed here, at the moment the panic
-/// is caught — to stderr on a non-quiet final replay (right after the live
-/// draw/note lines, which is what keeps each failure one block), or
-/// through the verbose output sink for a non-final case in verbose mode.
+/// is caught — on a non-quiet final replay it is returned to the caller to
+/// print (right after the live draw/note lines, which is what keeps each
+/// failure one block), and for a non-final case in verbose mode it goes to
+/// `output`, the run's resolved destination.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -235,6 +236,7 @@ pub(crate) fn run_test_case(
     is_final: bool,
     mode: Mode,
     verbosity: Verbosity,
+    output: &RunOutput,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -250,7 +252,7 @@ pub(crate) fn run_test_case(
     take_panic_info();
 
     let c_tc = Arc::new(c_tc);
-    let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode);
+    let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
     let (tc_result, payload, diagnostic) = match result {
@@ -287,7 +289,7 @@ pub(crate) fn run_test_case(
                     let diagnostic =
                         render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
                     for line in diagnostic.trim_end_matches('\n').split('\n') {
-                        crate::test_case::emit_verbose_line(line);
+                        output.line(line);
                     }
                 }
                 None
@@ -300,7 +302,7 @@ pub(crate) fn run_test_case(
     };
 
     if verbose {
-        emit_verbose_stop_reason(&tc_result);
+        emit_verbose_stop_reason(&tc_result, output);
     }
 
     report_outcome(&c_tc, &tc_result);
@@ -333,13 +335,13 @@ fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
 }
 
 /// Print a per-test-case line describing why this test case stopped.
-fn emit_verbose_stop_reason(result: &TestCaseResult) {
+fn emit_verbose_stop_reason(result: &TestCaseResult, output: &RunOutput) {
     match result {
         TestCaseResult::Invalid => {
-            crate::test_case::emit_verbose_line("Test case stopped: failed assumption");
+            output.line("Test case stopped: failed assumption");
         }
         TestCaseResult::Overrun => {
-            crate::test_case::emit_verbose_line("Test case stopped: out of data");
+            output.line("Test case stopped: out of data");
         }
         TestCaseResult::Valid | TestCaseResult::Interesting(_) => {}
     }
@@ -444,20 +446,21 @@ pub(crate) fn drive<F>(
     let mode = settings.mode;
     let verbosity = settings.verbosity;
     let quiet = verbosity == Verbosity::Quiet;
+    let output = RunOutput::resolve();
 
     let c_settings = SettingsHandle::build(settings, database_key);
-    let run = match RunHandle::start(&c_settings) {
+    let run = match RunHandle::start(&c_settings, output.sink()) {
         Ok(run) => run,
         Err(message) => panic!("{message}"), // nocov
     };
 
     if mode == Mode::SingleTestCase {
-        drive_single_case(&run, &mut test_fn, verbosity, test_location);
+        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
         return;
     }
 
     while let Some(c_tc) = run.next_test_case() {
-        run_test_case(c_tc, &mut test_fn, false, mode, verbosity);
+        run_test_case(c_tc, &mut test_fn, false, mode, verbosity, &output);
     }
 
     let result = run.result();
@@ -477,31 +480,33 @@ pub(crate) fn drive<F>(
             let count = result.failure_count();
             let multiple = count > 1;
             if multiple && !quiet {
-                eprintln!("Property-based test failed with {count} distinct failures.");
+                output.line(&format!(
+                    "Property-based test failed with {count} distinct failures."
+                ));
             }
             let mut last_payload: Option<Box<dyn std::any::Any + Send>> = None;
             for index in 0..count {
                 if multiple && !quiet {
-                    eprintln!();
+                    output.line("");
                 }
                 let blob = result
                     .failure(index)
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
-                let c_tc = match CTestCase::from_blob(&c_settings, &blob) {
+                let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity);
+                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
                 if let Some(diagnostic) = diagnostic {
-                    eprint!("{diagnostic}");
+                    output.block(&diagnostic);
                 }
                 if let Some(line) = reproducer_line(settings, Some(blob.as_str())) {
-                    eprintln!("{line}");
+                    output.block(&format!("{line}\n"));
                 }
                 last_payload = payload;
             }
@@ -530,16 +535,17 @@ fn drive_single_case(
     test_fn: &mut dyn FnMut(TestCase),
     verbosity: Verbosity,
     test_location: Option<&TestLocation>,
+    output: &RunOutput,
 ) {
     let c_tc = run
         .next_test_case()
         .expect("a SingleTestCase run produces exactly one test case");
     let (result, payload, diagnostic) =
-        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity);
+        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity, output);
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
         if let Some(diagnostic) = diagnostic {
-            eprint!("{diagnostic}");
+            output.block(&diagnostic);
         }
         std::panic::resume_unwind(
             payload.expect("an interesting case carries the caught panic payload"),
@@ -567,15 +573,22 @@ pub(crate) fn drive_blob_replay<F>(
     init_panic_hook();
     require_antithesis_feature();
     let mut test_fn = test_fn;
+    let output = RunOutput::resolve();
     let c_settings = SettingsHandle::build(settings, database_key);
-    let c_tc = match CTestCase::from_blob(&c_settings, blob) {
+    let c_tc = match CTestCase::from_blob(&c_settings, blob, output.sink()) {
         Ok(c_tc) => c_tc,
         Err(message) => panic!("{message}"),
     };
-    let (result, payload, diagnostic) =
-        run_test_case(c_tc, &mut test_fn, true, settings.mode, settings.verbosity);
+    let (result, payload, diagnostic) = run_test_case(
+        c_tc,
+        &mut test_fn,
+        true,
+        settings.mode,
+        settings.verbosity,
+        &output,
+    );
     if let Some(diagnostic) = diagnostic {
-        eprint!("{diagnostic}");
+        output.block(&diagnostic);
     }
     match result {
         TestCaseResult::Interesting(_) => {

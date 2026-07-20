@@ -72,7 +72,7 @@ mod datetimes {
 
     #[test]
     fn test_simplifies_towards_millenium() {
-        let d = minimal(gs::datetimes(), |_: &String| true);
+        let d = minimal(gs::datetime_strings(), |_: &String| true);
         let (year, month, day, hour, minute, second, microsecond) = datetime_parts(&d);
         assert_eq!(year, 2000);
         assert_eq!(month, 1);
@@ -85,38 +85,38 @@ mod datetimes {
 
     #[test]
     fn test_default_datetimes_are_naive() {
-        assert_all_examples(gs::datetimes(), |s: &String| {
+        assert_all_examples(gs::datetime_strings(), |s: &String| {
             !s.contains('+') && !s.contains('Z')
         });
     }
 
     #[test]
     fn test_allow_imaginary_is_not_an_error_for_naive_datetimes() {
-        assert_all_examples(gs::datetimes(), |_: &String| true);
+        assert_all_examples(gs::datetime_strings(), |_: &String| true);
     }
 
     #[test]
     fn test_can_find_after_the_year_2000() {
-        let d = minimal(gs::dates(), |s: &String| date_year(s) > 2000);
+        let d = minimal(gs::date_strings(), |s: &String| date_year(s) > 2000);
         assert_eq!(date_year(&d), 2001);
     }
 
     #[test]
     fn test_can_find_before_the_year_2000() {
-        let d = minimal(gs::dates(), |s: &String| date_year(s) < 2000);
+        let d = minimal(gs::date_strings(), |s: &String| date_year(s) < 2000);
         assert_eq!(date_year(&d), 1999);
     }
 
     #[test]
     fn test_can_find_each_month() {
         for month in 1u32..=12 {
-            find_any(gs::dates(), move |s: &String| date_month(s) == month);
+            find_any(gs::date_strings(), move |s: &String| date_month(s) == month);
         }
     }
 
     #[test]
     fn test_can_find_midnight() {
-        find_any(gs::times(), |s: &String| {
+        find_any(gs::time_strings(), |s: &String| {
             let (h, m, sec, _) = parse_time_parts(s);
             h == 0 && m == 0 && sec == 0
         });
@@ -124,23 +124,23 @@ mod datetimes {
 
     #[test]
     fn test_can_find_non_midnight() {
-        let t = minimal(gs::times(), |s: &String| parse_time_parts(s).0 != 0);
+        let t = minimal(gs::time_strings(), |s: &String| parse_time_parts(s).0 != 0);
         assert_eq!(parse_time_parts(&t).0, 1);
     }
 
     #[test]
     fn test_can_find_on_the_minute() {
-        find_any(gs::times(), |s: &String| parse_time_parts(s).2 == 0);
+        find_any(gs::time_strings(), |s: &String| parse_time_parts(s).2 == 0);
     }
 
     #[test]
     fn test_can_find_off_the_minute() {
-        find_any(gs::times(), |s: &String| parse_time_parts(s).2 != 0);
+        find_any(gs::time_strings(), |s: &String| parse_time_parts(s).2 != 0);
     }
 
     #[test]
     fn test_simplifies_towards_midnight() {
-        let t = minimal(gs::times(), |_: &String| true);
+        let t = minimal(gs::time_strings(), |_: &String| true);
         let (hour, minute, second, microsecond) = parse_time_parts(&t);
         assert_eq!(hour, 0);
         assert_eq!(minute, 0);
@@ -150,14 +150,14 @@ mod datetimes {
 
     #[test]
     fn test_can_generate_naive_time() {
-        find_any(gs::times(), |s: &String| {
+        find_any(gs::time_strings(), |s: &String| {
             !s.contains('+') && !s.contains('Z')
         });
     }
 
     #[test]
     fn test_naive_times_are_naive() {
-        assert_all_examples(gs::times(), |s: &String| {
+        assert_all_examples(gs::time_strings(), |s: &String| {
             !s.contains('+') && !s.contains('Z')
         });
     }

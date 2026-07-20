@@ -24,6 +24,46 @@ pub fn assert_matches_regex(text: &str, pattern: &str) {
     );
 }
 
+/// Run `f` with Hegel's output redirected into a buffer, catching any panic.
+///
+/// Returns the captured output lines (draw/note lines from final replays,
+/// verbose stop-reason lines, …) together with `f`'s result. This is the
+/// in-process replacement for spawning a project and scraping its stderr:
+/// everything Hegel emits through its output sink is captured, while raw
+/// process-level output (panic-hook noise, backtraces) is not.
+pub fn capture_hegel_output<F: FnOnce() + UnwindSafe>(
+    f: F,
+) -> (Vec<String>, Result<(), Box<dyn std::any::Any + Send>>) {
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let buf_writer = buf.clone();
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| buf_writer.lock().unwrap().push(s.to_string()));
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hegel::with_output_override(sink, f);
+    }));
+    let lines = buf.lock().unwrap().clone();
+    (lines, result)
+}
+
+/// Like [`capture_hegel_output`], but asserts the run panicked with a message
+/// matching `pattern`, and returns only the captured lines that look like
+/// draw-output lines (`let <name> = <value>;`).
+pub fn capture_draw_lines<F: FnOnce() + UnwindSafe>(f: F, pattern: &str) -> Vec<String> {
+    let (lines, result) = capture_hegel_output(f);
+    let err = result.expect_err("expected panic, but closure returned normally");
+    let msg = err
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| err.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert_matches_regex(&msg, pattern);
+    let re = Regex::new(r"let \w+ = .+;").unwrap();
+    lines
+        .iter()
+        .filter_map(|line| re.find(line).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
 /// Run `f` and assert it panics with a message matching the `pattern` regex.
 pub fn expect_panic<F: FnOnce() + UnwindSafe>(f: F, pattern: &str) {
     let err = catch_unwind(f).expect_err("expected panic, but closure returned normally");
@@ -383,7 +423,8 @@ where
                 Settings::new()
                     .test_cases(test_cases)
                     .database(None)
-                    .derandomize(true),
+                    .derandomize(true)
+                    .report_multiple_failures(true),
             )
             .run();
         }));

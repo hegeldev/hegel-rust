@@ -40,10 +40,11 @@ pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
-    BinaryGenerator, CharactersGenerator, DateGenerator, DateTimeGenerator, DomainGenerator,
-    EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator, Ipv6AddressGenerator, RegexGenerator,
-    TextGenerator, TimeGenerator, UrlGenerator, UuidsGenerator, binary, characters, dates,
-    datetimes, domains, emails, from_regex, ip_addresses, text, times, urls, uuids,
+    BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
+    DomainGenerator, EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator,
+    Ipv6AddressGenerator, RegexGenerator, TextGenerator, TimeStringGenerator, UrlGenerator,
+    UuidsGenerator, binary, characters, date_strings, datetime_strings, domains, emails,
+    from_regex, ip_addresses, text, time_strings, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
 #[doc(hidden)]

@@ -168,7 +168,7 @@ impl ExplicitTestCase {
             Err(payload) => {
                 let notes = self.notes.borrow();
                 for note in notes.iter() {
-                    eprintln!("{}", note);
+                    crate::test_case::emit_verbose_line(note);
                 }
                 std::panic::resume_unwind(payload);
             }

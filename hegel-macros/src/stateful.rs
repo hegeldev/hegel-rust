@@ -30,9 +30,19 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
                 .iter()
                 .filter(|a| !a.path().is_ident("doc"))
                 .collect();
+            // Register through a non-capturing closure rather than
+            // `Self::#name` directly: `Rule.apply` is `fn(&mut M, TestCase)`,
+            // and the method-call syntax inside the closure lets methods take
+            // either `&self` or `&mut self` (an `&mut M` auto-coerces to
+            // `&M`), as the `stateful` module docs promise for invariants.
             quote! {
                 #(#attrs)*
-                ::hegel::stateful::Rule::new(#name_str, Self::#name)
+                ::hegel::stateful::Rule::new(
+                    #name_str,
+                    |__hegel_machine: &mut Self, __hegel_tc: ::hegel::TestCase| {
+                        __hegel_machine.#name(__hegel_tc)
+                    },
+                )
             }
         })
         .collect()
@@ -47,6 +57,25 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
             let has_rule = method.attrs.iter().any(&is_rule);
             let has_invariant = method.attrs.iter().any(&is_invariant);
             method.attrs.retain(|a| !is_rule(a) && !is_invariant(a));
+
+            // Rules and invariants are applied through a `&mut M` handle, so
+            // the method must borrow `self` (`&self` or `&mut self`,
+            // including the explicit `self: &Self` / `self: &mut Self`
+            // forms). Reject by-value receivers here with a targeted error:
+            // for a `Copy` state machine, `m.rule(tc)` on a by-value receiver
+            // would otherwise compile and silently mutate a copy.
+            if has_rule || has_invariant {
+                let borrows_self = method.sig.receiver().is_some_and(|receiver| {
+                    receiver.reference.is_some() || matches!(&*receiver.ty, syn::Type::Reference(_))
+                });
+                if !borrows_self {
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        "#[rule] and #[invariant] methods must take `&self` or `&mut self`",
+                    )
+                    .to_compile_error();
+                }
+            }
 
             let info = || MethodInfo {
                 name: method.sig.ident.clone(),

@@ -1,82 +1,69 @@
+//! `#[hegel::reproduce_failure]` behaviour. The compile-error cases (the
+//! attribute on a bare function or above `#[hegel::test]`) live in
+//! `tests/ui/reproduce_failure_*.rs`, where trybuild pins their diagnostics.
+//!
+//! The end-to-end replay test drives `#[ignore]`d fixture tests in this very
+//! binary via `exec::self_test`, passing the captured blob through an
+//! environment variable — the attribute argument may be any expression, so
+//! the fixture reads it back with `std::env::var`.
+
 mod common;
 
-use common::project::TempRustProject;
-
-#[test]
-fn test_reproduce_failure_on_bare_function() {
-    let code = r#"
-#[hegel::reproduce_failure("AAEC")]
-fn my_func(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("can only be used together with.*hegel::test")
-        .cargo_run(&[]);
-}
-
-#[test]
-fn test_reproduce_failure_wrong_order() {
-    let code = r#"
-#[hegel::reproduce_failure("AAEC")]
-#[hegel::test]
-fn my_test(tc: hegel::TestCase) {
-    let _ = tc;
-}
-
-fn main() {}
-"#;
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("must appear below.*hegel::test.*not above")
-        .cargo_run(&[]);
-}
+use common::exec::self_test;
+use hegel::TestCase;
+use hegel::generators as gs;
 
 /// A correct-usage attribute compiles (exercising the `#[hegel::test]`
 /// wiring that injects `.reproduce_failure(...)`); at runtime an undecodable
 /// blob panics with a clear message rather than passing silently.
-#[test]
-fn test_reproduce_failure_undecodable_blob_panics() {
-    let code = r#"
 #[hegel::test]
 #[hegel::reproduce_failure("!!! not a blob !!!")]
-fn my_test(tc: hegel::TestCase) {
-    use hegel::generators as gs;
+#[should_panic(expected = "could not be decoded")]
+fn test_reproduce_failure_undecodable_blob_panics(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers());
     let _ = x;
 }
-"#;
-    TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", code)
-        .expect_failure("could not be decoded")
-        .cargo_test(&["--test", "repro"]);
-}
+
+const BLOB: &str = "!!! not a blob !!!";
 
 /// The blob argument may be any expression, not just a string literal — e.g.
 /// a `const`. Here a `const` with a bogus blob compiles and reaches the
 /// runtime decode (which then panics: it can't be decoded).
-#[test]
-fn test_reproduce_failure_accepts_a_const_blob() {
-    let code = r#"
-const BLOB: &str = "!!! not a blob !!!";
-
 #[hegel::test]
 #[hegel::reproduce_failure(BLOB)]
-fn my_test(tc: hegel::TestCase) {
-    use hegel::generators as gs;
+#[should_panic(expected = "could not be decoded")]
+fn test_reproduce_failure_accepts_a_const_blob(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers());
     let _ = x;
 }
-"#;
-    TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", code)
-        .expect_failure("could not be decoded")
-        .cargo_test(&["--test", "repro"]);
+
+/// Stage 1 fixture: a failing test with `print_blob = true`, whose output the
+/// driver scrapes for the `reproduce_failure("…")` blob.
+#[hegel::test(print_blob = true)]
+#[ignore = "fixture: run via exec::self_test"]
+fn repro_print_blob_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers());
+    assert!(x < 5, "x was {x}");
+}
+
+/// Stage 2 fixture: replays the blob passed via `HEGEL_TEST_REPRO_BLOB`.
+#[hegel::test]
+#[hegel::reproduce_failure(std::env::var("HEGEL_TEST_REPRO_BLOB").unwrap())]
+#[ignore = "fixture: run via exec::self_test"]
+fn repro_replay_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers());
+    assert!(x < 5, "x was {x}");
+}
+
+/// Stage 3 fixture: a stacked stale blob below the good one must not break
+/// the replay.
+#[hegel::test]
+#[hegel::reproduce_failure(std::env::var("HEGEL_TEST_REPRO_BLOB").unwrap())]
+#[hegel::reproduce_failure("!!! stale bookkeeping blob !!!")]
+#[ignore = "fixture: run via exec::self_test"]
+fn repro_replay_stacked_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers());
+    assert!(x < 5, "x was {x}");
 }
 
 /// End-to-end: a failing test prints a reproducer blob; pasting that blob
@@ -84,21 +71,9 @@ fn my_test(tc: hegel::TestCase) {
 /// same failure.
 #[test]
 fn test_reproduce_failure_replays_real_counterexample() {
-    let failing = r#"
-#[hegel::test(print_blob = true)]
-fn my_test(tc: hegel::TestCase) {
-    use hegel::generators as gs;
-    let x: i32 = tc.draw(gs::integers());
-    assert!(x < 5, "x was {x}");
-}
-"#;
-    let project = TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", failing);
-    let out = project
-        .invoke()
+    let out = self_test("repro_print_blob_fixture")
         .expect_failure("x was")
-        .cargo_test(&["--test", "repro"]);
+        .run();
 
     let combined = format!("{}\n{}", out.stdout, out.stderr);
     let re = regex::Regex::new(r#"reproduce_failure\("([^"]+)"\)"#).unwrap();
@@ -108,38 +83,13 @@ fn my_test(tc: hegel::TestCase) {
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| panic!("no reproduce_failure line in output:\n{combined}"));
 
-    let reproducing = format!(
-        r#"
-#[hegel::test]
-#[hegel::reproduce_failure("{blob}")]
-fn my_test(tc: hegel::TestCase) {{
-    use hegel::generators as gs;
-    let x: i32 = tc.draw(gs::integers());
-    assert!(x < 5, "x was {{x}}");
-}}
-"#
-    );
-    TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", &reproducing)
+    self_test("repro_replay_fixture")
+        .env("HEGEL_TEST_REPRO_BLOB", &blob)
         .expect_failure("x was")
-        .cargo_test(&["--test", "repro"]);
+        .run();
 
-    let stacked = format!(
-        r#"
-#[hegel::test]
-#[hegel::reproduce_failure("{blob}")]
-#[hegel::reproduce_failure("!!! stale bookkeeping blob !!!")]
-fn my_test(tc: hegel::TestCase) {{
-    use hegel::generators as gs;
-    let x: i32 = tc.draw(gs::integers());
-    assert!(x < 5, "x was {{x}}");
-}}
-"#
-    );
-    TempRustProject::new()
-        .main_file("fn main() {}")
-        .test_file("repro.rs", &stacked)
+    self_test("repro_replay_stacked_fixture")
+        .env("HEGEL_TEST_REPRO_BLOB", &blob)
         .expect_failure("x was")
-        .cargo_test(&["--test", "repro"]);
+        .run();
 }

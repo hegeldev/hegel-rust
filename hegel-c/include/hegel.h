@@ -483,6 +483,9 @@ typedef enum {
  threads is a data race and unsupported. Passing `NULL` wherever a context
  is accepted is allowed and simply opts out of error messages: the call
  still returns its usual error code, there is just nothing to read back.
+
+ A context carries no output destination: that is chosen per run or test
+ case at creation (see `hegel_run_start` / `hegel_test_case_from_blob`).
  */
 typedef struct hegel_context_t hegel_context_t;
 
@@ -579,6 +582,16 @@ typedef struct hegel_string_generator_t hegel_string_generator_t;
  `hegel_test_case_free`
  */
 typedef struct hegel_test_case_t hegel_test_case_t;
+
+/*
+ Per-line output callback, passed to `hegel_run_start` /
+ `hegel_test_case_from_blob` (see there for the full contract). `user_data`
+ is the pointer supplied alongside the callback; `line` is one line of
+ engine output, NUL-terminated UTF-8 of `len` bytes (not counting the
+ terminator) without a trailing newline, valid only for the duration of
+ the call.
+ */
+typedef void (*hegel_output_callback_t)(void *user_data, const char *line, size_t len);
 
 /*
  An engine-allocated byte buffer returned by `hegel_generate_bytes`.
@@ -820,6 +833,18 @@ hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
  hold the settings handle alive — `hegel_run_start` snapshots the
  settings it needs.
 
+ `callback` sets where the engine's output for this run goes: each line is
+ delivered to it (with `user_data` passed through verbatim) instead of
+ stderr, once per line, NUL-terminated UTF-8 of `len` bytes without a
+ trailing newline, in a buffer owned by libhegel and valid only for the
+ duration of the call. A NULL `callback` leaves the run's output on stderr
+ (`user_data` is ignored). The engine emits from its worker thread, so the
+ callback must be safe to invoke from a thread other than this one, and it
+ — along with whatever `user_data` points to — must stay valid until the
+ run has been freed with `hegel_run_free`. This sets only the
+ *destination*; how much output the engine emits is controlled by
+ `hegel_settings_set_verbosity`.
+
  Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
  `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
  worker thread cannot be spawned (with a diagnostic in
@@ -828,6 +853,8 @@ hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
  */
 hegel_result_t hegel_run_start(hegel_context_t *ctx,
                                const hegel_settings_t *settings,
+                               hegel_output_callback_t callback,
+                               void *user_data,
                                hegel_run_t **out_run);
 
 /*
@@ -901,6 +928,15 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
  overruns. Replaying a blob is how a caller performs the *final replay* of
  a counterexample.
 
+ `callback` sets where the engine's output for this replay goes — at debug
+ verbosity the blob is decoded with a trace line, emitted synchronously
+ during this call. Each line is delivered to `callback` (with `user_data`
+ passed through verbatim) instead of stderr, NUL-terminated UTF-8 of `len`
+ bytes without a trailing newline, in a buffer valid only for the duration
+ of the call. A NULL `callback` leaves the replay's output on stderr
+ (`user_data` is ignored). There is no worker thread, so the callback is
+ only ever invoked on this thread and need not outlive this call.
+
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `s`, or `HEGEL_E_INVALID_ARG`
  for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
  failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
@@ -911,6 +947,8 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
 hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
                                          const hegel_settings_t *s,
                                          const char *blob,
+                                         hegel_output_callback_t callback,
+                                         void *user_data,
                                          hegel_test_case_t **out_test_case);
 
 /*

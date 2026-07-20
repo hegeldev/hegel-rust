@@ -1,0 +1,5 @@
+error: #[hegel::standalone_function] functions must take at least one parameter of type ::hegel::TestCase (as the first parameter).
+ --> tests/ui/standalone_function_no_params.rs:5:1
+  |
+5 | fn bad() {}
+  | ^^^^^^^^

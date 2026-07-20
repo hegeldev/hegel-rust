@@ -26,7 +26,10 @@ unsafe fn start_run_and_first_case() -> (
     ok(unsafe { hegel_settings_set_database(ctx, s, empty.as_ptr()) });
     ok(unsafe { hegel_settings_set_seed(ctx, s, 1, true) });
     let mut run: *mut HegelRun = ptr::null_mut();
-    assert_eq!(unsafe { hegel_run_start(ctx, s, &mut run) }, HEGEL_OK);
+    assert_eq!(
+        unsafe { hegel_run_start(ctx, s, None, ptr::null_mut(), &mut run) },
+        HEGEL_OK
+    );
     let mut tc: *mut HegelTestCase = ptr::null_mut();
     assert_eq!(unsafe { hegel_next_test_case(ctx, run, &mut tc) }, HEGEL_OK);
     assert!(!tc.is_null());

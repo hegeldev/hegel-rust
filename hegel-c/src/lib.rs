@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Once;
@@ -56,7 +56,7 @@ pub mod __bench {
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
 use crate::embed::{data_source_for_blob, run_native};
 use crate::native::bignum::BigInt;
-use crate::settings::{Backend, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call.
 ///
@@ -360,6 +360,16 @@ pub enum hegel_label_t {
     HEGEL_LABEL_STRING = 30,
 }
 
+/// Per-line output callback, passed to `hegel_run_start` /
+/// `hegel_test_case_from_blob` (see there for the full contract). `user_data`
+/// is the pointer supplied alongside the callback; `line` is one line of
+/// engine output, NUL-terminated UTF-8 of `len` bytes (not counting the
+/// terminator) without a trailing newline, valid only for the duration of
+/// the call.
+#[allow(non_camel_case_types)]
+pub type hegel_output_callback_t =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
+
 /// Opaque error-reporting context.
 ///
 /// libhegel records the diagnostic for a failed call on a context the caller
@@ -378,8 +388,57 @@ pub enum hegel_label_t {
 /// threads is a data race and unsupported. Passing `NULL` wherever a context
 /// is accepted is allowed and simply opts out of error messages: the call
 /// still returns its usual error code, there is just nothing to read back.
+///
+/// A context carries no output destination: that is chosen per run or test
+/// case at creation (see `hegel_run_start` / `hegel_test_case_from_blob`).
 pub struct HegelContext {
     last_error: CString,
+}
+
+/// A caller-supplied output callback paired with its `user_data` pointer,
+/// as passed to `hegel_run_start` / `hegel_test_case_from_blob`.
+#[derive(Copy, Clone)]
+struct OutputTarget {
+    callback: unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize),
+    user_data: *mut c_void,
+}
+
+// SAFETY: the raw `user_data` pointer is what makes this `!Send + !Sync` by
+// default, but the documented contract of the output callback is that it must
+// be safe to invoke with this `user_data` from any thread, so handing the
+// pair to the engine's worker thread is sound.
+unsafe impl Send for OutputTarget {}
+unsafe impl Sync for OutputTarget {}
+
+impl OutputTarget {
+    /// Deliver one line of output to this target's callback.
+    fn emit(self, line: &str) {
+        let line = cstring_lossy(line);
+        unsafe { (self.callback)(self.user_data, line.as_ptr(), line.as_bytes().len()) };
+    }
+
+    /// The engine-facing [`Output`] that delivers each line to this target.
+    ///
+    /// The closure captures `self` as a whole (via the by-value `emit`
+    /// receiver) rather than its fields individually, which would capture a
+    /// bare `*mut c_void` and lose [`OutputTarget`]'s `Send + Sync` impls.
+    fn as_output(self) -> Output {
+        Output::callback(move |line| self.emit(line))
+    }
+}
+
+/// The engine [`Output`] destination for a run or blob replay: the supplied
+/// callback when one is given, stderr otherwise (including for a NULL
+/// `callback`, in which case `user_data` is ignored).
+fn output_from_callback(callback: hegel_output_callback_t, user_data: *mut c_void) -> Output {
+    match callback {
+        Some(callback) => OutputTarget {
+            callback,
+            user_data,
+        }
+        .as_output(),
+        None => Output::stderr(),
+    }
 }
 
 /// Allocate a new error-reporting context initialised with an empty message.
@@ -1122,6 +1181,18 @@ fn install_worker_panic_hook() {
 /// hold the settings handle alive — `hegel_run_start` snapshots the
 /// settings it needs.
 ///
+/// `callback` sets where the engine's output for this run goes: each line is
+/// delivered to it (with `user_data` passed through verbatim) instead of
+/// stderr, once per line, NUL-terminated UTF-8 of `len` bytes without a
+/// trailing newline, in a buffer owned by libhegel and valid only for the
+/// duration of the call. A NULL `callback` leaves the run's output on stderr
+/// (`user_data` is ignored). The engine emits from its worker thread, so the
+/// callback must be safe to invoke from a thread other than this one, and it
+/// — along with whatever `user_data` points to — must stay valid until the
+/// run has been freed with `hegel_run_free`. This sets only the
+/// *destination*; how much output the engine emits is controlled by
+/// `hegel_settings_set_verbosity`.
+///
 /// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
 /// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
 /// worker thread cannot be spawned (with a diagnostic in
@@ -1131,6 +1202,8 @@ fn install_worker_panic_hook() {
 pub unsafe extern "C" fn hegel_run_start(
     ctx: *mut HegelContext,
     settings: *const HegelSettings,
+    callback: hegel_output_callback_t,
+    user_data: *mut c_void,
     out_run: *mut *mut HegelRun,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -1143,7 +1216,10 @@ pub unsafe extern "C" fn hegel_run_start(
         set_last_error(ctx, "hegel_run_start: settings pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    let settings = handle.inner.clone();
+    let settings = handle
+        .inner
+        .clone()
+        .output(output_from_callback(callback, user_data));
     let database_key = handle.database_key.clone();
 
     let (to_caller, from_worker) = mpsc::channel::<WorkerMessage>();
@@ -1402,6 +1478,15 @@ pub unsafe extern "C" fn hegel_run_free(
 /// overruns. Replaying a blob is how a caller performs the *final replay* of
 /// a counterexample.
 ///
+/// `callback` sets where the engine's output for this replay goes — at debug
+/// verbosity the blob is decoded with a trace line, emitted synchronously
+/// during this call. Each line is delivered to `callback` (with `user_data`
+/// passed through verbatim) instead of stderr, NUL-terminated UTF-8 of `len`
+/// bytes without a trailing newline, in a buffer valid only for the duration
+/// of the call. A NULL `callback` leaves the replay's output on stderr
+/// (`user_data` is ignored). There is no worker thread, so the callback is
+/// only ever invoked on this thread and need not outlive this call.
+///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `s`, or `HEGEL_E_INVALID_ARG`
 /// for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
 /// failure blob (corrupt, non-UTF-8, or from an incompatible Hegel version),
@@ -1413,6 +1498,8 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
     ctx: *mut HegelContext,
     s: *const HegelSettings,
     blob: *const c_char,
+    callback: hegel_output_callback_t,
+    user_data: *mut c_void,
     out_test_case: *mut *mut HegelTestCase,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -1433,7 +1520,11 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         set_last_error(ctx, "hegel_test_case_from_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
     };
-    let Some(ds) = data_source_for_blob(&handle.inner, blob) else {
+    let settings = handle
+        .inner
+        .clone()
+        .output(output_from_callback(callback, user_data));
+    let Some(ds) = data_source_for_blob(&settings, blob) else {
         set_last_error(
             ctx,
             "hegel_test_case_from_blob: the supplied failure blob could not be decoded. \

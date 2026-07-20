@@ -3,19 +3,53 @@ use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
 use crate::generators::{BoxedGenerator, Generator, TestCase, integers};
-use crate::test_case::{full_ranges, invalid_argument};
+use crate::test_case::invalid_argument;
+
+/// Convert a [`Date`] to the engine's date struct. Every jiff `Date` fits:
+/// jiff spans years ±9999 and the engine accepts ±999999.
+fn hegel_date(d: Date) -> hegel_c::hegel_date_t {
+    hegel_c::hegel_date_t {
+        year: i32::from(d.year()),
+        month: d.month() as u8,
+        day: d.day() as u8,
+    }
+}
 
 /// Generator for [`jiff::civil::Date`] values. Created by [`dates()`].
-pub struct DateGenerator;
+pub struct DateGenerator {
+    min_value: Date,
+    max_value: Date,
+}
+
+impl DateGenerator {
+    /// Set the minimum date (inclusive).
+    pub fn min_value(mut self, min: Date) -> Self {
+        self.min_value = min;
+        self
+    }
+
+    /// Set the maximum date (inclusive).
+    pub fn max_value(mut self, max: Date) -> Self {
+        self.max_value = max;
+        self
+    }
+}
 
 impl Generator<Date> for DateGenerator {
     fn do_draw(&self, tc: &TestCase) -> Date {
-        let d = tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE);
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        let d = tc.generate_date(hegel_date(self.min_value), hegel_date(self.max_value));
         Date::new(d.year as i16, d.month as i8, d.day as i8).unwrap()
     }
 }
 
 /// Generate [`jiff::civil::Date`] values.
+///
+/// Defaults span years 1–9999 (`0001-01-01` through `9999-12-31`). Use the
+/// builder methods to constrain the range, or to widen it down to jiff's
+/// minimum of `-9999-01-01`.
 ///
 /// See [`DateGenerator`] for builder methods.
 ///
@@ -23,23 +57,77 @@ impl Generator<Date> for DateGenerator {
 ///
 /// ```no_run
 /// use hegel::extras::jiff as jiff_gs;
+/// use jiff::civil::Date;
 ///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
-///     let d = tc.draw(jiff_gs::dates());
-///     assert!(d.year() >= 1);
+///     let min = Date::constant(2024, 1, 1);
+///     let d = tc.draw(jiff_gs::dates().min_value(min));
+///     assert!(d >= min);
 /// }
 /// ```
 pub fn dates() -> DateGenerator {
-    DateGenerator
+    DateGenerator {
+        min_value: Date::constant(1, 1, 1),
+        max_value: Date::constant(9999, 12, 31),
+    }
+}
+
+/// Total nanoseconds from midnight for a [`Time`].
+fn time_total_nanos(t: Time) -> i64 {
+    (i64::from(t.hour()) * 3_600 + i64::from(t.minute()) * 60 + i64::from(t.second()))
+        * 1_000_000_000
+        + i64::from(t.subsec_nanosecond())
+}
+
+/// Convert whole microseconds from midnight to the engine's time struct.
+fn hegel_time(total_micros: i64) -> hegel_c::hegel_time_t {
+    hegel_c::hegel_time_t {
+        hour: (total_micros / 3_600_000_000) as u8,
+        minute: (total_micros / 60_000_000 % 60) as u8,
+        second: (total_micros / 1_000_000 % 60) as u8,
+        microsecond: (total_micros % 1_000_000) as u32,
+    }
 }
 
 /// Generator for [`jiff::civil::Time`] values. Created by [`times()`].
-pub struct TimeGenerator;
+pub struct TimeGenerator {
+    min_value: Time,
+    max_value: Time,
+}
+
+impl TimeGenerator {
+    /// Set the minimum time (inclusive).
+    pub fn min_value(mut self, min: Time) -> Self {
+        self.min_value = min;
+        self
+    }
+
+    /// Set the maximum time (inclusive).
+    pub fn max_value(mut self, max: Time) -> Self {
+        self.max_value = max;
+        self
+    }
+}
 
 impl Generator<Time> for TimeGenerator {
     fn do_draw(&self, tc: &TestCase) -> Time {
-        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND);
+        if self.min_value > self.max_value {
+            invalid_argument!("Cannot have max_value < min_value");
+        }
+        // Generated times are whole microseconds, so round the bounds
+        // inward: min up, max down (totals are non-negative). That can empty
+        // an in-order range whose bounds sit between two consecutive
+        // microseconds.
+        let min_micros = (time_total_nanos(self.min_value) + 999) / 1_000;
+        let max_micros = time_total_nanos(self.max_value) / 1_000;
+        if min_micros > max_micros {
+            invalid_argument!(
+                "times() generates whole-microsecond values, and no whole microsecond \
+                 lies between min_value and max_value"
+            );
+        }
+        let t = tc.generate_time(hegel_time(min_micros), hegel_time(max_micros));
         Time::new(
             t.hour as i8,
             t.minute as i8,
@@ -52,21 +140,31 @@ impl Generator<Time> for TimeGenerator {
 
 /// Generate [`jiff::civil::Time`] values.
 ///
+/// Generated times have whole-microsecond precision (`subsec_nanosecond()`
+/// is always a multiple of 1000). Bounds may carry sub-microsecond
+/// components; they are honoured by rounding inward to the enclosed
+/// microsecond range.
+///
 /// See [`TimeGenerator`] for builder methods.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use hegel::extras::jiff as jiff_gs;
+/// use jiff::civil::Time;
 ///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
-///     let t = tc.draw(jiff_gs::times());
-///     assert!(t.hour() >= 0 && t.hour() <= 23);
+///     let max = Time::constant(12, 0, 0, 0);
+///     let t = tc.draw(jiff_gs::times().max_value(max));
+///     assert!(t <= max);
 /// }
 /// ```
 pub fn times() -> TimeGenerator {
-    TimeGenerator
+    TimeGenerator {
+        min_value: Time::MIN,
+        max_value: Time::MAX,
+    }
 }
 
 /// Convert a [`DateTime`] to nanoseconds since the Unix epoch, treating it

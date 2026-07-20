@@ -73,7 +73,7 @@ int main(void) {
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xfeedface, true);
 
     hegel_run_t *run;
-    HEGEL_CHECK(hegel_run_start, ctx, s, &run);
+    HEGEL_CHECK(hegel_run_start, ctx, s, NULL, NULL, &run);
 
     const uint64_t MIN_SIZE = 0;
     const uint64_t MAX_SIZE = 8;

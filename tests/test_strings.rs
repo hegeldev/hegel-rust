@@ -132,7 +132,7 @@ fn test_regex_with_alphabet() {
 
 #[test]
 fn test_dates_format() {
-    assert_all_examples(gs::dates(), |s: &String| {
+    assert_all_examples(gs::date_strings(), |s: &String| {
         let parts: Vec<&str> = s.split('-').collect();
         if parts.len() != 3 || parts[0].len() != 4 {
             return false;
@@ -147,7 +147,7 @@ fn test_dates_format() {
 
 #[test]
 fn test_times_format() {
-    assert_all_examples(gs::times(), |s: &String| {
+    assert_all_examples(gs::time_strings(), |s: &String| {
         let parts: Vec<&str> = s.splitn(3, ':').collect();
         if parts.len() != 3 {
             return false;
@@ -166,7 +166,7 @@ fn test_times_format() {
 
 #[test]
 fn test_datetimes_format() {
-    assert_all_examples(gs::datetimes(), |s: &String| {
+    assert_all_examples(gs::datetime_strings(), |s: &String| {
         let parts: Vec<&str> = s.splitn(2, 'T').collect();
         if parts.len() != 2 {
             return false;
@@ -900,22 +900,28 @@ mod regex_tests {
 
     #[test]
     fn test_end_with_terminator_does_not_pad() {
-        assert_all_examples(gs::from_regex(r"abc\Z"), |s: &String| s.ends_with("abc"));
+        assert_all_examples(gs::from_regex(r"abc\Z").fullmatch(false), |s: &String| {
+            s.ends_with("abc")
+        });
     }
 
     #[test]
     fn test_end() {
-        find_any(gs::from_regex(r"\Aabc$"), |s: &String| s == "abc");
-        find_any(gs::from_regex(r"\Aabc$"), |s: &String| s == "abc\n");
+        find_any(gs::from_regex(r"\Aabc$").fullmatch(false), |s: &String| {
+            s == "abc"
+        });
+        find_any(gs::from_regex(r"\Aabc$").fullmatch(false), |s: &String| {
+            s == "abc\n"
+        });
     }
 
     #[test]
     fn test_groupref_exists() {
         assert_all_examples(gs::from_regex("^(<)?a(?(1)>)$"), |s: &String| {
-            ["a", "a\n", "<a>", "<a>\n"].contains(&s.as_str())
+            ["a", "<a>"].contains(&s.as_str())
         });
         assert_all_examples(gs::from_regex("^(a)?(?(1)b|c)$"), |s: &String| {
-            ["ab", "ab\n", "c", "c\n"].contains(&s.as_str())
+            ["ab", "c"].contains(&s.as_str())
         });
     }
 
@@ -954,7 +960,7 @@ mod regex_tests {
         fn is_word(c: char) -> bool {
             c == '_' || c.is_alphanumeric()
         }
-        assert_all_examples(gs::from_regex(r"\bfoo\b"), |s: &String| {
+        assert_all_examples(gs::from_regex(r"\bfoo\b").fullmatch(false), |s: &String| {
             let cs: Vec<char> = s.chars().collect();
             (0..cs.len().saturating_sub(2)).any(|i| {
                 cs[i..i + 3] == ['f', 'o', 'o']
@@ -980,7 +986,7 @@ mod regex_tests {
     #[test]
     fn test_can_handle_boundaries_nested() {
         Hegel::new(|tc| {
-            let s: String = tc.draw(gs::from_regex(r"(\Afoo\Z)"));
+            let s: String = tc.draw(gs::from_regex(r"(\Afoo\Z)").fullmatch(false));
             assert_eq!(s, "foo");
         })
         .settings(Settings::new().database(None))
@@ -999,18 +1005,20 @@ mod regex_tests {
 
     #[test]
     fn test_positive_lookbehind() {
-        FindAny::new(gs::from_regex(".*(?<=ab)c"), |s: &String| {
-            s.ends_with("abc")
-        })
+        FindAny::new(
+            gs::from_regex(".*(?<=ab)c").fullmatch(false),
+            |s: &String| s.ends_with("abc"),
+        )
         .suppress_health_check(HealthCheck::TooSlow)
         .run();
     }
 
     #[test]
     fn test_positive_lookahead() {
-        FindAny::new(gs::from_regex("a(?=bc).*"), |s: &String| {
-            s.starts_with("abc")
-        })
+        FindAny::new(
+            gs::from_regex("a(?=bc).*").fullmatch(false),
+            |s: &String| s.starts_with("abc"),
+        )
         .suppress_health_check(HealthCheck::TooSlow)
         .run();
     }
@@ -1074,47 +1082,63 @@ mod regex_tests {
 
     #[test]
     fn test_can_pad_strings_arbitrarily() {
-        find_any(gs::from_regex("a"), |s: &String| !s.starts_with('a'));
-        find_any(gs::from_regex("a"), |s: &String| !s.ends_with('a'));
+        find_any(gs::from_regex("a").fullmatch(false), |s: &String| {
+            !s.starts_with('a')
+        });
+        find_any(gs::from_regex("a").fullmatch(false), |s: &String| {
+            !s.ends_with('a')
+        });
     }
 
     #[test]
     fn test_can_pad_empty_strings() {
-        find_any(gs::from_regex(""), |s: &String| !s.is_empty());
+        find_any(gs::from_regex("").fullmatch(false), |s: &String| {
+            !s.is_empty()
+        });
     }
 
     #[test]
     fn test_can_pad_strings_with_newlines() {
-        find_any(gs::from_regex("^$"), |s: &String| !s.is_empty());
+        find_any(gs::from_regex("^$").fullmatch(false), |s: &String| {
+            !s.is_empty()
+        });
     }
 
     #[test]
     fn test_given_multiline_regex_can_insert_after_dollar() {
-        find_any(gs::from_regex(r"(?m)\Ahi$"), |s: &String| {
-            s.contains('\n') && s.split('\n').nth(1).is_some_and(|p| !p.is_empty())
-        });
+        find_any(
+            gs::from_regex(r"(?m)\Ahi$").fullmatch(false),
+            |s: &String| s.contains('\n') && s.split('\n').nth(1).is_some_and(|p| !p.is_empty()),
+        );
     }
 
     #[test]
     fn test_given_multiline_regex_can_insert_before_caret() {
-        find_any(gs::from_regex(r"(?m)^hi\Z"), |s: &String| {
-            s.contains('\n') && s.split('\n').next().is_some_and(|p| !p.is_empty())
-        });
+        find_any(
+            gs::from_regex(r"(?m)^hi\Z").fullmatch(false),
+            |s: &String| s.contains('\n') && s.split('\n').next().is_some_and(|p| !p.is_empty()),
+        );
     }
 
     #[test]
     fn test_does_not_left_pad_beginning_of_string_marker() {
-        assert_all_examples(gs::from_regex(r"\Afoo"), |s: &String| s.starts_with("foo"));
+        assert_all_examples(gs::from_regex(r"\Afoo").fullmatch(false), |s: &String| {
+            s.starts_with("foo")
+        });
     }
 
     #[test]
     fn test_bare_caret_can_produce() {
-        find_any(gs::from_regex("^"), |s: &String| !s.is_empty());
+        find_any(gs::from_regex("^").fullmatch(false), |s: &String| {
+            !s.is_empty()
+        });
     }
 
     #[test]
     fn test_bare_dollar_can_produce() {
-        find_any(gs::from_regex("$"), |s: &String| !s.is_empty());
+        find_any(gs::from_regex("$").fullmatch(false), |s: &String| {
+            !s.is_empty()
+        });
     }
 
     #[test]
@@ -1129,6 +1153,12 @@ mod regex_tests {
                 \.    # the decimal point
                 \d *  # some fractional digits",
         ));
+    }
+
+    #[test]
+    fn test_fullmatch_is_the_default() {
+        let re = Regex::new(r"\A[ab]+\z").unwrap();
+        assert_all_examples(gs::from_regex("[ab]+"), move |s: &String| re.is_match(s));
     }
 
     #[test]
@@ -1228,9 +1258,10 @@ mod regex_tests {
 
     #[test]
     fn test_sets_allow_multichar_output_in_ignorecase_mode() {
-        find_any(gs::from_regex("(?i)[\u{0130}_]"), |s: &String| {
-            s.chars().count() > 1
-        });
+        find_any(
+            gs::from_regex("(?i)[\u{0130}_]").fullmatch(false),
+            |s: &String| s.chars().count() > 1,
+        );
     }
 
     #[test]
@@ -1260,7 +1291,7 @@ mod regex_tests {
 
     #[test]
     fn lookahead_with_anchor() {
-        check_can_generate_examples(gs::from_regex(r"abc(?!\Z)"));
+        check_can_generate_examples(gs::from_regex(r"abc(?!\Z)").fullmatch(false));
     }
 
     #[test]
@@ -1424,7 +1455,7 @@ mod regex_tests {
 
     #[test]
     fn anchor_beginning_after_content() {
-        check_can_generate_examples(gs::from_regex(r".*\A"));
+        check_can_generate_examples(gs::from_regex(r".*\A").fullmatch(false));
     }
 
     #[test]
@@ -1459,18 +1490,20 @@ mod regex_tests {
     #[test]
     fn padded_pattern_with_empty_alphabet_intervals() {
         check_can_generate_examples(
-            gs::from_regex(r"a?").alphabet(gs::characters().categories(&[])),
+            gs::from_regex(r"a?")
+                .fullmatch(false)
+                .alphabet(gs::characters().categories(&[])),
         );
     }
 
     #[test]
     fn anchor_at_start_after_content() {
-        check_can_generate_examples(gs::from_regex(r"\Aabc"));
+        check_can_generate_examples(gs::from_regex(r"\Aabc").fullmatch(false));
     }
 
     #[test]
     fn anchor_multiline_with_padding() {
-        check_can_generate_examples(gs::from_regex(r"(?m)^abc"));
+        check_can_generate_examples(gs::from_regex(r"(?m)^abc").fullmatch(false));
     }
 }
 

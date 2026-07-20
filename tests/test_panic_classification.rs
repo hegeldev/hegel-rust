@@ -9,7 +9,7 @@ mod common;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use common::project::TempRustProject;
+use common::exec::fixture;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase, Verbosity};
 
@@ -72,35 +72,6 @@ fn user_panic_matching_invalid_argument_prefix_is_a_failure() {
     );
 }
 
-const THREADED_REJECTS_CODE: &str = r#"
-use hegel::{Hegel, HealthCheck, Settings};
-use hegel::generators as gs;
-
-fn main() {
-    Hegel::new(|tc| {
-        let worker = tc.clone();
-        let result = std::thread::spawn(move || {
-            let keep: bool = worker.draw(gs::booleans());
-            // Rejecting on the worker thread raises the control-flow unwind
-            // *there*, not on the thread the lifecycle's hook protects.
-            worker.assume(keep);
-        })
-        .join();
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
-    })
-    .settings(
-        Settings::new()
-            .database(None)
-            .derandomize(true)
-            .test_cases(20)
-            .suppress_health_check(HealthCheck::all()),
-    )
-    .run();
-}
-"#;
-
 /// Regression test: a control-flow "panic" raised on a spawned thread used
 /// to hit the *default* panic hook (the suppressing hook only recognises
 /// test context through a thread-local), printing a
@@ -109,9 +80,7 @@ fn main() {
 /// stderr no matter which thread raises them.
 #[test]
 fn worker_thread_rejections_print_no_panic_noise() {
-    let output = TempRustProject::new()
-        .main_file(THREADED_REJECTS_CODE)
-        .cargo_run(&[]);
+    let output = fixture(env!("CARGO_BIN_EXE_fixture_threaded_rejects")).run();
     assert!(
         !output.stderr.contains("panicked"),
         "worker-thread rejections must not reach any panic hook, got:\n{}",

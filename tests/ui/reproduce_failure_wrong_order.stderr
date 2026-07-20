@@ -1,0 +1,9 @@
+error: #[hegel::reproduce_failure(...)] must appear below #[hegel::test], not above it.
+       Write:
+         #[hegel::test]
+         #[hegel::reproduce_failure("<blob>")]
+         fn my_test(tc: ::hegel::TestCase) { ... }
+ --> tests/ui/reproduce_failure_wrong_order.rs:6:1
+  |
+6 | fn my_test(tc: hegel::TestCase) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

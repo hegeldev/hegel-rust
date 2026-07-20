@@ -3,7 +3,7 @@ members = [".", "hegel-macros", "hegel-c"]
 
 [package]
 name = "hegeltest"
-version = "0.25.0"
+version = "0.28.0"
 edition = "2024"
 # if you bump this, also bump ci.yml, hegel-macros/Cargo.toml, and hegel-c/Cargo.toml
 rust-version = "1.86"
@@ -12,6 +12,10 @@ exclude = [
   "/.github",
   "/nix",
   "/RELEASE-sample.md",
+  # Test-only fixture binaries (see the [[bin]] targets below). Excluding the
+  # sources makes `cargo package` strip the [[bin]] targets from the published
+  # crate, so downstream builds and `cargo install` never see them.
+  "/tests/fixtures",
 ]
 license = "MIT"
 readme = "README.md"
@@ -34,17 +38,65 @@ name = "hegel"
 name = "stack"
 doc-scrape-examples = true
 
+# Prebuilt fixture binaries for the end-to-end integration tests. Each is a
+# tiny `fn main` (or `#[hegel::main]`) program whose real-process behaviour —
+# CLI parsing, stderr layout, panic hooks, backtraces — the tests in `tests/`
+# assert on by spawning the binary via `env!("CARGO_BIN_EXE_…")`. Declaring
+# them as [[bin]] targets makes cargo build, cache, and (under cargo-llvm-cov)
+# instrument them like any other target: there are no uniquely-named temp
+# crates to compile at test time and no artifacts cargo doesn't own. The
+# sources are excluded from the published package (see `exclude` above).
+[[bin]]
+name = "fixture_basic_main"
+path = "tests/fixtures/basic_main.rs"
+
+[[bin]]
+name = "fixture_main_simple"
+path = "tests/fixtures/main_simple.rs"
+
+[[bin]]
+name = "fixture_main_failing"
+path = "tests/fixtures/main_failing.rs"
+
+[[bin]]
+name = "fixture_main_rewrite"
+path = "tests/fixtures/main_rewrite.rs"
+
+[[bin]]
+name = "fixture_main_explicit"
+path = "tests/fixtures/main_explicit.rs"
+
+[[bin]]
+name = "fixture_output_failing"
+path = "tests/fixtures/output_failing.rs"
+
+[[bin]]
+name = "fixture_report_failing"
+path = "tests/fixtures/report_failing.rs"
+
+[[bin]]
+name = "fixture_two_bugs"
+path = "tests/fixtures/two_bugs.rs"
+
+[[bin]]
+name = "fixture_payload_failing"
+path = "tests/fixtures/payload_failing.rs"
+
+[[bin]]
+name = "fixture_threaded_rejects"
+path = "tests/fixtures/threaded_rejects.rs"
+
 [dependencies]
 paste = "1.0"
 tempfile = "3.0"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.25.0", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.28.0", path = "hegel-macros" }
 # The native engine + C ABI ("libhegel"). hegeltest drives it through the
 # C ABI (the hegel_* extern "C" functions), exactly like other language
 # bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
 # is `hegeltest-c`.
-hegeltest-c = { version = "=0.28.0", path = "hegel-c", default-features = false }
+hegeltest-c = { version = "=0.29.0", path = "hegel-c", default-features = false }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }
@@ -76,6 +128,12 @@ is-terminal = "0.4.13"
 # with other macros for #[hegel::test] to work with #[tokio::test]. See
 # https://github.com/tokio-rs/tokio/pull/6497
 tokio = { version = "1.39", features = ["macros", "rt"] }
+# Compile-diagnostic UI tests (tests/test_ui.rs + tests/ui/*.rs): macro and
+# derive misuse must fail to compile with the pinned .stderr output.
+trybuild = "1.0.116"
+# Compile-time !Send/!Sync assertions (test-case handles must not be able to
+# cross threads) without pinning toolchain-dependent diagnostic text.
+static_assertions = "1.1.0"
 
 [[bench]]
 name = "biased_sample"

@@ -1,14 +1,8 @@
 mod common;
 
-use common::project::TempRustProject;
 use hegel::TestCase;
 use hegel::generators as gs;
 use hegel::stateful::{Pool, pool};
-
-#[test]
-fn test_state_machine_failure() {
-    let code = r#"
-use hegel::TestCase;
 
 struct Linear {
     state: i32,
@@ -47,18 +41,10 @@ impl Linear {
 }
 
 #[hegel::test]
-fn test_upper_bound(tc: TestCase) {
+#[should_panic(expected = "assertion failed: self.state < 4")]
+fn test_state_machine_failure(tc: TestCase) {
     let m = Linear { state: 0 };
     hegel::stateful::run(m, tc);
-}
-
-fn main() {}
-"#;
-
-    TempRustProject::new()
-        .main_file(code)
-        .expect_failure("assertion failed: self.state < 4")
-        .cargo_test(&[]);
 }
 
 struct TestConsumeMachine {
@@ -167,8 +153,49 @@ fn test_draw_domain(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+/// Regression test: the module docs promise invariants can take `&self`,
+/// but the macro used to register methods as bare `fn(&mut M, TestCase)`
+/// pointers, so a `&self` invariant failed to compile inside generated code.
+/// Both `&self` and `&mut self` receivers must work, for rules and
+/// invariants alike.
+struct SharedReceiverMachine {
+    counter: u32,
+    observed: u32,
+}
+
+#[hegel::state_machine]
+impl SharedReceiverMachine {
+    #[rule]
+    fn bump(&mut self, _tc: TestCase) {
+        self.counter += 1;
+    }
+
+    #[rule]
+    fn observe(&self, _tc: TestCase) {
+        assert!(self.observed <= self.counter);
+    }
+
+    #[invariant]
+    fn counter_covers_observed(&self, _tc: TestCase) {
+        assert!(self.observed <= self.counter);
+    }
+
+    #[invariant]
+    fn record(&mut self, _tc: TestCase) {
+        self.observed = self.counter;
+    }
+}
+
+#[hegel::test]
+fn test_state_machine_with_shared_receivers(tc: TestCase) {
+    let m = SharedReceiverMachine {
+        counter: 0,
+        observed: 0,
+    };
+    hegel::stateful::run(m, tc);
+}
+
 mod stateful {
-    use super::common::project::TempRustProject;
     use super::common::utils::expect_panic;
     use hegel::TestCase;
     use hegel::generators as gs;
@@ -492,39 +519,25 @@ mod stateful {
         .run();
     }
 
-    const FLAKY_MACHINE_CODE: &str = r#"
-use std::sync::atomic::{AtomicBool, Ordering};
-use hegel::TestCase;
+    static WILL_FAIL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-static WILL_FAIL: AtomicBool = AtomicBool::new(true);
+    struct FlakyStateMachine;
 
-struct FlakyStateMachine;
-
-#[hegel::state_machine]
-impl FlakyStateMachine {
-    #[rule]
-    fn action(&mut self, _tc: TestCase) {
-        // First call: swap true→false, should_fail=true → assertion fires.
-        // All subsequent calls: should_fail=false → passes.
-        let should_fail = WILL_FAIL.swap(false, Ordering::SeqCst);
-        assert!(!should_fail, "flaky: fails on first invocation only");
+    #[hegel::state_machine]
+    impl FlakyStateMachine {
+        #[rule]
+        fn action(&mut self, _tc: TestCase) {
+            // First call: swap true→false, should_fail=true → assertion fires.
+            // All subsequent calls: should_fail=false → passes.
+            let should_fail = WILL_FAIL.swap(false, std::sync::atomic::Ordering::SeqCst);
+            assert!(!should_fail, "flaky: fails on first invocation only");
+        }
     }
-}
 
-#[hegel::test(database = None)]
-fn test_flaky_state_machine(tc: TestCase) {
-    hegel::stateful::run(FlakyStateMachine, tc);
-}
-
-fn main() {}
-"#;
-
-    #[test]
-    fn test_flaky_raises_flaky() {
-        TempRustProject::new()
-            .main_file(FLAKY_MACHINE_CODE)
-            .expect_failure("Flaky test detected")
-            .cargo_test(&[]);
+    #[hegel::test(database = None)]
+    #[should_panic(expected = "Flaky test detected")]
+    fn test_flaky_raises_flaky(tc: TestCase) {
+        hegel::stateful::run(FlakyStateMachine, tc);
     }
 
     struct NoRulesMachine;
