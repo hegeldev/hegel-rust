@@ -36,7 +36,7 @@ use crate::ffi::PrinterHandle;
 /// p.text(",");
 /// p.breakable(" ");
 /// p.text("second");
-/// p.end_group(1, "]");
+/// p.end_group("]");
 /// assert_eq!(p.value(), "[first,\n second]");
 /// ```
 #[derive(Debug)]
@@ -127,11 +127,12 @@ impl PrettyPrinter {
         handle.begin_group(indent as u64, open).unwrap();
     }
 
-    /// Close the innermost group: decrease the indentation by `dedent`, then
-    /// emit `close`. Panics if no group is open.
-    pub fn end_group(&mut self, dedent: usize, close: &str) {
+    /// Close the innermost group: undo the indentation its
+    /// [`begin_group`](PrettyPrinter::begin_group) added, then emit `close`.
+    /// Panics if no group is open.
+    pub fn end_group(&mut self, close: &str) {
         let Some(handle) = &self.handle else { return };
-        handle.end_group(dedent as u64, close).unwrap();
+        handle.end_group(close).unwrap();
     }
 
     /// Adjust the indentation applied by subsequent break points by `delta`.
@@ -520,7 +521,7 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
                     }
                     emit_debug_nodes(item, printer);
                 }
-                printer.end_group(indent, close);
+                printer.end_group(close);
             }
         }
     }
@@ -714,7 +715,7 @@ fn pretty_seq<'a, T: PrettyPrintable + ?Sized + 'a>(
         item.pretty_print(printer);
     }
     let _ = index;
-    printer.end_group(open.chars().count(), close);
+    printer.end_group(close);
 }
 
 impl<T: PrettyPrintable> PrettyPrintable for [T] {
@@ -769,7 +770,7 @@ fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
         printer.text(")");
     }
     let _ = index;
-    printer.end_group(open.chars().count(), "])");
+    printer.end_group("])");
 }
 
 impl<K: PrettyPrintable, V: PrettyPrintable, S> PrettyPrintable
@@ -793,7 +794,7 @@ impl<T: PrettyPrintable> PrettyPrintable for Option<T> {
             Some(value) => {
                 printer.begin_group(5, "Some(");
                 value.pretty_print(printer);
-                printer.end_group(5, ")");
+                printer.end_group(")");
             }
         }
     }
@@ -805,12 +806,12 @@ impl<T: PrettyPrintable, E: PrettyPrintable> PrettyPrintable for Result<T, E> {
             Ok(value) => {
                 printer.begin_group(3, "Ok(");
                 value.pretty_print(printer);
-                printer.end_group(3, ")");
+                printer.end_group(")");
             }
             Err(error) => {
                 printer.begin_group(4, "Err(");
                 error.pretty_print(printer);
-                printer.end_group(4, ")");
+                printer.end_group(")");
             }
         }
     }
@@ -826,7 +827,7 @@ impl<A: PrettyPrintable> PrettyPrintable for (A,) {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         printer.begin_group(1, "(");
         self.0.pretty_print(printer);
-        printer.end_group(1, ",)");
+        printer.end_group(",)");
     }
 }
 
@@ -847,7 +848,7 @@ macro_rules! pretty_tuple {
                     $name.pretty_print(printer);
                 )+
                 let _ = index;
-                printer.end_group(1, ")");
+                printer.end_group(")");
             }
         }
     )+};

@@ -54,7 +54,7 @@ fn groups_lay_out_inline_or_broken() {
         text(ctx, p, "1,");
         ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
         text(ctx, p, "2");
-        ok(hegel_printer_end_group(ctx, p, 1, "]".as_ptr(), 1));
+        ok(hegel_printer_end_group(ctx, p, "]".as_ptr(), 1));
         assert_eq!(value(ctx, p), "[1, 2]");
         ok(hegel_printer_free(ctx, p));
 
@@ -65,7 +65,7 @@ fn groups_lay_out_inline_or_broken() {
         text(ctx, p, "2,");
         ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
         text(ctx, p, "3");
-        ok(hegel_printer_end_group(ctx, p, 1, "]".as_ptr(), 1));
+        ok(hegel_printer_end_group(ctx, p, "]".as_ptr(), 1));
         assert_eq!(value(ctx, p), "[1,\n 2,\n 3]");
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
@@ -142,7 +142,7 @@ fn deferred_slot_roundtrip_and_death() {
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_end_group(ctx, slot, 0, ptr::null(), 0),
+            hegel_printer_end_group(ctx, slot, ptr::null(), 0),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
@@ -244,7 +244,7 @@ fn comments_attach_to_line_ends_and_break_open_groups() {
         text(ctx, p, ",");
         ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
         text(ctx, p, "3");
-        ok(hegel_printer_end_group(ctx, p, 1, "]".as_ptr(), 1));
+        ok(hegel_printer_end_group(ctx, p, "]".as_ptr(), 1));
         assert_eq!(
             value(ctx, p),
             "[1,\n 2,  // or any other generated value\n 3\n]"
@@ -321,11 +321,11 @@ fn text_arguments_are_validated() {
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_end_group(ctx, p, 0, "\n".as_ptr(), 1),
+            hegel_printer_end_group(ctx, p, "\n".as_ptr(), 1),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_end_group(ctx, p, 0, ptr::null(), 0),
+            hegel_printer_end_group(ctx, p, ptr::null(), 0),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("without a matching begin_group"));
@@ -353,7 +353,7 @@ fn if_break_emits_trailing_text_only_in_the_broken_form() {
             ok(hegel_printer_shift_indent(ctx, p, -4));
             ok(hegel_printer_if_break(ctx, p, ",".as_ptr(), 1));
             ok(hegel_printer_breakable(ctx, p, "".as_ptr(), 0));
-            ok(hegel_printer_end_group(ctx, p, 0, "}".as_ptr(), 1));
+            ok(hegel_printer_end_group(ctx, p, "}".as_ptr(), 1));
             assert_eq!(value(ctx, p), expected);
             ok(hegel_printer_free(ctx, p));
         }
@@ -403,7 +403,7 @@ fn null_handles_and_out_parameters_are_rejected() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_end_group(ctx, null, 0, ptr::null(), 0),
+            hegel_printer_end_group(ctx, null, ptr::null(), 0),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(

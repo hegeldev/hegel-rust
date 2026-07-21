@@ -218,7 +218,7 @@ fn printer_groups_lay_out_inline_or_broken() {
     printer.text("1,");
     printer.breakable(" ");
     printer.text("2");
-    printer.end_group(1, "]");
+    printer.end_group("]");
     assert_eq!(printer.value(), "[1, 2]");
 }
 
@@ -255,7 +255,7 @@ fn comments_attach_to_line_ends_and_break_open_groups() {
     printer.text(",");
     printer.breakable(" ");
     printer.text("3");
-    printer.end_group(1, "]");
+    printer.end_group("]");
     assert_eq!(
         printer.value(),
         "[1,\n 2,  // or any other generated value\n 3\n]"
@@ -295,7 +295,27 @@ fn printer_debug_form_is_opaque() {
 #[should_panic(expected = "matching begin_group")]
 fn unbalanced_end_group_panics() {
     let mut printer = PrettyPrinter::new(79);
-    printer.end_group(0, "]");
+    printer.end_group("]");
+}
+
+#[test]
+fn end_group_dedents_by_the_full_open_delimiter_width() {
+    let mut printer = PrettyPrinter::new(12);
+    printer.begin_group(5, "Some(");
+    printer.begin_group(1, "[");
+    printer.text("first,");
+    printer.breakable(" ");
+    printer.text("second");
+    printer.end_group("]");
+    printer.end_group(")");
+    printer.hard_break();
+    printer.text("x");
+    assert_eq!(
+        printer.value(),
+        "Some([first,
+      second])
+x"
+    );
 }
 
 mod debug_repr {
@@ -400,7 +420,7 @@ fn noop_printer_discards_everything() {
     printer.hard_break();
     printer.shift_indent(2);
     printer.comment("nothing to see");
-    printer.end_group(1, "]");
+    printer.end_group("]");
     let mut slot = printer.deferred();
     slot.text("later\ntext");
     slot.breakable(" ");
