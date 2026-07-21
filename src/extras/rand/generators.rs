@@ -60,7 +60,7 @@ impl PrintableGenerator<HegelRandom> for RandomsGenerator {
         }
         printer.begin_group(1, "HegelRandom { consumed: [");
         let slot = printer.deferred();
-        printer.end_group(1, "] }");
+        printer.end_group("] }");
         HegelRandom {
             source: RandomSource::Artificial(
                 tc.clone(),

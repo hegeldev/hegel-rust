@@ -554,7 +554,7 @@ impl hegel::PrintableGenerator<(bool, bool)> for PairGenerator {
             printer.text(", ");
         }
         let second = gs::booleans().do_draw_and_print(tc, printer);
-        printer.end_group(1, ")");
+        printer.end_group(")");
         (first, second)
     }
 }
