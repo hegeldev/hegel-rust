@@ -629,6 +629,15 @@ fn out_of_range_enum_values_are_invalid_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("unknown verbosity"));
+        assert_eq!(
+            hegel_c::hegel_settings_set_stateful_step_count(ctx, s, 0),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("step count must be at least 1"));
+        assert_eq!(
+            hegel_c::hegel_settings_set_stateful_step_count(ctx, s, -3),
+            HEGEL_E_INVALID_ARG
+        );
 
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));

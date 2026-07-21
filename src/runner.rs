@@ -193,7 +193,8 @@ impl Settings {
 
     /// Set the target number of steps run per stateful test case (default:
     /// 50). Each stateful case runs at least one step and at most this many.
-    /// Has no effect on non-stateful tests.
+    /// Has no effect on non-stateful tests. `n` must be at least 1; a smaller
+    /// value makes the run fail with a usage error.
     pub fn stateful_step_count(mut self, n: i64) -> Self {
         self.stateful_step_count = n;
         self
