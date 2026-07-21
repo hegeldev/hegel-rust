@@ -53,7 +53,10 @@ fn drawn_rngs_print_the_values_they_hand_out() {
         let _ = (a, b);
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HegelRandom { consumed: [0, 0] };"]);
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = HegelRandom { consumed: [0, 0] };"]
+    );
 }
 
 #[test]
@@ -65,7 +68,10 @@ fn drawn_rngs_record_filled_byte_buffers() {
         rng.try_fill_bytes(&mut buffer).unwrap();
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HegelRandom { consumed: [[0, 0]] };"]);
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = HegelRandom { consumed: [[0, 0]] };"]
+    );
 }
 
 #[test]
@@ -84,10 +90,7 @@ fn true_random_rngs_print_their_seed() {
         let _: u32 = rng.random();
         panic!("boom");
     });
-    assert_eq!(
-        lines,
-        vec!["let draw_1 = HegelRandom { seed: 0 };"]
-    );
+    assert_eq!(lines, vec!["let draw_1 = HegelRandom { seed: 0 };"]);
 }
 
 #[test]

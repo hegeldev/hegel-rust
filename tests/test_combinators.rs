@@ -1092,11 +1092,8 @@ mod one_of_named_types {
     use hegel::{Hegel, Settings};
 
     struct Holder {
-        generator: OneOf2Generator<
-            gs::IntegerGenerator<i64>,
-            gs::SampledFromGenerator<'static, i64>,
-            i64,
-        >,
+        generator:
+            OneOf2Generator<gs::IntegerGenerator<i64>, gs::SampledFromGenerator<'static, i64>, i64>,
     }
 
     #[test]

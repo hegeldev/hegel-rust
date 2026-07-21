@@ -217,8 +217,7 @@ mod reproduce {
                 Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
-                Vec::new(),
-                None,
+                crate::ffi::ExplainAnnotations::default(),
             );
         }
         let result = run.result();

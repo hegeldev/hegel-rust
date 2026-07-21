@@ -1157,8 +1157,10 @@ impl RunResult {
             require_ok(hegel_c::hegel_failure_free(ctx, f));
             Failure {
                 reproduce_blob,
-                explain_comments,
-                explain_together,
+                explain: ExplainAnnotations {
+                    comments: explain_comments,
+                    together: explain_together,
+                },
             }
         })
     }
@@ -1174,14 +1176,20 @@ impl Drop for RunResult {
 /// A distinct failure read out of a finished run.
 ///
 /// Carries the reproduce blob the client replays to produce the diagnostic
-/// and re-raise the test's own panic, plus the explain phase's annotations —
-/// `(start, end, text)` choice slices of the shrunk counterexample for the
-/// replay to attach to the printed regions that consumed them, and the
-/// whole-test "varied together" note when there is one.
+/// and re-raise the test's own panic, plus the explain phase's annotations
+/// for the replay to attach to the printed regions that consumed them.
 pub(crate) struct Failure {
     pub(crate) reproduce_blob: Option<String>,
-    pub(crate) explain_comments: Vec<(u64, u64, String)>,
-    pub(crate) explain_together: Option<String>,
+    pub(crate) explain: ExplainAnnotations,
+}
+
+/// A failure's explain-phase annotations: `(start, end, text)` choice slices
+/// of the shrunk counterexample, and the whole-test "varied together" note
+/// when there is one.
+#[derive(Default)]
+pub(crate) struct ExplainAnnotations {
+    pub(crate) comments: Vec<(u64, u64, String)>,
+    pub(crate) together: Option<String>,
 }
 
 fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {

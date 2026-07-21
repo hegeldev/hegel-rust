@@ -108,7 +108,10 @@ fn options_and_results_print_as_constructors() {
 fn maps_and_sets_print_as_from_constructors() {
     let map: BTreeMap<i32, &str> = [(1, "a"), (2, "b")].into_iter().collect();
     assert_eq!(render(&map, 79), "BTreeMap::from([(1, \"a\"), (2, \"b\")])");
-    assert_eq!(render(&BTreeMap::<i32, i32>::new(), 79), "BTreeMap::from([])");
+    assert_eq!(
+        render(&BTreeMap::<i32, i32>::new(), 79),
+        "BTreeMap::from([])"
+    );
     assert_eq!(
         render(&map, 24),
         "BTreeMap::from([(1, \"a\"),\n                (2, \"b\")])"
@@ -152,7 +155,10 @@ fn durations_and_addresses_print_as_constructors() {
         "Ipv6Addr::new(0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1)"
     );
     assert_eq!(
-        render(&IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)), 79),
+        render(
+            &IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            79
+        ),
         "IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1))"
     );
 }

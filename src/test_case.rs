@@ -461,18 +461,14 @@ impl TestCase {
     /// the replay's draws print; the whole-test note reserves a deferred hole
     /// at the top of the document and only appears — as a leading `// …`
     /// line — once a slice annotation actually renders.
-    pub(crate) fn set_explain_comments(
-        &self,
-        comments: Vec<(u64, u64, String)>,
-        together: Option<String>,
-    ) {
+    pub(crate) fn set_explain_comments(&self, explain: crate::ffi::ExplainAnnotations) {
         {
             let mut table = self.global.explain_comments.lock();
-            for (start, end, text) in comments {
+            for (start, end, text) in explain.comments {
                 table.insert((start, end), text);
             }
         }
-        if let Some(text) = together {
+        if let Some(text) = explain.together {
             self.with_printer(|printer| {
                 let slot = printer.deferred();
                 *self.global.explain_together.lock() = Some((slot, text));

@@ -24,7 +24,10 @@ fn chrono_values_print_as_constructor_expressions() {
     use chrono::{FixedOffset, NaiveDate, TimeDelta, TimeZone, Weekday, WeekdaySet};
 
     let date = NaiveDate::from_ymd_opt(2020, 2, 29).unwrap();
-    assert_eq!(render(&date), "NaiveDate::from_ymd_opt(2020, 2, 29).unwrap()");
+    assert_eq!(
+        render(&date),
+        "NaiveDate::from_ymd_opt(2020, 2, 29).unwrap()"
+    );
     let time = chrono::NaiveTime::from_hms_nano_opt(1, 2, 3, 40).unwrap();
     assert_eq!(
         render(&time),

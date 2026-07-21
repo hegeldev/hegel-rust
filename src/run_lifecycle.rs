@@ -237,8 +237,7 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
-    explain_comments: Vec<(u64, u64, String)>,
-    explain_together: Option<String>,
+    explain: crate::ffi::ExplainAnnotations,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -255,8 +254,8 @@ pub(crate) fn run_test_case(
 
     let c_tc = Arc::new(c_tc);
     let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
-    if should_emit && !explain_comments.is_empty() {
-        tc.set_explain_comments(explain_comments, explain_together);
+    if should_emit && !explain.comments.is_empty() {
+        tc.set_explain_comments(explain);
     }
     let reporter = tc.child(0);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
@@ -474,8 +473,7 @@ pub(crate) fn drive<F>(
             mode,
             verbosity,
             &output,
-            Vec::new(),
-            None,
+            crate::ffi::ExplainAnnotations::default(),
         );
     }
 
@@ -520,8 +518,7 @@ pub(crate) fn drive<F>(
                     mode,
                     verbosity,
                     &output,
-                    failure.explain_comments,
-                    failure.explain_together,
+                    failure.explain,
                 );
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
@@ -571,8 +568,7 @@ fn drive_single_case(
         Mode::SingleTestCase,
         verbosity,
         output,
-        Vec::new(),
-        None,
+        crate::ffi::ExplainAnnotations::default(),
     );
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
@@ -618,8 +614,7 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
-        Vec::new(),
-        None,
+        crate::ffi::ExplainAnnotations::default(),
     );
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);

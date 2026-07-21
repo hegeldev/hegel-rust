@@ -407,7 +407,10 @@ fn every_leaf_generator_prints() {
     assert_eq!(printed_draw_lines(gs::text()), vec!["let draw_1 = \"\";"]);
     printed_draw_lines(gs::characters());
     printed_draw_lines(gs::from_regex("[a-z]{2}"));
-    assert_eq!(printed_draw_lines(gs::binary()), vec!["let draw_1 = vec![];"]);
+    assert_eq!(
+        printed_draw_lines(gs::binary()),
+        vec!["let draw_1 = vec![];"]
+    );
     printed_draw_lines(gs::emails());
     printed_draw_lines(gs::urls());
     printed_draw_lines(gs::domains());
@@ -625,7 +628,10 @@ fn duplicate_set_elements_reject_cleanly_while_printing() {
         panic!("boom");
     });
     let pattern = regex::Regex::new(r"^let draw_\d+ = HashSet::from\(\[\d+, \d+\]\);$").unwrap();
-    let set_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= HashSet::from([")).collect();
+    let set_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("= HashSet::from(["))
+        .collect();
     assert!(!set_lines.is_empty());
     for line in set_lines {
         assert!(pattern.is_match(line), "malformed set line {line:?}");
@@ -649,7 +655,10 @@ fn duplicate_map_keys_reject_cleanly_while_printing() {
         r"^let draw_\d+ = HashMap::from\(\[\(\d+, (true|false)\), \(\d+, (true|false)\)\]\);$",
     )
     .unwrap();
-    let map_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= HashMap::from([")).collect();
+    let map_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("= HashMap::from(["))
+        .collect();
     assert!(!map_lines.is_empty());
     for line in map_lines {
         assert!(pattern.is_match(line), "malformed map line {line:?}");

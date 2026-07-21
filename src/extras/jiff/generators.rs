@@ -97,10 +97,7 @@ impl PrettyPrintable for Offset {
 
 impl PrettyPrintable for Zoned {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text(&format!(
-            "{:?}.parse::<Zoned>().unwrap()",
-            self.to_string()
-        ));
+        printer.text(&format!("{:?}.parse::<Zoned>().unwrap()", self.to_string()));
     }
 }
 use crate::test_case::invalid_argument;
