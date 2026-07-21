@@ -81,7 +81,7 @@ fn bounded_case_runs_at_least_one_step_even_with_step_count_one() {
         64,
         None,
     );
-    ntc.family().set_stateful_step_count(0);
+    ntc.family().set_stateful_step_count(1);
     let mut sm = machine(2);
     assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
