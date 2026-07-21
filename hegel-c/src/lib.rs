@@ -4525,9 +4525,11 @@ pub unsafe extern "C" fn hegel_failure_together_note(
 /// Snapshotting the count before and after a draw yields the choice slice
 /// the draw consumed, which is how a client matches printed regions against
 /// the slices named by `hegel_failure_comment` during the final replay. The
-/// count is per-stream: a cloned handle reports the choices of its own
-/// stream. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_count`.
+/// count is a `uint64_t` rather than the `size_t` other counts use so it
+/// compares directly against those slice bounds. The count is per-stream: a
+/// cloned handle reports the choices of its own stream. Returns
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `HEGEL_E_INVALID_ARG` for a
+/// NULL `out_count`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_choice_count(
     ctx: *mut HegelContext,
