@@ -88,14 +88,15 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         }
     }
 
-    let generator_param_decls = generator_params
-        .iter()
-        .zip(field_types.iter())
-        .map(|(param, ty)| {
-            quote! {
-                #param = <#ty as ::hegel::generators::DefaultGenerator>::Generator
-            }
-        });
+    let generator_param_decls =
+        generator_params
+            .iter()
+            .zip(field_types.iter())
+            .map(|(param, ty)| {
+                quote! {
+                    #param = <#ty as ::hegel::generators::DefaultGenerator>::Generator
+                }
+            });
 
     let generator_fields = field_names
         .iter()
@@ -104,11 +105,14 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             quote! { #name: #param }
         });
 
-    let new_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
-        quote! {
-            #name: <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
-        }
-    });
+    let new_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! {
+                #name: <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
+            }
+        });
 
     let default_bounds = default_gen_bounds(&field_types);
 

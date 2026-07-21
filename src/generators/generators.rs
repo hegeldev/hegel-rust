@@ -128,12 +128,12 @@ pub trait Generator<T> {
     ///
     /// let masked = gs::text().print_with(|_, printer| printer.text("<secret>"));
     /// ```
-    fn print_with<F>(self, print: F) -> PrintWith<Self, F>
+    fn print_with<F>(self, print: F) -> PrintedWith<Self, F>
     where
         Self: Sized,
         F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
     {
-        PrintWith {
+        PrintedWith {
             source: self,
             print,
         }
@@ -145,12 +145,12 @@ pub trait Generator<T> {
     /// Useful when a combinator chain loses printability — e.g. a `map` to a
     /// type that does implement [`PrettyPrintable`] but whose source cannot
     /// prove it, or a hand-written [`Generator`] implementation.
-    fn print_as_value(self) -> PrintAsValue<Self>
+    fn print_as_value(self) -> PrintedAsValue<Self>
     where
         Self: Sized,
         T: PrettyPrintable,
     {
-        PrintAsValue { source: self }
+        PrintedAsValue { source: self }
     }
 
     /// Make this generator printable by printing each drawn value's `Debug`
@@ -171,12 +171,12 @@ pub trait Generator<T> {
     ///
     /// let paths = gs::text().map(PathBuf::from).print_as_debug();
     /// ```
-    fn print_as_debug(self) -> PrintAsDebug<Self>
+    fn print_as_debug(self) -> PrintedAsDebug<Self>
     where
         Self: Sized,
         T: std::fmt::Debug,
     {
-        PrintAsDebug { source: self }
+        PrintedAsDebug { source: self }
     }
 }
 
@@ -261,12 +261,12 @@ pub(crate) fn draw_and_print_value<T: PrettyPrintable>(
 }
 
 /// Result of [`Generator::print_with`].
-pub struct PrintWith<G, F> {
+pub struct PrintedWith<G, F> {
     source: G,
     print: F,
 }
 
-impl<T, G, F> Generator<T> for PrintWith<G, F>
+impl<T, G, F> Generator<T> for PrintedWith<G, F>
 where
     G: Generator<T>,
     F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
@@ -276,7 +276,7 @@ where
     }
 }
 
-impl<T, G, F> PrintableGenerator<T> for PrintWith<G, F>
+impl<T, G, F> PrintableGenerator<T> for PrintedWith<G, F>
 where
     G: Generator<T>,
     F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
@@ -289,11 +289,11 @@ where
 }
 
 /// Result of [`Generator::print_as_value`].
-pub struct PrintAsValue<G> {
+pub struct PrintedAsValue<G> {
     source: G,
 }
 
-impl<T, G> Generator<T> for PrintAsValue<G>
+impl<T, G> Generator<T> for PrintedAsValue<G>
 where
     G: Generator<T>,
     T: PrettyPrintable,
@@ -303,7 +303,7 @@ where
     }
 }
 
-impl<T, G> PrintableGenerator<T> for PrintAsValue<G>
+impl<T, G> PrintableGenerator<T> for PrintedAsValue<G>
 where
     G: Generator<T>,
     T: PrettyPrintable,
@@ -314,11 +314,11 @@ where
 }
 
 /// Result of [`Generator::print_as_debug`].
-pub struct PrintAsDebug<G> {
+pub struct PrintedAsDebug<G> {
     source: G,
 }
 
-impl<T, G> Generator<T> for PrintAsDebug<G>
+impl<T, G> Generator<T> for PrintedAsDebug<G>
 where
     G: Generator<T>,
     T: std::fmt::Debug,
@@ -328,7 +328,7 @@ where
     }
 }
 
-impl<T, G> PrintableGenerator<T> for PrintAsDebug<G>
+impl<T, G> PrintableGenerator<T> for PrintedAsDebug<G>
 where
     G: Generator<T>,
     T: std::fmt::Debug,

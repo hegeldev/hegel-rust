@@ -476,10 +476,7 @@ fn take_group_prefix(text: &mut String, delimiter: char) -> String {
         let Some(without_space) = text.strip_suffix(' ') else {
             return String::new();
         };
-        let start = without_space
-            .rfind(' ')
-            .map(|index| index + 1)
-            .unwrap_or(0);
+        let start = without_space.rfind(' ').map(|index| index + 1).unwrap_or(0);
         let prefix = without_space[start..].to_string();
         if prefix.is_empty() {
             return String::new();

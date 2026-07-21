@@ -546,9 +546,8 @@ impl Generator<f64> for SilentSmallFloat {
 #[test]
 fn test_derive_enum_variant_builder_accepts_plain_generators() {
     hegel::Hegel::new(|tc| {
-        let s: Shape = tc.draw_silent(
-            Shape::default_generator().circle(|g| g.radius(SilentSmallFloat)),
-        );
+        let s: Shape =
+            tc.draw_silent(Shape::default_generator().circle(|g| g.radius(SilentSmallFloat)));
         if let Shape::Circle { radius } = s {
             assert!((0.0..=1.0).contains(&radius));
         }
