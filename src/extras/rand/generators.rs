@@ -31,9 +31,13 @@ impl Generator<HegelRandom> for RandomsGenerator {
     fn do_draw(&self, tc: &TestCase) -> HegelRandom {
         if self.use_true_random {
             let seed: u64 = integers().do_draw(tc);
-            HegelRandom::TrueRandom(Box::new(StdRng::seed_from_u64(seed)))
+            HegelRandom {
+                source: RandomSource::True(Box::new(StdRng::seed_from_u64(seed))),
+            }
         } else {
-            HegelRandom::ArtificialRandom(tc.clone(), None)
+            HegelRandom {
+                source: RandomSource::Artificial(tc.clone(), None),
+            }
         }
     }
 }
@@ -41,33 +45,38 @@ impl Generator<HegelRandom> for RandomsGenerator {
 /// Printing a drawn RNG is deferred: at draw time nothing is known about it
 /// yet, so a hole is reserved in the document and every value the RNG hands
 /// out during the test body is recorded into it. The failing example then
-/// shows `HegelRandom([v1, v2, …])` — the random values the test actually
-/// consumed. A seeded true-random RNG prints its seed instead, since its
-/// values are not drawn through the engine.
+/// shows `HegelRandom { consumed: [v1, v2, …] }` — the random values the
+/// test actually consumed. A seeded true-random RNG prints as
+/// `HegelRandom { seed: … }` instead, since its values are not drawn
+/// through the engine.
 impl PrintableGenerator<HegelRandom> for RandomsGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HegelRandom {
         if self.use_true_random {
             let seed: u64 = integers().do_draw(tc);
-            printer.text(&format!("HegelRandom(TrueRandom {{ seed: {seed} }})"));
-            return HegelRandom::TrueRandom(Box::new(StdRng::seed_from_u64(seed)));
+            printer.text(&format!("HegelRandom {{ seed: {seed} }}"));
+            return HegelRandom {
+                source: RandomSource::True(Box::new(StdRng::seed_from_u64(seed))),
+            };
         }
-        printer.begin_group(1, "HegelRandom([");
+        printer.begin_group(1, "HegelRandom { consumed: [");
         let slot = printer.deferred();
-        printer.end_group(1, "])");
-        HegelRandom::ArtificialRandom(
-            tc.clone(),
-            Some(RngPrintSlot {
-                printer: slot,
-                recorded: 0,
-            }),
-        )
+        printer.end_group(1, "] }");
+        HegelRandom {
+            source: RandomSource::Artificial(
+                tc.clone(),
+                Some(RngPrintSlot {
+                    printer: slot,
+                    recorded: 0,
+                }),
+            ),
+        }
     }
 }
 
 /// Records the values an artificially-random [`HegelRandom`] hands out into
 /// the deferred hole reserved for it at draw time.
 #[derive(Debug)]
-pub struct RngPrintSlot {
+struct RngPrintSlot {
     printer: DeferredPrinter,
     recorded: usize,
 }
@@ -85,49 +94,57 @@ impl RngPrintSlot {
 
 /// A random number generator produced by [`randoms()`].
 ///
-/// Implements [`Rng`] from the `rand` crate.
+/// Implements [`Rng`] from the `rand` crate. How it is backed — engine-drawn
+/// (shrinkable) data by default, or a seeded `StdRng` after
+/// [`use_true_random`](RandomsGenerator::use_true_random) — is internal.
 #[derive(Debug)]
-pub enum HegelRandom {
+pub struct HegelRandom {
+    source: RandomSource,
+}
+
+/// What a [`HegelRandom`] hands out when asked for randomness.
+#[derive(Debug)]
+enum RandomSource {
     /// Backed by test case data. Shrinkable. The second field records the
     /// values handed out into the failing-example output; it is `Some` only
     /// when the RNG was drawn by a test case whose output is being reported.
-    ArtificialRandom(TestCase, Option<RngPrintSlot>),
+    Artificial(TestCase, Option<RngPrintSlot>),
     /// Backed by a seeded `StdRng`. Not shrinkable.
-    TrueRandom(Box<StdRng>),
+    True(Box<StdRng>),
 }
 
 impl TryRng for HegelRandom {
     type Error = Infallible;
 
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(match self {
-            Self::ArtificialRandom(tc, slot) => {
+        Ok(match &mut self.source {
+            RandomSource::Artificial(tc, slot) => {
                 let value: u32 = integers().do_draw(tc);
                 if let Some(slot) = slot {
                     slot.record(format_args!("{value}"));
                 }
                 value
             }
-            Self::TrueRandom(rng) => rng.next_u32(),
+            RandomSource::True(rng) => rng.next_u32(),
         })
     }
 
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Ok(match self {
-            Self::ArtificialRandom(tc, slot) => {
+        Ok(match &mut self.source {
+            RandomSource::Artificial(tc, slot) => {
                 let value: u64 = integers().do_draw(tc);
                 if let Some(slot) = slot {
                     slot.record(format_args!("{value}"));
                 }
                 value
             }
-            Self::TrueRandom(rng) => rng.next_u64(),
+            RandomSource::True(rng) => rng.next_u64(),
         })
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-        match self {
-            Self::ArtificialRandom(tc, slot) => {
+        match &mut self.source {
+            RandomSource::Artificial(tc, slot) => {
                 let bytes: Vec<u8> = binary()
                     .min_size(dest.len())
                     .max_size(dest.len())
@@ -137,7 +154,7 @@ impl TryRng for HegelRandom {
                     slot.record(format_args!("{bytes:?}"));
                 }
             }
-            Self::TrueRandom(rng) => rng.fill_bytes(dest),
+            RandomSource::True(rng) => rng.fill_bytes(dest),
         }
         Ok(())
     }
