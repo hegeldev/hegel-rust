@@ -170,25 +170,33 @@ pub(crate) fn split_generics(generics: &syn::Generics) -> Result<GenericsParts<'
     })
 }
 
-/// DefaultGenerator + printable + Send + Sync bounds for a set of types.
-///
-/// The default generators are printable: `#[derive(DefaultGenerator)]`
-/// stores each field's generator as a `BoxedPrintableGenerator` so the
-/// derived generator can print field-by-field as it draws.
-pub(crate) fn default_gen_bounds(
-    types: &[&syn::Type],
-    lifetime: proc_macro2::TokenStream,
-) -> Vec<proc_macro2::TokenStream> {
+/// `DefaultGenerator` bounds for a set of field types, required wherever the
+/// generated code instantiates the fields' default generators.
+pub(crate) fn default_gen_bounds(types: &[&syn::Type]) -> Vec<proc_macro2::TokenStream> {
     types
         .iter()
         .map(|ty| {
             quote! {
-                #ty: ::hegel::generators::DefaultGenerator,
-                <#ty as ::hegel::generators::DefaultGenerator>::Generator:
-                    ::hegel::generators::PrintableGenerator<#ty> + Send + Sync + #lifetime
+                #ty: ::hegel::generators::DefaultGenerator
             }
         })
         .collect()
+}
+
+/// The generator type parameter standing in for one field's generator:
+/// `__GName` for a field `name`, `__G0` for a tuple field `_0`. The `__G`
+/// prefix keeps the parameter out of the way of the derived type's own
+/// generics.
+pub(crate) fn generator_param_ident(field_name: &str) -> syn::Ident {
+    let mut name = String::from("__G");
+    for segment in field_name.trim_start_matches("r#").split('_') {
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            name.extend(first.to_uppercase());
+            name.push_str(chars.as_str());
+        }
+    }
+    quote::format_ident!("{}", name)
 }
 
 /// Emit the printing statements for one struct or enum-variant shape,

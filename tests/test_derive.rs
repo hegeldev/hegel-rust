@@ -451,3 +451,108 @@ fn test_derive_enum_with_keyword_variants() {
         KeywordVariants::r#Crate(b) => *b,
     });
 }
+
+/// A deliberately non-printable generator: field builders accept any
+/// [`Generator`], and printability of the derived generator is decided by
+/// its current field generators.
+struct SilentSmallInt;
+
+impl Generator<i32> for SilentSmallInt {
+    fn do_draw(&self, tc: &hegel::TestCase) -> i32 {
+        tc.draw_silent(gs::integers::<i32>().min_value(1).max_value(3))
+    }
+}
+
+#[test]
+fn test_derive_struct_field_accepts_a_non_printable_generator() {
+    hegel::Hegel::new(|tc| {
+        let p: Point = tc.draw_silent(Point::default_generator().x(SilentSmallInt));
+        assert!((1..=3).contains(&p.x));
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+#[test]
+fn test_derive_struct_field_print_with_restores_printability() {
+    hegel::Hegel::new(|tc| {
+        let p: Point = tc.draw(
+            Point::default_generator()
+                .x(SilentSmallInt.print_with(|v, printer| printer.text(&format!("{v}")))),
+        );
+        assert!((1..=3).contains(&p.x));
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+/// A type whose hand-written `DefaultGenerator` produces a non-printable
+/// generator: deriving `DefaultGenerator` on a struct containing it still
+/// compiles, and the derived generator is drawable silently.
+#[derive(Debug, Clone)]
+struct Opaque(i32);
+
+struct OpaqueGenerator;
+
+impl Generator<Opaque> for OpaqueGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> Opaque {
+        Opaque(tc.draw_silent(gs::integers::<i32>()))
+    }
+}
+
+impl DefaultGenerator for Opaque {
+    type Generator = OpaqueGenerator;
+    fn default_generator() -> Self::Generator {
+        OpaqueGenerator
+    }
+}
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct HasOpaque {
+    id: u32,
+    payload: Opaque,
+}
+
+#[test]
+fn test_derive_with_non_printable_default_field_generator_draws_silently() {
+    hegel::Hegel::new(|tc| {
+        let v: HasOpaque = tc.draw_silent(gs::default::<HasOpaque>());
+        let _ = v.payload.0;
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+#[test]
+fn test_derive_with_non_printable_default_becomes_printable_via_builder() {
+    hegel::Hegel::new(|tc| {
+        let v: HasOpaque = tc.draw(gs::default::<HasOpaque>().payload(
+            OpaqueGenerator.print_with(|v, printer| printer.text(&format!("Opaque({})", v.0))),
+        ));
+        let _ = v.id;
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+struct SilentSmallFloat;
+
+impl Generator<f64> for SilentSmallFloat {
+    fn do_draw(&self, tc: &hegel::TestCase) -> f64 {
+        tc.draw_silent(gs::floats::<f64>().min_value(0.0).max_value(1.0))
+    }
+}
+
+#[test]
+fn test_derive_enum_variant_builder_accepts_plain_generators() {
+    hegel::Hegel::new(|tc| {
+        let s: Shape = tc.draw_silent(
+            Shape::default_generator().circle(|g| g.radius(SilentSmallFloat)),
+        );
+        if let Shape::Circle { radius } = s {
+            assert!((0.0..=1.0).contains(&radius));
+        }
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}

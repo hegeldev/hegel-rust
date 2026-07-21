@@ -255,14 +255,18 @@ pub use hegel_c::__bench;
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
 /// allowing it to be used with [`default`](generators::default) via `default::<T>()`.
 ///
-/// The derived generator is a [`PrintableGenerator`]: it prints values
-/// field by field as it draws them, in the same Rust-expression format
-/// `#[derive(PrettyPrintable)]` produces, so the type itself needs no
-/// [`PrettyPrintable`] implementation. A type that wants a different
-/// printed representation implements [`DefaultGenerator`] by hand (e.g.
-/// with [`print_with`](generators::Generator::print_with)). Field
-/// generators — the defaults and anything passed to the builder methods —
-/// must themselves be printable.
+/// The derived generator prints values field by field as it draws them, in
+/// the same Rust-expression format `#[derive(PrettyPrintable)]` produces,
+/// so the type itself needs no [`PrettyPrintable`] implementation. It is
+/// generic over its field generators — mirroring `one_of!` and tuples — and
+/// is a [`PrintableGenerator`] exactly when every field generator is one:
+/// the builder methods accept any [`Generator`] of the field's type, and a
+/// non-printable field generator simply makes the result silent-only (or
+/// printable again via [`print_as_value`](generators::Generator::print_as_value),
+/// [`print_as_debug`](generators::Generator::print_as_debug), or
+/// [`print_with`](generators::Generator::print_with)). A type that wants a
+/// different printed representation implements [`DefaultGenerator`] by
+/// hand.
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
