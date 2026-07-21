@@ -6,7 +6,8 @@ use crate::native::core::{
     ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
 };
 
-use super::{ShrinkResult, ShrinkRun, Shrinker, bin_search_down_r, find_integer_r};
+use super::search::{BinSearchDown, FindInteger};
+use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::hegel_internal_debug_assert;
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
@@ -63,7 +64,7 @@ impl<'a> Shrinker<'a> {
     ///    zero while holding the fractional remainder r/n fixed. Catches
     ///    shrinks like 2.5 → 1.5 under predicates that constrain the
     ///    fractional part.
-    pub(super) fn shrink_floats(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn shrink_floats(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = &self.current_nodes[i];
@@ -75,20 +76,23 @@ impl<'a> Shrinker<'a> {
 
                 let s = fc.simplest();
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Float(s))]))?;
+                    self.replace(&HashMap::from([(i, ChoiceValue::Float(s))]))
+                        .await?;
                 }
 
                 let v = self.float_at(i);
 
                 if v.is_infinite() {
                     if v < 0.0 && fc.validate(f64::INFINITY) {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Float(f64::INFINITY))]))?;
+                        self.replace(&HashMap::from([(i, ChoiceValue::Float(f64::INFINITY))]))
+                            .await?;
                     }
                     let v = self.float_at(i);
                     if v.is_infinite() {
                         let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
                         if fc.validate(cand) {
-                            self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))?;
+                            self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))
+                                .await?;
                         }
                     }
                 }
@@ -99,7 +103,9 @@ impl<'a> Shrinker<'a> {
                     let mut stepped = false;
                     for cand in [f64::MAX, f64::INFINITY] {
                         if fc.validate(cand)
-                            && self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))?
+                            && self
+                                .replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))
+                                .await?
                         {
                             stepped = true;
                             break;
@@ -109,7 +115,7 @@ impl<'a> Shrinker<'a> {
                         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
                         attempt[i] = attempt[i].with_value(ChoiceValue::Float(f64::NAN));
                         let (is_interesting, actual_nodes, actual_spans) =
-                            self.run_test_fn(ShrinkRun::Full(&attempt))?;
+                            self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
                         self.calls += 1;
                         if is_interesting
                             && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)
@@ -130,7 +136,8 @@ impl<'a> Shrinker<'a> {
                 if v.is_sign_negative() {
                     let neg = -v;
                     if fc.validate(neg) {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Float(neg))]))?;
+                        self.replace(&HashMap::from([(i, ChoiceValue::Float(neg))]))
+                            .await?;
                     }
                 }
 
@@ -146,22 +153,30 @@ impl<'a> Shrinker<'a> {
                     };
                     let i_capture = i;
                     let fc_capture = fc.clone();
-                    find_integer_r(|k| {
-                        if k >= 127 {
-                            return Ok(false);
-                        }
-                        let shifted = base >> k;
-                        let candidate_mag = shifted as f64;
-                        let candidate = if is_neg {
-                            -candidate_mag
+                    let mut search = FindInteger::new();
+                    while let Some(k) = search.probe() {
+                        let ok = if k >= 127 {
+                            false
                         } else {
-                            candidate_mag
+                            let shifted = base >> k;
+                            let candidate_mag = shifted as f64;
+                            let candidate = if is_neg {
+                                -candidate_mag
+                            } else {
+                                candidate_mag
+                            };
+                            if !fc_capture.validate(candidate) {
+                                false
+                            } else {
+                                self.replace(&HashMap::from([(
+                                    i_capture,
+                                    ChoiceValue::Float(candidate),
+                                )]))
+                                .await?
+                            }
                         };
-                        if !fc_capture.validate(candidate) {
-                            return Ok(false);
-                        }
-                        self.replace(&HashMap::from([(i_capture, ChoiceValue::Float(candidate))]))
-                    })?;
+                        search.record(ok);
+                    }
                     let cur = self.float_at(i);
                     if cur.is_finite() {
                         let base_after = cur.abs() as i128;
@@ -172,22 +187,26 @@ impl<'a> Shrinker<'a> {
                         };
                         for step in [2i128, 1] {
                             let i_capture = i;
-                            find_integer_r(|n| {
+                            let mut search = FindInteger::new();
+                            while let Some(n) = search.probe() {
                                 let attempt = base_after - step * (n as i128);
-                                if attempt < lo {
-                                    return Ok(false);
-                                }
-                                let candidate_mag = attempt as f64;
-                                let candidate = if is_neg {
-                                    -candidate_mag
+                                let ok = if attempt < lo {
+                                    false
                                 } else {
-                                    candidate_mag
+                                    let candidate_mag = attempt as f64;
+                                    let candidate = if is_neg {
+                                        -candidate_mag
+                                    } else {
+                                        candidate_mag
+                                    };
+                                    self.replace(&HashMap::from([(
+                                        i_capture,
+                                        ChoiceValue::Float(candidate),
+                                    )]))
+                                    .await?
                                 };
-                                self.replace(&HashMap::from([(
-                                    i_capture,
-                                    ChoiceValue::Float(candidate),
-                                )]))
-                            })?;
+                                search.record(ok);
+                            }
                         }
                     }
                 } else if v_abs.is_finite() && v_abs > 0.0 {
@@ -208,7 +227,8 @@ impl<'a> Shrinker<'a> {
                                 candidate_mag
                             };
                             if fc.validate(candidate) {
-                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))?;
+                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
+                                    .await?;
                             }
                         }
                     }
@@ -219,19 +239,22 @@ impl<'a> Shrinker<'a> {
                 let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
                 if current_idx > 0 {
-                    bin_search_down_r(0, current_idx as i128, &mut |idx| {
+                    let mut search = BinSearchDown::new(0, current_idx as i128);
+                    while let Some(idx) = search.probe() {
                         let candidate_mag = index_to_float(idx as u64);
                         let candidate = if is_neg {
                             -candidate_mag
                         } else {
                             candidate_mag
                         };
-                        if fc.validate(candidate) {
+                        let ok = if fc.validate(candidate) {
                             self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
+                                .await?
                         } else {
-                            Ok(false)
-                        }
-                    })?;
+                            false
+                        };
+                        search.record(ok);
+                    }
                 }
 
                 let v = self.float_at(i);
@@ -241,7 +264,8 @@ impl<'a> Shrinker<'a> {
                         let k_init = m / n;
                         let r = m % n;
                         if k_init > 0 {
-                            bin_search_down_r(0, k_init as i128, &mut |k| {
+                            let mut search = BinSearchDown::new(0, k_init as i128);
+                            while let Some(k) = search.probe() {
                                 let num_sum = (k as u128) * n + r;
                                 let candidate_abs = (num_sum as f64) / (n as f64);
                                 let candidate = if is_neg {
@@ -249,13 +273,19 @@ impl<'a> Shrinker<'a> {
                                 } else {
                                     candidate_abs
                                 };
-                                if !fc.validate(candidate) {
-                                    return Ok(false);
-                                }
-                                let epoch = self.improvements;
-                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))?;
-                                Ok(self.improvements > epoch)
-                            })?;
+                                let ok = if !fc.validate(candidate) {
+                                    false
+                                } else {
+                                    let epoch = self.improvements;
+                                    self.replace(&HashMap::from([(
+                                        i,
+                                        ChoiceValue::Float(candidate),
+                                    )]))
+                                    .await?;
+                                    self.improvements > epoch
+                                };
+                                search.record(ok);
+                            }
                         }
                     }
                 }
@@ -286,7 +316,7 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::redistribute_integers`] — this pass complements it by
     /// covering Float-Float, Float-Integer, and Integer-Float pairs that
     /// the integer-only pass skips.
-    pub(super) fn redistribute_numeric_pairs(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn redistribute_numeric_pairs(&mut self) -> ShrinkResult<()> {
         let len = self.current_nodes.len();
         for i in 0..len {
             for gap in 1..=4 {
@@ -316,7 +346,7 @@ impl<'a> Shrinker<'a> {
                 if is_trivial(&self.current_nodes[i]) {
                     continue;
                 }
-                redistribute_pair(self, i, j)?;
+                redistribute_pair(self, i, j).await?;
             }
         }
         Ok(())
@@ -366,7 +396,7 @@ fn bigint_as_f64(n: &BigInt) -> f64 {
 /// `v_i` is reduced toward its shrink target (0 for floats, simplest() for
 /// integers); the matching adjustment to `v_j` raises it. If `v_i` is
 /// already below its shrink target, both deltas flip sign.
-fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> ShrinkResult<()> {
+async fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> ShrinkResult<()> {
     let (v_i, kind_i) = match (
         shrinker.current_nodes[i].kind.as_ref(),
         &shrinker.current_nodes[i].value,
@@ -401,16 +431,22 @@ fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> ShrinkR
         Direction::RaiseLeftLowerRight
     };
 
-    find_integer_r(|k| {
+    let mut search = FindInteger::new();
+    while let Some(k) = search.probe() {
         let (cand_i, cand_j) = apply_delta(&v_i, &v_j, k as i128, dir);
-        let Some(val_i) = build_value(&kind_i, cand_i) else {
-            return Ok(false);
+        let ok = match build_value(&kind_i, cand_i) {
+            None => false,
+            Some(val_i) => match build_value(&kind_j, cand_j) {
+                None => false,
+                Some(val_j) => {
+                    shrinker
+                        .replace(&HashMap::from([(i, val_i), (j, val_j)]))
+                        .await?
+                }
+            },
         };
-        let Some(val_j) = build_value(&kind_j, cand_j) else {
-            return Ok(false);
-        };
-        shrinker.replace(&HashMap::from([(i, val_i), (j, val_j)]))
-    })?;
+        search.record(ok);
+    }
     Ok(())
 }
 

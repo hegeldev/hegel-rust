@@ -7,26 +7,54 @@
 //!
 //! 1. Short-circuit: attempt a full sort.
 //! 2. `sort_regions`: adaptively grow a sorted-region from each index,
-//!    using [`super::find_integer`] for an exponential probe.
+//!    using [`FindInteger`] for an exponential probe.
 //! 3. `sort_regions_with_gaps`: for each index, try sorting the
 //!    surrounding region while holding the centre element fixed.
 //!
-//! The shrink function is generic over an `accept` callback: callers pass
-//! a closure that, given a candidate permutation of `[0..n)`, asks the
-//! shrinker's `consider` whether the resulting node sequence is still
-//! interesting.  The callback returns `true` if the permutation became
+//! The shrink function is generic over an `accept` judge: callers pass
+//! a [`PermutationJudge`] that, given a candidate permutation of `[0..n)`,
+//! asks the shrinker's `consider` whether the resulting node sequence is
+//! still interesting.  The judge returns `true` if the permutation became
 //! the new shrink target (and is now reflected in `current`), `false`
 //! otherwise.
 
-use super::{ShrinkResult, find_integer_r};
+use std::future::Future;
+use std::pin::Pin;
+
+use super::ShrinkResult;
+use super::search::FindInteger;
 use crate::control::hegel_internal_debug_assert;
+
+/// The boxed future a [`PermutationJudge`] resolves to: whether the
+/// permutation became the new shrink target.
+pub(super) type JudgeFuture<'s> = Pin<Box<dyn Future<Output = ShrinkResult<bool>> + Send + 's>>;
+
+/// Decides whether a candidate permutation becomes the new shrink target.
+///
+/// Like [`ShrinkProbe`](super::ShrinkProbe), the method hand-desugars
+/// `async fn` into a boxed future so the judge may borrow itself while
+/// suspended — the real judge runs the shrinker's `consider`, which hands
+/// the test case to the driver. Synchronous judges (the shape the ordering
+/// unit tests use) get this for free through the blanket [`FnMut`] impl.
+pub(super) trait PermutationJudge {
+    fn accept<'s>(&'s mut self, permutation: &'s [usize]) -> JudgeFuture<'s>;
+}
+
+impl<F> PermutationJudge for F
+where
+    F: FnMut(&[usize]) -> ShrinkResult<bool>,
+{
+    fn accept<'s>(&'s mut self, permutation: &'s [usize]) -> JudgeFuture<'s> {
+        Box::pin(std::future::ready(self(permutation)))
+    }
+}
 
 /// Run the ordering shrinker over a permutation of `[0..n)`.
 ///
 /// * `keys` is the per-index sort key function; cheaper to compute once
 ///   up front than re-evaluate it inside every comparator.
-/// * `accept(permutation)` returns whether the permutation became the
-///   new shrink target.
+/// * `accept.accept(permutation)` returns whether the permutation became
+///   the new shrink target.
 ///
 /// The function does not own the permutation it produces: it maintains
 /// its own `current` permutation locally and tells the caller, via
@@ -34,11 +62,15 @@ use crate::control::hegel_internal_debug_assert;
 /// returns `true`, the caller has presumably updated whatever underlying
 /// state corresponds to that permutation; the function refreshes its
 /// `current` from the new ordering.
-pub(super) fn shrink_ordering<T, K, F>(n: usize, mut keys: K, mut accept: F) -> ShrinkResult<()>
+pub(super) async fn shrink_ordering<T, K, F>(
+    n: usize,
+    mut keys: K,
+    mut accept: F,
+) -> ShrinkResult<()>
 where
     T: Ord,
     K: FnMut(usize) -> T,
-    F: FnMut(&[usize]) -> ShrinkResult<bool>,
+    F: PermutationJudge,
 {
     if n <= 1 {
         return Ok(());
@@ -50,7 +82,7 @@ where
         p.sort_by_key(|&i| keys(i));
         p
     };
-    if sorted_candidate != current && accept(&sorted_candidate)? {
+    if sorted_candidate != current && accept.accept(&sorted_candidate).await? {
         return Ok(());
     }
 
@@ -60,25 +92,28 @@ where
         let prefix: Vec<usize> = snapshot[..i].to_vec();
         let len = snapshot.len();
         let mut best: Vec<usize> = Vec::new();
-        let k = find_integer_r(|k| {
-            if i + k > len {
-                return Ok(false);
-            }
-            let mut region: Vec<usize> = snapshot[i..i + k].to_vec();
-            region.sort_by_key(|&j| keys(j));
-            let mut attempt = prefix.clone();
-            attempt.extend_from_slice(&region);
-            attempt.extend_from_slice(&snapshot[i + k..]);
-            if attempt == snapshot {
-                return Ok(true);
-            }
-            if accept(&attempt)? {
-                best = attempt;
-                Ok(true)
+        let mut search = FindInteger::new();
+        while let Some(k) = search.probe() {
+            let ok = if i + k > len {
+                false
             } else {
-                Ok(false)
-            }
-        })?;
+                let mut region: Vec<usize> = snapshot[i..i + k].to_vec();
+                region.sort_by_key(|&j| keys(j));
+                let mut attempt = prefix.clone();
+                attempt.extend_from_slice(&region);
+                attempt.extend_from_slice(&snapshot[i + k..]);
+                if attempt == snapshot {
+                    true
+                } else if accept.accept(&attempt).await? {
+                    best = attempt;
+                    true
+                } else {
+                    false
+                }
+            };
+            search.record(ok);
+        }
+        let k = search.result();
         if !best.is_empty() {
             current = best;
         }
@@ -97,39 +132,47 @@ where
         let mut right = i + 1;
         let snapshot_r = current.clone();
         let i_fixed = i;
-        let k_r = find_integer_r(|k| {
-            if right + k > snapshot_r.len() {
-                return Ok(false);
-            }
-            try_sort_around(
-                &snapshot_r,
-                left,
-                right + k,
-                i_fixed,
-                &mut keys,
-                &mut accept,
-            )
-        })?;
-        right += k_r;
+        let mut search = FindInteger::new();
+        while let Some(k) = search.probe() {
+            let ok = if right + k > snapshot_r.len() {
+                false
+            } else {
+                try_sort_around(
+                    &snapshot_r,
+                    left,
+                    right + k,
+                    i_fixed,
+                    &mut keys,
+                    &mut accept,
+                )
+                .await?
+            };
+            search.record(ok);
+        }
+        right += search.result();
         let snapshot_l = current.clone();
-        find_integer_r(|k| {
-            if k > left {
-                return Ok(false);
-            }
-            try_sort_around(
-                &snapshot_l,
-                left - k,
-                right,
-                i_fixed,
-                &mut keys,
-                &mut accept,
-            )
-        })?;
+        let mut search = FindInteger::new();
+        while let Some(k) = search.probe() {
+            let ok = if k > left {
+                false
+            } else {
+                try_sort_around(
+                    &snapshot_l,
+                    left - k,
+                    right,
+                    i_fixed,
+                    &mut keys,
+                    &mut accept,
+                )
+                .await?
+            };
+            search.record(ok);
+        }
     }
     Ok(())
 }
 
-fn try_sort_around<T, K, F>(
+async fn try_sort_around<T, K, F>(
     snapshot: &[usize],
     a: usize,
     b: usize,
@@ -140,7 +183,7 @@ fn try_sort_around<T, K, F>(
 where
     T: Ord,
     K: FnMut(usize) -> T,
-    F: FnMut(&[usize]) -> ShrinkResult<bool>,
+    F: PermutationJudge,
 {
     hegel_internal_debug_assert!(a <= centre && centre < b && b <= snapshot.len());
     let split = centre - a;
@@ -155,7 +198,7 @@ where
     if attempt == snapshot {
         return Ok(true);
     }
-    accept(&attempt)
+    accept.accept(&attempt).await
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Unit tests for `lower_duplicated_characters` and
 //! `normalize_unicode_chars`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::StringChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -26,14 +27,14 @@ fn lower_duplicated_characters_lowers_shared_codepoint_in_pair() {
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32, b'd' as u32]),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.lower_duplicated_characters().unwrap();
+    drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
     if let ChoiceValue::String(s0) = &shrinker.current_nodes[0].value {
         assert!(s0.contains(&(b'a' as u32)) || !s0.contains(&(b'b' as u32)));
     }
@@ -58,14 +59,14 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
         ),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.lower_duplicated_characters().unwrap();
+    drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s, &vec![b'b' as u32]);
     }
@@ -75,14 +76,14 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
 fn normalize_unicode_chars_replaces_accented_letter_with_base() {
     let initial = vec![string_node_with(b'A' as u32, 0x00FF, vec![0x00C0])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars().unwrap();
+    drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert!(s == &vec![b'A' as u32] || s == &vec![b'a' as u32]);
     } else {
@@ -98,14 +99,14 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
         vec![b'A' as u32],
     )];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars().unwrap();
+    drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s, &vec![b'A' as u32]);
     } else {
@@ -117,7 +118,7 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
 fn normalize_unicode_chars_handles_string_truncated_by_closure() {
     let initial = vec![string_node_with(b'A' as u32, 0x00FF, vec![0x00C0, 0x00C0])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut actual: Vec<ChoiceNode> = nodes.to_vec();
                 if let Some(node) = actual.first_mut() {
@@ -132,7 +133,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars().unwrap();
+    drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert_eq!(s.len(), 1);
     } else {
@@ -149,14 +150,14 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
         false,
     )];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars().unwrap();
+    drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
@@ -170,14 +171,14 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
 fn normalize_unicode_chars_respects_intervals() {
     let initial = vec![string_node_with(0xC0, 0xFF, vec![0xC0])];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.normalize_unicode_chars().unwrap();
+    drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
     if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
         assert!(
             s.iter().all(|&cp| (0xC0..=0xFF).contains(&cp)),
@@ -194,14 +195,14 @@ fn lower_duplicated_characters_handles_mismatched_alphabets() {
         string_node_with(b'b' as u32, b'z' as u32, vec![b'b' as u32]),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.lower_duplicated_characters().unwrap();
+    drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
     if let (ChoiceKind::String(k1), ChoiceValue::String(s1)) = (
         shrinker.current_nodes[1].kind.as_ref(),
         &shrinker.current_nodes[1].value,

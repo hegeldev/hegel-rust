@@ -36,8 +36,7 @@ unsafe fn start_run_and_first_case() -> (
     (ctx, s, run, tc)
 }
 
-/// Mark the in-flight case valid and tear the run down (draining any case the
-/// worker has queued behind it).
+/// Mark the in-flight case valid and tear the run down.
 unsafe fn finish(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
@@ -155,4 +154,47 @@ fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
         usize::MAX,
         "usize::MAX converts exactly on every target"
     );
+}
+
+/// A panic inside an engine poll must not unwind into the C caller:
+/// `hegel_next_test_case` catches it, finishes the run with a run-level
+/// error carrying the panic message, and later calls see an ordinary
+/// finished run. The engine is deliberately panic-free on any input the
+/// C ABI accepts, so the panicking future is injected directly.
+#[test]
+fn engine_panic_during_poll_becomes_a_run_error() {
+    install_engine_panic_hook();
+    let ctx = hegel_context_new();
+    let exchange = Arc::new(CaseExchange::new());
+    let engine: EngineFuture = Box::pin(async { panic!("engine invariant violated") });
+    let run = Box::into_raw(Box::new(HegelRun {
+        engine: Some(engine),
+        exchange,
+        current_family: None,
+        result: None,
+    }));
+
+    unsafe {
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_next_test_case(ctx, run, &mut tc));
+        assert!(tc.is_null(), "a panicked run offers no test case");
+
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        ok(hegel_run_result(ctx, run, &mut result));
+        let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
+        ok(hegel_run_result_status(ctx, result, &mut status));
+        assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
+        let mut message: *const c_char = ptr::null();
+        ok(hegel_run_result_error(ctx, result, &mut message));
+        let message = CStr::from_ptr(message).to_str().unwrap();
+        assert_eq!(message, "Engine panic: engine invariant violated");
+
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_next_test_case(ctx, run, &mut tc));
+        assert!(tc.is_null(), "a panicked run stays finished");
+
+        ok(hegel_run_result_free(ctx, result));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_context_free(ctx));
+    }
 }

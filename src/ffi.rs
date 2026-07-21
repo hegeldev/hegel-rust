@@ -224,7 +224,8 @@ impl Drop for SettingsHandle {
 /// Engine-output trampoline passed to `hegel_run_start` /
 /// `hegel_test_case_from_blob`: `user_data` points at the [`OutputSink`] the
 /// run resolved at start, and each engine output line is forwarded to it. The
-/// engine invokes this from its worker thread; the sink is `Send + Sync`, and
+/// engine invokes this while it runs between test cases; the sink is
+/// `Send + Sync`, and
 /// the pointee stays alive for as long as the engine can emit — owned by the
 /// [`RunHandle`] for a run, borrowed across the creating call for a blob
 /// replay (whose only line is emitted during it).

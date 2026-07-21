@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
 
-use super::{ShrinkResult, Shrinker, bin_search_down_big_r, find_integer_r};
+use super::search::{BinSearchDownBig, FindInteger};
+use super::{ShrinkResult, Shrinker};
 use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
 
 impl<'a> Shrinker<'a> {
@@ -12,7 +13,7 @@ impl<'a> Shrinker<'a> {
     /// Longer chunks allow deleting composite elements (e.g. a list element
     /// requires deleting both the "include?" choice and the element itself).
     /// Iterates backwards since later choices tend to depend on earlier ones.
-    pub(super) fn delete_chunks(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn delete_chunks(&mut self) -> ShrinkResult<()> {
         let mut k: usize = 8;
         while k > 0 {
             let mut i = self.current_nodes.len().saturating_sub(k + 1);
@@ -25,7 +26,7 @@ impl<'a> Shrinker<'a> {
                 attempt.extend_from_slice(&self.current_nodes[end..]);
                 hegel_internal_assert!(attempt.len() < self.current_nodes.len());
 
-                if !self.consider(&attempt)? && i > 0 {
+                if !self.consider(&attempt).await? && i > 0 {
                     let prev = &attempt[i - 1];
                     let decremented = match (prev.kind.as_ref(), &prev.value) {
                         (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
@@ -42,7 +43,7 @@ impl<'a> Shrinker<'a> {
                     if let Some(new_value) = decremented {
                         let mut modified = attempt.clone();
                         modified[i - 1] = modified[i - 1].with_value(new_value);
-                        self.consider(&modified)?;
+                        self.consider(&modified).await?;
                     }
                 }
                 if i == 0 {
@@ -59,7 +60,7 @@ impl<'a> Shrinker<'a> {
     /// via flat_map), reducing that value may shorten the test case without
     /// keeping the result interesting. This pass detects that situation and
     /// tries deleting the now-excess choices to recover an interesting result.
-    pub(super) fn bind_deletion(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn bind_deletion(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
@@ -80,10 +81,14 @@ impl<'a> Shrinker<'a> {
 
             let expected_len = self.current_nodes.len();
 
-            bin_search_down_big_r(simplest, current_val, &mut |v| {
-                let value = self.int_replacement(i, v);
-                self.try_replace_with_deletion(i, value, expected_len)
-            })?;
+            let mut search = BinSearchDownBig::new(simplest, current_val);
+            while let Some(v) = search.probe() {
+                let value = self.int_replacement(i, &v);
+                let ok = self
+                    .try_replace_with_deletion(i, value, expected_len)
+                    .await?;
+                search.record(ok);
+            }
 
             i += 1;
         }
@@ -93,20 +98,20 @@ impl<'a> Shrinker<'a> {
     /// Try replacing the value at `idx`. If the result is interesting, done.
     /// If the result is valid but used fewer nodes than `expected_len`, try
     /// deleting regions after `idx` to recover an interesting result.
-    pub(super) fn try_replace_with_deletion(
+    pub(super) async fn try_replace_with_deletion(
         &mut self,
         idx: usize,
         value: ChoiceValue,
         expected_len: usize,
     ) -> ShrinkResult<bool> {
-        if self.replace(&HashMap::from([(idx, value.clone())]))? {
+        if self.replace(&HashMap::from([(idx, value.clone())])).await? {
             return Ok(true);
         }
 
         let mut attempt = self.current_nodes.clone();
         attempt[idx] = attempt[idx].with_value(value);
 
-        let (_, actual_nodes, _) = self.run_test_fn(super::ShrinkRun::Full(&attempt))?;
+        let (_, actual_nodes, _) = self.run_test_fn(super::ShrinkRun::Full(&attempt)).await?;
         if actual_nodes.len() >= expected_len {
             return Ok(false);
         }
@@ -120,7 +125,7 @@ impl<'a> Shrinker<'a> {
             for j in (idx + 1..=start).rev() {
                 let mut candidate = attempt[..j].to_vec();
                 candidate.extend_from_slice(&attempt[j + size..]);
-                if self.consider(&candidate)? {
+                if self.consider(&candidate).await? {
                     return Ok(true);
                 }
             }
@@ -140,7 +145,7 @@ impl<'a> Shrinker<'a> {
     ///
     /// Non-integer nodes are deferred to the existing per-type passes —
     /// the unified driver only adds value for integers.
-    pub(crate) fn minimize_individual_choices(&mut self) -> ShrinkResult<()> {
+    pub(crate) async fn minimize_individual_choices(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
@@ -162,9 +167,11 @@ impl<'a> Shrinker<'a> {
             }
 
             let epoch_phase1 = self.improvements;
-            bin_search_down_big_r(simplest.clone(), current_val.clone(), &mut |v| {
-                self.replace_int(i, v)
-            })?;
+            let mut search = BinSearchDownBig::new(simplest.clone(), current_val.clone());
+            while let Some(v) = search.probe() {
+                let ok = self.replace_int(i, &v).await?;
+                search.record(ok);
+            }
             if self.improvements > epoch_phase1 {
                 i += 1;
                 continue;
@@ -182,7 +189,7 @@ impl<'a> Shrinker<'a> {
             lowered[i] = lowered[i].with_value(towards_value);
 
             let (_, actual_nodes, actual_spans) =
-                self.run_test_fn(super::ShrinkRun::Full(&lowered))?;
+                self.run_test_fn(super::ShrinkRun::Full(&lowered)).await?;
 
             let mut misalignment_handled = false;
             for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
@@ -200,7 +207,7 @@ impl<'a> Shrinker<'a> {
                 if let Some(rv) = retry_value {
                     let mut candidate = lowered.clone();
                     candidate[k] = candidate[k].with_value(rv);
-                    if self.consider(&candidate)? && self.improvements > epoch_phase1 {
+                    if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
                         misalignment_handled = true;
                         break;
                     }
@@ -224,7 +231,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut candidate: Vec<_> = actual_nodes[..span.start].to_vec();
                 candidate.extend_from_slice(&actual_nodes[span.end..]);
-                if self.consider(&candidate)? && self.improvements > epoch_phase1 {
+                if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
                     shrank = true;
                     break;
                 }
@@ -234,7 +241,7 @@ impl<'a> Shrinker<'a> {
                 for j in i + 1..actual_nodes.len() {
                     let mut candidate: Vec<_> = actual_nodes[..j].to_vec();
                     candidate.extend_from_slice(&actual_nodes[j + 1..]);
-                    if self.consider(&candidate)? && self.improvements > epoch_phase1 {
+                    if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
                         break;
                     }
                 }
@@ -263,27 +270,35 @@ impl<'a> Shrinker<'a> {
     /// each `n in 1..=5` — and gives O(log k) test-function calls when
     /// a long deletable region exists, vs. the linear O(k) of the legacy
     /// loop. `delete_chunks` is kept alongside as the native fallback.
-    pub(crate) fn node_program(&mut self, n: usize) -> ShrinkResult<()> {
+    pub(crate) async fn node_program(&mut self, n: usize) -> ShrinkResult<()> {
         if n == 0 {
             return Ok(());
         }
         let mut i = 0;
         while i + n <= self.current_nodes.len() {
-            if !self.run_node_program_live(i, n, 1)? {
+            if !self.run_node_program_live(i, n, 1).await? {
                 i += 1;
                 continue;
             }
             let starting = i;
-            let left_offset = find_integer_r(|k| {
-                if k * n > starting {
-                    return Ok(false);
-                }
-                self.run_node_program_live(starting - k * n, n, 1)
-            })?;
+            let mut search = FindInteger::new();
+            while let Some(k) = search.probe() {
+                let ok = if k * n > starting {
+                    false
+                } else {
+                    self.run_node_program_live(starting - k * n, n, 1).await?
+                };
+                search.record(ok);
+            }
+            let left_offset = search.result();
             let start = starting.saturating_sub(left_offset * n);
 
             let snapshot = self.current_nodes.clone();
-            find_integer_r(|k| self.run_node_program(&snapshot, start, n, k))?;
+            let mut search = FindInteger::new();
+            while let Some(k) = search.probe() {
+                let ok = self.run_node_program(&snapshot, start, n, k).await?;
+                search.record(ok);
+            }
 
             i = start.saturating_add(n);
         }
@@ -291,7 +306,7 @@ impl<'a> Shrinker<'a> {
     }
 
     /// [`Self::run_node_program`] against the current shrink target.
-    fn run_node_program_live(
+    async fn run_node_program_live(
         &mut self,
         i: usize,
         program_len: usize,
@@ -299,6 +314,7 @@ impl<'a> Shrinker<'a> {
     ) -> ShrinkResult<bool> {
         let original = self.current_nodes.clone();
         self.run_node_program(&original, i, program_len, repeats)
+            .await
     }
 
     /// Apply the "delete n consecutive nodes" program `repeats` times at
@@ -308,7 +324,7 @@ impl<'a> Shrinker<'a> {
     /// The deletion always operates on the supplied `original` snapshot,
     /// so repeat counts are well-defined regardless of intermediate
     /// shrink-target updates.
-    fn run_node_program(
+    async fn run_node_program(
         &mut self,
         original: &[ChoiceNode],
         i: usize,
@@ -323,7 +339,7 @@ impl<'a> Shrinker<'a> {
         let mut attempt = original[..i].to_vec();
         attempt.extend_from_slice(&original[i + total_delete..]);
         let epoch = self.improvements;
-        Ok(self.consider(&attempt)? && self.improvements > epoch)
+        Ok(self.consider(&attempt).await? && self.improvements > epoch)
     }
 }
 

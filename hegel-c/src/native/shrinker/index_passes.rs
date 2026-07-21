@@ -26,7 +26,7 @@ impl<'a> Shrinker<'a> {
     /// Value punning (via `with_value` + `for_choices` with `prefix_nodes`)
     /// handles the case where decrementing changes the kind at position
     /// `j` (e.g. a `one_of` branch switch).
-    pub(super) fn lower_and_bump(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn lower_and_bump(&mut self) -> ShrinkResult<()> {
         let max_gap = std::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
             let mut idx = 0;
@@ -67,14 +67,14 @@ impl<'a> Shrinker<'a> {
                     if gap == 1 {
                         let mut attempt = self.current_nodes.clone();
                         attempt[i] = attempt[i].with_value(new_val.clone());
-                        self.consider(&attempt)?;
+                        self.consider(&attempt).await?;
 
                         let mut zeroed = attempt;
                         for node in &mut zeroed[i + 1..] {
                             let s = node.kind.simplest();
                             *node = node.with_value(s);
                         }
-                        self.consider(&zeroed)?;
+                        self.consider(&zeroed).await?;
                     }
 
                     if j < self.current_nodes.len() && !is_unindexed(&self.current_nodes[j].kind) {
@@ -84,7 +84,7 @@ impl<'a> Shrinker<'a> {
                         for bump in [1u32, 2, 4] {
                             let candidate_idx = &target_idx + BigUint::from(bump);
                             if let Some(bumped) = kind_j.from_index(candidate_idx) {
-                                if try_bump_ij(self, i, new_val, j, &bumped)? {
+                                if try_bump_ij(self, i, new_val, j, &bumped).await? {
                                     bumped_any_relative = true;
                                     break;
                                 }
@@ -99,10 +99,10 @@ impl<'a> Shrinker<'a> {
                                 }
                                 let p_minus_one = &p - BigUint::from(1u32);
                                 if let Some(v) = kind_j.from_index(p_minus_one) {
-                                    try_bump_ij(self, i, new_val, j, &v)?;
+                                    try_bump_ij(self, i, new_val, j, &v).await?;
                                 }
                                 if let Some(v) = kind_j.from_index(p.clone()) {
-                                    try_bump_ij(self, i, new_val, j, &v)?;
+                                    try_bump_ij(self, i, new_val, j, &v).await?;
                                 }
                                 p *= BigUint::from(2u32);
                             }
@@ -121,7 +121,7 @@ impl<'a> Shrinker<'a> {
     /// A value shrinker can only make values simpler; sometimes making a
     /// value *less* simple (e.g. `false → true`) causes an earlier exit,
     /// producing a shorter and thus overall simpler choice sequence.
-    pub(super) fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
@@ -181,7 +181,7 @@ impl<'a> Shrinker<'a> {
                     let s = node.kind.simplest();
                     *node = node.with_value(s);
                 }
-                self.consider(&zeroed)?;
+                self.consider(&zeroed).await?;
             }
             i += 1;
         }
@@ -192,7 +192,7 @@ impl<'a> Shrinker<'a> {
 /// Helper for `lower_and_bump`: replace `{i: new_val, j: bump_val}` if the
 /// kind at j validates `bump_val`. Returns whether the attempt was
 /// interesting.
-pub(super) fn try_bump_ij(
+pub(super) async fn try_bump_ij(
     shrinker: &mut Shrinker<'_>,
     i: usize,
     new_val: &ChoiceValue,
@@ -202,5 +202,5 @@ pub(super) fn try_bump_ij(
     let replacements: HashMap<usize, ChoiceValue> = [(i, new_val.clone()), (j, bump_val.clone())]
         .into_iter()
         .collect();
-    shrinker.replace(&replacements)
+    shrinker.replace(&replacements).await
 }

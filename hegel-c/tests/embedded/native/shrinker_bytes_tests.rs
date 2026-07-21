@@ -1,4 +1,5 @@
 use super::*;
+use crate::exchange::drive_no_yield;
 use crate::native::core::{ChoiceNode, Spans};
 use crate::native::shrinker::Shrinker;
 
@@ -12,7 +13,7 @@ fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
 
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: crate::native::shrinker::ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -25,7 +26,7 @@ fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
 fn shrink_bytes_collapses_accepting_run_to_simplest() {
     let initial = vec![bytes_node(vec![3, 1, 4, 1], 1, 10)];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.shrink_bytes().unwrap();
+    drive_no_yield(shrinker.shrink_bytes()).unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(v) => v.clone(),
         _ => unreachable!(),
@@ -37,7 +38,7 @@ fn shrink_bytes_collapses_accepting_run_to_simplest() {
 fn shrink_bytes_linear_scan_breaks_when_replace_shortens_below_sz() {
     let initial = vec![bytes_node(vec![7, 0, 0, 0, 0, 0, 0, 0], 0, 16)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: crate::native::shrinker::ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let is_singleton_seven = matches!(
                     nodes.first().map(|n| &n.value),
@@ -50,7 +51,7 @@ fn shrink_bytes_linear_scan_breaks_when_replace_shortens_below_sz() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_bytes().unwrap();
+    drive_no_yield(shrinker.shrink_bytes()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(v) => assert_eq!(v, &vec![7u8]),
         _ => unreachable!(),
@@ -64,7 +65,7 @@ fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
         bytes_node(vec![4, 5], 0, 10),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: crate::native::shrinker::ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let t_ok = matches!(
                     nodes.get(1).map(|n| &n.value),
@@ -77,7 +78,7 @@ fn redistribute_bytes_pair_partial_move_triggers_bin_search() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_bytes_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_bytes_pairs()).unwrap();
     match &shrinker.current_nodes[1].value {
         ChoiceValue::Bytes(b) => assert!(b.len() <= 3, "t exceeded 3 bytes: {b:?}"),
         _ => unreachable!(),
@@ -91,7 +92,7 @@ fn redistribute_bytes_pair_moves_several_elements_in_one_invocation() {
         bytes_node(vec![9], 0, 10),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: crate::native::shrinker::ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let s_ok = matches!(
                     nodes.first().map(|n| &n.value),
@@ -104,7 +105,7 @@ fn redistribute_bytes_pair_moves_several_elements_in_one_invocation() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_bytes_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_bytes_pairs()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Bytes(b) => assert_eq!(
             b,
@@ -122,7 +123,7 @@ fn redistribute_bytes_pair_moves_entire_value_when_accepted() {
         bytes_node(vec![4, 5], 0, 10),
     ];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.redistribute_bytes_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_bytes_pairs()).unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,

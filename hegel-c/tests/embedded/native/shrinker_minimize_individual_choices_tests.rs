@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::minimize_individual_choices`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -34,14 +35,14 @@ fn int_value(node: &ChoiceNode) -> i128 {
 fn minimize_individual_choices_drives_int_to_simplest_when_predicate_admits() {
     let initial = vec![int_node(20)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
 }
 
@@ -49,14 +50,14 @@ fn minimize_individual_choices_drives_int_to_simplest_when_predicate_admits() {
 fn minimize_individual_choices_skips_forced_nodes() {
     let initial = vec![forced_int_node(7)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 7);
 }
 
@@ -64,7 +65,7 @@ fn minimize_individual_choices_skips_forced_nodes() {
 fn minimize_individual_choices_invokes_span_delete_fallback() {
     let initial = vec![int_node(3), int_node(1), int_node(1), int_node(1)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let count = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
@@ -92,7 +93,7 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
@@ -115,7 +116,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
         ),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
@@ -139,7 +140,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
     match &shrinker.current_nodes[1].value {
         ChoiceValue::String(s) => {
@@ -157,7 +158,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
 fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
     let initial = vec![int_node(2), int_node(7), int_node(7)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let int_v = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap(),
@@ -174,7 +175,7 @@ fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
@@ -184,7 +185,7 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
     use crate::native::core::Span;
     let initial = vec![int_node(2), int_node(7), int_node(7), int_node(7)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let int_v = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap(),
@@ -212,7 +213,7 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
@@ -233,7 +234,7 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
         ),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
@@ -257,7 +258,7 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
     match &shrinker.current_nodes[1].value {
         ChoiceValue::Bytes(b) => {
@@ -271,14 +272,14 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
 fn minimize_individual_choices_no_op_on_already_simplest_node() {
     let initial = vec![int_node(0)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.minimize_individual_choices().unwrap();
+    drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 0);
 }
 
@@ -286,15 +287,18 @@ fn minimize_individual_choices_no_op_on_already_simplest_node() {
 fn try_replace_with_deletion_continues_past_sizes_reaching_into_idx() {
     let initial = vec![int_node(1), int_node(2), int_node(3)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(_) => (false, vec![int_node(9)], Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    let deleted = shrinker
-        .try_replace_with_deletion(2, ChoiceValue::Integer(BigInt::from(0)), 5)
-        .unwrap();
+    let deleted = drive_no_yield(shrinker.try_replace_with_deletion(
+        2,
+        ChoiceValue::Integer(BigInt::from(0)),
+        5,
+    ))
+    .unwrap();
     assert!(!deleted);
 }

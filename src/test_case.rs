@@ -248,7 +248,8 @@ thread_local! {
 ///
 /// A run started while the override is active resolves it once, at start,
 /// and routes everything through it for the run's lifetime: the engine's own
-/// progress lines (emitted from its worker thread), draw and note output —
+/// progress lines (emitted while the engine runs between test cases), draw
+/// and note output —
 /// including from clones driven on other threads — verbose per-case
 /// diagnostics and stop reasons, and the final failure report with its
 /// reproducer line. Which of those exist at all is still governed by
@@ -293,9 +294,10 @@ pub(crate) fn emit_verbose_line(msg: &str) {
 /// Resolved exactly once, on the thread that starts the run, from the
 /// installed override ([`with_output_override`]) — and then carried by the
 /// run itself. Everything the run emits later flows through this value,
-/// wherever it happens: the engine's worker thread and clones driven on
-/// other threads never see the starting thread's thread-local override, so
-/// resolving lazily at emit time would send their output to the wrong place.
+/// wherever it happens: clones driven on other threads (and a run pulled
+/// from a different thread than the one that started it) never see the
+/// starting thread's thread-local override, so resolving lazily at emit
+/// time would send their output to the wrong place.
 pub(crate) struct RunOutput {
     sink: Option<OutputSink>,
 }

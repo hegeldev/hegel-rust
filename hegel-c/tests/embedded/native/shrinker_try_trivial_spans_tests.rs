@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::try_trivial_spans`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -41,7 +42,7 @@ fn try_trivial_spans_zeroes_non_forced_children() {
     spans.push(span(0, 3));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let s = {
                     let mut s = Spans::new();
@@ -55,7 +56,7 @@ fn try_trivial_spans_zeroes_non_forced_children() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans().unwrap();
+    drive_no_yield(shrinker.try_trivial_spans()).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -74,7 +75,7 @@ fn try_trivial_spans_preserves_forced_children() {
     spans.push(span(0, 3));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let s = {
                     let mut s = Spans::new();
@@ -88,7 +89,7 @@ fn try_trivial_spans_preserves_forced_children() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans().unwrap();
+    drive_no_yield(shrinker.try_trivial_spans()).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -102,18 +103,18 @@ fn try_trivial_spans_preserves_forced_children() {
 
 #[test]
 fn try_trivial_spans_skips_already_trivial_span() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    let calls = Rc::new(Cell::new(0u32));
-    let calls_inside = Rc::clone(&calls);
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let calls = Arc::new(AtomicU32::new(0));
+    let calls_inside = Arc::clone(&calls);
 
     let initial = vec![int_node(0), int_node(0)];
     let mut spans = Spans::new();
     spans.push(span(0, 2));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| {
-            calls_inside.set(calls_inside.get() + 1);
+        Box::new(move |run: ShrinkRun<'_>| {
+            calls_inside.fetch_add(1, Ordering::Relaxed);
             match run {
                 ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
                 ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -122,8 +123,8 @@ fn try_trivial_spans_skips_already_trivial_span() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans().unwrap();
-    assert_eq!(calls.get(), 0);
+    drive_no_yield(shrinker.try_trivial_spans()).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -133,14 +134,14 @@ fn try_trivial_spans_handles_oversized_span_end() {
     spans.push(span(0, 99));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.try_trivial_spans().unwrap();
+    drive_no_yield(shrinker.try_trivial_spans()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
     match &shrinker.current_nodes[0].value {
         ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 5),
@@ -150,20 +151,19 @@ fn try_trivial_spans_handles_oversized_span_end() {
 
 #[test]
 fn try_trivial_spans_retries_with_realised_span_content() {
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     let initial = vec![int_node(5), int_node(5), int_node(7)];
     let mut spans = Spans::new();
     spans.push(span(0, 2));
 
-    let call_count = Rc::new(Cell::new(0u32));
-    let cc = Rc::clone(&call_count);
+    let call_count = Arc::new(AtomicU32::new(0));
+    let cc = Arc::clone(&call_count);
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let n = cc.get();
-                cc.set(n + 1);
+                let n = cc.fetch_add(1, Ordering::Relaxed);
                 if n == 0 {
                     let realised = vec![int_node(2), nodes[2].clone()];
                     let mut s = Spans::new();
@@ -180,8 +180,8 @@ fn try_trivial_spans_retries_with_realised_span_content() {
         initial,
         spans,
     );
-    shrinker.try_trivial_spans().unwrap();
-    assert_eq!(call_count.get(), 2);
+    drive_no_yield(shrinker.try_trivial_spans()).unwrap();
+    assert_eq!(call_count.load(Ordering::Relaxed), 2);
     assert_eq!(shrinker.current_nodes.len(), 2);
     match (
         &shrinker.current_nodes[0].value,

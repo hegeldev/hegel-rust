@@ -1,6 +1,7 @@
+use crate::exchange::drive_no_yield;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans, StringChoice};
 use crate::native::intervalsets::IntervalSet;
-use crate::native::shrinker::Shrinker;
+use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn intervals(min: u32, max: u32) -> IntervalSet {
     IntervalSet::new(vec![(min, max)])
@@ -20,7 +21,7 @@ fn string_node(value: Vec<u32>, min_codepoint: u32, max_codepoint: u32) -> Choic
 
 fn accepting_shrinker(nodes: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             crate::native::shrinker::ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -36,7 +37,7 @@ fn redistribute_string_pair_moves_entire_value_when_accepted() {
         string_node(vec![b'd' as u32, b'e' as u32], 0, 0x10FFFF),
     ];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.redistribute_string_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_string_pairs()).unwrap();
     let (a, b) = match (
         &shrinker.current_nodes[0].value,
         &shrinker.current_nodes[1].value,
@@ -64,7 +65,7 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
         string_node(vec![b'd' as u32, b'e' as u32], 0, 0x10FFFF),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let t_ok = matches!(
                     nodes.get(1).map(|n| &n.value),
@@ -77,7 +78,7 @@ fn redistribute_string_pair_partial_move_triggers_bin_search() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_string_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_string_pairs()).unwrap();
     match &shrinker.current_nodes[1].value {
         ChoiceValue::String(s) => assert!(s.len() <= 3, "t exceeded 3 cps: {s:?}"),
         _ => unreachable!(),
@@ -91,7 +92,7 @@ fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
         string_node(vec![b'z' as u32], 0, 0x10FFFF),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let s_ok = matches!(
                     nodes.first().map(|n| &n.value),
@@ -104,7 +105,7 @@ fn redistribute_string_pair_moves_several_elements_in_one_invocation() {
         initial,
         Spans::new(),
     );
-    shrinker.redistribute_string_pairs().unwrap();
+    drive_no_yield(shrinker.redistribute_string_pairs()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => assert_eq!(
             s,
@@ -123,7 +124,7 @@ fn shrink_strings_collapses_accepting_run_toward_simplest() {
         b'z' as u32,
     )];
     let mut shrinker = accepting_shrinker(initial);
-    shrinker.shrink_strings().unwrap();
+    drive_no_yield(shrinker.shrink_strings()).unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::String(v) => v.clone(),
         _ => unreachable!(),
@@ -135,7 +136,7 @@ fn shrink_strings_collapses_accepting_run_toward_simplest() {
 fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
     let initial = vec![string_node(vec![200, 200], 0, 0x10FFFF)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let accept = matches!(
                     nodes.first().map(|n| &n.value),
@@ -151,7 +152,7 @@ fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_strings().unwrap();
+    drive_no_yield(shrinker.shrink_strings()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => assert_eq!(s, &vec![100u32, 100u32]),
         _ => unreachable!(),
@@ -162,7 +163,7 @@ fn shrink_strings_duplicate_pass_bin_search_skips_after_val_eliminated() {
 fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
     let initial = vec![string_node(vec![0x00C0], b'A' as u32, 0x00FF)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let accept = matches!(
                     nodes.first().map(|n| &n.value),
@@ -177,7 +178,7 @@ fn shrink_strings_semantic_candidate_falls_back_to_nfd_base_in_range() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_strings().unwrap();
+    drive_no_yield(shrinker.shrink_strings()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => {
             assert_eq!(s.len(), 1);
@@ -197,7 +198,7 @@ fn shrink_strings_linear_scan_breaks_when_replace_shortens_below_target() {
     let prefix3 = original[..3].to_vec();
     let initial = vec![string_node(original.clone(), 0, 0x10FFFF)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
                 let ok = matches!(
                     nodes.first().map(|n| &n.value),
@@ -211,7 +212,7 @@ fn shrink_strings_linear_scan_breaks_when_replace_shortens_below_target() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_strings().unwrap();
+    drive_no_yield(shrinker.shrink_strings()).unwrap();
     match &shrinker.current_nodes[0].value {
         ChoiceValue::String(s) => {
             assert_eq!(
