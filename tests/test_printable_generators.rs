@@ -530,6 +530,47 @@ fn multi_element_sets_and_maps_print_separators() {
     assert!(lines[0].contains(": false, "), "{lines:?}");
 }
 
+/// A hand-written generator that calls `tc.note()` from inside `do_draw`
+/// without opening a span, as composite bodies do.
+struct NotingGenerator;
+
+impl Generator<i64> for NotingGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> i64 {
+        tc.note("noted mid-draw");
+        tc.draw_silent(gs::integers::<i64>().min_value(5).max_value(5))
+    }
+}
+
+#[test]
+fn note_inside_a_printed_draw_buffers_until_the_line_completes() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(NotingGenerator.print_with(|v, p| p.text(&format!("{v}"))));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 5;", "noted mid-draw"]);
+}
+
+/// A hand-written generator that makes a named `tc.draw` from inside
+/// `do_draw`; during a printed draw the nested draw must stay silent, like a
+/// draw inside any combinator span.
+struct NestedDrawGenerator;
+
+impl Generator<bool> for NestedDrawGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> bool {
+        tc.draw(gs::booleans())
+    }
+}
+
+#[test]
+fn nested_draw_inside_a_printed_draw_stays_silent() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(NestedDrawGenerator.print_with(|v, p| p.text(&format!("{v:?}"))));
+        panic!("boom");
+    });
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
+}
+
 #[test]
 fn duplicate_set_elements_reject_cleanly_while_printing() {
     let lines = lines_at(Verbosity::Verbose, |tc| {

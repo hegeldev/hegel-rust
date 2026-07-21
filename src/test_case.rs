@@ -142,6 +142,30 @@ pub(crate) struct TestCaseGlobalData {
 /// The width drawn-value documents are laid out to.
 const PRINTER_MAX_WIDTH: u64 = 79;
 
+/// Marks a printed draw as in progress: `span_depth` is raised for the
+/// duration of the enclosing `draw_and_print` call so that a `tc.note()` or
+/// nested `tc.draw` made by a hand-written generator body behaves exactly as
+/// it does inside a combinator span — the note buffers, the nested draw
+/// stays silent — instead of re-entering the printer lock the enclosing draw
+/// already holds. Restored on drop so an unwinding draw (a failed
+/// assumption, a budget stop) leaves the depth balanced.
+struct PrintingDrawScope<'a> {
+    tc: &'a TestCase,
+}
+
+impl<'a> PrintingDrawScope<'a> {
+    fn new(tc: &'a TestCase) -> Self {
+        tc.local.borrow_mut().span_depth += 1;
+        PrintingDrawScope { tc }
+    }
+}
+
+impl Drop for PrintingDrawScope<'_> {
+    fn drop(&mut self) {
+        self.tc.local.borrow_mut().span_depth -= 1;
+    }
+}
+
 /// Emit one note line: an indent prefix, the message (with any embedded
 /// newlines breaking at the note's indentation), and a closing line break.
 fn emit_note_line(printer: &mut PrettyPrinter, indent: usize, message: &str) {
@@ -546,19 +570,22 @@ impl TestCase {
             return generator.do_draw(self);
         };
         let indent = self.local.borrow().indent;
-        let value = self.with_printer(|printer| {
-            let mut speculation = printer.speculate();
-            let printer = speculation.printer();
-            printer.text(&" ".repeat(indent));
-            printer.shift_indent(indent as isize);
-            printer.text(&format!("let {display_name} = "));
-            let value = generator.draw_and_print(self, printer);
-            printer.text(";");
-            printer.shift_indent(-(indent as isize));
-            printer.hard_break();
-            speculation.commit();
-            value
-        });
+        let value = {
+            let _printing = PrintingDrawScope::new(self);
+            self.with_printer(|printer| {
+                let mut speculation = printer.speculate();
+                let printer = speculation.printer();
+                printer.text(&" ".repeat(indent));
+                printer.shift_indent(indent as isize);
+                printer.text(&format!("let {display_name} = "));
+                let value = generator.draw_and_print(self, printer);
+                printer.text(";");
+                printer.shift_indent(-(indent as isize));
+                printer.hard_break();
+                speculation.commit();
+                value
+            })
+        };
         self.flush_pending_notes();
         value
     }
