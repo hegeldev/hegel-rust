@@ -1,4 +1,3 @@
-use std::cmp::min;
 use std::collections::HashSet;
 
 use super::choices::EngineError;
@@ -6,11 +5,11 @@ use super::state::NativeTestCase;
 use crate::control::hegel_internal_assert;
 use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::draws;
 
-/// Upper bound on the per-test-case step cap drawn by
-/// [`NativeStateMachine::next_rule`].
-const MAX_STEP_CAP: i64 = 50;
+/// Probability that the per-step stop decision in
+/// [`NativeStateMachine::next_rule`] halts a stateful test case, when the
+/// engine is free to choose (2^-16).
+const P_STOP: f64 = 1.0 / 65536.0;
 
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
@@ -79,10 +78,6 @@ pub struct NativeStateMachine {
     #[allow(dead_code)]
     invariant_names: Vec<String>,
     flags: Option<FeatureFlags>,
-    /// Per-test-case cap on the number of rules handed out, drawn on the
-    /// first `next_rule` call: an integer in `[1, i64::MAX]` truncated to
-    /// [`MAX_STEP_CAP`] (so usually exactly [`MAX_STEP_CAP`]).
-    step_cap: Option<i64>,
     /// Number of rules handed out so far.
     steps_drawn: i64,
 }
@@ -98,32 +93,28 @@ impl NativeStateMachine {
             rule_names,
             invariant_names,
             flags: None,
-            step_cap: None,
             steps_drawn: 0,
         }
     }
 
     /// Draw the index of the next rule to run, in `[0, num_rules)`, or
-    /// `None` once the test case has run enough steps.
+    /// `None` once the test case decides to stop.
     ///
-    /// The first call draws the test case's step cap. Once `step_cap` rules
-    /// have been handed out, every further call returns `None` without
-    /// drawing. Families marked as unbounded (single-test-case runs) draw
-    /// no cap and never return `None`.
+    /// Each call first makes a per-step stop decision: a boolean draw with
+    /// probability [`P_STOP`] of halting. Every test case runs at least one step
+    /// and at most `stateful_step_count`. Families marked as unbounded
+    /// (single-test-case runs) never force a stop.
     pub fn next_rule(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
-        if ntc.family().state_machine_steps_unbounded() {
-            return Ok(Some(self.select_rule(ntc)?));
-        }
-        let step_cap = match self.step_cap {
-            Some(cap) => cap,
-            None => {
-                let raw = draws::generate_integer(ntc, &BigInt::from(1), &BigInt::from(i64::MAX))?;
-                let cap = min(raw.to_i128().unwrap() as i64, MAX_STEP_CAP);
-                self.step_cap = Some(cap);
-                cap
-            }
+        let forced = if ntc.family().state_machine_steps_unbounded() {
+            Some(false)
+        } else if self.steps_drawn >= ntc.family().stateful_step_count() {
+            Some(true)
+        } else if self.steps_drawn == 0 {
+            Some(false)
+        } else {
+            None
         };
-        if self.steps_drawn >= step_cap {
+        if ntc.weighted_precise(P_STOP, forced)? {
             return Ok(None);
         }
         let index = self.select_rule(ntc)?;

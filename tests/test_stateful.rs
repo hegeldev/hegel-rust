@@ -661,9 +661,16 @@ mod stateful {
         }
     }
 
-    fn run_step_recorder(fail_assumption: bool) -> Vec<u64> {
+    fn run_step_recorder(fail_assumption: bool, step_count: Option<i64>) -> Vec<u64> {
         let counts: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let counts_in_test = Arc::clone(&counts);
+        let mut settings = Settings::new()
+            .test_cases(100)
+            .database(None)
+            .derandomize(true);
+        if let Some(step_count) = step_count {
+            settings = settings.stateful_step_count(step_count);
+        }
         Hegel::new(move |tc: TestCase| {
             counts_in_test.lock().unwrap().push(0);
             let m = StepRecorderMachine {
@@ -672,22 +679,17 @@ mod stateful {
             };
             hegel::stateful::run(m, tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(100)
-                .database(None)
-                .derandomize(true),
-        )
+        .settings(settings)
         .run();
         let counts = counts.lock().unwrap();
         counts.clone()
     }
 
-    /// The engine owns the step cap: no test case runs more than 50 steps,
-    /// and the unbounded cap draw usually truncates to exactly 50.
+    /// The engine owns the step cap: with the default `stateful_step_count`,
+    /// no test case runs more than 50 steps, and most run exactly 50.
     #[test]
     fn test_step_cap_is_50_most_of_the_time() {
-        let counts = run_step_recorder(false);
+        let counts = run_step_recorder(false, None);
         assert!(counts.iter().all(|&c| c <= 50));
         let full = counts.iter().filter(|&&c| c == 50).count();
         assert!(
@@ -702,12 +704,27 @@ mod stateful {
     /// the engine's cap rather than retrying indefinitely.
     #[test]
     fn test_hopeless_machine_is_bounded_by_the_step_cap() {
-        let counts = run_step_recorder(true);
+        let counts = run_step_recorder(true, None);
         assert!(counts.iter().all(|&c| c <= 50));
         let full = counts.iter().filter(|&&c| c == 50).count();
         assert!(
             full > counts.len() / 2,
             "expected most of {} test cases to attempt exactly 50 rules, got {full}",
+            counts.len()
+        );
+    }
+
+    /// The `stateful_step_count` setting replaces the fixed cap: with a custom
+    /// value, no test case runs more than that many steps, and most run
+    /// exactly that many.
+    #[test]
+    fn test_stateful_step_count_setting_bounds_steps() {
+        let counts = run_step_recorder(false, Some(7));
+        assert!(counts.iter().all(|&c| (1..=7).contains(&c)));
+        let full = counts.iter().filter(|&&c| c == 7).count();
+        assert!(
+            full > counts.len() / 2,
+            "expected most of {} test cases to run exactly 7 steps, got {full}",
             counts.len()
         );
     }
