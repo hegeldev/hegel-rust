@@ -205,6 +205,12 @@ pub trait Generator<T> {
 /// construction. Guard any work done purely for printing (formatting a
 /// value, say) with [`PrettyPrinter::should_print`] to keep the silent path
 /// cheap.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot print the values it draws",
+    label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
+    note = "make it printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`"
+)]
 pub trait PrintableGenerator<T>: Generator<T> {
     /// Produce a value, printing its representation to `printer` as it is
     /// drawn.
