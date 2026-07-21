@@ -14,9 +14,9 @@ fn every_jiff_generator_prints_its_drawn_value() {
 }
 
 fn render<T: hegel::PrettyPrintable>(value: &T) -> String {
-    let mut printer = hegel::PrettyPrinter::new(79);
-    value.pretty_print(&mut printer);
-    printer.value()
+    let mut doc = hegel::Document::new();
+    value.pretty_print(doc.printer());
+    doc.finish()
 }
 
 #[test]

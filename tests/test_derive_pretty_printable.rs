@@ -4,12 +4,12 @@
 //! `tests/ui/derive_pretty_printable_union.rs`, where trybuild pins its
 //! diagnostic.
 
-use hegel::{PrettyPrintable, PrettyPrinter};
+use hegel::{Document, PrettyPrintable};
 
 fn render<T: PrettyPrintable>(value: &T, max_width: usize) -> String {
-    let mut printer = PrettyPrinter::new(max_width);
-    value.pretty_print(&mut printer);
-    printer.value()
+    let mut doc = Document::new().max_width(max_width);
+    value.pretty_print(doc.printer());
+    doc.finish()
 }
 
 #[derive(PrettyPrintable)]
