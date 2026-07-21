@@ -168,7 +168,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         .zip(field_names.iter())
         .map(|(print_ident, field_name)| {
             quote! {
-                let #print_ident = self.#field_name.draw_and_print(__tc, __printer);
+                let #print_ident = __tc.draw_and_print(&self.#field_name, __printer);
             }
         })
         .collect();

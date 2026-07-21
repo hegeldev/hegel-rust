@@ -105,7 +105,7 @@ macro_rules! impl_tuple {
                             printer.breakable(" ");
                         }
                         index += 1;
-                        self.$field.draw_and_print(tc, printer)
+                        tc.draw_and_print(&self.$field, printer)
                     },
                 )+);
                 if index == 1 {

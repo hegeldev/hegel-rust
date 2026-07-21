@@ -101,7 +101,7 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
         self.draw_vec(tc, printer, |elements, tc, printer| {
-            elements.draw_and_print(tc, printer)
+            tc.draw_and_print(elements, printer)
         })
     }
 }
@@ -219,7 +219,7 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
         self.draw_set(tc, printer, |elements, tc, printer| {
-            elements.draw_and_print(tc, printer)
+            tc.draw_and_print(elements, printer)
         })
     }
 }
@@ -339,8 +339,8 @@ where
         self.draw_map(
             tc,
             printer,
-            |keys, tc, printer| keys.draw_and_print(tc, printer),
-            |values, tc, printer| values.draw_and_print(tc, printer),
+            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            |values, tc, printer| tc.draw_and_print(values, printer),
         )
     }
 }
@@ -435,7 +435,7 @@ impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerat
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> [T; N] {
         self.draw_array(tc, printer, |element, tc, printer| {
-            element.draw_and_print(tc, printer)
+            tc.draw_and_print(element, printer)
         })
     }
 }

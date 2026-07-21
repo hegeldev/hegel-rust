@@ -127,7 +127,7 @@ pub(crate) struct TestCaseGlobalData {
     /// slice `[start, end)` of the shrunk counterexample they describe.
     /// Populated by the lifecycle before the final replay of an explained
     /// failure and consumed — each at most once — by
-    /// [`PrintableGenerator::draw_and_print`]'s region tracking; empty
+    /// [`TestCase::draw_and_print`]'s region tracking; empty
     /// everywhere else, which is what keeps the tracking free for ordinary
     /// test cases.
     explain_comments: Mutex<HashMap<(u64, u64), String>>,
@@ -457,7 +457,7 @@ impl TestCase {
 
     /// Install the failure's explain-phase annotations before the final
     /// replay. Slice notes go into the table that
-    /// [`PrintableGenerator::draw_and_print`]'s region tracking consumes as
+    /// [`TestCase::draw_and_print`]'s region tracking consumes as
     /// the replay's draws print; the whole-test note reserves a deferred hole
     /// at the top of the document and only appears — as a leading `// …`
     /// line — once a slice annotation actually renders.
@@ -573,7 +573,7 @@ impl TestCase {
                 printer.text(&" ".repeat(indent));
                 printer.shift_indent(indent as isize);
                 printer.text(&format!("let {display_name} = "));
-                let value = generator.draw_and_print(self, printer);
+                let value = self.draw_and_print(&generator, printer);
                 printer.text(";");
                 printer.shift_indent(-(indent as isize));
                 printer.hard_break();
@@ -592,6 +592,37 @@ impl TestCase {
     /// failing-test summary.
     pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
         generator.do_draw(self)
+    }
+
+    /// Draw a value from a generator, printing its representation to
+    /// `printer` as one tracked region.
+    ///
+    /// This is how a compositional [`PrintableGenerator`] draws an inner
+    /// generator from its own
+    /// [`do_draw_and_print`](PrintableGenerator::do_draw_and_print) (and how
+    /// [`draw`](Self::draw) runs its argument): the choice slice the region
+    /// consumes is matched against the failure's explain-phase annotations
+    /// on the final replay, so a comment like `// or any other generated
+    /// value` can attach to exactly the printed part it describes — a single
+    /// list element, one field of a struct. Away from the final replay of an
+    /// explained failure the wrapper adds nothing and simply delegates.
+    ///
+    /// A generator that merely forwards to an inner printable generator
+    /// without printing or drawing anything itself should call the inner
+    /// generator's `do_draw_and_print` directly instead, so the region isn't
+    /// doubled.
+    pub fn draw_and_print<T>(
+        &self,
+        generator: impl PrintableGenerator<T>,
+        printer: &mut PrettyPrinter,
+    ) -> T {
+        if !printer.should_print() {
+            return generator.do_draw_and_print(self, printer);
+        }
+        let region = self.explain_region_start();
+        let value = generator.do_draw_and_print(self, printer);
+        self.explain_region_finish(region, printer);
+        value
     }
 
     /// Assume a condition is true. If false, reject the current test input.

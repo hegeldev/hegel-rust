@@ -219,32 +219,14 @@ pub trait Generator<T> {
 pub trait PrintableGenerator<T>: Generator<T> {
     /// Produce a value, printing its representation to `printer` as it is
     /// drawn.
+    ///
+    /// A compositional implementation draws each inner generator with
+    /// [`TestCase::draw_and_print`], which tracks the inner draw as one
+    /// explain-annotation region; a generator that merely forwards to an
+    /// inner printable generator without printing or drawing anything itself
+    /// calls the inner generator's `do_draw_and_print` directly instead, so
+    /// the region isn't doubled.
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
-
-    /// Produce a value, printing its representation as one tracked region.
-    ///
-    /// This is how a compositional printable generator invokes an inner
-    /// generator (and how [`TestCase::draw`] invokes its argument): the
-    /// choice slice the region consumes is matched against the failure's
-    /// explain-phase annotations on the final replay, so a comment like
-    /// `// or any other generated value` can attach to exactly the printed
-    /// part it describes — a single list element, one field of a struct.
-    /// Away from the final replay of an explained failure the wrapper adds
-    /// nothing and simply delegates.
-    ///
-    /// Do not override; implement `do_draw_and_print`. A generator that
-    /// merely forwards to an inner printable generator without printing or
-    /// drawing anything itself should delegate `do_draw_and_print` directly
-    /// rather than calling this, so the region isn't doubled.
-    fn draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        if !printer.should_print() {
-            return self.do_draw_and_print(tc, printer);
-        }
-        let region = tc.explain_region_start();
-        let value = self.do_draw_and_print(tc, printer);
-        tc.explain_region_finish(region, printer);
-        value
-    }
 
     /// Convert this generator into a type-erased boxed printable generator,
     /// as accepted by [`one_of!`](crate::one_of).
@@ -438,7 +420,7 @@ where
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
-        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.draw_and_print(tc, printer))
+        self.draw_flat_mapped(tc, |next_gen, tc| tc.draw_and_print(next_gen, printer))
     }
 }
 
@@ -500,7 +482,7 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         self.draw_filtered(tc, printer, |source, tc, printer| {
-            source.draw_and_print(tc, printer)
+            tc.draw_and_print(source, printer)
         })
     }
 }

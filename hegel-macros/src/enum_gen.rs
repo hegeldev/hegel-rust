@@ -390,7 +390,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 }
                 _ => {
                     let field_name = variant_to_field[&variant.ident.to_string()];
-                    quote! { #i => self.#field_name.draw_and_print(__tc, __printer) }
+                    quote! { #i => __tc.draw_and_print(&self.#field_name, __printer) }
                 }
             }
         })
@@ -657,7 +657,7 @@ fn generate_variant_generator(
             .zip(field_idents.iter())
             .map(|(print_ident, field_ident)| {
                 quote! {
-                    let #print_ident = self.#field_ident.draw_and_print(__tc, __printer);
+                    let #print_ident = __tc.draw_and_print(&self.#field_ident, __printer);
                 }
             })
             .collect();
@@ -681,7 +681,7 @@ fn generate_variant_generator(
             .zip(field_idents.iter())
             .map(|(print_ident, field_ident)| {
                 quote! {
-                    let #print_ident = self.#field_ident.draw_and_print(__tc, __printer);
+                    let #print_ident = __tc.draw_and_print(&self.#field_ident, __printer);
                 }
             })
             .collect();

@@ -560,11 +560,11 @@ impl hegel::PrintableGenerator<(bool, bool)> for PairGenerator {
         printer: &mut hegel::PrettyPrinter,
     ) -> (bool, bool) {
         printer.begin_group(1, "(");
-        let first = gs::booleans().draw_and_print(tc, printer);
+        let first = tc.draw_and_print(gs::booleans(), printer);
         if printer.should_print() {
             printer.text(", ");
         }
-        let second = gs::booleans().draw_and_print(tc, printer);
+        let second = tc.draw_and_print(gs::booleans(), printer);
         printer.end_group(")");
         (first, second)
     }
