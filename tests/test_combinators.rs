@@ -1086,3 +1086,28 @@ mod nocover_given_reuse {
         .run();
     }
 }
+
+mod one_of_named_types {
+    use hegel::generators::{self as gs, OneOf2Generator};
+    use hegel::{Hegel, Settings};
+
+    struct Holder {
+        generator: OneOf2Generator<
+            gs::IntegerGenerator<i64>,
+            gs::SampledFromGenerator<'static, i64>,
+            i64,
+        >,
+    }
+
+    #[test]
+    fn test_one_of_result_types_are_nameable() {
+        let holder = Holder {
+            generator: hegel::one_of!(gs::integers::<i64>(), gs::sampled_from(vec![1_i64, 2])),
+        };
+        Hegel::new(move |tc| {
+            let _: i64 = tc.draw(&holder.generator);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+}

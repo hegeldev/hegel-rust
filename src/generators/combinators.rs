@@ -221,6 +221,9 @@ pub fn one_of1<T, G1: Generator<T>>(gen1: G1) -> OneOf1Generator<G1, T> {
 macro_rules! impl_one_of {
     ($name:ident, $fn_name:ident, $max:expr,
      $(($idx:tt, $field:ident, $G:ident)),+ ; ($last_field:ident, $last_G:ident)) => {
+        /// Generator choosing uniformly among its component generators.
+        /// Created by [`one_of!`](crate::one_of); a
+        /// [`PrintableGenerator`] exactly when every component is one.
         pub struct $name<$($G,)+ $last_G, T> {
             $($field: $G,)+
             $last_field: $last_G,

@@ -22,7 +22,7 @@ error[E0277]: the trait bound `OsString: PrettyPrintable` is not satisfied
            and $N others
    = note: required for `JustGenerator<OsString>` to implement `PrintableGenerator<OsString>`
    = note: 1 redundant requirement hidden
-   = note: required for `generators::combinators::OneOf2Generator<JustGenerator<OsString>, JustGenerator<OsString>, OsString>` to implement `PrintableGenerator<OsString>`
+   = note: required for `OneOf2Generator<JustGenerator<OsString>, JustGenerator<OsString>, OsString>` to implement `PrintableGenerator<OsString>`
 note: required by a bound in `TestCase::draw`
   --> src/test_case.rs
    |
