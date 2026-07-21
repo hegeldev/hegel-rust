@@ -328,6 +328,7 @@ mod debug_repr {
             "[]",
             "Unitish {}",
             "Outer { inner: Inner { n: 1 } }",
+            "odd  {1}",
         ] {
             assert_eq!(render_debug(repr, 79), repr, "{repr}");
         }
