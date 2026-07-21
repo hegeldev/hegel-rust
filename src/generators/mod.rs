@@ -46,8 +46,8 @@ pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred};
 pub use generators::{
-    BoxedGenerator, BoxedPrintableGenerator, Filtered, FlatMapped, Generator, Mapped, PrintAsDebug,
-    PrintAsValue, PrintWith, PrintableGenerator,
+    BoxedGenerator, BoxedPrintableGenerator, Filtered, FlatMapped, Generator, Mapped,
+    PrintableGenerator, PrintedAsDebug, PrintedAsValue, PrintedWith,
 };
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
