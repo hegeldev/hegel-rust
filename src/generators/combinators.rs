@@ -61,29 +61,35 @@ pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     _phantom: PhantomData<fn(&'a ()) -> T>,
 }
 
+/// The choice structure every `one_of` form shares — a ONE_OF span around a
+/// uniform index draw followed by the chosen alternative — with the
+/// alternative dispatch (and whether it draws silently or printing)
+/// injected. Using this from both draw paths is what keeps their choice
+/// streams identical.
+fn draw_one_of<T>(tc: &TestCase, max_index: usize, draw_at: impl FnOnce(usize) -> T) -> T {
+    tc.start_span(labels::ONE_OF);
+    let index = integers::<usize>()
+        .min_value(0)
+        .max_value(max_index)
+        .do_draw(tc);
+    let result = draw_at(index);
+    tc.stop_span(false);
+    result
+}
+
 impl<'a, T, B: Generator<T>> Generator<T> for OneOfGenerator<'a, T, B> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(labels::ONE_OF);
-        let index = integers::<usize>()
-            .min_value(0)
-            .max_value(self.generators.len() - 1)
-            .do_draw(tc);
-        let result = self.generators[index].do_draw(tc);
-        tc.stop_span(false);
-        result
+        draw_one_of(tc, self.generators.len() - 1, |index| {
+            self.generators[index].do_draw(tc)
+        })
     }
 }
 
 impl<'a, T, B: PrintableGenerator<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, B> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        tc.start_span(labels::ONE_OF);
-        let index = integers::<usize>()
-            .min_value(0)
-            .max_value(self.generators.len() - 1)
-            .do_draw(tc);
-        let result = self.generators[index].draw_and_print(tc, printer);
-        tc.stop_span(false);
-        result
+        draw_one_of(tc, self.generators.len() - 1, |index| {
+            self.generators[index].draw_and_print(tc, printer)
+        })
     }
 }
 
@@ -191,11 +197,7 @@ where
     G1: Generator<T>,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(labels::ONE_OF);
-        integers::<usize>().min_value(0).max_value(0).do_draw(tc);
-        let result = self.gen1.do_draw(tc);
-        tc.stop_span(false);
-        result
+        draw_one_of(tc, 0, |_| self.gen1.do_draw(tc))
     }
 }
 
@@ -204,11 +206,7 @@ where
     G1: PrintableGenerator<T>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        tc.start_span(labels::ONE_OF);
-        integers::<usize>().min_value(0).max_value(0).do_draw(tc);
-        let result = self.gen1.draw_and_print(tc, printer);
-        tc.stop_span(false);
-        result
+        draw_one_of(tc, 0, |_| self.gen1.draw_and_print(tc, printer))
     }
 }
 
@@ -235,17 +233,10 @@ macro_rules! impl_one_of {
             $last_G: Generator<T>,
         {
             fn do_draw(&self, tc: &TestCase) -> T {
-                tc.start_span(labels::ONE_OF);
-                let index = integers::<usize>()
-                    .min_value(0)
-                    .max_value($max)
-                    .do_draw(tc);
-                let result = match index {
+                draw_one_of(tc, $max, |index| match index {
                     $($idx => self.$field.do_draw(tc),)+
                     _ => self.$last_field.do_draw(tc),
-                };
-                tc.stop_span(false);
-                result
+                })
             }
         }
 
@@ -255,17 +246,10 @@ macro_rules! impl_one_of {
             $last_G: PrintableGenerator<T>,
         {
             fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-                tc.start_span(labels::ONE_OF);
-                let index = integers::<usize>()
-                    .min_value(0)
-                    .max_value($max)
-                    .do_draw(tc);
-                let result = match index {
+                draw_one_of(tc, $max, |index| match index {
                     $($idx => self.$field.draw_and_print(tc, printer),)+
                     _ => self.$last_field.draw_and_print(tc, printer),
-                };
-                tc.stop_span(false);
-                result
+                })
             }
         }
 
@@ -416,31 +400,19 @@ pub struct OptionalGenerator<G, T> {
     _phantom: PhantomData<fn(T)>,
 }
 
-impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
-where
-    G: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        tc.start_span(labels::OPTIONAL);
-        let result = if tc.generate_boolean(0.5) {
-            Some(self.inner.do_draw(tc))
-        } else {
-            None
-        };
-        tc.stop_span(false);
-        result
-    }
-}
-
-impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
-where
-    G: PrintableGenerator<T>,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+impl<T, G> OptionalGenerator<G, T> {
+    /// The one optional body both draw paths run; only how the inner value
+    /// is drawn (silently or printing) is injected.
+    fn draw_optional(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl FnOnce(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> Option<T> {
         tc.start_span(labels::OPTIONAL);
         let result = if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
-            let value = self.inner.draw_and_print(tc, printer);
+            let value = draw(&self.inner, tc, printer);
             printer.end_group(5, ")");
             Some(value)
         } else {
@@ -449,6 +421,28 @@ where
         };
         tc.stop_span(false);
         result
+    }
+}
+
+impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: Generator<T>,
+{
+    fn do_draw(&self, tc: &TestCase) -> Option<T> {
+        self.draw_optional(tc, &mut PrettyPrinter::noop(), |inner, tc, _| {
+            inner.do_draw(tc)
+        })
+    }
+}
+
+impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+        self.draw_optional(tc, printer, |inner, tc, printer| {
+            inner.draw_and_print(tc, printer)
+        })
     }
 }
 

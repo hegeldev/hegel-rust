@@ -170,12 +170,17 @@ pub trait Generator<T> {
 /// `do_draw_and_print` must draw **exactly** the same choices as
 /// [`Generator::do_draw`] — the engine explores with the silent path and
 /// replays failures with the printing path, so any divergence makes failures
-/// unreplayable. Implementations should share drawing code between the two
-/// paths, differing only in what they print.
+/// unreplayable. The reliable way to satisfy this is to write the drawing
+/// logic once: implement `do_draw_and_print`, and implement
+/// [`Generator::do_draw`] as
+/// `self.do_draw_and_print(tc, &mut PrettyPrinter::noop())` — the no-op
+/// printer discards all output, so both paths run the same body by
+/// construction. Guard any work done purely for printing (formatting a
+/// value, say) with [`PrettyPrinter::should_print`] to keep the silent path
+/// cheap.
 pub trait PrintableGenerator<T>: Generator<T> {
     /// Produce a value, printing its representation to `printer` as it is
     /// drawn.
-    #[doc(hidden)]
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
 
     /// Produce a value, printing its representation as one tracked region.
@@ -194,6 +199,9 @@ pub trait PrintableGenerator<T>: Generator<T> {
     /// drawing anything itself should delegate `do_draw_and_print` directly
     /// rather than calling this, so the region isn't doubled.
     fn draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        if !printer.should_print() {
+            return self.do_draw_and_print(tc, printer);
+        }
         let region = tc.explain_region_start();
         let value = self.do_draw_and_print(tc, printer);
         tc.explain_region_finish(region, printer);
@@ -328,6 +336,23 @@ pub struct FlatMapped<T, U, G2, F, G1> {
     _phantom: PhantomData<fn(T) -> (U, G2)>,
 }
 
+impl<T, U, G2, F, G1> FlatMapped<T, U, G2, F, G1>
+where
+    G1: Generator<T>,
+    F: Fn(T) -> G2 + Send + Sync,
+{
+    /// The one flat-map body both draw paths run; only how the derived
+    /// generator is drawn (silently or printing) is injected.
+    fn draw_flat_mapped(&self, tc: &TestCase, draw_next: impl FnOnce(G2, &TestCase) -> U) -> U {
+        tc.start_span(labels::FLAT_MAP);
+        let intermediate = self.source.do_draw(tc);
+        let next_gen = (self.f)(intermediate);
+        let result = draw_next(next_gen, tc);
+        tc.stop_span(false);
+        result
+    }
+}
+
 impl<T, U, G2, F, G1> Generator<U> for FlatMapped<T, U, G2, F, G1>
 where
     G1: Generator<T>,
@@ -335,12 +360,7 @@ where
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> U {
-        tc.start_span(labels::FLAT_MAP);
-        let intermediate = self.source.do_draw(tc);
-        let next_gen = (self.f)(intermediate);
-        let result = next_gen.do_draw(tc);
-        tc.stop_span(false);
-        result
+        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.do_draw(tc))
     }
 }
 
@@ -351,12 +371,7 @@ where
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
-        tc.start_span(labels::FLAT_MAP);
-        let intermediate = self.source.do_draw(tc);
-        let next_gen = (self.f)(intermediate);
-        let result = next_gen.draw_and_print(tc, printer);
-        tc.stop_span(false);
-        result
+        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.draw_and_print(tc, printer))
     }
 }
 
@@ -367,39 +382,25 @@ pub struct Filtered<T, F, G> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T, F, G> Generator<T> for Filtered<T, F, G>
+impl<T, F, G> Filtered<T, F, G>
 where
-    G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
-    fn do_draw(&self, tc: &TestCase) -> T {
-        for _ in 0..3 {
-            tc.start_span(labels::FILTER);
-            let value = self.source.do_draw(tc);
-            if (self.predicate)(&value) {
-                tc.stop_span(false);
-                return value;
-            }
-            tc.stop_span(true);
-        }
-        tc.assume(false);
-        unreachable!()
-    }
-}
-
-/// Printing a filtered draw retries exactly like the silent path, but each
-/// attempt prints inside a speculative region so a rejected attempt's output
-/// is discarded — only the accepted value's representation survives.
-impl<T, F, G> PrintableGenerator<T> for Filtered<T, F, G>
-where
-    G: PrintableGenerator<T>,
-    F: Fn(&T) -> bool + Send + Sync,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+    /// The one filtering loop both draw paths run: each attempt draws
+    /// inside a speculative print region, so a rejected attempt discards
+    /// whatever the injected `draw` printed — only the accepted value's
+    /// representation survives. The silent path passes the no-op printer
+    /// and a print-free `draw`.
+    fn draw_filtered(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> T {
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let mut speculation = printer.speculate();
-            let value = self.source.draw_and_print(tc, speculation.printer());
+            let value = draw(&self.source, tc, speculation.printer());
             if (self.predicate)(&value) {
                 speculation.commit();
                 tc.stop_span(false);
@@ -410,6 +411,30 @@ where
         }
         tc.assume(false);
         unreachable!()
+    }
+}
+
+impl<T, F, G> Generator<T> for Filtered<T, F, G>
+where
+    G: Generator<T>,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.draw_filtered(tc, &mut PrettyPrinter::noop(), |source, tc, _| {
+            source.do_draw(tc)
+        })
+    }
+}
+
+impl<T, F, G> PrintableGenerator<T> for Filtered<T, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        self.draw_filtered(tc, printer, |source, tc, printer| {
+            source.draw_and_print(tc, printer)
+        })
     }
 }
 

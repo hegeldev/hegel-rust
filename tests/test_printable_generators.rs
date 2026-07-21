@@ -10,7 +10,7 @@ use common::utils::printed_draw_lines;
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::{self as gs, Generator};
-use hegel::{Hegel, Phase, Settings, Verbosity};
+use hegel::{Hegel, Phase, PrintableGenerator, Settings, Verbosity};
 
 /// Run a failing property and capture the final replay's draw/note lines.
 ///
@@ -528,6 +528,43 @@ fn multi_element_sets_and_maps_print_separators() {
     });
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains(": false, "), "{lines:?}");
+}
+
+/// A compositional generator written the recommended way: one drawing body
+/// in `do_draw_and_print`, with `do_draw` forwarding through the no-op
+/// printer, and expensive formatting guarded by `should_print`.
+struct PairGenerator;
+
+impl Generator<(bool, bool)> for PairGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> (bool, bool) {
+        self.do_draw_and_print(tc, &mut hegel::PrettyPrinter::noop())
+    }
+}
+
+impl hegel::PrintableGenerator<(bool, bool)> for PairGenerator {
+    fn do_draw_and_print(
+        &self,
+        tc: &hegel::TestCase,
+        printer: &mut hegel::PrettyPrinter,
+    ) -> (bool, bool) {
+        printer.begin_group(1, "(");
+        let first = gs::booleans().draw_and_print(tc, printer);
+        if printer.should_print() {
+            printer.text(", ");
+        }
+        let second = gs::booleans().draw_and_print(tc, printer);
+        printer.end_group(1, ")");
+        (first, second)
+    }
+}
+
+#[test]
+fn single_body_generators_draw_and_print_through_the_noop_printer() {
+    let lines = failing_lines(|tc| {
+        let pair = tc.draw(PairGenerator);
+        assert_ne!(pair, (false, false), "force a failure on the minimal pair");
+    });
+    assert_eq!(lines, vec!["let draw_1 = (false, false);"]);
 }
 
 /// A hand-written generator that calls `tc.note()` from inside `do_draw`

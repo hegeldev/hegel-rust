@@ -261,7 +261,7 @@ fn printer_debug_form_is_opaque() {
     let printer = PrettyPrinter::new(79);
     assert_eq!(
         format!("{printer:?}"),
-        "PrettyPrinter { handle: PrinterHandle { .. } }"
+        "PrettyPrinter { handle: Some(PrinterHandle { .. }) }"
     );
 }
 
@@ -270,4 +270,43 @@ fn printer_debug_form_is_opaque() {
 fn unbalanced_end_group_panics() {
     let mut printer = PrettyPrinter::new(79);
     printer.end_group(0, "]");
+}
+
+#[test]
+fn should_print_distinguishes_real_and_noop_printers() {
+    assert!(PrettyPrinter::new(79).should_print());
+    assert!(!PrettyPrinter::noop().should_print());
+}
+
+#[test]
+fn noop_printer_discards_everything() {
+    let mut printer = PrettyPrinter::noop();
+    printer.begin_group(1, "[");
+    printer.text("first");
+    printer.text("a\nb");
+    printer.breakable(" ");
+    printer.hard_break();
+    printer.shift_indent(2);
+    printer.comment("nothing to see");
+    printer.end_group(1, "]");
+    let mut slot = printer.deferred();
+    slot.text("later\ntext");
+    slot.breakable(" ");
+    assert_eq!(printer.value(), "");
+}
+
+#[test]
+fn noop_printer_speculation_commits_aborts_and_drops() {
+    let mut printer = PrettyPrinter::noop();
+    let mut speculation = printer.speculate();
+    speculation.printer().text("kept");
+    speculation.commit();
+    let mut speculation = printer.speculate();
+    speculation.printer().text("discarded");
+    speculation.abort();
+    {
+        let mut speculation = printer.speculate();
+        speculation.printer().text("dropped");
+    }
+    assert_eq!(printer.value(), "");
 }

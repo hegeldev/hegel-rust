@@ -41,42 +41,17 @@ impl<G, T: PartialEq> VecGenerator<G, T> {
     }
 }
 
-impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
-where
-    G: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        tc.start_span(labels::LIST);
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
-        let mut result = Vec::new();
-        while collection.more() {
-            let element = self.elements.do_draw(tc);
-            if let Some(eq_fn) = &self.unique_by {
-                if result.iter().any(|existing| eq_fn(existing, &element)) {
-                    collection.reject(Some("duplicate element"));
-                    continue;
-                }
-            }
-            result.push(element);
-        }
-        tc.stop_span(false);
-        result
-    }
-}
-
-/// Printing a vec draw is fully compositional: each element prints through
-/// the element generator inside a speculative region, so an element rejected
-/// for uniqueness discards its own output (including its separator).
-impl<T, G> PrintableGenerator<Vec<T>> for VecGenerator<G, T>
-where
-    G: PrintableGenerator<T>,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+impl<G, T> VecGenerator<G, T> {
+    /// The one vec body both draw paths run: each element draws inside a
+    /// speculative print region, so an element rejected for uniqueness
+    /// discards its own output (including its separator). Only how each
+    /// element is drawn (silently or printing) is injected.
+    fn draw_vec(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> Vec<T> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
                 invalid_argument!("Cannot have max_size < min_size");
@@ -92,7 +67,7 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = self.elements.draw_and_print(tc, speculation.printer());
+            let element = draw(&self.elements, tc, speculation.printer());
             if let Some(eq_fn) = &self.unique_by {
                 if result.iter().any(|existing| eq_fn(existing, &element)) {
                     speculation.abort();
@@ -106,6 +81,28 @@ where
         printer.end_group(1, "]");
         tc.stop_span(false);
         result
+    }
+}
+
+impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
+where
+    G: Generator<T>,
+{
+    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
+        self.draw_vec(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
+            elements.do_draw(tc)
+        })
+    }
+}
+
+impl<T, G> PrintableGenerator<Vec<T>> for VecGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+        self.draw_vec(tc, printer, |elements, tc, printer| {
+            elements.draw_and_print(tc, printer)
+        })
     }
 }
 
@@ -158,41 +155,20 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
+impl<G, T> HashSetGenerator<G, T>
 where
-    G: Generator<T>,
     T: Eq + Hash,
 {
-    fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        tc.start_span(labels::SET);
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
-        let mut set = HashSet::new();
-        while collection.more() {
-            let element = self.elements.do_draw(tc);
-            if !set.insert(element) {
-                collection.reject(Some("duplicate element"));
-            }
-        }
-        hegel_internal_assert!(set.len() >= self.min_size);
-        tc.stop_span(false);
-        set
-    }
-}
-
-/// Printing a set draw is fully compositional: each element prints through
-/// the element generator inside a speculative region, so an element rejected
-/// as a duplicate discards its own output (including its separator).
-impl<T, G> PrintableGenerator<HashSet<T>> for HashSetGenerator<G, T>
-where
-    G: PrintableGenerator<T>,
-    T: Eq + Hash,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
+    /// The one set body both draw paths run: each element draws inside a
+    /// speculative print region, so an element rejected as a duplicate
+    /// discards its own output (including its separator). Only how each
+    /// element is drawn (silently or printing) is injected.
+    fn draw_set(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> HashSet<T> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
                 invalid_argument!("Cannot have max_size < min_size");
@@ -208,7 +184,7 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = self.elements.draw_and_print(tc, speculation.printer());
+            let element = draw(&self.elements, tc, speculation.printer());
             if set.contains(&element) {
                 speculation.abort();
                 collection.reject(Some("duplicate element"));
@@ -221,6 +197,30 @@ where
         printer.end_group(1, "}");
         tc.stop_span(false);
         set
+    }
+}
+
+impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
+where
+    G: Generator<T>,
+    T: Eq + Hash,
+{
+    fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
+        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
+            elements.do_draw(tc)
+        })
+    }
+}
+
+impl<T, G> PrintableGenerator<HashSet<T>> for HashSetGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+    T: Eq + Hash,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
+        self.draw_set(tc, printer, |elements, tc, printer| {
+            elements.draw_and_print(tc, printer)
+        })
     }
 }
 
@@ -266,44 +266,31 @@ where
     KT: Eq + std::hash::Hash,
 {
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        tc.start_span(labels::MAP);
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
-        let mut map = HashMap::new();
-        while collection.more() {
-            let key = self.keys.do_draw(tc);
-            match map.entry(key) {
-                std::collections::hash_map::Entry::Occupied(_) => {
-                    collection.reject(Some("duplicate key"));
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let value = self.values.do_draw(tc);
-                    entry.insert(value);
-                }
-            }
-        }
-        hegel_internal_assert!(map.len() >= self.min_size);
-        tc.stop_span(false);
-        map
+        self.draw_map(
+            tc,
+            &mut PrettyPrinter::noop(),
+            |keys, tc, _| keys.do_draw(tc),
+            |values, tc, _| values.do_draw(tc),
+        )
     }
 }
 
-/// Printing a map draw is fully compositional: each key and value prints
-/// through its generator inside a speculative region, so an entry rejected
-/// for a duplicate key discards its own output (including its separator).
-/// The value is only drawn — matching the silent path's choices — once the
-/// key is known to be fresh.
-impl<K, V, KT, VT> PrintableGenerator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
+impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT>
 where
-    K: PrintableGenerator<KT>,
-    V: PrintableGenerator<VT>,
     KT: Eq + std::hash::Hash,
 {
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
+    /// The one map body both draw paths run: each entry draws inside a
+    /// speculative print region, so an entry rejected for a duplicate key
+    /// discards its own output (including its separator), and the value is
+    /// only drawn once the key is known to be fresh. Only how keys and
+    /// values are drawn (silently or printing) is injected.
+    fn draw_map(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
+    ) -> HashMap<KT, VT> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
                 invalid_argument!("Cannot have max_size < min_size");
@@ -319,13 +306,13 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let key = self.keys.draw_and_print(tc, speculation.printer());
+            let key = draw_key(&self.keys, tc, speculation.printer());
             if map.contains_key(&key) {
                 speculation.abort();
                 collection.reject(Some("duplicate key"));
             } else {
                 speculation.printer().text(": ");
-                let value = self.values.draw_and_print(tc, speculation.printer());
+                let value = draw_value(&self.values, tc, speculation.printer());
                 speculation.commit();
                 map.insert(key, value);
             }
@@ -334,6 +321,22 @@ where
         printer.end_group(1, "}");
         tc.stop_span(false);
         map
+    }
+}
+
+impl<K, V, KT, VT> PrintableGenerator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
+where
+    K: PrintableGenerator<KT>,
+    V: PrintableGenerator<VT>,
+    KT: Eq + std::hash::Hash,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
+        self.draw_map(
+            tc,
+            printer,
+            |keys, tc, printer| keys.draw_and_print(tc, printer),
+            |values, tc, printer| values.draw_and_print(tc, printer),
+        )
     }
 }
 
@@ -388,21 +391,15 @@ pub fn arrays<G: Generator<T> + Send + Sync, T, const N: usize>(
     ArrayGenerator::new(element)
 }
 
-impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
-    for ArrayGenerator<G, T, N>
-{
-    fn do_draw(&self, tc: &TestCase) -> [T; N] {
-        tc.start_span(labels::TUPLE);
-        let result = std::array::from_fn(|_| self.element.do_draw(tc));
-        tc.stop_span(false);
-        result
-    }
-}
-
-impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerator<[T; N]>
-    for ArrayGenerator<G, T, N>
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> [T; N] {
+impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
+    /// The one array body both draw paths run; only how each element is
+    /// drawn (silently or printing) is injected.
+    fn draw_array(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> [T; N] {
         tc.start_span(labels::TUPLE);
         printer.begin_group(1, "[");
         let result = std::array::from_fn(|i| {
@@ -410,10 +407,30 @@ impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerat
                 printer.text(",");
                 printer.breakable(" ");
             }
-            self.element.draw_and_print(tc, printer)
+            draw(&self.element, tc, printer)
         });
         printer.end_group(1, "]");
         tc.stop_span(false);
         result
+    }
+}
+
+impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
+    for ArrayGenerator<G, T, N>
+{
+    fn do_draw(&self, tc: &TestCase) -> [T; N] {
+        self.draw_array(tc, &mut PrettyPrinter::noop(), |element, tc, _| {
+            element.do_draw(tc)
+        })
+    }
+}
+
+impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerator<[T; N]>
+    for ArrayGenerator<G, T, N>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> [T; N] {
+        self.draw_array(tc, printer, |element, tc, printer| {
+            element.draw_and_print(tc, printer)
+        })
     }
 }
