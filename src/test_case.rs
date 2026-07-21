@@ -538,7 +538,8 @@ impl TestCase {
     /// can be reported with a failing test case; to draw from a plain
     /// [`Generator`], use [`draw_silent`](Self::draw_silent), or make the
     /// generator printable with
-    /// [`print_as_value`](crate::generators::Generator::print_as_value) or
+    /// [`print_as_value`](crate::generators::Generator::print_as_value),
+    /// [`print_as_debug`](crate::generators::Generator::print_as_debug), or
     /// [`print_with`](crate::generators::Generator::print_with).
     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
         self.__draw_named(generator, "draw", true)

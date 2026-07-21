@@ -152,6 +152,32 @@ pub trait Generator<T> {
     {
         PrintAsValue { source: self }
     }
+
+    /// Make this generator printable by printing each drawn value's `Debug`
+    /// representation.
+    ///
+    /// This works for any `Debug` type, so it is the escape hatch for types
+    /// the orphan rule keeps out of [`PrettyPrintable`] — standard-library
+    /// and third-party types alike. Derived-`Debug` output is re-laid-out
+    /// through the printer (see
+    /// [`print_debug_repr`](crate::pretty::print_debug_repr)), so large
+    /// values wrap like natively printed ones.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = gs::text().map(PathBuf::from).print_as_debug();
+    /// ```
+    fn print_as_debug(self) -> PrintAsDebug<Self>
+    where
+        Self: Sized,
+        T: std::fmt::Debug,
+    {
+        PrintAsDebug { source: self }
+    }
 }
 
 /// A [`Generator`] that can print each value's representation as it draws it.
@@ -162,8 +188,9 @@ pub trait Generator<T> {
 /// structural combinators (collections, tuples, `optional`, `one_of!`,
 /// `flat_map`) whenever their component generators are, and value-transforming
 /// combinators (`map`, `filter`, `just`, `sampled_from`, composites) whenever
-/// the produced type implements [`PrettyPrintable`]. For everything else there
-/// is [`Generator::print_as_value`] and [`Generator::print_with`].
+/// the produced type implements [`PrettyPrintable`]. For everything else
+/// there are [`Generator::print_as_value`], [`Generator::print_as_debug`],
+/// and [`Generator::print_with`].
 ///
 /// # Contract
 ///
@@ -283,6 +310,35 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(&self.source, tc, printer)
+    }
+}
+
+/// Result of [`Generator::print_as_debug`].
+pub struct PrintAsDebug<G> {
+    source: G,
+}
+
+impl<T, G> Generator<T> for PrintAsDebug<G>
+where
+    G: Generator<T>,
+    T: std::fmt::Debug,
+{
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.source.do_draw(tc)
+    }
+}
+
+impl<T, G> PrintableGenerator<T> for PrintAsDebug<G>
+where
+    G: Generator<T>,
+    T: std::fmt::Debug,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        let value = self.source.do_draw(tc);
+        if printer.should_print() {
+            crate::pretty::print_debug_repr(&format!("{value:?}"), printer);
+        }
+        value
     }
 }
 

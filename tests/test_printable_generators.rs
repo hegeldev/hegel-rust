@@ -559,6 +559,15 @@ impl hegel::PrintableGenerator<(bool, bool)> for PairGenerator {
 }
 
 #[test]
+fn print_as_debug_makes_foreign_debug_types_printable() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::text().map(std::path::PathBuf::from).print_as_debug());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = \"\";"]);
+}
+
+#[test]
 fn single_body_generators_draw_and_print_through_the_noop_printer() {
     let lines = failing_lines(|tc| {
         let pair = tc.draw(PairGenerator);

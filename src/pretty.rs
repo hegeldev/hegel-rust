@@ -291,6 +291,245 @@ impl Drop for Speculation<'_> {
     }
 }
 
+/// Print a `{:?}` representation through the layout machinery.
+///
+/// The output of a derived `Debug` implementation follows a small grammar —
+/// `Name { field: value, … }`, `Name(…)`, `(…)`, `[…]`, `{key: value, …}`,
+/// string and character literals, atoms — and this function re-emits it
+/// through the printer's group and breakable primitives, so a large value
+/// wraps exactly like one printed by `#[derive(PrettyPrintable)]`. Anything
+/// that doesn't parse as that grammar (a hand-written `Debug` can produce
+/// arbitrary text) is emitted verbatim, with embedded newlines honored as
+/// hard breaks.
+///
+/// This is the engine behind [`pretty_print_as_debug!`](crate::pretty_print_as_debug)
+/// and [`print_as_debug`](crate::Generator::print_as_debug); it is exposed
+/// for hand-written [`PrettyPrintable`] implementations that want to embed a
+/// `Debug` representation in a larger layout.
+pub fn print_debug_repr(repr: &str, printer: &mut PrettyPrinter) {
+    match DebugRepr::parse(repr) {
+        Some(nodes) => emit_debug_nodes(&nodes, printer),
+        None => printer.text(repr),
+    }
+}
+
+/// One parsed piece of a `Debug` representation: literal text, or a
+/// delimited group laid out with a breakable point after each comma.
+enum DebugNode {
+    Leaf(String),
+    Group {
+        /// The atom glued to the open delimiter (`Some` in `Some(5)`, `Name`
+        /// in `Name { … }`); empty for bare tuples, lists, and map braces.
+        prefix: String,
+        delimiter: char,
+        /// Brace group in derived struct style (`Name { … }`, spaces inside
+        /// the braces) as opposed to map style (`{… }`).
+        named: bool,
+        items: Vec<Vec<DebugNode>>,
+    },
+}
+
+/// Recursive-descent parser over the derived-`Debug` grammar. Any input
+/// outside the grammar makes a parsing method return `None`, and the whole
+/// representation falls back to verbatim text.
+struct DebugRepr {
+    chars: Vec<char>,
+    pos: usize,
+}
+
+impl DebugRepr {
+    fn parse(repr: &str) -> Option<Vec<DebugNode>> {
+        if repr.contains('\n') {
+            return None;
+        }
+        let mut parser = DebugRepr {
+            chars: repr.chars().collect(),
+            pos: 0,
+        };
+        let nodes = parser.parse_item()?;
+        if parser.pos != parser.chars.len() {
+            return None;
+        }
+        Some(nodes)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.chars.get(self.pos + 1).copied()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.pos += 1;
+        Some(c)
+    }
+
+    /// Parse one comma-separated item — literal runs and nested groups —
+    /// stopping (without consuming) at a `", "`, a close delimiter, or the
+    /// end of the input.
+    fn parse_item(&mut self) -> Option<Vec<DebugNode>> {
+        let mut nodes = Vec::new();
+        let mut text = String::new();
+        loop {
+            match self.peek() {
+                None | Some(']' | ')' | '}') => break,
+                Some(',') if self.peek_next() == Some(' ') => break,
+                Some(' ') if self.peek_next() == Some('}') => break,
+                Some('"' | '\'') => {
+                    flush_text(&mut text, &mut nodes);
+                    nodes.push(DebugNode::Leaf(self.lex_quoted()?));
+                }
+                Some(delimiter @ ('[' | '(' | '{')) => {
+                    let prefix = take_group_prefix(&mut text, delimiter);
+                    flush_text(&mut text, &mut nodes);
+                    nodes.push(self.parse_group(prefix)?);
+                }
+                Some(c) => {
+                    text.push(c);
+                    self.bump();
+                }
+            }
+        }
+        flush_text(&mut text, &mut nodes);
+        Some(nodes)
+    }
+
+    /// Parse a delimited group whose open delimiter is the current char.
+    fn parse_group(&mut self, prefix: String) -> Option<DebugNode> {
+        let delimiter = self.bump()?;
+        let close = match delimiter {
+            '[' => ']',
+            '(' => ')',
+            _ => '}',
+        };
+        let named = delimiter == '{' && !prefix.is_empty() && self.peek() == Some(' ');
+        if named {
+            self.bump();
+        }
+        let mut items = Vec::new();
+        if !named && self.peek() == Some(close) {
+            self.bump();
+        } else {
+            loop {
+                items.push(self.parse_item()?);
+                match self.peek() {
+                    Some(',') if self.peek_next() == Some(' ') => {
+                        self.bump();
+                        self.bump();
+                    }
+                    Some(' ') if named && self.peek_next() == Some(close) => {
+                        self.bump();
+                        self.bump();
+                        break;
+                    }
+                    Some(c) if !named && c == close => {
+                        self.bump();
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        Some(DebugNode::Group {
+            prefix,
+            delimiter,
+            named,
+            items,
+        })
+    }
+
+    /// Lex a string or character literal, including its quotes. A backslash
+    /// escapes the following character, which is all the lexer needs: no
+    /// escape sequence contains an unescaped closing quote.
+    fn lex_quoted(&mut self) -> Option<String> {
+        let quote = self.bump()?;
+        let mut lit = String::new();
+        lit.push(quote);
+        loop {
+            let c = self.bump()?;
+            lit.push(c);
+            if c == '\\' {
+                lit.push(self.bump()?);
+            } else if c == quote {
+                return Some(lit);
+            }
+        }
+    }
+}
+
+/// Move accumulated literal text into a leaf node.
+fn flush_text(text: &mut String, nodes: &mut Vec<DebugNode>) {
+    if !text.is_empty() {
+        nodes.push(DebugNode::Leaf(std::mem::take(text)));
+    }
+}
+
+/// Split the atom glued to an open delimiter off the accumulated text:
+/// `Some` from `Some(`, and `Name` (dropping the joining space) from
+/// `Name {`. Brace groups only take a prefix across that space — a brace
+/// directly following text is not the derived-struct shape.
+fn take_group_prefix(text: &mut String, delimiter: char) -> String {
+    if delimiter == '{' {
+        let Some(without_space) = text.strip_suffix(' ') else {
+            return String::new();
+        };
+        let start = without_space
+            .rfind(' ')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let prefix = without_space[start..].to_string();
+        if prefix.is_empty() {
+            return String::new();
+        }
+        text.truncate(text.len() - prefix.len() - 1);
+        prefix
+    } else {
+        let start = text.rfind(' ').map(|index| index + 1).unwrap_or(0);
+        let prefix = text[start..].to_string();
+        text.truncate(start);
+        prefix
+    }
+}
+
+/// Emit parsed nodes, matching the layout `#[derive(PrettyPrintable)]`
+/// produces for the same shapes.
+fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
+    for node in nodes {
+        match node {
+            DebugNode::Leaf(text) => printer.text(text),
+            DebugNode::Group {
+                prefix,
+                delimiter,
+                named,
+                items,
+            } => {
+                let (open, close, indent) = match (delimiter, named) {
+                    ('{', true) => (format!("{prefix} {{"), " }", 4),
+                    ('{', false) if prefix.is_empty() => ("{".to_string(), "}", 1),
+                    ('{', false) => (format!("{prefix} {{"), "}", 1),
+                    ('[', _) => (format!("{prefix}["), "]", 1),
+                    _ => (format!("{prefix}("), ")", 1),
+                };
+                printer.begin_group(indent, &open);
+                if *named {
+                    printer.breakable(" ");
+                }
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        printer.text(",");
+                        printer.breakable(" ");
+                    }
+                    emit_debug_nodes(item, printer);
+                }
+                printer.end_group(indent, close);
+            }
+        }
+    }
+}
+
 /// A value that can describe its own printed representation.
 ///
 /// Implementations should print the value in Rust-expression syntax wherever
@@ -307,14 +546,17 @@ pub trait PrettyPrintable {
     fn pretty_print(&self, printer: &mut PrettyPrinter);
 }
 
-/// Implement [`PrettyPrintable`] for one or more `Debug` types by printing
-/// their `{:?}` representation.
+/// Implement [`PrettyPrintable`] for one or more local `Debug` types by
+/// printing their `{:?}` representation through
+/// [`print_debug_repr`](crate::pretty::print_debug_repr), so derived-`Debug`
+/// output wraps like a native implementation.
 ///
-/// This is the escape hatch for types whose `Debug` output is already the
-/// representation you want (or whose definition you do not control, so
-/// `#[derive(PrettyPrintable)]` is unavailable). Any newlines in the `Debug`
-/// output become line breaks at the current indentation; no further layout
-/// is applied.
+/// This is for **your own types** whose `Debug` output is already the
+/// representation you want: the orphan rule means it cannot implement a
+/// hegel trait for a type from another crate (including the standard
+/// library). To print a foreign type by its `Debug` representation, make
+/// the *generator* printable instead with
+/// [`print_as_debug`](crate::Generator::print_as_debug).
 ///
 /// ```
 /// use hegel::{PrettyPrintable, PrettyPrinter};
@@ -335,7 +577,7 @@ macro_rules! pretty_print_as_debug {
     ($($t:ty),+ $(,)?) => {$(
         impl $crate::PrettyPrintable for $t {
             fn pretty_print(&self, printer: &mut $crate::PrettyPrinter) {
-                printer.text(&format!("{:?}", self));
+                $crate::pretty::print_debug_repr(&format!("{:?}", self), printer);
             }
         }
     )+};

@@ -272,6 +272,91 @@ fn unbalanced_end_group_panics() {
     printer.end_group(0, "]");
 }
 
+mod debug_repr {
+    use super::render;
+    use hegel::pretty::print_debug_repr;
+    use hegel::{PrettyPrintable, PrettyPrinter};
+
+    fn render_debug(repr: &str, max_width: usize) -> String {
+        let mut printer = PrettyPrinter::new(max_width);
+        print_debug_repr(repr, &mut printer);
+        printer.value()
+    }
+
+    #[test]
+    fn flat_shapes_render_unchanged() {
+        for repr in [
+            "42",
+            "Name",
+            "10.5s",
+            "1:30:00",
+            "Point { x: 1, y: 2 }",
+            "Some(5)",
+            "(1, false)",
+            "[1, 2, 3]",
+            "{\"a\": 1, \"b\": 2}",
+            "Wrapper([1, 2], 'x')",
+            "\"quoted, [text]\"",
+            "'\\''",
+            "{}",
+            "[]",
+            "Unitish {}",
+            "Outer { inner: Inner { n: 1 } }",
+        ] {
+            assert_eq!(render_debug(repr, 79), repr, "{repr}");
+        }
+    }
+
+    #[test]
+    fn parsed_groups_break_when_narrow() {
+        assert_eq!(render_debug("[100, 200]", 6), "[100,\n 200]");
+        assert_eq!(
+            render_debug("Point { x: 100, y: 200 }", 12),
+            "Point {\n    x: 100,\n    y: 200 }"
+        );
+    }
+
+    #[test]
+    fn unparseable_debug_output_is_emitted_verbatim() {
+        for repr in [
+            "unbalanced [100, 200",
+            "don't",
+            "\"unterminated",
+            "top, level",
+            "{ braced }",
+            "extra ] close",
+            "[100, 200] trailing, text",
+            "[100,200 }",
+        ] {
+            assert_eq!(render_debug(repr, 6), repr, "{repr}");
+        }
+        assert_eq!(render_debug("multi\nline [1, 2]", 6), "multi\nline [1, 2]");
+    }
+
+    #[derive(Debug, PrettyPrintable)]
+    struct Nested {
+        name: String,
+        values: Vec<i32>,
+        pair: (bool, char),
+    }
+
+    #[test]
+    fn debug_repr_layout_matches_the_derive() {
+        let value = Nested {
+            name: "abcdef".to_string(),
+            values: vec![100, 200, 300, 400, 500],
+            pair: (true, 'x'),
+        };
+        for width in [10, 20, 30, 45, 79] {
+            assert_eq!(
+                render_debug(&format!("{value:?}"), width),
+                render(&value, width),
+                "width {width}"
+            );
+        }
+    }
+}
+
 #[test]
 fn should_print_distinguishes_real_and_noop_printers() {
     assert!(PrettyPrinter::new(79).should_print());
