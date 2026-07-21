@@ -5,16 +5,104 @@ use jiff::{SignedDuration, Span, Timestamp, Zoned};
 use crate::generators::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 
-crate::pretty_print_as_debug!(
-    Date,
-    Time,
-    DateTime,
-    Timestamp,
-    Span,
-    SignedDuration,
-    Offset,
-    Zoned
-);
+impl PrettyPrintable for Date {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "date({}, {}, {})",
+            self.year(),
+            self.month(),
+            self.day()
+        ));
+    }
+}
+
+impl PrettyPrintable for Time {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "time({}, {}, {}, {})",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for DateTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "datetime({}, {}, {}, {}, {}, {}, {})",
+            self.year(),
+            self.month(),
+            self.day(),
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for Timestamp {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Timestamp::new({}, {}).unwrap()",
+            self.as_second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for Span {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let mut repr = String::from("Span::new()");
+        for (unit, value) in [
+            ("years", i64::from(self.get_years())),
+            ("months", i64::from(self.get_months())),
+            ("weeks", i64::from(self.get_weeks())),
+            ("days", i64::from(self.get_days())),
+            ("hours", i64::from(self.get_hours())),
+            ("minutes", self.get_minutes()),
+            ("seconds", self.get_seconds()),
+            ("milliseconds", self.get_milliseconds()),
+            ("microseconds", self.get_microseconds()),
+            ("nanoseconds", self.get_nanoseconds()),
+        ] {
+            if value != 0 {
+                repr.push_str(&format!(".{unit}({value})"));
+            }
+        }
+        printer.text(&repr);
+    }
+}
+
+impl PrettyPrintable for SignedDuration {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "SignedDuration::new({}, {})",
+            self.as_secs(),
+            self.subsec_nanos()
+        ));
+    }
+}
+
+impl PrettyPrintable for Offset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Offset::from_seconds({}).unwrap()",
+            self.seconds()
+        ));
+    }
+}
+
+impl PrettyPrintable for Zoned {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "{:?}.parse::<Zoned>().unwrap()",
+            self.to_string()
+        ));
+    }
+}
 use crate::test_case::invalid_argument;
 
 /// Convert a [`Date`] to the engine's date struct. Every jiff `Date` fits:

@@ -604,18 +604,55 @@ macro_rules! pretty_via_debug {
     )+};
 }
 
-pretty_via_debug!(
-    char,
-    str,
-    std::time::Duration,
-    std::net::IpAddr,
-    std::net::Ipv4Addr,
-    std::net::Ipv6Addr
-);
+pretty_via_debug!(char, str);
 
 impl PrettyPrintable for String {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         self.as_str().pretty_print(printer);
+    }
+}
+
+impl PrettyPrintable for std::time::Duration {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Duration::new({}, {})",
+            self.as_secs(),
+            self.subsec_nanos()
+        ));
+    }
+}
+
+impl PrettyPrintable for std::net::Ipv4Addr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let [a, b, c, d] = self.octets();
+        printer.text(&format!("Ipv4Addr::new({a}, {b}, {c}, {d})"));
+    }
+}
+
+impl PrettyPrintable for std::net::Ipv6Addr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let segments = self
+            .segments()
+            .map(|segment| format!("{segment:#x}"))
+            .join(", ");
+        printer.text(&format!("Ipv6Addr::new({segments})"));
+    }
+}
+
+impl PrettyPrintable for std::net::IpAddr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::net::IpAddr::V4(addr) => {
+                printer.text("IpAddr::V4(");
+                addr.pretty_print(printer);
+                printer.text(")");
+            }
+            std::net::IpAddr::V6(addr) => {
+                printer.text("IpAddr::V6(");
+                addr.pretty_print(printer);
+                printer.text(")");
+            }
+        }
     }
 }
 
@@ -678,7 +715,7 @@ fn pretty_seq<'a, T: PrettyPrintable + ?Sized + 'a>(
         item.pretty_print(printer);
     }
     let _ = index;
-    printer.end_group(close.chars().count(), close);
+    printer.end_group(open.chars().count(), close);
 }
 
 impl<T: PrettyPrintable> PrettyPrintable for [T] {
@@ -689,7 +726,7 @@ impl<T: PrettyPrintable> PrettyPrintable for [T] {
 
 impl<T: PrettyPrintable> PrettyPrintable for Vec<T> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.as_slice().pretty_print(printer);
+        pretty_seq(printer, "vec![", "]", self.iter());
     }
 }
 
@@ -701,23 +738,24 @@ impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
 
 impl<T: PrettyPrintable, S> PrettyPrintable for std::collections::HashSet<T, S> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "{", "}", self.iter());
+        pretty_seq(printer, "HashSet::from([", "])", self.iter());
     }
 }
 
 impl<T: PrettyPrintable> PrettyPrintable for std::collections::BTreeSet<T> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "{", "}", self.iter());
+        pretty_seq(printer, "BTreeSet::from([", "])", self.iter());
     }
 }
 
-/// Print `entries` as a `{key: value, …}` map: inline when it fits, one
-/// entry per line when it does not.
+/// Print `entries` as a `Name::from([(key, value), …])` map: inline when it
+/// fits, one entry per line when it does not.
 fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
     printer: &mut PrettyPrinter,
+    open: &str,
     entries: impl Iterator<Item = (&'a K, &'a V)>,
 ) {
-    printer.begin_group(1, "{");
+    printer.begin_group(open.chars().count(), open);
     let mut index = 0usize;
     for (key, value) in entries {
         if index > 0 {
@@ -725,25 +763,27 @@ fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
             printer.breakable(" ");
         }
         index += 1;
+        printer.text("(");
         key.pretty_print(printer);
-        printer.text(": ");
+        printer.text(", ");
         value.pretty_print(printer);
+        printer.text(")");
     }
     let _ = index;
-    printer.end_group(1, "}");
+    printer.end_group(open.chars().count(), "])");
 }
 
 impl<K: PrettyPrintable, V: PrettyPrintable, S> PrettyPrintable
     for std::collections::HashMap<K, V, S>
 {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_map(printer, self.iter());
+        pretty_map(printer, "HashMap::from([", self.iter());
     }
 }
 
 impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::BTreeMap<K, V> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_map(printer, self.iter());
+        pretty_map(printer, "BTreeMap::from([", self.iter());
     }
 }
 

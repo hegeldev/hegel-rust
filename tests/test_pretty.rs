@@ -79,18 +79,19 @@ fn wide_tuples_break_one_element_per_line() {
 
 #[test]
 fn sequences_print_inline_when_they_fit() {
-    assert_eq!(render(&vec![1, 2, 3], 79), "[1, 2, 3]");
-    assert_eq!(render(&Vec::<i32>::new(), 79), "[]");
+    assert_eq!(render(&vec![1, 2, 3], 79), "vec![1, 2, 3]");
+    assert_eq!(render(&Vec::<i32>::new(), 79), "vec![]");
     assert_eq!(render(&[1, 2], 79), "[1, 2]");
     assert_eq!(render(&[1, 2][..], 79), "[1, 2]");
 }
 
 #[test]
 fn sequences_break_when_they_overflow() {
-    assert_eq!(render(&vec![1, 2, 3], 6), "[1,\n 2,\n 3]");
+    assert_eq!(render(&vec![1, 2, 3], 6), "vec![1,\n     2,\n     3]");
+    assert_eq!(render(&[1, 2, 3], 6), "[1,\n 2,\n 3]");
     assert_eq!(
-        render(&vec![vec![1, 2], vec![3, 4]], 10),
-        "[[1, 2],\n [3, 4]]"
+        render(&vec![vec![1, 2], vec![3, 4]], 16),
+        "vec![vec![1, 2],\n     vec![3, 4]]"
     );
 }
 
@@ -104,37 +105,56 @@ fn options_and_results_print_as_constructors() {
 }
 
 #[test]
-fn maps_and_sets_print_with_braces() {
+fn maps_and_sets_print_as_from_constructors() {
     let map: BTreeMap<i32, &str> = [(1, "a"), (2, "b")].into_iter().collect();
-    assert_eq!(render(&map, 79), "{1: \"a\", 2: \"b\"}");
-    assert_eq!(render(&BTreeMap::<i32, i32>::new(), 79), "{}");
-    assert_eq!(render(&map, 8), "{1: \"a\",\n 2: \"b\"}");
+    assert_eq!(render(&map, 79), "BTreeMap::from([(1, \"a\"), (2, \"b\")])");
+    assert_eq!(render(&BTreeMap::<i32, i32>::new(), 79), "BTreeMap::from([])");
+    assert_eq!(
+        render(&map, 24),
+        "BTreeMap::from([(1, \"a\"),\n                (2, \"b\")])"
+    );
 
     let set: BTreeSet<i32> = [1, 2].into_iter().collect();
-    assert_eq!(render(&set, 79), "{1, 2}");
+    assert_eq!(render(&set, 79), "BTreeSet::from([1, 2])");
 
     let map: HashMap<i32, &str> = [(1, "a")].into_iter().collect();
-    assert_eq!(render(&map, 79), "{1: \"a\"}");
+    assert_eq!(render(&map, 79), "HashMap::from([(1, \"a\")])");
     let set: HashSet<i32> = [7].into_iter().collect();
-    assert_eq!(render(&set, 79), "{7}");
+    assert_eq!(render(&set, 79), "HashSet::from([7])");
 }
 
 #[test]
 fn smart_pointers_and_references_delegate() {
     assert_eq!(render(&Box::new(5), 79), "5");
     assert_eq!(render(&std::rc::Rc::new("x"), 79), "\"x\"");
-    assert_eq!(render(&std::sync::Arc::new(vec![1]), 79), "[1]");
+    assert_eq!(render(&std::sync::Arc::new(vec![1]), 79), "vec![1]");
     let mut value = 9;
     let reference = &mut value;
     assert_eq!(render(&reference, 79), "9");
 }
 
 #[test]
-fn debug_shaped_std_types_print_their_debug_form() {
-    assert_eq!(render(&Duration::from_secs(5), 79), "5s");
-    assert_eq!(render(&IpAddr::V4(Ipv4Addr::LOCALHOST), 79), "127.0.0.1");
-    assert_eq!(render(&Ipv4Addr::new(10, 0, 0, 1), 79), "10.0.0.1");
-    assert_eq!(render(&Ipv6Addr::LOCALHOST, 79), "::1");
+fn durations_and_addresses_print_as_constructors() {
+    assert_eq!(
+        render(&Duration::from_millis(5500), 79),
+        "Duration::new(5, 500000000)"
+    );
+    assert_eq!(
+        render(&IpAddr::V4(Ipv4Addr::LOCALHOST), 79),
+        "IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))"
+    );
+    assert_eq!(
+        render(&Ipv4Addr::new(10, 0, 0, 1), 79),
+        "Ipv4Addr::new(10, 0, 0, 1)"
+    );
+    assert_eq!(
+        render(&Ipv6Addr::LOCALHOST, 79),
+        "Ipv6Addr::new(0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1)"
+    );
+    assert_eq!(
+        render(&IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)), 79),
+        "IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1))"
+    );
 }
 
 #[derive(Debug)]
@@ -336,7 +356,7 @@ mod debug_repr {
     #[derive(Debug, PrettyPrintable)]
     struct Nested {
         name: String,
-        values: Vec<i32>,
+        values: [i32; 5],
         pair: (bool, char),
     }
 
@@ -344,7 +364,7 @@ mod debug_repr {
     fn debug_repr_layout_matches_the_derive() {
         let value = Nested {
             name: "abcdef".to_string(),
-            values: vec![100, 200, 300, 400, 500],
+            values: [100, 200, 300, 400, 500],
             pair: (true, 'x'),
         };
         for width in [10, 20, 30, 45, 79] {

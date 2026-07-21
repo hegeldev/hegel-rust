@@ -99,7 +99,7 @@ fn generic_types_get_pretty_printable_bounds() {
             },
             79
         ),
-        "Wrapper { value: [1, 2, 3] }"
+        "Wrapper { value: vec![1, 2, 3] }"
     );
     assert_eq!(render(&Maybe::<i32>::Nothing, 79), "Maybe::Nothing");
     assert_eq!(render(&Maybe::Just("x"), 79), "Maybe::Just(\"x\")");
@@ -141,15 +141,15 @@ fn nested_derives_compose_and_wrap() {
     };
     assert_eq!(
         render(&value, 79),
-        "Nested { point: Point { x: 1, y: 2 }, tags: [\"alpha\", \"beta\"] }"
+        "Nested { point: Point { x: 1, y: 2 }, tags: vec![\"alpha\", \"beta\"] }"
     );
     assert_eq!(
         render(&value, 40),
-        "Nested {\n    point: Point { x: 1, y: 2 },\n    tags: [\"alpha\", \"beta\"] }"
+        "Nested {\n    point: Point { x: 1, y: 2 },\n    tags: vec![\"alpha\", \"beta\"] }"
     );
     assert_eq!(
         render(&value, 30),
-        "Nested {\n    point: Point {\n        x: 1,\n        y: 2 },\n    tags: [\"alpha\", \"beta\"] }"
+        "Nested {\n    point: Point {\n        x: 1,\n        y: 2 },\n    tags: vec![\"alpha\",\n         \"beta\"] }"
     );
 }
 

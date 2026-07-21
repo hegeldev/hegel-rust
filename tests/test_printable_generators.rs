@@ -105,9 +105,9 @@ fn wide_values_wrap_across_lines() {
     assert_eq!(
         lines,
         vec![
-            "let draw_1 = [\"aaaaaaaaaaaaaaaaaaaa\",",
-            " \"aaaaaaaaaaaaaaaaaaaa\",",
-            " \"aaaaaaaaaaaaaaaaaaaa\"];",
+            "let draw_1 = vec![\"aaaaaaaaaaaaaaaaaaaa\",",
+            "     \"aaaaaaaaaaaaaaaaaaaa\",",
+            "     \"aaaaaaaaaaaaaaaaaaaa\"];",
         ]
     );
 }
@@ -153,7 +153,7 @@ fn structural_combinators_print_compositionally() {
         );
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = [1];"]);
+    assert_eq!(lines, vec!["let draw_1 = vec![1];"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::arrays::<_, _, 2>(gs::booleans()));
@@ -168,25 +168,25 @@ fn sets_and_maps_print_in_draw_order() {
         let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = {1};"]);
+    assert_eq!(lines, vec!["let draw_1 = HashSet::from([1]);"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashsets(gs::text().max_size(2)).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = {\"\"};"]);
+    assert_eq!(lines, vec!["let draw_1 = HashSet::from([\"\"]);"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashmaps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = {9: false};"]);
+    assert_eq!(lines, vec!["let draw_1 = HashMap::from([(9, false)]);"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashmaps(gs::text().max_size(2), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = {\"\": false};"]);
+    assert_eq!(lines, vec!["let draw_1 = HashMap::from([(\"\", false)]);"]);
 }
 
 #[test]
@@ -252,8 +252,8 @@ fn unique_vec_rejections_never_corrupt_verbose_output() {
         let b: bool = tc.draw(gs::booleans());
         assert!(!b);
     });
-    let pattern = regex::Regex::new(r"^let draw_1 = \[(\d+(, \d+)*)?\];$").unwrap();
-    let vec_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= [")).collect();
+    let pattern = regex::Regex::new(r"^let draw_1 = vec!\[(\d+(, \d+)*)?\];$").unwrap();
+    let vec_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= vec![")).collect();
     assert!(!vec_lines.is_empty());
     for line in vec_lines {
         assert!(pattern.is_match(line), "malformed vec line {line:?}");
@@ -407,7 +407,7 @@ fn every_leaf_generator_prints() {
     assert_eq!(printed_draw_lines(gs::text()), vec!["let draw_1 = \"\";"]);
     printed_draw_lines(gs::characters());
     printed_draw_lines(gs::from_regex("[a-z]{2}"));
-    assert_eq!(printed_draw_lines(gs::binary()), vec!["let draw_1 = [];"]);
+    assert_eq!(printed_draw_lines(gs::binary()), vec!["let draw_1 = vec![];"]);
     printed_draw_lines(gs::emails());
     printed_draw_lines(gs::urls());
     printed_draw_lines(gs::domains());
@@ -527,7 +527,7 @@ fn multi_element_sets_and_maps_print_separators() {
         panic!("boom");
     });
     assert_eq!(lines.len(), 1);
-    assert!(lines[0].contains(": false, "), "{lines:?}");
+    assert!(lines[0].contains(", false), ("), "{lines:?}");
 }
 
 /// A compositional generator written the recommended way: one drawing body
@@ -624,8 +624,8 @@ fn duplicate_set_elements_reject_cleanly_while_printing() {
         let _ = s;
         panic!("boom");
     });
-    let pattern = regex::Regex::new(r"^let draw_\d+ = \{\d+, \d+\};$").unwrap();
-    let set_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= {")).collect();
+    let pattern = regex::Regex::new(r"^let draw_\d+ = HashSet::from\(\[\d+, \d+\]\);$").unwrap();
+    let set_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= HashSet::from([")).collect();
     assert!(!set_lines.is_empty());
     for line in set_lines {
         assert!(pattern.is_match(line), "malformed set line {line:?}");
@@ -645,9 +645,11 @@ fn duplicate_map_keys_reject_cleanly_while_printing() {
         let _ = m;
         panic!("boom");
     });
-    let pattern =
-        regex::Regex::new(r"^let draw_\d+ = \{\d+: (true|false), \d+: (true|false)\};$").unwrap();
-    let map_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= {")).collect();
+    let pattern = regex::Regex::new(
+        r"^let draw_\d+ = HashMap::from\(\[\(\d+, (true|false)\), \(\d+, (true|false)\)\]\);$",
+    )
+    .unwrap();
+    let map_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= HashMap::from([")).collect();
     assert!(!map_lines.is_empty());
     for line in map_lines {
         assert!(pattern.is_match(line), "malformed map line {line:?}");

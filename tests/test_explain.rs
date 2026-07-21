@@ -66,9 +66,9 @@ fn a_single_list_element_can_be_annotated() {
     assert_eq!(
         lines,
         vec![
-            "let draw_1 = [0,",
-            " 0,  // or any other generated value",
-            " 1",
+            "let draw_1 = vec![0,",
+            "     0,  // or any other generated value",
+            "     1",
             "];",
         ]
     );
