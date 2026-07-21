@@ -376,10 +376,6 @@ impl TestCase {
         }
     }
 
-    pub(crate) fn mode(&self) -> Mode {
-        self.global.mode
-    }
-
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.
     ///
     /// Held briefly around draw-state updates, never around whole user-visible

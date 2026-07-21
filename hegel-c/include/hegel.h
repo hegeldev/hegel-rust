@@ -744,6 +744,15 @@ hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
 
 /*
+ Target number of steps to run per stateful test case. The default is
+ 50. Each stateful case runs at least one step and at most `n`; the
+ engine chooses where in that range to stop.
+ */
+hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
+                                                      hegel_settings_t *s,
+                                                      int64_t n);
+
+/*
  Set the engine's output verbosity. `v` is a `hegel_verbosity_t` value;
  the parameter is typed as `uint32_t` so an out-of-range value is a
  reportable `HEGEL_E_INVALID_ARG` instead of undefined behavior.

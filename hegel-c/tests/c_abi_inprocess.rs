@@ -139,6 +139,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_c::hegel_settings_set_stateful_step_count(ctx, ptr::null_mut(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
@@ -1059,6 +1063,7 @@ fn state_machine_and_primitive_boolean_paths() {
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_stateful_step_count(ctx, s, 10));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
