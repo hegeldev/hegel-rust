@@ -92,6 +92,11 @@ pub trait Generator<T> {
     /// but the same output type and need to store them together, e.g. in a
     /// `Vec` or when passing to [`one_of()`](super::one_of).
     ///
+    /// A `BoxedGenerator` is *not* a [`PrintableGenerator`], even when the
+    /// generator it erases is one — box with
+    /// [`boxed_printable`](PrintableGenerator::boxed_printable) instead to
+    /// keep the result usable with [`draw`](crate::TestCase::draw).
+    ///
     /// # Example
     ///
     /// ```no_run
