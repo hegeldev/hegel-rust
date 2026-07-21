@@ -29,7 +29,10 @@ pub use collections::{
     vecs,
 };
 pub use combinators::{
-    OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
+    OneOf1Generator, OneOf2Generator, OneOf3Generator, OneOf4Generator, OneOf5Generator,
+    OneOf6Generator, OneOf7Generator, OneOf8Generator, OneOf9Generator, OneOf10Generator,
+    OneOf11Generator, OneOf12Generator, OneOfGenerator, OptionalGenerator, SampledFromGenerator,
+    one_of, optional, sampled_from,
 };
 #[doc(hidden)]
 pub use combinators::{
