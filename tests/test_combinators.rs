@@ -19,28 +19,7 @@ fn test_sampled_from_strings(tc: TestCase) {
 }
 
 #[test]
-fn test_one_of_enumerates_when_all_children_do() {
-    let g = hegel::one_of!(
-        gs::sampled_from(vec![1_i64, 2]),
-        gs::sampled_from(vec![3_i64, 4]),
-    );
-    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
-
-    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]), gs::integers::<i64>());
-    assert!(g.enumerate_values().is_none());
-
-    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]));
-    assert_eq!(g.enumerate_values(), Some(vec![1, 2]));
-
-    let g = gs::one_of(vec![
-        gs::sampled_from(vec![1_i64, 2]).boxed_printable(),
-        gs::sampled_from(vec![3_i64, 4]).boxed_printable(),
-    ]);
-    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
-}
-
-#[test]
-fn test_one_of_enumerable_children_feed_the_filter_pool() {
+fn test_one_of_filtered_produces_only_valid_values() {
     assert_all_examples(
         hegel::one_of!(
             gs::sampled_from(vec![1_i64, 2]),
@@ -268,15 +247,6 @@ fn test_optional_mapped_find_any() {
     );
 }
 
-/// A rare value (x == 0) should always be found via the enumerate_values fallback.
-#[test]
-fn test_sampled_from_filter_rare_value() {
-    assert_all_examples(
-        gs::sampled_from((0..100_i64).collect::<Vec<i64>>()).filter(|x: &i64| *x == 0),
-        |x: &i64| *x == 0,
-    );
-}
-
 /// A selective filter on sampled_from should only produce values satisfying
 /// the predicate, not trigger a FilterTooMuch health check.
 #[test]
@@ -287,8 +257,8 @@ fn test_sampled_from_filter_produces_only_valid_values() {
     );
 }
 
-/// When all elements are rejected, panic immediately with a clear message
-/// rather than triggering FilterTooMuch or silently passing vacuously.
+/// When all elements are rejected, the run fails (via the engine's
+/// rejection accounting) rather than silently passing vacuously.
 #[test]
 fn test_sampled_from_unsatisfiable_filter_panics() {
     expect_panic(
@@ -300,11 +270,11 @@ fn test_sampled_from_unsatisfiable_filter_panics() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "(?i)(unsatisfiable|filter)",
+        "(?i)(health.check|FailedHealthCheck|unsatisfiable|filter)",
     );
 }
 
-/// Chained .map().filter() on sampled_from should also use enumerate_values.
+/// Chained .map().filter() on sampled_from produces only valid values.
 #[test]
 fn test_sampled_from_mapped_then_filtered() {
     assert_all_examples(
@@ -315,7 +285,7 @@ fn test_sampled_from_mapped_then_filtered() {
     );
 }
 
-/// Boxed filtered sampled_from forwards enumerate_values through the box.
+/// A boxed filtered sampled_from produces only valid values.
 #[test]
 fn test_sampled_from_filtered_boxed() {
     assert_all_examples(
