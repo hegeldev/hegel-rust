@@ -345,6 +345,12 @@ pub use hegel_macros::DefaultGenerator;
 /// (or one you cannot add a derive to), use
 /// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
 ///
+/// A field whose type cannot implement [`PrettyPrintable`] — a foreign type
+/// the orphan rule keeps out, say — can opt out with `#[pretty(debug)]`:
+/// that field prints its `Debug` representation (re-laid-out through the
+/// printer, like [`print_as_debug`](generators::Generator::print_as_debug)),
+/// and its type must implement `Debug` instead.
+///
 /// ```
 /// use hegel::{PrettyPrintable, PrettyPrinter};
 ///
@@ -352,12 +358,21 @@ pub use hegel_macros::DefaultGenerator;
 /// struct Person {
 ///     name: String,
 ///     age: u32,
+///     #[pretty(debug)]
+///     home: std::path::PathBuf,
 /// }
 ///
-/// let person = Person { name: "Ada".to_string(), age: 36 };
+/// let person = Person {
+///     name: "Ada".to_string(),
+///     age: 36,
+///     home: "/home/ada".into(),
+/// };
 /// let mut printer = PrettyPrinter::new(79);
 /// person.pretty_print(&mut printer);
-/// assert_eq!(printer.value(), "Person { name: \"Ada\".to_string(), age: 36 }");
+/// assert_eq!(
+///     printer.value(),
+///     "Person { name: \"Ada\".to_string(), age: 36, home: \"/home/ada\" }"
+/// );
 /// ```
 pub use hegel_macros::PrettyPrintable;
 

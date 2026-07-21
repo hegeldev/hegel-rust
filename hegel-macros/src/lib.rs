@@ -28,7 +28,7 @@ pub fn derive_generator(input: TokenStream) -> TokenStream {
     }
 }
 
-#[proc_macro_derive(PrettyPrintable)]
+#[proc_macro_derive(PrettyPrintable, attributes(pretty))]
 pub fn derive_pretty_printable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     pretty_printable::derive_pretty_printable(&input)
