@@ -61,13 +61,18 @@ pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     _phantom: PhantomData<&'a fn() -> T>,
 }
 
-fn draw_one_of<T>(tc: &TestCase, max_index: usize, pick: impl FnOnce(usize) -> T) -> T {
+/// The choice structure every `one_of` form shares — a ONE_OF span around a
+/// uniform index draw followed by the chosen alternative — with the
+/// alternative dispatch (and whether it draws silently or printing)
+/// injected. Using this from both draw paths is what keeps their choice
+/// streams identical.
+fn draw_one_of<T>(tc: &TestCase, max_index: usize, draw_at: impl FnOnce(usize) -> T) -> T {
     tc.start_span(labels::ONE_OF);
     let index = integers::<usize>()
         .min_value(0)
         .max_value(max_index)
         .do_draw(tc);
-    let result = pick(index);
+    let result = draw_at(index);
     tc.stop_span(false);
     result
 }
@@ -366,31 +371,19 @@ pub struct OptionalGenerator<G, T> {
     _phantom: PhantomData<fn(T)>,
 }
 
-impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
-where
-    G: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        tc.start_span(labels::OPTIONAL);
-        let result = if tc.generate_boolean(0.5) {
-            Some(self.inner.do_draw(tc))
-        } else {
-            None
-        };
-        tc.stop_span(false);
-        result
-    }
-}
-
-impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
-where
-    G: PrintableGenerator<T>,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+impl<T, G> OptionalGenerator<G, T> {
+    /// The one optional body both draw paths run; only how the inner value
+    /// is drawn (silently or printing) is injected.
+    fn draw_optional(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl FnOnce(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> Option<T> {
         tc.start_span(labels::OPTIONAL);
         let result = if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
-            let value = self.inner.do_draw_and_print(tc, printer);
+            let value = draw(&self.inner, tc, printer);
             printer.end_group(5, ")");
             Some(value)
         } else {
@@ -399,6 +392,28 @@ where
         };
         tc.stop_span(false);
         result
+    }
+}
+
+impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: Generator<T>,
+{
+    fn do_draw(&self, tc: &TestCase) -> Option<T> {
+        self.draw_optional(tc, &mut PrettyPrinter::noop(), |inner, tc, _| {
+            inner.do_draw(tc)
+        })
+    }
+}
+
+impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+        self.draw_optional(tc, printer, |inner, tc, printer| {
+            inner.do_draw_and_print(tc, printer)
+        })
     }
 }
 
