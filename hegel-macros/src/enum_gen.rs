@@ -649,17 +649,21 @@ fn generate_variant_generator(
                 quote! { #ident: self.#ident.do_draw(__tc) }
             })
             .collect();
-        let print_actions: Vec<_> = field_idents
+        let print_idents: Vec<_> = (0..field_idents.len())
+            .map(|i| format_ident!("__field{i}"))
+            .collect();
+        let print_actions: Vec<_> = print_idents
             .iter()
-            .map(|ident| {
+            .zip(field_idents.iter())
+            .map(|(print_ident, field_ident)| {
                 quote! {
-                    let #ident = self.#ident.draw_and_print(__tc, __printer);
+                    let #print_ident = self.#field_ident.draw_and_print(__tc, __printer);
                 }
             })
             .collect();
         (
             quote! { #enum_name::#variant_name { #(#field_constructions,)* } },
-            quote! { #enum_name::#variant_name { #(#field_idents,)* } },
+            quote! { #enum_name::#variant_name { #(#field_idents: #print_idents,)* } },
             print_actions,
         )
     } else {

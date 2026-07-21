@@ -56,10 +56,15 @@ pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenS
                             .iter()
                             .map(|f| f.ident.clone().unwrap())
                             .collect();
+                        let bindings: Vec<_> = (0..idents.len())
+                            .map(|i| format_ident!("__field{i}"))
+                            .collect();
                         let accessors: Vec<TokenStream> =
-                            idents.iter().map(|i| quote! { #i }).collect();
+                            bindings.iter().map(|i| quote! { #i }).collect();
                         let body = print_shape(&label, &variant.fields, &accessors);
-                        quote! { #name::#variant_name { #(#idents),* } => { #body } }
+                        quote! {
+                            #name::#variant_name { #(#idents: #bindings),* } => { #body }
+                        }
                     }
                     Fields::Unnamed(fields) => {
                         let idents: Vec<_> = (0..fields.unnamed.len())

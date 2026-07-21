@@ -591,8 +591,9 @@ impl TestCase {
 
     /// Draw a value from a generator without recording it in the output.
     ///
-    /// Unlike [`draw`](Self::draw), this does not require `T: Debug` and
-    /// will not print the value in the failing-test summary.
+    /// Unlike [`draw`](Self::draw), this accepts any plain [`Generator`] —
+    /// no printability required — and will not print the value in the
+    /// failing-test summary.
     pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
         generator.do_draw(self)
     }
