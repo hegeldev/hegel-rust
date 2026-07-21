@@ -6,6 +6,7 @@ use crate::test_case::TestCase;
 /// Health checks detect common issues with test configuration that would
 /// otherwise cause tests to run inefficiently or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.
     FilterTooMuch,
@@ -49,6 +50,7 @@ impl HealthCheck {
 ///
 /// Corresponds to `hypothesis.Phase`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Phase {
     /// Run explicit test cases added via `#[hegel::explicit_test_case]`.
     Explicit,
@@ -70,6 +72,7 @@ pub enum Phase {
 
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Mode {
     /// Run a full test (multiple test cases with shrinking). This is the default.
     TestRun,
@@ -84,6 +87,7 @@ pub enum Mode {
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
 /// vs `backend="hypothesis-urandom"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Backend {
     /// The default: generate from a seeded pseudo-random generator. Runs are
     /// reproducible from [`Settings::seed`] and shrinking/replay work as usual.
@@ -107,6 +111,7 @@ pub enum Backend {
 
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Verbosity {
     /// Suppress all output.
     Quiet,
