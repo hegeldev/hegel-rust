@@ -1,13 +1,13 @@
-use hegel::{PrettyPrintable, PrettyPrinter};
+use hegel::{Document, PrettyPrintable, PrettyPrinter};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 fn render<T: PrettyPrintable + ?Sized>(value: &T, max_width: usize) -> String {
-    let mut printer = PrettyPrinter::new(max_width);
-    value.pretty_print(&mut printer);
-    printer.value()
+    let mut doc = Document::new().max_width(max_width);
+    value.pretty_print(doc.printer());
+    doc.finish()
 }
 
 #[test]
@@ -206,59 +206,64 @@ fn pretty_print_as_debug_reuses_debug_output() {
 fn pretty_print_as_debug_honors_newlines_at_current_indentation() {
     assert_eq!(render(&MultiLineDebug, 79), "line one\nline two");
 
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.shift_indent(2);
-    MultiLineDebug.pretty_print(&mut printer);
-    assert_eq!(printer.value(), "line one\n  line two");
+    MultiLineDebug.pretty_print(printer);
+    assert_eq!(doc.finish(), "line one\n  line two");
 }
 
 #[test]
 fn printer_text_treats_newlines_as_hard_breaks() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.shift_indent(4);
     printer.text("a\nb");
     printer.shift_indent(-4);
     printer.hard_break();
     printer.text("c");
-    assert_eq!(printer.value(), "a\n    b\nc");
+    assert_eq!(doc.finish(), "a\n    b\nc");
 }
 
 #[test]
 fn printer_groups_lay_out_inline_or_broken() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.begin_group(1, "[");
     printer.text("1,");
     printer.breakable(" ");
     printer.text("2");
     printer.end_group("]");
-    assert_eq!(printer.value(), "[1, 2]");
+    assert_eq!(doc.finish(), "[1, 2]");
 }
 
 #[test]
 fn deferred_holes_fill_in_before_rendering() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.text("a");
     let mut slot = printer.deferred();
     printer.text("d");
     slot.text("b\nc");
-    assert_eq!(printer.value(), "ab\ncd");
+    assert_eq!(doc.finish(), "ab\ncd");
 }
 
 #[test]
-fn dead_deferred_slots_ignore_writes() {
-    let mut printer = PrettyPrinter::new(79);
+fn deferred_slots_outliving_their_document_ignore_writes() {
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.text("a");
     let mut slot = printer.deferred();
     slot.text("b");
-    assert_eq!(printer.value(), "ab");
+    assert_eq!(doc.finish(), "ab");
     slot.text("ignored");
     slot.breakable(" ");
-    assert_eq!(printer.value(), "ab");
 }
 
 #[test]
 fn comments_attach_to_line_ends_and_break_open_groups() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.begin_group(1, "[");
     printer.text("1,");
     printer.breakable(" ");
@@ -269,20 +274,21 @@ fn comments_attach_to_line_ends_and_break_open_groups() {
     printer.text("3");
     printer.end_group("]");
     assert_eq!(
-        printer.value(),
+        doc.finish(),
         "[1,\n 2,  // or any other generated value\n 3\n]"
     );
 }
 
 #[test]
 fn comments_outside_groups_do_not_affect_layout() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.text("let x = 0;");
     printer.comment("or any other generated value");
     printer.hard_break();
     printer.text("let y = 1;");
     assert_eq!(
-        printer.value(),
+        doc.finish(),
         "let x = 0;  // or any other generated value\nlet y = 1;"
     );
 }
@@ -290,13 +296,15 @@ fn comments_outside_groups_do_not_affect_layout() {
 #[test]
 #[should_panic(expected = "must not contain newlines")]
 fn comments_with_newlines_panic() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.comment("a\nb");
 }
 
 #[test]
 fn printer_debug_form_is_opaque() {
-    let printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     assert_eq!(
         format!("{printer:?}"),
         "PrettyPrinter { handle: Some(PrinterHandle { .. }) }"
@@ -306,19 +314,21 @@ fn printer_debug_form_is_opaque() {
 #[test]
 #[should_panic(expected = "matching begin_group")]
 fn unbalanced_end_group_panics() {
-    let mut printer = PrettyPrinter::new(79);
+    let mut doc = Document::new();
+    let printer = doc.printer();
     printer.end_group("]");
 }
 
 #[test]
 #[should_panic(expected = "max_width must be positive")]
 fn zero_width_printer_panics() {
-    PrettyPrinter::new(0);
+    Document::new().max_width(0);
 }
 
 #[test]
 fn end_group_dedents_by_the_full_open_delimiter_width() {
-    let mut printer = PrettyPrinter::new(12);
+    let mut doc = Document::new().max_width(12);
+    let printer = doc.printer();
     printer.begin_group(5, "Some(");
     printer.begin_group(1, "[");
     printer.text("first,");
@@ -328,18 +338,18 @@ fn end_group_dedents_by_the_full_open_delimiter_width() {
     printer.end_group(")");
     printer.hard_break();
     printer.text("x");
-    assert_eq!(printer.value(), "Some([first,\n      second])\nx");
+    assert_eq!(doc.finish(), "Some([first,\n      second])\nx");
 }
 
 mod debug_repr {
     use super::render;
     use hegel::pretty::print_debug_repr;
-    use hegel::{PrettyPrintable, PrettyPrinter};
+    use hegel::{Document, PrettyPrintable};
 
     fn render_debug(repr: &str, max_width: usize) -> String {
-        let mut printer = PrettyPrinter::new(max_width);
-        print_debug_repr(repr, &mut printer);
-        printer.value()
+        let mut doc = Document::new().max_width(max_width);
+        print_debug_repr(repr, doc.printer());
+        doc.finish()
     }
 
     #[test]
@@ -419,7 +429,7 @@ mod debug_repr {
 
 #[test]
 fn should_print_distinguishes_real_and_noop_printers() {
-    assert!(PrettyPrinter::new(79).should_print());
+    assert!(Document::new().printer().should_print());
     assert!(!PrettyPrinter::noop().should_print());
 }
 
@@ -437,7 +447,7 @@ fn noop_printer_discards_everything() {
     let mut slot = printer.deferred();
     slot.text("later\ntext");
     slot.breakable(" ");
-    assert_eq!(printer.value(), "");
+    assert!(!printer.should_print());
 }
 
 #[test]
@@ -453,11 +463,40 @@ fn noop_printer_speculation_commits_aborts_and_drops() {
         let mut speculation = printer.speculate();
         speculation.printer().text("dropped");
     }
-    assert_eq!(printer.value(), "");
+    assert!(!printer.should_print());
 }
 
 #[test]
 fn boxed_unsized_values_print_their_targets() {
     let boxed: Box<str> = "abc".into();
     assert_eq!(render(&boxed, 79), "\"abc\"");
+}
+
+#[test]
+fn empty_documents_finish_to_the_empty_string() {
+    assert_eq!(Document::new().finish(), "");
+    assert_eq!(Document::default().finish(), "");
+}
+
+#[test]
+fn documents_default_to_a_width_of_79() {
+    for (element_width, expected_break) in [(74, false), (75, true)] {
+        let mut doc = Document::new();
+        let printer = doc.printer();
+        printer.begin_group(1, "[");
+        printer.text(&"a".repeat(element_width));
+        printer.text(",");
+        printer.breakable(" ");
+        printer.text("b");
+        printer.end_group("]");
+        assert_eq!(doc.finish().contains('\n'), expected_break);
+    }
+}
+
+#[test]
+#[should_panic(expected = "max_width must be set before the document is printed to")]
+fn setting_the_width_after_printing_panics() {
+    let mut doc = Document::new();
+    doc.printer().text("a");
+    doc.max_width(40);
 }
