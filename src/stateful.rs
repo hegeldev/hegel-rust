@@ -69,7 +69,6 @@
 use crate::TestCase;
 use crate::control::{AssumeFailed, hegel_internal_assert};
 use crate::generators::Generator;
-use crate::runner::Mode;
 use crate::test_case::raise_for_rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -250,11 +249,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &invariants, &tc);
 
-    let is_single = tc.mode() == Mode::SingleTestCase;
-
     let mut steps_attempted: i64 = 0;
 
-    while is_single || steps_attempted < 1000 {
+    loop {
         let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
             Ok(Some(i)) => i,
             Ok(None) => break,

@@ -895,6 +895,24 @@ pub unsafe extern "C" fn hegel_settings_set_test_cases(
     HEGEL_OK
 }
 
+/// Target number of steps to run per stateful test case. The default is
+/// 50. Each stateful case runs at least one step and at most `n`; the
+/// engine chooses where in that range to stop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    n: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_stateful_step_count") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().stateful_step_count(n);
+    HEGEL_OK
+}
+
 /// Set the engine's output verbosity. `v` is a `hegel_verbosity_t` value;
 /// the parameter is typed as `uint32_t` so an out-of-range value is a
 /// reportable `HEGEL_E_INVALID_ARG` instead of undefined behavior.
