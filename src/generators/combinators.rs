@@ -88,7 +88,7 @@ impl<'a, T, B: Generator<T>> Generator<T> for OneOfGenerator<'a, T, B> {
 impl<'a, T, B: PrintableGenerator<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, B> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_one_of(tc, self.generators.len() - 1, |index| {
-            self.generators[index].do_draw_and_print(tc, printer)
+            tc.draw_and_print(&self.generators[index], printer)
         })
     }
 }
@@ -217,8 +217,8 @@ macro_rules! impl_one_of {
         {
             fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
                 draw_one_of(tc, $arity - 1, |index| match index {
-                    $($idx => self.$field.do_draw_and_print(tc, printer),)*
-                    _ => self.$last_field.do_draw_and_print(tc, printer),
+                    $($idx => tc.draw_and_print(&self.$field, printer),)*
+                    _ => tc.draw_and_print(&self.$last_field, printer),
                 })
             }
         }
@@ -412,7 +412,7 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
         self.draw_optional(tc, printer, |inner, tc, printer| {
-            inner.do_draw_and_print(tc, printer)
+            tc.draw_and_print(inner, printer)
         })
     }
 }
