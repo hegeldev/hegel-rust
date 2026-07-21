@@ -264,9 +264,11 @@ pub use hegel_c::__bench;
 /// non-printable field generator simply makes the result silent-only (or
 /// printable again via [`print_as_value`](generators::Generator::print_as_value),
 /// [`print_as_debug`](generators::Generator::print_as_debug), or
-/// [`print_with`](generators::Generator::print_with)). A type that wants a
-/// different printed representation implements [`DefaultGenerator`] by
-/// hand.
+/// [`print_with`](generators::Generator::print_with)). Because the derived
+/// generator prints compositionally, a hand-written [`PrettyPrintable`]
+/// implementation on the type is **not consulted** for its failing-example
+/// output; a type that wants a different printed representation implements
+/// [`DefaultGenerator`] by hand.
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
