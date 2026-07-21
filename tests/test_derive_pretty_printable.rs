@@ -164,3 +164,91 @@ fn derive_on_an_empty_enum_compiles() {
     // The property is that `Void` above compiles at all.
     let _ = std::any::type_name::<Void>();
 }
+
+#[derive(PrettyPrintable)]
+struct WithForeign {
+    name: String,
+    #[pretty(debug)]
+    path: std::path::PathBuf,
+}
+
+#[test]
+fn pretty_debug_fields_print_their_debug_representation() {
+    let value = WithForeign {
+        name: "a".to_string(),
+        path: std::path::PathBuf::from("/tmp"),
+    };
+    assert_eq!(
+        render(&value, 79),
+        "WithForeign { name: \"a\".to_string(), path: \"/tmp\" }"
+    );
+}
+
+#[derive(Debug)]
+struct DebugInner {
+    #[allow(dead_code)]
+    items: Vec<i32>,
+}
+
+#[derive(PrettyPrintable)]
+struct DebugOuter {
+    #[pretty(debug)]
+    inner: DebugInner,
+}
+
+#[test]
+fn pretty_debug_fields_relayout_derived_debug_output() {
+    let value = DebugOuter {
+        inner: DebugInner {
+            items: vec![1000, 2000, 3000],
+        },
+    };
+    assert_eq!(
+        render(&value, 79),
+        "DebugOuter { inner: DebugInner { items: [1000, 2000, 3000] } }"
+    );
+    assert_eq!(
+        render(&value, 24),
+        "DebugOuter {\n    inner: DebugInner {\n        items: [1000,\n         2000,\n         3000] } }"
+    );
+}
+
+#[derive(PrettyPrintable)]
+enum ForeignMessage {
+    Payload {
+        #[pretty(debug)]
+        data: std::ffi::OsString,
+    },
+    Raw(#[pretty(debug)] std::ffi::OsString),
+}
+
+#[test]
+fn pretty_debug_fields_work_in_enum_variants() {
+    assert_eq!(
+        render(
+            &ForeignMessage::Payload {
+                data: std::ffi::OsString::from("x")
+            },
+            79
+        ),
+        "ForeignMessage::Payload { data: \"x\" }"
+    );
+    assert_eq!(
+        render(&ForeignMessage::Raw(std::ffi::OsString::from("y")), 79),
+        "ForeignMessage::Raw(\"y\")"
+    );
+}
+
+#[derive(PrettyPrintable)]
+struct GenericDebugField<T> {
+    #[pretty(debug)]
+    raw: T,
+}
+
+#[test]
+fn pretty_debug_fields_add_a_debug_bound_for_generic_fields() {
+    assert_eq!(
+        render(&GenericDebugField { raw: 5 }, 79),
+        "GenericDebugField { raw: 5 }"
+    );
+}
