@@ -55,6 +55,45 @@ fn e0283_note_uses_must_implement_wording() -> bool {
     panic!("unrecognized E0283 note wording; add a golden for it:\n{stderr}");
 }
 
+/// rustc also changed how it annotates a "required for" note that points at
+/// a `#[derive(..)]` span: the MSRV toolchain says ``unsatisfied trait bound
+/// introduced in this `derive` macro`` where newer toolchains say ``type
+/// parameter would need to implement …`` and add a "consider manually
+/// implementing" help. Probed like
+/// [`e0283_note_uses_must_implement_wording`], with a dependency-free
+/// derive whose generated impl has an unsatisfiable bound.
+fn derive_bound_note_uses_type_parameter_wording() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let probe = dir.path().join("probe.rs");
+    std::fs::write(
+        &probe,
+        "#[derive(Clone)] struct Foo<T>(T);\n\
+         struct NoClone;\n\
+         fn need<T: Clone>(_: T) {}\n\
+         fn main() { need(Foo(NoClone)); }\n",
+    )
+    .unwrap();
+    let output = Command::new(rustc_binary())
+        .args(["--edition", "2021", "--crate-name", "probe"])
+        .arg(&probe)
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "the derive-bound probe unexpectedly compiled"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("type parameter would need to implement") {
+        return true;
+    }
+    if stderr.contains("unsatisfied trait bound introduced in this") {
+        return false;
+    }
+    panic!("unrecognized derive-bound note wording; add a golden for it:\n{stderr}");
+}
+
 fn rustc_binary() -> std::ffi::OsString {
     std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into())
 }
@@ -104,12 +143,25 @@ fn normalize_e0283_stderr(raw: &str) -> String {
     for line in raw.lines() {
         let trimmed = line.trim_start();
         if in_impl_list {
-            if trimmed.starts_with('`') || trimmed.starts_with("and ") {
+            // List entries vary by toolchain: backticked "`X` implements
+            // `Y`" lines, bare type names, and the "and N others" tail.
+            // Everything until the next diagnostic marker is part of the
+            // list.
+            let starts_marker = trimmed.starts_with('=')
+                || trimmed.starts_with('|')
+                || trimmed.starts_with("--> ")
+                || trimmed.starts_with("note")
+                || trimmed.starts_with("help")
+                || trimmed.starts_with("error")
+                || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if !starts_marker {
                 continue;
             }
             in_impl_list = false;
         }
-        if trimmed.starts_with("= help: the following types implement trait") {
+        if trimmed.starts_with("= help: the following types implement trait")
+            || trimmed.starts_with("= help: the following other types implement trait")
+        {
             in_impl_list = true;
             out.push(format!(" {trimmed}"));
             continue;
@@ -157,21 +209,10 @@ fn normalize_e0283_stderr(raw: &str) -> String {
     out.join("\n") + "\n"
 }
 
-/// The `tests/ui-e0283/` case, checked by hand: compile the case against
-/// the freshly built hegel rlib, normalize the diagnostic (see
-/// [`normalize_e0283_stderr`]), and compare it with the golden for the
-/// active toolchain's wording. Regenerate with `TRYBUILD=overwrite`, once
-/// on a `cannot satisfy` toolchain (MSRV or current stable) and once on a
-/// `must implement` one (nightly).
-#[test]
-fn e0283_diagnostic() {
-    let case = "tests/ui-e0283/default_cant_infer_through_draw.rs";
-    let golden = if e0283_note_uses_must_implement_wording() {
-        "tests/ui-e0283/expected-current.stderr"
-    } else {
-        "tests/ui-e0283/expected-msrv.stderr"
-    };
-
+/// Compile `case` against the freshly built hegel rlib and return its
+/// normalized stderr (see [`normalize_e0283_stderr`]). The case must fail to
+/// compile.
+fn compile_failing_case(case: &str) -> String {
     let deps = deps_dir();
     let rlib = newest_hegel_rlib(&deps);
     let out_dir = tempfile::tempdir().unwrap();
@@ -200,19 +241,59 @@ fn e0283_diagnostic() {
         "{case} unexpectedly compiled against {}",
         rlib.display()
     );
-    let actual = normalize_e0283_stderr(&String::from_utf8_lossy(&output.stderr));
+    normalize_e0283_stderr(&String::from_utf8_lossy(&output.stderr))
+}
 
+/// Compare a hand-checked case's normalized diagnostic against its golden,
+/// or rewrite the golden under `TRYBUILD=overwrite`.
+fn check_against_golden(actual: &str, golden: &str) {
     if std::env::var_os("TRYBUILD").is_some_and(|v| v == "overwrite") {
-        std::fs::write(golden, &actual).unwrap();
+        std::fs::write(golden, actual).unwrap();
         return;
     }
     let expected = std::fs::read_to_string(golden)
         .unwrap_or_else(|_| panic!("missing golden {golden}; regenerate with TRYBUILD=overwrite"));
     assert_eq!(
         actual, expected,
-        "normalized E0283 diagnostic does not match {golden}; \
+        "normalized diagnostic does not match {golden}; \
          if the new output is intended, regenerate with TRYBUILD=overwrite"
     );
+}
+
+/// The `tests/ui-e0283/` case, checked by hand: its diagnostic enumerates
+/// implementors and splits by the active toolchain's E0283 wording (see the
+/// module docs). Regenerate with `TRYBUILD=overwrite`, once on a `cannot
+/// satisfy` toolchain (MSRV or current stable) and once on a `must
+/// implement` one (nightly).
+#[test]
+fn e0283_diagnostic() {
+    let actual = compile_failing_case("tests/ui-e0283/default_cant_infer_through_draw.rs");
+    let golden = if e0283_note_uses_must_implement_wording() {
+        "tests/ui-e0283/expected-current.stderr"
+    } else {
+        "tests/ui-e0283/expected-msrv.stderr"
+    };
+    check_against_golden(&actual, golden);
+}
+
+/// The error a user sees when a derived generator's customized field
+/// generator is not printable and the result is drawn with `tc.draw`. Pinned
+/// because the "required for" chain names the derive's hidden generator
+/// type: the headline message and escape-hatch notes have to carry the
+/// explanation on their own. Checked by hand for the same reason as the
+/// E0283 case — the diagnostic enumerates `PrintableGenerator` implementors,
+/// which vary with the feature set — and golden-split by the derive-bound
+/// note wording. Regenerate with `TRYBUILD=overwrite`, once on the MSRV
+/// toolchain and once on a current one.
+#[test]
+fn derived_generator_non_printable_field_diagnostic() {
+    let actual = compile_failing_case("tests/ui-printability/derive_non_printable_field_draw.rs");
+    let golden = if derive_bound_note_uses_type_parameter_wording() {
+        "tests/ui-printability/expected-current.stderr"
+    } else {
+        "tests/ui-printability/expected-msrv.stderr"
+    };
+    check_against_golden(&actual, golden);
 }
 
 #[test]

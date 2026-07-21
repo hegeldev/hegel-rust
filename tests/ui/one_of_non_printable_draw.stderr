@@ -1,4 +1,4 @@
-error[E0277]: the trait bound `OsString: PrettyPrintable` is not satisfied
+error[E0277]: `OsString` has no printed representation
   --> tests/ui/one_of_non_printable_draw.rs:12:21
    |
 12 |       let _ = tc.draw(hegel::one_of!(
@@ -8,8 +8,12 @@ error[E0277]: the trait bound `OsString: PrettyPrintable` is not satisfied
 13 | |         gs::just(OsString::new()),
 14 | |         gs::just(OsString::new()),
 15 | |     ));
-   | |_____^ the trait `PrettyPrintable` is not implemented for `OsString`
+   | |_____^ `OsString` does not implement `PrettyPrintable`
    |
+   = help: the trait `PrettyPrintable` is not implemented for `OsString`
+   = note: for your own type, add `#[derive(PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)
+   = note: for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(..)` prints a custom representation
+   = note: or draw without reporting the value via `tc.draw_silent(..)`
    = help: the following other types implement trait `PrettyPrintable`:
              &T
              &mut T

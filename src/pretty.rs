@@ -539,6 +539,13 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
 /// types, either `#[derive(PrettyPrintable)]` or — to reuse an existing
 /// `Debug` representation without writing anything —
 /// [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no printed representation",
+    label = "`{Self}` does not implement `PrettyPrintable`",
+    note = "for your own type, add `#[derive(PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
+    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(..)` prints a custom representation",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`"
+)]
 pub trait PrettyPrintable {
     /// Print this value's representation to `printer`.
     fn pretty_print(&self, printer: &mut PrettyPrinter);
