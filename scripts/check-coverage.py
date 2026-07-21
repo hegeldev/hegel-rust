@@ -469,7 +469,7 @@ def run_coverage() -> Path:
         cargo_args=[
             "--workspace",
             "--features",
-            "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
+            "rand,chrono,jiff,serde_json,serde_json_raw_value",
             # proc-macro compile-time execution isn't runtime coverage; keep
             # hegel-macros out of the report rather than count it as uncovered.
             "--ignore-filename-regex",

@@ -255,6 +255,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let mut steps_attempted: i64 = 0;
 
     while is_single || steps_attempted < 1000 {
+        crate::antithesis::emit_strategy_state(steps_attempted + 1);
         let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
             Ok(Some(i)) => i,
             Ok(None) => break,

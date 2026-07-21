@@ -146,7 +146,6 @@ default = []
 # `rand` crate itself is always a dependency (the native engine uses it), so
 # this feature only toggles the extra public generator surface.
 rand = []
-antithesis = ["dep:serde_json"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = ["dep:serde_json"]

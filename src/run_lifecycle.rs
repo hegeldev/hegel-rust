@@ -441,7 +441,7 @@ pub(crate) fn drive<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
+    crate::antithesis::validate_launch_configuration();
     let mut test_fn = test_fn;
     let mode = settings.mode;
     let verbosity = settings.verbosity;
@@ -552,6 +552,9 @@ fn drive_single_case(
         );
     }
     emit_antithesis_assertion(false, test_location);
+    if matches!(result, TestCaseResult::Invalid) {
+        crate::antithesis::emit_soft_terminate("test_case_invalid");
+    }
 }
 
 /// Replay a single base64 failure blob through the C ABI
@@ -571,7 +574,7 @@ pub(crate) fn drive_blob_replay<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
+    crate::antithesis::validate_launch_configuration();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
     let c_settings = SettingsHandle::build(settings, database_key);
@@ -608,26 +611,11 @@ pub(crate) fn drive_blob_replay<F>(
     }
 }
 
-/// Fail fast — before any test case runs — when running under Antithesis
-/// without the `antithesis` feature compiled in.
-fn require_antithesis_feature() {
-    crate::antithesis::require_antithesis_feature(
-        crate::antithesis::is_running_in_antithesis(),
-        cfg!(feature = "antithesis"),
-    );
-}
-
-/// Report the run's verdict to Antithesis (when running under it).
+/// Report the run's verdict to Antithesis (a no-op outside it).
 fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
-    #[cfg(feature = "antithesis")]
-    // nocov start
-    if crate::antithesis::is_running_in_antithesis() {
-        if let Some(loc) = test_location {
-            crate::antithesis::emit_assertion(loc, !test_failed);
-        }
+    if let Some(loc) = test_location {
+        crate::antithesis::emit_assertion(loc, !test_failed);
     }
-    // nocov end
-    let _ = (test_failed, test_location);
 }
 
 #[cfg(test)]

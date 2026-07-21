@@ -91,21 +91,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Windows drops `antithesis` because the upstream SDK is
-          # Linux-only and emits a `compile_error!` otherwise.
-          - os: windows-latest
-            rust: "1.86"
-            recipe: check-tests-all-features-windows
-          - os: windows-latest
-            rust: stable
-            recipe: check-tests-all-features-windows
-          - os: ubuntu-latest
-            rust: "1.86"
-            recipe: check-tests-all-features
-          - os: ubuntu-latest
-            rust: stable
-            recipe: check-tests-all-features
+        os: [ubuntu-latest, windows-latest]
+        rust: ["1.86", stable]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -130,7 +117,7 @@ jobs:
         run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Run tests
-        run: just ${{ matrix.recipe }}
+        run: just check-tests-all-features
 
   test-c-bindings:
     # Builds libhegel (the C shared/static library in hegel-c/), runs
