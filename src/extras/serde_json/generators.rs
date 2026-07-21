@@ -74,6 +74,16 @@ impl crate::PrettyPrintable for serde_json::value::RawValue {
     }
 }
 
+/// `RawValue`'s representation, `RawValue::from_string(..).unwrap()`,
+/// already evaluates to a `Box<RawValue>` (the type is unsized, so values
+/// only exist boxed) — the box prints nothing of its own.
+#[cfg(feature = "serde_json_raw_value")]
+impl crate::PrettyPrintable for Box<serde_json::value::RawValue> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        (**self).pretty_print(printer);
+    }
+}
+
 /// Generator for [`serde_json::Number`] values. Created by [`numbers()`].
 ///
 /// Produces `Number` values backed by an `i64`, `u64`, or finite `f64`.
