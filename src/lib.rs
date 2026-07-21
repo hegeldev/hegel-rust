@@ -357,7 +357,7 @@ pub use hegel_macros::DefaultGenerator;
 /// let person = Person { name: "Ada".to_string(), age: 36 };
 /// let mut printer = PrettyPrinter::new(79);
 /// person.pretty_print(&mut printer);
-/// assert_eq!(printer.value(), "Person { name: \"Ada\", age: 36 }");
+/// assert_eq!(printer.value(), "Person { name: \"Ada\".to_string(), age: 36 }");
 /// ```
 pub use hegel_macros::PrettyPrintable;
 
