@@ -1687,11 +1687,10 @@ hegel_result_t hegel_printer_if_break(hegel_context_t *ctx,
 
  The text must not contain newlines: express line structure with
  `hegel_printer_hard_break` (or breakable points) so column accounting
- stays correct. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`,
- and `HEGEL_E_INVALID_ARG` — with a diagnostic in
- `hegel_context_last_error` — for non-UTF-8 or newline-containing text, a
- NULL `text` with `len > 0`, or a handle whose deferred slot is already
- dead.
+ stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
+ `hegel_context_last_error` — for a NULL `printer` or a handle whose
+ deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+ or newline-containing text or a NULL `text` with `len > 0`.
  */
 hegel_result_t hegel_printer_text(hegel_context_t *ctx,
                                   hegel_printer_t *printer,
@@ -1775,8 +1774,8 @@ hegel_result_t hegel_printer_end_group(hegel_context_t *ctx,
  Adjust the indentation applied by subsequent break points by `delta`
  (may be negative to undo an earlier shift).
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` for a handle whose deferred slot is already dead.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+ deferred slot is already dead.
  */
 hegel_result_t hegel_printer_shift_indent(hegel_context_t *ctx,
                                           hegel_printer_t *printer,
@@ -1791,12 +1790,12 @@ hegel_result_t hegel_printer_shift_indent(hegel_context_t *ctx,
  while the test body runs — is spliced in at the hole's position when
  `hegel_printer_resolve` runs on the document's root handle, with
  line-breaking behaving exactly as if it had been printed inline. After
- resolve the slot is dead and writes to it return `HEGEL_E_INVALID_ARG`;
- use `hegel_printer_is_live` to probe. Holes nest: calling this on a
- deferred handle opens a hole inside that slot.
+ resolve the slot is dead and writes to it return
+ `HEGEL_E_INVALID_HANDLE`; use `hegel_printer_is_live` to probe. Holes
+ nest: calling this on a deferred handle opens a hole inside that slot.
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` for a NULL `out_printer` or a dead slot handle.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
  */
 hegel_result_t hegel_printer_deferred(hegel_context_t *ctx,
                                       hegel_printer_t *printer,
@@ -1809,8 +1808,8 @@ hegel_result_t hegel_printer_deferred(hegel_context_t *ctx,
  how draw-time printing survives rejection: print each attempt inside a
  region, commit on acceptance, abort on rejection.
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` for a dead slot handle.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle.
  */
 hegel_result_t hegel_printer_begin_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
 
@@ -1818,9 +1817,9 @@ hegel_result_t hegel_printer_begin_speculative(hegel_context_t *ctx, hegel_print
  Close the innermost speculative region on this handle, keeping its
  content.
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is open or
- the slot is dead.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+ open.
  */
 hegel_result_t hegel_printer_commit_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
 
@@ -1828,9 +1827,9 @@ hegel_result_t hegel_printer_commit_speculative(hegel_context_t *ctx, hegel_prin
  Close the innermost speculative region on this handle, discarding its
  content. Deferred slots opened inside the region die with it.
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is open or
- the slot is dead.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+ open.
  */
 hegel_result_t hegel_printer_abort_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
 

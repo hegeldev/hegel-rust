@@ -3375,15 +3375,21 @@ unsafe fn printer_arg<'a>(
 }
 
 /// Translate a printer-core error onto `ctx`. Every printer error reports
-/// API misuse (a dead slot, unbalanced groups, resolve with nothing
-/// outstanding, …), so all of them map to `HEGEL_E_INVALID_ARG`.
+/// API misuse. A dead slot is a handle in an invalid *state* — the handle
+/// itself has expired — so it maps to `HEGEL_E_INVALID_HANDLE`, matching how
+/// the rest of the ABI classifies handle-state errors; everything else
+/// (unbalanced groups, resolve with nothing outstanding, …) describes the
+/// call and maps to `HEGEL_E_INVALID_ARG`.
 fn translate_printer_error(
     ctx: *mut HegelContext,
     fn_name: &str,
     e: PrinterError,
 ) -> hegel_result_t {
     set_last_error(ctx, &format!("{fn_name}: {e}"));
-    HEGEL_E_INVALID_ARG
+    match e {
+        PrinterError::DeadSlot => HEGEL_E_INVALID_HANDLE,
+        _ => HEGEL_E_INVALID_ARG,
+    }
 }
 
 /// Read a required length-delimited UTF-8 text argument for a printer call.
@@ -3511,11 +3517,10 @@ pub unsafe extern "C" fn hegel_printer_if_break(
 ///
 /// The text must not contain newlines: express line structure with
 /// `hegel_printer_hard_break` (or breakable points) so column accounting
-/// stays correct. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`,
-/// and `HEGEL_E_INVALID_ARG` — with a diagnostic in
-/// `hegel_context_last_error` — for non-UTF-8 or newline-containing text, a
-/// NULL `text` with `len > 0`, or a handle whose deferred slot is already
-/// dead.
+/// stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
+/// `hegel_context_last_error` — for a NULL `printer` or a handle whose
+/// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+/// or newline-containing text or a NULL `text` with `len > 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_text(
     ctx: *mut HegelContext,
@@ -3696,8 +3701,8 @@ pub unsafe extern "C" fn hegel_printer_end_group(
 /// Adjust the indentation applied by subsequent break points by `delta`
 /// (may be negative to undo an earlier shift).
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` for a handle whose deferred slot is already dead.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+/// deferred slot is already dead.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_shift_indent(
     ctx: *mut HegelContext,
@@ -3725,12 +3730,12 @@ pub unsafe extern "C" fn hegel_printer_shift_indent(
 /// while the test body runs — is spliced in at the hole's position when
 /// `hegel_printer_resolve` runs on the document's root handle, with
 /// line-breaking behaving exactly as if it had been printed inline. After
-/// resolve the slot is dead and writes to it return `HEGEL_E_INVALID_ARG`;
-/// use `hegel_printer_is_live` to probe. Holes nest: calling this on a
-/// deferred handle opens a hole inside that slot.
+/// resolve the slot is dead and writes to it return
+/// `HEGEL_E_INVALID_HANDLE`; use `hegel_printer_is_live` to probe. Holes
+/// nest: calling this on a deferred handle opens a hole inside that slot.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_printer` or a dead slot handle.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_deferred(
     ctx: *mut HegelContext,
@@ -3767,8 +3772,8 @@ pub unsafe extern "C" fn hegel_printer_deferred(
 /// how draw-time printing survives rejection: print each attempt inside a
 /// region, commit on acceptance, abort on rejection.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` for a dead slot handle.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_begin_speculative(
     ctx: *mut HegelContext,
@@ -3789,9 +3794,9 @@ pub unsafe extern "C" fn hegel_printer_begin_speculative(
 /// Close the innermost speculative region on this handle, keeping its
 /// content.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is open or
-/// the slot is dead.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+/// open.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_commit_speculative(
     ctx: *mut HegelContext,
@@ -3812,9 +3817,9 @@ pub unsafe extern "C" fn hegel_printer_commit_speculative(
 /// Close the innermost speculative region on this handle, discarding its
 /// content. Deferred slots opened inside the region die with it.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is open or
-/// the slot is dead.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+/// open.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_abort_speculative(
     ctx: *mut HegelContext,

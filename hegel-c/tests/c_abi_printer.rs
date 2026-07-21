@@ -136,46 +136,46 @@ fn deferred_slot_roundtrip_and_death() {
         assert!(!live);
         assert_eq!(
             hegel_printer_text(ctx, slot, "x".as_ptr(), 1),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("session ended"));
         assert_eq!(
             hegel_printer_breakable(ctx, slot, " ".as_ptr(), 1),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_if_break(ctx, slot, ",".as_ptr(), 1),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
-        assert_eq!(hegel_printer_hard_break(ctx, slot), HEGEL_E_INVALID_ARG);
+        assert_eq!(hegel_printer_hard_break(ctx, slot), HEGEL_E_INVALID_HANDLE);
         assert_eq!(
             hegel_printer_begin_group(ctx, slot, 0, ptr::null(), 0),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_end_group(ctx, slot, ptr::null(), 0),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_shift_indent(ctx, slot, 1),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         let mut grandchild: *mut HegelPrinter = ptr::null_mut();
         assert_eq!(
             hegel_printer_deferred(ctx, slot, &mut grandchild),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_begin_speculative(ctx, slot),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_commit_speculative(ctx, slot),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
             hegel_printer_abort_speculative(ctx, slot),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
 
         ok(hegel_printer_free(ctx, slot));
@@ -287,7 +287,7 @@ fn comment_arguments_are_validated() {
         ok(hegel_printer_resolve(ctx, p));
         assert_eq!(
             hegel_printer_comment(ctx, slot, "x".as_ptr(), 1),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("session ended"));
 
