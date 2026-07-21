@@ -749,16 +749,20 @@ impl CTestCase {
     }
 
     /// Fetch a root handle onto the document shared by this test case's
-    /// family (created on first use, sized to `max_width`; the engine
-    /// ignores `max_width` on later calls). The document outlives the case's
-    /// completion, so drawn values can be assembled during the body and read
-    /// back after `mark_complete`.
+    /// family, creating it sized to `max_width` on first use. Every fetch
+    /// passes the same `PRINTER_MAX_WIDTH`, so the engine's width-conflict
+    /// check never fires. The document outlives the case's completion, so
+    /// drawn values can be assembled during the body and read back after
+    /// `mark_complete`.
     pub(crate) fn printer(&self, max_width: u64) -> PrinterHandle {
         let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
-        // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_printer(ctx, self.raw, max_width, &mut raw)
-        }));
+        with_printer_options(max_width, |options| {
+            // SAFETY: self.raw is a live handle; &mut raw is a valid
+            // out-param.
+            require_ok(with_context(|ctx| unsafe {
+                hegel_c::hegel_test_case_printer(ctx, self.raw, options, &mut raw)
+            }));
+        });
         PrinterHandle { raw }
     }
 
@@ -945,14 +949,33 @@ impl std::fmt::Debug for PrinterHandle {
     }
 }
 
+/// Run `f` with an engine printer-options handle configured for `max_width`,
+/// freeing the handle afterwards (options only parameterize construction, so
+/// they never outlive the constructing call).
+fn with_printer_options(max_width: u64, f: impl FnOnce(*const hegel_c::HegelPrinterOptions)) {
+    let mut options: *mut hegel_c::HegelPrinterOptions = ptr::null_mut();
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_new(ctx, &mut options)
+    }));
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_set_max_width(ctx, options, max_width)
+    }));
+    f(options);
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_free(ctx, options)
+    }));
+}
+
 impl PrinterHandle {
     /// Create a standalone document that keeps lines within `max_width`
     /// characters.
     pub(crate) fn new(max_width: u64) -> Self {
         let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_new(ctx, max_width, &mut raw)
-        }));
+        with_printer_options(max_width, |options| {
+            require_ok(with_context(|ctx| unsafe {
+                hegel_c::hegel_printer_new(ctx, options, &mut raw)
+            }));
+        });
         PrinterHandle { raw }
     }
 

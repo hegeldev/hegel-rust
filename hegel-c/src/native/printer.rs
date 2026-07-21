@@ -234,6 +234,11 @@ impl Printer {
         }
     }
 
+    /// The width this printer lays lines out to.
+    pub fn max_width(&self) -> usize {
+        self.max_width
+    }
+
     /// Emit literal, unbreakable text. Must not contain newlines.
     ///
     /// Group-balance misuse (an `end_group` with no group open) is reported

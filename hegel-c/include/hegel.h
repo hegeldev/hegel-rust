@@ -36,6 +36,11 @@
  *     hegel_string_generator_*   ->  hegel_string_generator_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
+ *     hegel_printer_options_new  ->  hegel_printer_options_free
+ *     hegel_printer_new          ->  hegel_printer_free
+ *     hegel_printer_deferred     ->  hegel_printer_free
+ *     hegel_test_case_printer    ->  hegel_printer_free
+ *     hegel_printer_value        ->  hegel_printer_value_result_free
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
@@ -534,6 +539,23 @@ typedef struct hegel_failure_t hegel_failure_t;
  released with `hegel_printer_free`.
  */
 typedef struct hegel_printer_t hegel_printer_t;
+
+/*
+ Options for constructing a pretty-printer document.
+
+ Construct with `hegel_printer_options_new`, configure via the
+ `hegel_printer_options_set_*` functions, pass to `hegel_printer_new` /
+ `hegel_test_case_printer`, and free with `hegel_printer_options_free`.
+ Every option has a default, and a NULL options pointer means "all
+ defaults", so callers that are happy with the defaults never construct
+ one. New options are added as new setters, never by changing existing
+ signatures.
+
+ An options handle only parameterizes construction: it is read during the
+ construction call and may be freed (or reconfigured and reused)
+ immediately afterwards.
+ */
+typedef struct hegel_printer_options_t hegel_printer_options_t;
 
 /*
  In-flight property-test run.
@@ -1591,15 +1613,45 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
                             const char *label);
 
 /*
- Create a standalone pretty-printer document that tries to keep lines
- within `max_width` characters.
+ Create a printer-options handle with every option at its default
+ (`max_width` 79).
+
+ On success writes a caller-owned handle into `*out_options` (release with
+ `hegel_printer_options_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+ */
+hegel_result_t hegel_printer_options_new(hegel_context_t *ctx,
+                                         hegel_printer_options_t **out_options);
+
+/*
+ Free an options handle previously returned by `hegel_printer_options_new`.
+ Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+ */
+hegel_result_t hegel_printer_options_free(hegel_context_t *ctx, hegel_printer_options_t *options);
+
+/*
+ Set the line width documents constructed with these options are laid out
+ to: lines stay within `max_width` characters where the group structure
+ allows it. The default is 79.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `options` and
+ `HEGEL_E_INVALID_ARG` for a `max_width` of 0 (a document cannot lay
+ anything out inside zero columns).
+ */
+hegel_result_t hegel_printer_options_set_max_width(hegel_context_t *ctx,
+                                                   hegel_printer_options_t *options,
+                                                   uint64_t max_width);
+
+/*
+ Create a standalone pretty-printer document laid out per `options`
+ (NULL for all defaults; see `hegel_printer_options_t`).
 
  On success writes a caller-owned handle into `*out_printer` (release with
  `hegel_printer_free`) and returns `HEGEL_OK`. Returns
  `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
  */
 hegel_result_t hegel_printer_new(hegel_context_t *ctx,
-                                 uint64_t max_width,
+                                 const hegel_printer_options_t *options,
                                  hegel_printer_t **out_printer);
 
 /*
@@ -1838,26 +1890,38 @@ hegel_result_t hegel_printer_value_result_free(hegel_context_t *ctx,
  `hegel_printer_free`; the document itself lives as long as any handle or
  the family).
 
- The document is created on first use, sized to `max_width` characters per
- line; later calls return the same document and ignore `max_width`. Every
- handle in the family — including `hegel_test_case_clone` handles — shares
- one document, and the document remains readable and writable after the
- case completes, so the client can assemble output while drawing and read
- it back after `hegel_mark_complete`.
+ The document is created on first use, laid out per `options` (NULL for
+ all defaults; see `hegel_printer_options_t`). Later calls return the same
+ document: passing NULL options (or ones that only restate the document's
+ width) is always fine, while options that request a *different*
+ `max_width` than the document was created with are an error — the width
+ of an existing document cannot change, and accepting the request would
+ silently ignore it. Note that `hegel_note` also creates the document (at
+ the default width) when it runs first. Every handle in the family —
+ including `hegel_test_case_clone` handles — shares one document, and the
+ document remains readable and writable after the case completes, so the
+ client can assemble output while drawing and read it back after
+ `hegel_mark_complete`.
 
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
- `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
+ width conflict with the existing document.
  */
 hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
-                                       uint64_t max_width,
+                                       const hegel_printer_options_t *options,
                                        hegel_printer_t **out_printer);
 
 /*
  Append a note — `len` bytes of UTF-8 at `text` — to the test case's
- document (creating the document on first use). Each `\n`-separated line
- of the note becomes its own output line, so notes may contain newlines.
- Notes and drawn values interleave in the order they were appended.
+ document. Each `\n`-separated line of the note becomes its own output
+ line, so notes may contain newlines. Notes and drawn values interleave in
+ the order they were appended.
+
+ If the family's document does not exist yet, this creates it with default
+ options (`max_width` 79) — a client that wants a different width must
+ call `hegel_test_case_printer` before its first note, since a later call
+ requesting a different width is a width-conflict error.
 
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
  `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL

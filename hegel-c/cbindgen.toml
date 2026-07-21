@@ -38,6 +38,11 @@ header = """
  *     hegel_string_generator_*   ->  hegel_string_generator_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
+ *     hegel_printer_options_new  ->  hegel_printer_options_free
+ *     hegel_printer_new          ->  hegel_printer_free
+ *     hegel_printer_deferred     ->  hegel_printer_free
+ *     hegel_test_case_printer    ->  hegel_printer_free
+ *     hegel_printer_value        ->  hegel_printer_value_result_free
  *
  * Every test-case handle you receive — whether from hegel_test_case_from_blob,
  * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
@@ -112,6 +117,7 @@ include = [
 "HegelFailure" = "hegel_failure_t"
 "HegelStringGenerator" = "hegel_string_generator_t"
 "HegelPrinter" = "hegel_printer_t"
+"HegelPrinterOptions" = "hegel_printer_options_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic

@@ -3262,9 +3262,101 @@ pub struct HegelPrinter {
     target: PrinterTarget,
 }
 
-/// The width `hegel_note` sizes a lazily-created document to when the client
-/// never called `hegel_test_case_printer` with an explicit width.
+/// The line width a printer document is laid out to when the client does not
+/// set one: the width of a lazily-created family document, of an options
+/// handle whose `hegel_printer_options_set_max_width` was never called, and
+/// of a construction call passed NULL options.
 const DEFAULT_PRINTER_MAX_WIDTH: u64 = 79;
+
+/// Options for constructing a pretty-printer document.
+///
+/// Construct with `hegel_printer_options_new`, configure via the
+/// `hegel_printer_options_set_*` functions, pass to `hegel_printer_new` /
+/// `hegel_test_case_printer`, and free with `hegel_printer_options_free`.
+/// Every option has a default, and a NULL options pointer means "all
+/// defaults", so callers that are happy with the defaults never construct
+/// one. New options are added as new setters, never by changing existing
+/// signatures.
+///
+/// An options handle only parameterizes construction: it is read during the
+/// construction call and may be freed (or reconfigured and reused)
+/// immediately afterwards.
+pub struct HegelPrinterOptions {
+    max_width: Option<u64>,
+}
+
+impl HegelPrinterOptions {
+    /// The width to lay documents out to: the configured value, or the
+    /// default. `options` is the (possibly NULL-derived) reference a
+    /// construction call received.
+    fn resolve_max_width(options: Option<&HegelPrinterOptions>) -> u64 {
+        options
+            .and_then(|o| o.max_width)
+            .unwrap_or(DEFAULT_PRINTER_MAX_WIDTH)
+    }
+}
+
+/// Create a printer-options handle with every option at its default
+/// (`max_width` 79).
+///
+/// On success writes a caller-owned handle into `*out_options` (release with
+/// `hegel_printer_options_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_new(
+    ctx: *mut HegelContext,
+    out_options: *mut *mut HegelPrinterOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_options.is_null() {
+        set_last_error(ctx, "hegel_printer_options_new: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let options = Box::into_raw(Box::new(HegelPrinterOptions { max_width: None }));
+    unsafe { *out_options = options };
+    HEGEL_OK
+}
+
+/// Free an options handle previously returned by `hegel_printer_options_new`.
+/// Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_free(
+    ctx: *mut HegelContext,
+    options: *mut HegelPrinterOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !options.is_null() {
+        drop(unsafe { Box::from_raw(options) });
+    }
+    HEGEL_OK
+}
+
+/// Set the line width documents constructed with these options are laid out
+/// to: lines stay within `max_width` characters where the group structure
+/// allows it. The default is 79.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `options` and
+/// `HEGEL_E_INVALID_ARG` for a `max_width` of 0 (a document cannot lay
+/// anything out inside zero columns).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_set_max_width(
+    ctx: *mut HegelContext,
+    options: *mut HegelPrinterOptions,
+    max_width: u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_options_set_max_width";
+    let Some(options) = (unsafe { options.as_mut() }) else {
+        set_last_error(ctx, &format!("{FN}: options pointer is null"));
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if max_width == 0 {
+        set_last_error(ctx, &format!("{FN}: max_width must be positive"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    options.max_width = Some(max_width);
+    HEGEL_OK
+}
 
 /// Resolve a printer handle pointer, reporting NULL as
 /// `HEGEL_E_INVALID_HANDLE`.
@@ -3324,7 +3416,8 @@ unsafe fn printer_text_arg(
     Ok(text)
 }
 
-/// Fetch (creating on first use) the document shared by `tc`'s family.
+/// Fetch (creating with `max_width` on first use) the document shared by
+/// `tc`'s family.
 fn family_printer(tc: &HegelTestCase, max_width: u64) -> Arc<Mutex<Printer>> {
     Arc::clone(
         tc.family
@@ -3333,8 +3426,8 @@ fn family_printer(tc: &HegelTestCase, max_width: u64) -> Arc<Mutex<Printer>> {
     )
 }
 
-/// Create a standalone pretty-printer document that tries to keep lines
-/// within `max_width` characters.
+/// Create a standalone pretty-printer document laid out per `options`
+/// (NULL for all defaults; see `hegel_printer_options_t`).
 ///
 /// On success writes a caller-owned handle into `*out_printer` (release with
 /// `hegel_printer_free`) and returns `HEGEL_OK`. Returns
@@ -3342,7 +3435,7 @@ fn family_printer(tc: &HegelTestCase, max_width: u64) -> Arc<Mutex<Printer>> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_new(
     ctx: *mut HegelContext,
-    max_width: u64,
+    options: *const HegelPrinterOptions,
     out_printer: *mut *mut HegelPrinter,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -3350,6 +3443,7 @@ pub unsafe extern "C" fn hegel_printer_new(
         set_last_error(ctx, "hegel_printer_new: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    let max_width = HegelPrinterOptions::resolve_max_width(unsafe { options.as_ref() });
     let handle = HegelPrinter {
         inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
         target: PrinterTarget::Main,
@@ -3884,20 +3978,27 @@ pub unsafe extern "C" fn hegel_printer_value_result_free(
 /// `hegel_printer_free`; the document itself lives as long as any handle or
 /// the family).
 ///
-/// The document is created on first use, sized to `max_width` characters per
-/// line; later calls return the same document and ignore `max_width`. Every
-/// handle in the family — including `hegel_test_case_clone` handles — shares
-/// one document, and the document remains readable and writable after the
-/// case completes, so the client can assemble output while drawing and read
-/// it back after `hegel_mark_complete`.
+/// The document is created on first use, laid out per `options` (NULL for
+/// all defaults; see `hegel_printer_options_t`). Later calls return the same
+/// document: passing NULL options (or ones that only restate the document's
+/// width) is always fine, while options that request a *different*
+/// `max_width` than the document was created with are an error — the width
+/// of an existing document cannot change, and accepting the request would
+/// silently ignore it. Note that `hegel_note` also creates the document (at
+/// the default width) when it runs first. Every handle in the family —
+/// including `hegel_test_case_clone` handles — shares one document, and the
+/// document remains readable and writable after the case completes, so the
+/// client can assemble output while drawing and read it back after
+/// `hegel_mark_complete`.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
+/// width conflict with the existing document.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_printer(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    max_width: u64,
+    options: *const HegelPrinterOptions,
     out_printer: *mut *mut HegelPrinter,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -3909,8 +4010,24 @@ pub unsafe extern "C" fn hegel_test_case_printer(
         set_last_error(ctx, "hegel_test_case_printer: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    let options = unsafe { options.as_ref() };
+    let requested = options.and_then(|o| o.max_width);
+    let inner = family_printer(tc, HegelPrinterOptions::resolve_max_width(options));
+    if let Some(requested) = requested {
+        let actual = inner.lock().max_width();
+        if actual != size_arg(requested) {
+            set_last_error(
+                ctx,
+                &format!(
+                    "hegel_test_case_printer: the family's document is laid out to \
+                     max_width {actual} and cannot change to {requested}"
+                ),
+            );
+            return HEGEL_E_INVALID_ARG;
+        }
+    }
     let handle = HegelPrinter {
-        inner: family_printer(tc, max_width),
+        inner,
         target: PrinterTarget::Main,
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
@@ -3918,9 +4035,14 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 }
 
 /// Append a note — `len` bytes of UTF-8 at `text` — to the test case's
-/// document (creating the document on first use). Each `\n`-separated line
-/// of the note becomes its own output line, so notes may contain newlines.
-/// Notes and drawn values interleave in the order they were appended.
+/// document. Each `\n`-separated line of the note becomes its own output
+/// line, so notes may contain newlines. Notes and drawn values interleave in
+/// the order they were appended.
+///
+/// If the family's document does not exist yet, this creates it with default
+/// options (`max_width` 79) — a client that wants a different width must
+/// call `hegel_test_case_printer` before its first note, since a later call
+/// requesting a different width is a width-conflict error.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
 /// `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL

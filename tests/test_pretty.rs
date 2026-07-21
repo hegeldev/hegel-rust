@@ -299,6 +299,12 @@ fn unbalanced_end_group_panics() {
 }
 
 #[test]
+#[should_panic(expected = "max_width must be positive")]
+fn zero_width_printer_panics() {
+    PrettyPrinter::new(0);
+}
+
+#[test]
 fn end_group_dedents_by_the_full_open_delimiter_width() {
     let mut printer = PrettyPrinter::new(12);
     printer.begin_group(5, "Some(");
