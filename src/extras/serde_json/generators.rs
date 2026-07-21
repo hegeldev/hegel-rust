@@ -7,10 +7,72 @@ use crate::generators::{
 };
 use crate::pretty::PrettyPrinter;
 
-crate::pretty_print_as_debug!(Number, Value);
+impl crate::PrettyPrintable for Number {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        if let Some(n) = self.as_i64() {
+            printer.text(&format!("Number::from({n})"));
+        } else if let Some(n) = self.as_u64() {
+            printer.text(&format!("Number::from({n}u64)"));
+        } else {
+            printer.text(&format!(
+                "Number::from_f64({:?}).unwrap()",
+                self.as_f64().unwrap()
+            ));
+        }
+    }
+}
+
+/// Print a [`Value`] in `json!` macro syntax: JSON literals for scalars, and
+/// group-wrapped arrays and objects so large documents break one element per
+/// line.
+fn pretty_print_json(value: &Value, printer: &mut PrettyPrinter) {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            printer.text(&value.to_string());
+        }
+        Value::Array(items) => {
+            printer.begin_group(1, "[");
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    printer.text(",");
+                    printer.breakable(" ");
+                }
+                pretty_print_json(item, printer);
+            }
+            printer.end_group(1, "]");
+        }
+        Value::Object(entries) => {
+            printer.begin_group(1, "{");
+            for (index, (key, item)) in entries.iter().enumerate() {
+                if index > 0 {
+                    printer.text(",");
+                    printer.breakable(" ");
+                }
+                printer.text(&format!("{}: ", Value::String(key.clone())));
+                pretty_print_json(item, printer);
+            }
+            printer.end_group(1, "}");
+        }
+    }
+}
+
+impl crate::PrettyPrintable for Value {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.begin_group(6, "json!(");
+        pretty_print_json(self, printer);
+        printer.end_group(6, ")");
+    }
+}
 
 #[cfg(feature = "serde_json_raw_value")]
-crate::pretty_print_as_debug!(serde_json::value::RawValue);
+impl crate::PrettyPrintable for serde_json::value::RawValue {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "RawValue::from_string({:?}.to_string()).unwrap()",
+            self.get()
+        ));
+    }
+}
 
 /// Generator for [`serde_json::Number`] values. Created by [`numbers()`].
 ///

@@ -3,25 +3,100 @@ use crate::generators::{
 };
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 
-crate::pretty_print_as_debug!(
-    WeekdaySet,
-    FixedOffset,
-    TimeDelta,
-    NaiveDate,
-    NaiveTime,
-    NaiveDateTime,
-    Weekday
-);
-
-impl PrettyPrintable for NaiveWeek {
+impl PrettyPrintable for Weekday {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text(&format!("{self:?}"));
+        printer.text(&format!("Weekday::{self:?}"));
     }
 }
 
-impl<Tz: TimeZone> PrettyPrintable for DateTime<Tz> {
+impl PrettyPrintable for WeekdaySet {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text(&format!("{self:?}"));
+        let days = self
+            .iter(Weekday::Mon)
+            .map(|day| format!("Weekday::{day:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        printer.text(&format!("WeekdaySet::from_array([{days}])"));
+    }
+}
+
+impl PrettyPrintable for FixedOffset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "FixedOffset::east_opt({}).unwrap()",
+            self.local_minus_utc()
+        ));
+    }
+}
+
+impl PrettyPrintable for TimeDelta {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let (secs, nanos) = {
+            let secs = self.num_seconds();
+            let nanos = self.subsec_nanos();
+            if nanos < 0 {
+                (secs - 1, nanos + 1_000_000_000)
+            } else {
+                (secs, nanos)
+            }
+        };
+        printer.text(&format!("TimeDelta::new({secs}, {nanos}).unwrap()"));
+    }
+}
+
+impl PrettyPrintable for NaiveDate {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "NaiveDate::from_ymd_opt({}, {}, {}).unwrap()",
+            self.year(),
+            self.month(),
+            self.day()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "NaiveTime::from_hms_nano_opt({}, {}, {}, {}).unwrap()",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveDateTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.date().pretty_print(printer);
+        printer.text(&format!(
+            ".and_hms_nano_opt({}, {}, {}, {}).unwrap()",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveWeek {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let first = self.first_day();
+        first.pretty_print(printer);
+        printer.text(&format!(".week(Weekday::{:?})", first.weekday()));
+    }
+}
+
+impl<Tz: TimeZone> PrettyPrintable for DateTime<Tz>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "DateTime::parse_from_rfc3339({:?}).unwrap()",
+            self.to_rfc3339()
+        ));
     }
 }
 use crate::test_case::invalid_argument;
@@ -653,6 +728,7 @@ impl<G, Tz> PrintableGenerator<DateTime<Tz>> for DateTimeGenerator<G, Tz>
 where
     G: Generator<Tz>,
     Tz: TimeZone + Send + Sync + 'static,
+    Tz::Offset: std::fmt::Display,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime<Tz> {
         let value = self.do_draw(tc);
