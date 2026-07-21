@@ -218,6 +218,7 @@ mod reproduce {
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
                 Vec::new(),
+                None,
             );
         }
         let result = run.result();

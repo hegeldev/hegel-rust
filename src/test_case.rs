@@ -458,20 +458,18 @@ impl TestCase {
     /// Install the failure's explain-phase annotations before the final
     /// replay. Slice notes go into the table that
     /// [`PrintableGenerator::draw_and_print`]'s region tracking consumes as
-    /// the replay's draws print; the whole-test note (the marker slice
-    /// `(0, 0)`) reserves a deferred hole at the top of the document and only
-    /// appears — as a leading `// …` line — once a slice annotation actually
-    /// renders.
-    pub(crate) fn set_explain_comments(&self, comments: Vec<(u64, u64, String)>) {
-        let mut together = None;
+    /// the replay's draws print; the whole-test note reserves a deferred hole
+    /// at the top of the document and only appears — as a leading `// …`
+    /// line — once a slice annotation actually renders.
+    pub(crate) fn set_explain_comments(
+        &self,
+        comments: Vec<(u64, u64, String)>,
+        together: Option<String>,
+    ) {
         {
             let mut table = self.global.explain_comments.lock();
             for (start, end, text) in comments {
-                if (start, end) == (0, 0) {
-                    together = Some(text);
-                } else {
-                    table.insert((start, end), text);
-                }
+                table.insert((start, end), text);
             }
         }
         if let Some(text) = together {

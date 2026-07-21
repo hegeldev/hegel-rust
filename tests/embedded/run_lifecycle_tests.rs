@@ -168,6 +168,7 @@ fn run_one_case(
         verbosity,
         &RunOutput::resolve(),
         Vec::new(),
+        None,
     )
 }
 

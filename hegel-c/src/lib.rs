@@ -710,6 +710,9 @@ pub struct HegelFailure {
     /// Explain-phase annotations, sorted by choice slice. Read via
     /// `hegel_failure_comment_count` / `hegel_failure_comment`.
     comments: Vec<(u64, u64, CString)>,
+    /// The explain phase's whole-test "varied together" note. Read via
+    /// `hegel_failure_together_note`.
+    together_note: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
@@ -724,6 +727,7 @@ impl From<Failure> for HegelFailure {
                 .into_iter()
                 .map(|c| (c.start, c.end, cstring_lossy(&c.text)))
                 .collect(),
+            together_note: f.together_note.map(|note| cstring_lossy(&note)),
         }
     }
 }
@@ -4030,6 +4034,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
                 origin: origin_str,
                 reproduce_blob: None,
                 comments: Vec::new(),
+                together_note: None,
             })
         }
         _ => {
@@ -4298,12 +4303,12 @@ pub unsafe extern "C" fn hegel_failure_comment_count(
 
 /// Read one explain-phase annotation off a failure: the half-open choice
 /// slice `[*out_start, *out_end)` of the shrunk counterexample the note
-/// applies to, and the note's text (without any comment syntax). The
-/// whole-test "varied together" note uses the marker slice `(0, 0)`.
+/// applies to, and the note's text (without any comment syntax).
 ///
 /// A client renders these by attaching each text as a comment to whatever
 /// printed region consumed exactly that choice slice on the final replay;
-/// slices matching no printed region are dropped.
+/// slices matching no printed region are dropped. The whole-test "varied
+/// together" note is separate — see `hegel_failure_together_note`.
 ///
 /// The written text pointer is owned by the failure snapshot and stays valid
 /// until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
@@ -4342,6 +4347,40 @@ pub unsafe extern "C" fn hegel_failure_comment(
         *out_start = *start;
         *out_end = *end;
         *out_text = text.as_ptr();
+    }
+    HEGEL_OK
+}
+
+/// Write the explain phase's whole-test note — how the failure behaved when
+/// every commented slice was varied at once — into `*out_text`, or NULL when
+/// there is none (fewer than two commented slices, or the explain phase was
+/// disabled or found nothing). Clients render it as a leading comment line
+/// above the reported failing example, and only when at least one slice
+/// comment actually attached to a printed region.
+///
+/// The written pointer is owned by the failure snapshot and stays valid
+/// until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
+/// `f` and `HEGEL_E_INVALID_ARG` for a NULL `out_text`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_together_note(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_text: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_together_note") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_text.is_null() {
+        set_last_error(ctx, "hegel_failure_together_note: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_text = match &f.together_note {
+            Some(note) => note.as_ptr(),
+            None => ptr::null(),
+        };
     }
     HEGEL_OK
 }

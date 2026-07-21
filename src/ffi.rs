@@ -1151,10 +1151,14 @@ impl RunResult {
                 let text = cstr_opt(text).unwrap_or_default();
                 explain_comments.push((start, end, text));
             }
+            let mut together: *const c_char = ptr::null();
+            require_ok(hegel_c::hegel_failure_together_note(ctx, f, &mut together));
+            let explain_together = cstr_opt(together);
             require_ok(hegel_c::hegel_failure_free(ctx, f));
             Failure {
                 reproduce_blob,
                 explain_comments,
+                explain_together,
             }
         })
     }
@@ -1171,11 +1175,13 @@ impl Drop for RunResult {
 ///
 /// Carries the reproduce blob the client replays to produce the diagnostic
 /// and re-raise the test's own panic, plus the explain phase's annotations —
-/// `(start, end, text)` choice slices of the shrunk counterexample — for the
-/// replay to attach to the printed regions that consumed them.
+/// `(start, end, text)` choice slices of the shrunk counterexample for the
+/// replay to attach to the printed regions that consumed them, and the
+/// whole-test "varied together" note when there is one.
 pub(crate) struct Failure {
     pub(crate) reproduce_blob: Option<String>,
     pub(crate) explain_comments: Vec<(u64, u64, String)>,
+    pub(crate) explain_together: Option<String>,
 }
 
 fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {

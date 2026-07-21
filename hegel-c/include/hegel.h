@@ -2007,12 +2007,12 @@ hegel_result_t hegel_failure_comment_count(hegel_context_t *ctx,
 /*
  Read one explain-phase annotation off a failure: the half-open choice
  slice `[*out_start, *out_end)` of the shrunk counterexample the note
- applies to, and the note's text (without any comment syntax). The
- whole-test "varied together" note uses the marker slice `(0, 0)`.
+ applies to, and the note's text (without any comment syntax).
 
  A client renders these by attaching each text as a comment to whatever
  printed region consumed exactly that choice slice on the final replay;
- slices matching no printed region are dropped.
+ slices matching no printed region are dropped. The whole-test "varied
+ together" note is separate — see `hegel_failure_together_note`.
 
  The written text pointer is owned by the failure snapshot and stays valid
  until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
@@ -2025,6 +2025,22 @@ hegel_result_t hegel_failure_comment(hegel_context_t *ctx,
                                      uint64_t *out_start,
                                      uint64_t *out_end,
                                      const char **out_text);
+
+/*
+ Write the explain phase's whole-test note — how the failure behaved when
+ every commented slice was varied at once — into `*out_text`, or NULL when
+ there is none (fewer than two commented slices, or the explain phase was
+ disabled or found nothing). Clients render it as a leading comment line
+ above the reported failing example, and only when at least one slice
+ comment actually attached to a printed region.
+
+ The written pointer is owned by the failure snapshot and stays valid
+ until `hegel_failure_free`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL
+ `f` and `HEGEL_E_INVALID_ARG` for a NULL `out_text`.
+ */
+hegel_result_t hegel_failure_together_note(hegel_context_t *ctx,
+                                           const hegel_failure_t *f,
+                                           const char **out_text);
 
 /*
  Write the number of choices this test case has recorded so far into

@@ -113,6 +113,7 @@ impl NativeDataSource {
                 origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
                 comments: Vec::new(),
+                together_note: None,
             }),
         }
     }

@@ -283,6 +283,7 @@ fn interesting() -> TestCaseResult {
         origin: "Panic at <targeting-test>".to_string(),
         reproduce_blob: None,
         comments: Vec::new(),
+        together_note: None,
     })
 }
 

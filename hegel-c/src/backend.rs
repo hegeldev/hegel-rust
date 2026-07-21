@@ -185,13 +185,13 @@ pub trait DataSource: Send + Sync {
 
 /// An explain-phase annotation on a failure: the choice slice
 /// `[start, end)` of the shrunk counterexample could be varied without
-/// changing the failure, or — for the whole-test marker slice `(0, 0)` — a
-/// note about varying every commented slice together.
+/// changing the failure.
 ///
 /// Clients attach the text as a comment to whatever printed region consumed
 /// exactly that choice slice on the final replay; slices that match no
 /// printed region are silently dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExplainComment {
     /// Index of the first choice of the slice.
     pub start: u64,
@@ -207,6 +207,7 @@ pub struct ExplainComment {
 /// the client replays; the rendered diagnostic (panic location, message,
 /// backtrace) is produced when the client replays that blob.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
@@ -226,6 +227,11 @@ pub struct Failure {
     /// slice. Empty when the explain phase is disabled, was skipped (e.g.
     /// shrinking timed out), or found nothing to say.
     pub comments: Vec<ExplainComment>,
+    /// The explain phase's whole-test note — how the failure behaved when
+    /// every commented slice was varied at once — present only when at least
+    /// two slices carry comments. Rendered as a leading comment line above
+    /// the reported failing example.
+    pub together_note: Option<String>,
 }
 
 /// Result of running a single test case.

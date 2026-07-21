@@ -47,6 +47,7 @@ fn boom(msg: &str) -> TestCaseResult {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
         comments: Vec::new(),
+        together_note: None,
     })
 }
 
@@ -563,11 +564,6 @@ fn explain_reports_when_commented_parts_always_fail_together() {
         vec![
             ExplainComment {
                 start: 0,
-                end: 0,
-                text: EXPLAIN_TOGETHER_ALWAYS.to_string(),
-            },
-            ExplainComment {
-                start: 0,
                 end: 1,
                 text: EXPLAIN_NOTE.to_string(),
             },
@@ -577,6 +573,10 @@ fn explain_reports_when_commented_parts_always_fail_together() {
                 text: EXPLAIN_NOTE.to_string(),
             },
         ]
+    );
+    assert_eq!(
+        failures[0].together_note.as_deref(),
+        Some(EXPLAIN_TOGETHER_ALWAYS)
     );
 }
 
@@ -605,11 +605,6 @@ fn explain_reports_when_commented_parts_sometimes_pass_together() {
         vec![
             ExplainComment {
                 start: 0,
-                end: 0,
-                text: EXPLAIN_TOGETHER_SOMETIMES.to_string(),
-            },
-            ExplainComment {
-                start: 0,
                 end: 1,
                 text: EXPLAIN_NOTE.to_string(),
             },
@@ -619,6 +614,10 @@ fn explain_reports_when_commented_parts_sometimes_pass_together() {
                 text: EXPLAIN_NOTE.to_string(),
             },
         ]
+    );
+    assert_eq!(
+        failures[0].together_note.as_deref(),
+        Some(EXPLAIN_TOGETHER_SOMETIMES)
     );
 }
 
@@ -744,8 +743,8 @@ fn explain_returns_nothing_when_the_deadline_has_already_passed() {
             let origin = run.origin.clone().unwrap();
             let spans = Spans::from(run.spans.clone());
             let deadline = std::time::Instant::now() - Duration::from_secs(1);
-            let comments = ctx.explain(&origin, &run.nodes, &spans, deadline);
-            assert!(comments.is_empty(), "{comments:?}");
+            let (comments, together) = ctx.explain(&origin, &run.nodes, &spans, deadline);
+            assert!(comments.is_empty() && together.is_none(), "{comments:?}");
         },
     );
 }
@@ -811,9 +810,9 @@ fn explain_skips_attempts_whose_realigned_span_cannot_be_found_and_bails_when_th
                 crafted_span(9, 10, true),
                 crafted_span(0, 1, false),
             ]);
-            let comments = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
+            let (comments, together) = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
             assert!(
-                comments.is_empty(),
+                comments.is_empty() && together.is_none(),
                 "a false attempt is a smaller counterexample, invalidating the notes: {comments:?}"
             );
         },
@@ -863,9 +862,9 @@ fn explain_skips_attempts_whose_realigned_end_precedes_the_slice() {
             assert_eq!(run.nodes.len(), 5);
             let origin = run.origin.clone().unwrap();
             let crafted = Spans::from(vec![crafted_span(2, 3, false)]);
-            let comments = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
+            let (comments, together) = ctx.explain(&origin, &run.nodes, &crafted, far_deadline());
             assert!(
-                comments.is_empty(),
+                comments.is_empty() && together.is_none(),
                 "an attempt below the gate is skipped by the realignment clamp, \
                  but its execution records a shorter counterexample, so the \
                  notes are invalidated: {comments:?}"
@@ -900,9 +899,9 @@ fn explain_drops_every_note_when_the_together_round_finds_a_smaller_counterexamp
             let origin = run.origin.clone().unwrap();
             assert!(origin.contains("matched"), "{origin}");
             let spans = Spans::from(run.spans.clone());
-            let comments = ctx.explain(&origin, &run.nodes, &spans, far_deadline());
+            let (comments, together) = ctx.explain(&origin, &run.nodes, &spans, far_deadline());
             assert!(
-                comments.is_empty(),
+                comments.is_empty() && together.is_none(),
                 "varying each draw alone fails differently, but varying them \
                  together reaches [false, false] — a smaller counterexample \
                  with this origin — invalidating the notes: {comments:?}"

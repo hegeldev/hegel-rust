@@ -571,9 +571,10 @@ impl<'a> Engine<'a> {
                 };
                 self.interesting.insert(origin.clone(), shrunk.clone());
                 if settings.phases.contains(&Phase::Explain) && !this_shrink_timed_out {
-                    let comments = self.explain(&origin, &shrunk, &shrunk_spans, shrink_deadline);
-                    if !comments.is_empty() {
-                        self.slice_comments.insert(origin.clone(), comments);
+                    let annotations =
+                        self.explain(&origin, &shrunk, &shrunk_spans, shrink_deadline);
+                    if !annotations.0.is_empty() {
+                        self.explain_annotations.insert(origin.clone(), annotations);
                     }
                 }
                 shrunk_origins.insert(origin);
@@ -619,9 +620,10 @@ impl<'a> Engine<'a> {
                         return Err(RunError::Flaky(flaky_diagnostic()));
                     }
                     let spans = Spans::from(verify.spans);
-                    let comments = self.explain(&origin, &verify.nodes, &spans, explain_deadline);
-                    if !comments.is_empty() {
-                        self.slice_comments.insert(origin, comments);
+                    let annotations =
+                        self.explain(&origin, &verify.nodes, &spans, explain_deadline);
+                    if !annotations.0.is_empty() {
+                        self.explain_annotations.insert(origin, annotations);
                     }
                 }
             }
@@ -667,16 +669,18 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let mut slice_comments = std::mem::take(&mut self.slice_comments);
+        let mut explain_annotations = std::mem::take(&mut self.explain_annotations);
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
                 let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-                let comments = slice_comments.remove(&origin).unwrap_or_default();
+                let (comments, together_note) =
+                    explain_annotations.remove(&origin).unwrap_or_default();
                 Failure {
                     origin,
                     reproduce_blob: Some(crate::native::blob::encode_failure(&choices)),
                     comments,
+                    together_note,
                 }
             })
             .collect())
@@ -987,7 +991,7 @@ pub(crate) struct Engine<'a> {
     pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
     /// Explain-phase annotations per origin, computed right after that
     /// origin's shrink fixpoint and attached to its [`Failure`] in the report.
-    slice_comments: HashMap<String, Vec<ExplainComment>>,
+    explain_annotations: HashMap<String, (Vec<ExplainComment>, Option<String>)>,
     pub(crate) targeting: crate::native::targeting::TargetingState,
     pub(crate) calls: u64,
     pub(crate) valid_test_cases: u64,
@@ -1019,7 +1023,7 @@ impl<'a> Engine<'a> {
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::new(),
-            slice_comments: HashMap::new(),
+            explain_annotations: HashMap::new(),
             targeting: crate::native::targeting::TargetingState::new(),
             calls: 0,
             valid_test_cases: 0,
@@ -1339,9 +1343,9 @@ impl<'a> Engine<'a> {
     }
 
     /// Compute the explain annotations for `origin`'s shrunk counterexample
-    /// (`nodes` with span structure `spans`). Returns them sorted by slice;
-    /// the whole-test "varied together" note, when present, uses the marker
-    /// slice `(0, 0)`. Returns nothing if the shrink target moves while
+    /// (`nodes` with span structure `spans`): the slice comments sorted by
+    /// slice, and the whole-test "varied together" note when at least two
+    /// slices were flagged. Returns nothing if the shrink target moves while
     /// experimenting (an experiment stumbled on a smaller counterexample) or
     /// the deadline expires before any slice is flagged.
     fn explain(
@@ -1350,7 +1354,7 @@ impl<'a> Engine<'a> {
         nodes: &[ChoiceNode],
         spans: &Spans,
         deadline: std::time::Instant,
-    ) -> Vec<ExplainComment> {
+    ) -> (Vec<ExplainComment>, Option<String>) {
         let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
 
         let slices: Vec<(usize, usize)> = spans
@@ -1463,7 +1467,7 @@ impl<'a> Engine<'a> {
                 chunks.entry((start, end)).or_default().push(chunk);
 
                 if self.interesting.get(origin).map(|n| n.as_slice()) != Some(nodes) {
-                    return Vec::new();
+                    return (Vec::new(), None);
                 }
                 if result.status == Status::Valid {
                     break;
@@ -1479,6 +1483,7 @@ impl<'a> Engine<'a> {
             }
         }
 
+        let mut together_note = None;
         if comments.len() >= 2 {
             let mut chunks_by_start: Vec<(ExplainSlice, Vec<Vec<ChoiceValue>>)> = chunks
                 .into_iter()
@@ -1493,11 +1498,8 @@ impl<'a> Engine<'a> {
                 deadline,
                 &mut rng,
             ) {
-                Ok(Some(note)) => {
-                    comments.insert((0, 0), note);
-                }
-                Ok(None) => {}
-                Err(TargetMoved) => return Vec::new(),
+                Ok(note) => together_note = note,
+                Err(TargetMoved) => return (Vec::new(), None),
             }
         }
 
@@ -1510,7 +1512,7 @@ impl<'a> Engine<'a> {
             })
             .collect();
         out.sort_by_key(|c| (c.start, c.end));
-        out
+        (out, together_note)
     }
 
     /// The explain phase's closing round: re-vary every commented slice at

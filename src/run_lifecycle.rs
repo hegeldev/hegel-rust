@@ -238,6 +238,7 @@ pub(crate) fn run_test_case(
     verbosity: Verbosity,
     output: &RunOutput,
     explain_comments: Vec<(u64, u64, String)>,
+    explain_together: Option<String>,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -255,7 +256,7 @@ pub(crate) fn run_test_case(
     let c_tc = Arc::new(c_tc);
     let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
     if should_emit && !explain_comments.is_empty() {
-        tc.set_explain_comments(explain_comments);
+        tc.set_explain_comments(explain_comments, explain_together);
     }
     let reporter = tc.child(0);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
@@ -474,6 +475,7 @@ pub(crate) fn drive<F>(
             verbosity,
             &output,
             Vec::new(),
+            None,
         );
     }
 
@@ -519,6 +521,7 @@ pub(crate) fn drive<F>(
                     verbosity,
                     &output,
                     failure.explain_comments,
+                    failure.explain_together,
                 );
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
@@ -569,6 +572,7 @@ fn drive_single_case(
         verbosity,
         output,
         Vec::new(),
+        None,
     );
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
@@ -615,6 +619,7 @@ pub(crate) fn drive_blob_replay<F>(
         settings.verbosity,
         &output,
         Vec::new(),
+        None,
     );
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);

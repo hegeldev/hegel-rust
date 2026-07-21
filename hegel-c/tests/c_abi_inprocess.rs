@@ -987,6 +987,21 @@ fn explain_comments_are_readable_through_the_abi() {
             HEGEL_E_INVALID_HANDLE
         );
 
+        let mut note: *const c_char = ptr::null();
+        ok(hegel_c::hegel_failure_together_note(ctx, f, &mut note));
+        assert!(
+            note.is_null(),
+            "a single commented slice has no together note"
+        );
+        assert_eq!(
+            hegel_c::hegel_failure_together_note(ctx, f, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_failure_together_note(ctx, ptr::null(), &mut note),
+            HEGEL_E_INVALID_HANDLE
+        );
+
         let blob = repro_blob_of(ctx, f);
         assert!(!blob.is_null());
         let mut replay: *mut HegelTestCase = ptr::null_mut();
@@ -1020,6 +1035,62 @@ fn explain_comments_are_readable_through_the_abi() {
             ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, replay));
+
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A failure where every draw is irrelevant: two slices carry comments, so
+/// the whole-test "varied together" note exists and is readable through
+/// `hegel_failure_together_note`.
+#[test]
+fn together_note_is_readable_through_the_abi() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 10));
+        ok(hegel_c::hegel_settings_set_derandomize(ctx, s, true));
+        let run = start(ctx, s);
+        let origin = CString::new("Panic at together.rs:1:1").unwrap();
+        let min = i64::from(i32::MIN);
+        let max = i64::from(i32::MAX);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut a = 0i64;
+            let mut b = 0i64;
+            let first = hegel_generate_integer(ctx, tc, min, max, &mut a);
+            let second = hegel_generate_integer(ctx, tc, min, max, &mut b);
+            let (status, origin_ptr) = if first != HEGEL_OK || second != HEGEL_OK {
+                (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+            } else {
+                (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+            };
+            ok(hegel_mark_complete(ctx, tc, status as u32, origin_ptr));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+
+        let res = result(ctx, run);
+        let f = failure_at(ctx, res, 0);
+        assert!(!f.is_null());
+        let mut count = 0usize;
+        ok(hegel_failure_comment_count(ctx, f, &mut count));
+        assert_eq!(count, 2);
+        let mut note: *const c_char = ptr::null();
+        ok(hegel_c::hegel_failure_together_note(ctx, f, &mut note));
+        assert!(!note.is_null());
+        assert_eq!(
+            std::ffi::CStr::from_ptr(note).to_str().unwrap(),
+            "The test always failed when commented parts were varied together."
+        );
 
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
