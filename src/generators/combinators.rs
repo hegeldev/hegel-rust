@@ -416,7 +416,7 @@ impl<T, G> OptionalGenerator<G, T> {
         let result = if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
             let value = draw(&self.inner, tc, printer);
-            printer.end_group(5, ")");
+            printer.end_group(")");
             Some(value)
         } else {
             printer.text("None");

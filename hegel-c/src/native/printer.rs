@@ -115,7 +115,7 @@ enum Cmd {
     IfBreak(String),
     HardBreak,
     BeginGroup { indent: usize, open: String },
-    EndGroup { dedent: usize, close: String },
+    EndGroup { close: String },
     ShiftIndent(isize),
     Comment(String),
     Splice(SlotId),
@@ -154,6 +154,7 @@ impl Token {
 #[derive(Debug)]
 struct Group {
     depth: usize,
+    indent: usize,
     pending: usize,
     want_break: bool,
     comment: bool,
@@ -282,18 +283,12 @@ impl Printer {
         )
     }
 
-    /// Close the innermost group: decrease the indentation by `dedent`, then
-    /// emit `close`.
-    pub fn end_group(
-        &mut self,
-        target: Target,
-        dedent: usize,
-        close: &str,
-    ) -> Result<(), PrinterError> {
+    /// Close the innermost group: undo the indentation its `begin_group`
+    /// added, then emit `close`.
+    pub fn end_group(&mut self, target: Target, close: &str) -> Result<(), PrinterError> {
         self.dispatch(
             target,
             Cmd::EndGroup {
-                dedent,
                 close: close.to_string(),
             },
         )
@@ -564,6 +559,7 @@ impl<'a> Renderer<'a> {
             indentation: 0,
             groups: vec![Group {
                 depth: 0,
+                indent: 0,
                 pending: 0,
                 want_break: false,
                 comment: false,
@@ -587,7 +583,7 @@ impl<'a> Renderer<'a> {
             Cmd::IfBreak(s) => self.if_break(s),
             Cmd::HardBreak => self.newline(),
             Cmd::BeginGroup { indent, open } => self.begin_group(*indent, open),
-            Cmd::EndGroup { dedent, close } => return self.end_group(*dedent, close),
+            Cmd::EndGroup { close } => return self.end_group(close),
             Cmd::ShiftIndent(delta) => self.indentation += delta,
             Cmd::Comment(s) => self.comment(s),
             Cmd::Splice(SlotId(id)) => {
@@ -692,6 +688,7 @@ impl<'a> Renderer<'a> {
         let comment = self.force_break[id];
         self.groups.push(Group {
             depth,
+            indent,
             pending: 0,
             want_break: comment,
             comment,
@@ -704,12 +701,12 @@ impl<'a> Renderer<'a> {
         self.indentation += indent as isize;
     }
 
-    fn end_group(&mut self, dedent: usize, close: &str) -> Result<(), PrinterError> {
+    fn end_group(&mut self, close: &str) -> Result<(), PrinterError> {
         if self.group_stack.len() == 1 {
             return Err(PrinterError::UnbalancedGroup);
         }
-        self.indentation -= dedent as isize;
         let id = self.group_stack.pop().unwrap();
+        self.indentation -= self.groups[id].indent as isize;
         let close = if self.groups[id].comment {
             // A breakable the client placed before the close has already
             // started the fresh line; add the close's own break only when

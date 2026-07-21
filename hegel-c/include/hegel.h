@@ -1706,8 +1706,9 @@ hegel_result_t hegel_printer_begin_group(hegel_context_t *ctx,
                                          size_t open_len);
 
 /*
- Close the innermost group: decrease the indentation by `dedent`, then
- emit `close` (same rules as `hegel_printer_text`).
+ Close the innermost group: undo the indentation its
+ `hegel_printer_begin_group` added, then emit `close` (same rules as
+ `hegel_printer_text`).
 
  Errors as `hegel_printer_text`; closing with no group open is
  `HEGEL_E_INVALID_ARG` (reported by `hegel_printer_resolve` instead when
@@ -1715,7 +1716,6 @@ hegel_result_t hegel_printer_begin_group(hegel_context_t *ctx,
  */
 hegel_result_t hegel_printer_end_group(hegel_context_t *ctx,
                                        hegel_printer_t *printer,
-                                       uint64_t dedent,
                                        const uint8_t *close,
                                        size_t close_len);
 

@@ -29,7 +29,7 @@ fn fitting_group_renders_separators_inline() {
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "3").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1, 2, 3]");
 }
 
@@ -44,7 +44,7 @@ fn overflowing_group_breaks_every_breakable() {
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "3").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1,\n 2,\n 3]");
 }
 
@@ -56,15 +56,15 @@ fn nested_group_stays_inline_when_outer_breaks() {
     p.text(M, "1,").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "2").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.begin_group(M, 1, "[").unwrap();
     p.text(M, "3,").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "4").unwrap();
-    p.end_group(M, 1, "]").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[[1, 2],\n [3, 4]]");
 }
 
@@ -77,7 +77,7 @@ fn breakable_in_already_broken_group_breaks_immediately() {
     p.text(M, "bb").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "cc").unwrap();
-    p.end_group(M, 0, "").unwrap();
+    p.end_group(M, "").unwrap();
     assert_eq!(p.value().unwrap(), "aaaa\nbb\ncc");
 }
 
@@ -97,7 +97,7 @@ fn call_style_layout_with_group_indent() {
     p.begin_group(M, 4, "f(").unwrap();
     p.hard_break(M).unwrap();
     p.text(M, "x,").unwrap();
-    p.end_group(M, 4, "").unwrap();
+    p.end_group(M, "").unwrap();
     p.hard_break(M).unwrap();
     p.text(M, ")").unwrap();
     assert_eq!(p.value().unwrap(), "f(\n    x,\n)");
@@ -161,10 +161,10 @@ fn buffered_text_coalesces_after_breakable() {
 #[test]
 fn end_group_without_begin_is_an_error() {
     let mut p = printer(79);
-    assert_eq!(p.end_group(M, 0, ""), Err(PrinterError::UnbalancedGroup));
+    assert_eq!(p.end_group(M, ""), Err(PrinterError::UnbalancedGroup));
     p.begin_group(M, 0, "").unwrap();
-    p.end_group(M, 0, "").unwrap();
-    assert_eq!(p.end_group(M, 0, ""), Err(PrinterError::UnbalancedGroup));
+    p.end_group(M, "").unwrap();
+    assert_eq!(p.end_group(M, ""), Err(PrinterError::UnbalancedGroup));
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn closing_a_group_whose_breakables_were_flushed_is_fine() {
     p.begin_group(M, 0, "").unwrap();
     p.breakable(M, " ").unwrap();
     p.hard_break(M).unwrap();
-    p.end_group(M, 0, "").unwrap();
+    p.end_group(M, "").unwrap();
     assert_eq!(p.value().unwrap(), " \n");
 }
 
@@ -198,10 +198,10 @@ fn deq_marks_groups_without_breakables_for_breaking() {
     p.text(M, "aaaa").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "bb").unwrap();
-    p.end_group(M, 0, "").unwrap();
+    p.end_group(M, "").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "cc").unwrap();
-    p.end_group(M, 0, "").unwrap();
+    p.end_group(M, "").unwrap();
     assert_eq!(p.value().unwrap(), "aaaa\nbb\ncc");
 }
 
@@ -248,14 +248,14 @@ fn opening_a_deferred_does_not_force_a_premature_break() {
     inline.text(M, "123").unwrap();
     inline.breakable(M, " ").unwrap();
     inline.text(M, "45678").unwrap();
-    inline.end_group(M, 1, "]").unwrap();
+    inline.end_group(M, "]").unwrap();
 
     let mut p = printer(10);
     p.begin_group(M, 1, "[").unwrap();
     p.text(M, "123").unwrap();
     p.breakable(M, " ").unwrap();
     let slot = p.deferred(M).unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     p.text(Target::Slot(slot), "45678").unwrap();
     p.resolve().unwrap();
 
@@ -283,7 +283,7 @@ fn slot_dies_after_resolve() {
         Err(PrinterError::DeadSlot)
     );
     assert_eq!(
-        p.end_group(Target::Slot(slot), 0, ""),
+        p.end_group(Target::Slot(slot), ""),
         Err(PrinterError::DeadSlot)
     );
     assert_eq!(
@@ -514,7 +514,7 @@ fn commit_or_abort_without_begin_is_an_error() {
 fn resolve_surfaces_unbalanced_groups_after_the_hole() {
     let mut p = printer(79);
     p.deferred(M).unwrap();
-    p.end_group(M, 0, "").unwrap();
+    p.end_group(M, "").unwrap();
     assert_eq!(p.resolve(), Err(PrinterError::UnbalancedGroup));
 }
 
@@ -522,7 +522,7 @@ fn resolve_surfaces_unbalanced_groups_after_the_hole() {
 fn resolve_surfaces_unbalanced_groups_in_slot_content() {
     let mut p = printer(79);
     let slot = p.deferred(M).unwrap();
-    p.end_group(Target::Slot(slot), 0, "").unwrap();
+    p.end_group(Target::Slot(slot), "").unwrap();
     assert_eq!(p.resolve(), Err(PrinterError::UnbalancedGroup));
     assert_eq!(p.value(), Err(PrinterError::UnbalancedGroup));
 }
@@ -533,7 +533,7 @@ fn slot_content_may_close_groups_opened_before_the_hole() {
     p.begin_group(M, 1, "[").unwrap();
     p.text(M, "1").unwrap();
     let slot = p.deferred(M).unwrap();
-    p.end_group(Target::Slot(slot), 1, "]").unwrap();
+    p.end_group(Target::Slot(slot), "]").unwrap();
     p.resolve().unwrap();
     assert_eq!(p.value().unwrap(), "[1]");
 }
@@ -544,7 +544,7 @@ fn commit_of_unbalanced_speculation_into_main_errors_atomically() {
     p.text(M, "x").unwrap();
     p.begin_speculative(M).unwrap();
     p.text(M, "junk").unwrap();
-    p.end_group(M, 0, ")").unwrap();
+    p.end_group(M, ")").unwrap();
     assert_eq!(p.commit_speculative(M), Err(PrinterError::UnbalancedGroup));
     p.abort_speculative(M).unwrap();
     assert_eq!(p.value().unwrap(), "x");
@@ -556,7 +556,7 @@ fn speculation_may_close_groups_opened_outside_it() {
     p.begin_group(M, 0, "(").unwrap();
     p.begin_speculative(M).unwrap();
     p.text(M, "x").unwrap();
-    p.end_group(M, 0, ")").unwrap();
+    p.end_group(M, ")").unwrap();
     p.commit_speculative(M).unwrap();
     assert_eq!(p.value().unwrap(), "(x)");
 }
@@ -566,7 +566,7 @@ fn nested_speculation_commits_are_not_validated_until_the_outer_commit() {
     let mut p = printer(79);
     p.begin_speculative(M).unwrap();
     p.begin_speculative(M).unwrap();
-    p.end_group(M, 0, ")").unwrap();
+    p.end_group(M, ")").unwrap();
     p.commit_speculative(M).unwrap();
     assert_eq!(p.commit_speculative(M), Err(PrinterError::UnbalancedGroup));
     p.abort_speculative(M).unwrap();
@@ -604,7 +604,7 @@ fn gofmt_list(p: &mut Printer, elements: &[&str]) {
         p.if_break(M, ",").unwrap();
         p.breakable(M, "").unwrap();
     }
-    p.end_group(M, 0, "}").unwrap();
+    p.end_group(M, "}").unwrap();
 }
 
 #[test]
@@ -630,7 +630,7 @@ fn if_break_emits_immediately_in_an_already_broken_group() {
     p.text(M, "b").unwrap();
     p.if_break(M, ",").unwrap();
     p.breakable(M, "").unwrap();
-    p.end_group(M, 0, "}").unwrap();
+    p.end_group(M, "}").unwrap();
     assert_eq!(p.value().unwrap(), "{aaaaaa\nb,\n}");
 }
 
@@ -655,7 +655,7 @@ fn if_break_in_a_comment_forced_group_emits_before_the_close_break() {
     p.shift_indent(M, -4).unwrap();
     p.if_break(M, ",").unwrap();
     p.breakable(M, "").unwrap();
-    p.end_group(M, 0, "}").unwrap();
+    p.end_group(M, "}").unwrap();
     assert_eq!(p.value().unwrap(), "{\n    1, // c\n    2,\n}");
 }
 
@@ -670,7 +670,7 @@ fn comment_forced_close_break_is_not_doubled_after_an_explicit_breakable() {
     p.shift_indent(M, -4).unwrap();
     p.if_break(M, ",").unwrap();
     p.breakable(M, "").unwrap();
-    p.end_group(M, 0, "}").unwrap();
+    p.end_group(M, "}").unwrap();
     assert_eq!(p.value().unwrap(), "{\n    1, // c\n}");
 }
 
@@ -705,7 +705,7 @@ fn comment_forces_every_open_group_to_break() {
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "3").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(
         p.value().unwrap(),
         "[1,\n 2,  // or any other generated value\n 3\n]"
@@ -722,7 +722,7 @@ fn comment_breaks_earlier_breakables_of_its_groups() {
     p.breakable(M, " ").unwrap();
     p.text(M, "3").unwrap();
     p.comment(M, "  // c").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1,\n 2,\n 3  // c\n]");
 }
 
@@ -738,8 +738,8 @@ fn comment_does_not_break_groups_opened_after_it() {
     p.text(M, "2,").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "3").unwrap();
-    p.end_group(M, 1, ")").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, ")").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1,  // c\n (2, 3)\n]");
 }
 
@@ -750,9 +750,9 @@ fn nested_comment_forced_groups_each_break_before_their_close() {
     p.begin_group(M, 1, "[").unwrap();
     p.text(M, "1").unwrap();
     p.comment(M, "  // c").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     p.text(M, ",").unwrap();
-    p.end_group(M, 1, ")").unwrap();
+    p.end_group(M, ")").unwrap();
     assert_eq!(p.value().unwrap(), "([1  // c\n ],\n)");
 }
 
@@ -763,7 +763,7 @@ fn comment_break_trims_leading_whitespace_from_the_close_text() {
     p.breakable(M, " ").unwrap();
     p.text(M, "a: 1").unwrap();
     p.comment(M, "  // c").unwrap();
-    p.end_group(M, 4, " }").unwrap();
+    p.end_group(M, " }").unwrap();
     assert_eq!(p.value().unwrap(), "S {\n    a: 1  // c\n}");
 }
 
@@ -831,7 +831,7 @@ fn comment_in_an_aborted_speculation_is_dropped() {
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "2").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1, 2]");
 }
 
@@ -846,7 +846,7 @@ fn comment_in_a_committed_speculation_takes_effect() {
     p.text(M, ",").unwrap();
     p.breakable(M, " ").unwrap();
     p.text(M, "2").unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     assert_eq!(p.value().unwrap(), "[1,  // c\n 2\n]");
 }
 
@@ -857,7 +857,7 @@ fn comment_inside_a_deferred_slot_breaks_the_groups_open_at_the_hole() {
     p.text(M, "1,").unwrap();
     p.breakable(M, " ").unwrap();
     let slot = p.deferred(M).unwrap();
-    p.end_group(M, 1, "]").unwrap();
+    p.end_group(M, "]").unwrap();
     p.text(Target::Slot(slot), "2").unwrap();
     p.comment(Target::Slot(slot), "  // c").unwrap();
     p.resolve().unwrap();
@@ -935,7 +935,7 @@ enum Op {
     Breakable(String),
     HardBreak,
     BeginGroup { indent: usize, open: String },
-    EndGroup { dedent: usize, close: String },
+    EndGroup { close: String },
     ShiftIndent(isize),
     Comment(String),
 }
@@ -946,7 +946,7 @@ fn apply(p: &mut Printer, target: Target, op: &Op) {
         Op::Breakable(sep) => p.breakable(target, sep).unwrap(),
         Op::HardBreak => p.hard_break(target).unwrap(),
         Op::BeginGroup { indent, open } => p.begin_group(target, *indent, open).unwrap(),
-        Op::EndGroup { dedent, close } => p.end_group(target, *dedent, close).unwrap(),
+        Op::EndGroup { close } => p.end_group(target, close).unwrap(),
         Op::ShiftIndent(delta) => p.shift_indent(target, *delta).unwrap(),
         Op::Comment(s) => p.comment(target, s).unwrap(),
     }
@@ -973,7 +973,6 @@ fn random_program(rng: &mut SmallRng) -> Vec<Op> {
                 if open > 0 && rng.random_bool(0.5) {
                     open -= 1;
                     Op::EndGroup {
-                        dedent: rng.random_range(0..3),
                         close: ["", "]", ")"][rng.random_range(0..3)].to_string(),
                     }
                 } else {
@@ -993,7 +992,6 @@ fn random_program(rng: &mut SmallRng) -> Vec<Op> {
     }
     for _ in 0..open {
         ops.push(Op::EndGroup {
-            dedent: 0,
             close: String::new(),
         });
     }

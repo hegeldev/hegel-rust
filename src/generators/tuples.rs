@@ -111,7 +111,7 @@ macro_rules! impl_tuple {
                 if index == 1 {
                     printer.text(",");
                 }
-                printer.end_group(1, ")");
+                printer.end_group(")");
                 tc.stop_span(false);
                 result
             }

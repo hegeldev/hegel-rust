@@ -1001,10 +1001,11 @@ impl PrinterHandle {
         }))
     }
 
-    /// Close the innermost group: dedent by `dedent`, then emit `close`.
-    pub(crate) fn end_group(&self, dedent: u64, close: &str) -> Result<(), String> {
+    /// Close the innermost group: undo its `begin_group` indentation, then
+    /// emit `close`.
+    pub(crate) fn end_group(&self, close: &str) -> Result<(), String> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_end_group(ctx, self.raw, dedent, close.as_ptr(), close.len())
+            hegel_c::hegel_printer_end_group(ctx, self.raw, close.as_ptr(), close.len())
         }))
     }
 

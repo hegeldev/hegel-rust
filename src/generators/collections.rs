@@ -78,7 +78,7 @@ impl<G, T> VecGenerator<G, T> {
             speculation.commit();
             result.push(element);
         }
-        printer.end_group(5, "]");
+        printer.end_group("]");
         tc.stop_span(false);
         result
     }
@@ -194,7 +194,7 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
-        printer.end_group(15, "])");
+        printer.end_group("])");
         tc.stop_span(false);
         set
     }
@@ -323,7 +323,7 @@ where
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
-        printer.end_group(15, "])");
+        printer.end_group("])");
         tc.stop_span(false);
         map
     }
@@ -414,7 +414,7 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
             }
             draw(&self.element, tc, printer)
         });
-        printer.end_group(1, "]");
+        printer.end_group("]");
         tc.stop_span(false);
         result
     }

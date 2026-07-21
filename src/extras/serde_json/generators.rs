@@ -39,7 +39,7 @@ fn pretty_print_json(value: &Value, printer: &mut PrettyPrinter) {
                 }
                 pretty_print_json(item, printer);
             }
-            printer.end_group(1, "]");
+            printer.end_group("]");
         }
         Value::Object(entries) => {
             printer.begin_group(1, "{");
@@ -51,7 +51,7 @@ fn pretty_print_json(value: &Value, printer: &mut PrettyPrinter) {
                 printer.text(&format!("{}: ", Value::String(key.clone())));
                 pretty_print_json(item, printer);
             }
-            printer.end_group(1, "}");
+            printer.end_group("}");
         }
     }
 }
@@ -60,7 +60,7 @@ impl crate::PrettyPrintable for Value {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         printer.begin_group(6, "json!(");
         pretty_print_json(self, printer);
-        printer.end_group(6, ")");
+        printer.end_group(")");
     }
 }
 

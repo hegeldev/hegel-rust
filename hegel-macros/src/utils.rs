@@ -247,7 +247,7 @@ pub(crate) fn print_shape(
                 __printer.begin_group(4, #open);
                 __printer.breakable(" ");
                 #(#steps)*
-                __printer.end_group(4, " }");
+                __printer.end_group(" }");
             }
         }
         syn::Fields::Unnamed(_) => {
@@ -269,7 +269,7 @@ pub(crate) fn print_shape(
             quote! {
                 __printer.begin_group(1, #open);
                 #(#steps)*
-                __printer.end_group(1, ")");
+                __printer.end_group(")");
             }
         }
     }

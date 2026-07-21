@@ -3569,8 +3569,9 @@ pub unsafe extern "C" fn hegel_printer_begin_group(
     }
 }
 
-/// Close the innermost group: decrease the indentation by `dedent`, then
-/// emit `close` (same rules as `hegel_printer_text`).
+/// Close the innermost group: undo the indentation its
+/// `hegel_printer_begin_group` added, then emit `close` (same rules as
+/// `hegel_printer_text`).
 ///
 /// Errors as `hegel_printer_text`; closing with no group open is
 /// `HEGEL_E_INVALID_ARG` (reported by `hegel_printer_resolve` instead when
@@ -3579,7 +3580,6 @@ pub unsafe extern "C" fn hegel_printer_begin_group(
 pub unsafe extern "C" fn hegel_printer_end_group(
     ctx: *mut HegelContext,
     printer: *mut HegelPrinter,
-    dedent: u64,
     close: *const u8,
     close_len: usize,
 ) -> hegel_result_t {
@@ -3593,11 +3593,7 @@ pub unsafe extern "C" fn hegel_printer_end_group(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle
-        .inner
-        .lock()
-        .end_group(handle.target, size_arg(dedent), &close)
-    {
+    match handle.inner.lock().end_group(handle.target, &close) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
