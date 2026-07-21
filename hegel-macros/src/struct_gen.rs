@@ -181,17 +181,20 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         )
     };
 
+    let print_idents: Vec<_> = (0..field_names.len())
+        .map(|i| format_ident!("__field{i}"))
+        .collect();
     let print_construct = if is_tuple {
-        quote! { #name(#(#field_names,)*) }
+        quote! { #name(#(#print_idents,)*) }
     } else {
-        quote! { #name { #(#field_names,)* } }
+        quote! { #name { #(#field_names: #print_idents,)* } }
     };
-
-    let print_actions: Vec<_> = field_names
+    let print_actions: Vec<_> = print_idents
         .iter()
-        .map(|field_name| {
+        .zip(field_names.iter())
+        .map(|(print_ident, field_name)| {
             quote! {
-                let #field_name = self.#field_name.do_draw_and_print(__tc, __printer);
+                let #print_ident = self.#field_name.do_draw_and_print(__tc, __printer);
             }
         })
         .collect();
