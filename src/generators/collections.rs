@@ -1,6 +1,6 @@
 use super::{Collection, Generator, PrintableGenerator, TestCase, labels};
 use crate::control::hegel_internal_assert;
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -158,11 +158,6 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-/// The largest enumerated value pool [`HashSetGenerator`] will draw
-/// without replacement from. Mirrors the bound the engine's old
-/// unique-sampled-list strategy used.
-const MAX_UNIQUE_POOL: usize = 10_000;
-
 impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
 where
     G: Generator<T>,
@@ -175,69 +170,6 @@ where
             }
         }
         tc.start_span(labels::SET);
-        let set = match self.enumerated_pool() {
-            Some(pool) => self.draw_from_pool(tc, pool),
-            None => self.draw_by_rejection(tc),
-        };
-        tc.stop_span(false);
-        set
-    }
-}
-
-impl<T, G> HashSetGenerator<G, T>
-where
-    G: Generator<T>,
-    T: Eq + Hash,
-{
-    /// The distinct values of an enumerable element generator, in first
-    /// occurrence order (which the shrinker treats as simplest-first), when
-    /// there are few enough of them to draw without replacement.
-    fn enumerated_pool(&self) -> Option<Vec<T>> {
-        let values = self.elements.enumerate_values()?;
-        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
-            return None;
-        }
-        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut pool: Vec<T> = Vec::new();
-        for v in values {
-            let bucket = by_hash.entry(fingerprint(&v)).or_default();
-            if bucket.iter().any(|&i| pool[i] == v) {
-                continue;
-            }
-            bucket.push(pool.len());
-            pool.push(v);
-        }
-        Some(pool)
-    }
-
-    /// Draw set elements as indices into a shrinking pool of the remaining
-    /// values, avoiding the coupon-collector problem when the set must
-    /// contain most of a small alphabet. Port of Hypothesis's
-    /// `UniqueSampledListStrategy`.
-    fn draw_from_pool(&self, tc: &TestCase, mut remaining: Vec<T>) -> HashSet<T> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a set: min_size {} is larger than the {} distinct values the element generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut set = HashSet::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            set.insert(remaining.remove(j));
-        }
-        set
-    }
-
-    fn draw_by_rejection(&self, tc: &TestCase) -> HashSet<T> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
         while collection.more() {
@@ -247,19 +179,18 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
+        tc.stop_span(false);
         set
     }
 }
 
-/// Printing a set draw prints each element's own [`PrettyPrintable`]
-/// representation after it is accepted (rather than delegating to the element
-/// generator) because the without-replacement pool path produces elements by
-/// index, with no element draw to delegate to; printing the same way on both
-/// paths keeps the output consistent.
+/// Printing a set draw is fully compositional: each element prints through
+/// the element generator inside a speculative region, so an element rejected
+/// as a duplicate discards its own output (including its separator).
 impl<T, G> PrintableGenerator<HashSet<T>> for HashSetGenerator<G, T>
 where
-    G: Generator<T>,
-    T: Eq + Hash + PrettyPrintable,
+    G: PrintableGenerator<T>,
+    T: Eq + Hash,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
         if let Some(max) = self.max_size {
@@ -269,83 +200,28 @@ where
         }
         tc.start_span(labels::SET);
         printer.begin_group(1, "{");
-        let set = match self.enumerated_pool() {
-            Some(pool) => self.print_from_pool(tc, printer, pool),
-            None => self.print_by_rejection(tc, printer),
-        };
-        printer.end_group(1, "}");
-        tc.stop_span(false);
-        set
-    }
-}
-
-impl<T, G> HashSetGenerator<G, T>
-where
-    G: Generator<T>,
-    T: Eq + Hash + PrettyPrintable,
-{
-    fn print_from_pool(
-        &self,
-        tc: &TestCase,
-        printer: &mut PrettyPrinter,
-        mut remaining: Vec<T>,
-    ) -> HashSet<T> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a set: min_size {} is larger than the {} distinct values the element generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut set = HashSet::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            let value = remaining.remove(j);
-            if !set.is_empty() {
-                printer.text(",");
-                printer.breakable(" ");
-            }
-            value.pretty_print(printer);
-            set.insert(value);
-        }
-        set
-    }
-
-    fn print_by_rejection(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
         while collection.more() {
-            let element = self.elements.do_draw(tc);
+            let mut speculation = printer.speculate();
+            if !set.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let element = self.elements.draw_and_print(tc, speculation.printer());
             if set.contains(&element) {
+                speculation.abort();
                 collection.reject(Some("duplicate element"));
             } else {
-                if !set.is_empty() {
-                    printer.text(",");
-                    printer.breakable(" ");
-                }
-                element.pretty_print(printer);
+                speculation.commit();
                 set.insert(element);
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
+        printer.end_group(1, "}");
+        tc.stop_span(false);
         set
     }
-}
-
-/// A hashable stand-in for a value that is only `Eq + Hash`, used to dedup
-/// the enumerated pool.
-fn fingerprint<T: Eq + Hash>(v: &T) -> u64 {
-    use std::hash::{DefaultHasher, Hasher};
-    let mut h = DefaultHasher::new();
-    v.hash(&mut h);
-    h.finish()
 }
 
 /// Generate hash sets with elements from the given generator.
@@ -396,71 +272,6 @@ where
             }
         }
         tc.start_span(labels::MAP);
-        let map = match self.enumerated_key_pool() {
-            Some(pool) => self.draw_from_key_pool(tc, pool),
-            None => self.draw_by_rejection(tc),
-        };
-        tc.stop_span(false);
-        map
-    }
-}
-
-impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT>
-where
-    K: Generator<KT>,
-    V: Generator<VT>,
-    KT: Eq + std::hash::Hash,
-{
-    /// The distinct values of an enumerable key generator, in first
-    /// occurrence order, when there are few enough of them to draw without
-    /// replacement. Mirrors [`HashSetGenerator::enumerated_pool`].
-    fn enumerated_key_pool(&self) -> Option<Vec<KT>> {
-        let values = self.keys.enumerate_values()?;
-        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
-            return None;
-        }
-        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut pool: Vec<KT> = Vec::new();
-        for v in values {
-            let bucket = by_hash.entry(fingerprint(&v)).or_default();
-            if bucket.iter().any(|&i| pool[i] == v) {
-                continue;
-            }
-            bucket.push(pool.len());
-            pool.push(v);
-        }
-        Some(pool)
-    }
-
-    /// Draw keys as indices into a shrinking pool of the remaining values,
-    /// avoiding the coupon-collector problem when the map must contain most
-    /// of a small key alphabet; each key's value is drawn right after it.
-    fn draw_from_key_pool(&self, tc: &TestCase, mut remaining: Vec<KT>) -> HashMap<KT, VT> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a map: min_size {} is larger than the {} distinct keys the key generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut map = HashMap::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            let key = remaining.remove(j);
-            let value = self.values.do_draw(tc);
-            map.insert(key, value);
-        }
-        map
-    }
-
-    fn draw_by_rejection(&self, tc: &TestCase) -> HashMap<KT, VT> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
@@ -476,20 +287,21 @@ where
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
+        tc.stop_span(false);
         map
     }
 }
 
-/// Printing a map draw prints each accepted key's own [`PrettyPrintable`]
-/// representation (the without-replacement key-pool path produces keys by
-/// index, so there is no key draw to delegate to) and each value
-/// compositionally through the value generator. Duplicate keys are rejected
-/// before anything is printed for the entry.
+/// Printing a map draw is fully compositional: each key and value prints
+/// through its generator inside a speculative region, so an entry rejected
+/// for a duplicate key discards its own output (including its separator).
+/// The value is only drawn — matching the silent path's choices — once the
+/// key is known to be fresh.
 impl<K, V, KT, VT> PrintableGenerator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
 where
-    K: Generator<KT>,
+    K: PrintableGenerator<KT>,
     V: PrintableGenerator<VT>,
-    KT: Eq + std::hash::Hash + PrettyPrintable,
+    KT: Eq + std::hash::Hash,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
         if let Some(max) = self.max_size {
@@ -499,81 +311,28 @@ where
         }
         tc.start_span(labels::MAP);
         printer.begin_group(1, "{");
-        let map = match self.enumerated_key_pool() {
-            Some(pool) => self.print_from_key_pool(tc, printer, pool),
-            None => self.print_by_rejection(tc, printer),
-        };
-        printer.end_group(1, "}");
-        tc.stop_span(false);
-        map
-    }
-}
-
-impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT>
-where
-    K: Generator<KT>,
-    V: PrintableGenerator<VT>,
-    KT: Eq + std::hash::Hash + PrettyPrintable,
-{
-    fn print_from_key_pool(
-        &self,
-        tc: &TestCase,
-        printer: &mut PrettyPrinter,
-        mut remaining: Vec<KT>,
-    ) -> HashMap<KT, VT> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a map: min_size {} is larger than the {} distinct keys the key generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut map = HashMap::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            let key = remaining.remove(j);
-            if !map.is_empty() {
-                printer.text(",");
-                printer.breakable(" ");
-            }
-            key.pretty_print(printer);
-            printer.text(": ");
-            let value = self.values.draw_and_print(tc, printer);
-            map.insert(key, value);
-        }
-        map
-    }
-
-    fn print_by_rejection(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
-            let key = self.keys.do_draw(tc);
-            let separate = !map.is_empty();
-            match map.entry(key) {
-                std::collections::hash_map::Entry::Occupied(_) => {
-                    collection.reject(Some("duplicate key"));
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    if separate {
-                        printer.text(",");
-                        printer.breakable(" ");
-                    }
-                    entry.key().pretty_print(printer);
-                    printer.text(": ");
-                    let value = self.values.draw_and_print(tc, printer);
-                    entry.insert(value);
-                }
+            let mut speculation = printer.speculate();
+            if !map.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let key = self.keys.draw_and_print(tc, speculation.printer());
+            if map.contains_key(&key) {
+                speculation.abort();
+                collection.reject(Some("duplicate key"));
+            } else {
+                speculation.printer().text(": ");
+                let value = self.values.draw_and_print(tc, speculation.printer());
+                speculation.commit();
+                map.insert(key, value);
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
+        printer.end_group(1, "}");
+        tc.stop_span(false);
         map
     }
 }

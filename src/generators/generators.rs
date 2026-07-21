@@ -1,5 +1,5 @@
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
-use crate::test_case::{TestCase, invalid_argument, labels};
+use crate::test_case::{TestCase, labels};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -82,19 +82,8 @@ pub trait Generator<T> {
         Filtered {
             source: self,
             predicate,
-            enumerated: std::sync::OnceLock::new(),
             _phantom: PhantomData,
         }
-    }
-
-    /// Return all possible values if this generator has a known finite value set.
-    ///
-    /// Used by [`Filtered`]: instead of rejection sampling, enumerate the
-    /// valid elements and pick one directly. Mirrors Hypothesis's
-    /// `SampledFromStrategy.do_filtered_draw` optimization.
-    #[doc(hidden)]
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        None
     }
 
     /// Convert this generator into a type-erased boxed generator.
@@ -277,10 +266,6 @@ where
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.source.enumerate_values()
-    }
 }
 
 impl<T, G> PrintableGenerator<T> for PrintAsValue<G>
@@ -296,10 +281,6 @@ where
 impl<T, G: Generator<T>> Generator<T> for &G {
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        (*self).enumerate_values()
     }
 }
 
@@ -326,12 +307,6 @@ where
         let result = (self.f)(self.source.do_draw(tc));
         tc.stop_span(false);
         result
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<U>> {
-        self.source
-            .enumerate_values()
-            .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
     }
 }
 
@@ -389,46 +364,15 @@ where
 pub struct Filtered<T, F, G> {
     source: G,
     predicate: F,
-    /// The source's enumerated values with the predicate applied, computed
-    /// once: for an enumerable source like `sampled_from`, re-enumerating
-    /// (which clones the whole element vector) on every draw is the dominant
-    /// cost of a filtered draw.
-    enumerated: std::sync::OnceLock<Option<Vec<T>>>,
     _phantom: PhantomData<fn() -> T>,
-}
-
-impl<T, F, G> Filtered<T, F, G>
-where
-    T: Clone + Send + Sync,
-    G: Generator<T>,
-    F: Fn(&T) -> bool + Send + Sync,
-{
-    fn enumerated(&self) -> &Option<Vec<T>> {
-        self.enumerated.get_or_init(|| {
-            self.source
-                .enumerate_values()
-                .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
-        })
-    }
 }
 
 impl<T, F, G> Generator<T> for Filtered<T, F, G>
 where
-    T: Clone + Send + Sync,
     G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(valid) = self.enumerated() {
-            if valid.is_empty() {
-                invalid_argument!(
-                    "Unsatisfiable filter: all values from the source generator \
-                     are rejected by the filter predicate"
-                );
-            }
-            let index = tc.generate_integer_i64(0, valid.len() as i64 - 1) as usize;
-            return valid[index].clone();
-        }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let value = self.source.do_draw(tc);
@@ -441,37 +385,17 @@ where
         tc.assume(false);
         unreachable!()
     }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.enumerated().clone()
-    }
 }
 
 /// Printing a filtered draw retries exactly like the silent path, but each
 /// attempt prints inside a speculative region so a rejected attempt's output
-/// is discarded — only the accepted value's representation survives. The
-/// enumerated fast path draws only an index, so it prints the chosen value
-/// directly; that is why this impl needs `T: PrettyPrintable` on top of the
-/// source being printable.
+/// is discarded — only the accepted value's representation survives.
 impl<T, F, G> PrintableGenerator<T> for Filtered<T, F, G>
 where
-    T: Clone + Send + Sync + PrettyPrintable,
     G: PrintableGenerator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        if let Some(valid) = self.enumerated() {
-            if valid.is_empty() {
-                invalid_argument!(
-                    "Unsatisfiable filter: all values from the source generator \
-                     are rejected by the filter predicate"
-                );
-            }
-            let index = tc.generate_integer_i64(0, valid.len() as i64 - 1) as usize;
-            let value = valid[index].clone();
-            value.pretty_print(printer);
-            return value;
-        }
         for _ in 0..3 {
             tc.start_span(labels::FILTER);
             let mut speculation = printer.speculate();
@@ -507,10 +431,6 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
         self.inner.do_draw(tc)
     }
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.inner.enumerate_values()
-    }
-
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>
     where
         Self: Sized + Send + Sync + 'b,
@@ -537,10 +457,6 @@ impl<T> Clone for BoxedPrintableGenerator<'_, T> {
 impl<T> Generator<T> for BoxedPrintableGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.inner.enumerate_values()
     }
 }
 

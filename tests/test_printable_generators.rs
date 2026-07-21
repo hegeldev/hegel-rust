@@ -453,7 +453,7 @@ fn optional_some_prints_the_inner_draw() {
 }
 
 #[test]
-fn enumerated_filters_print_the_chosen_value() {
+fn filtered_sampled_from_prints_the_chosen_value() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::sampled_from(vec![1, 2, 3]).filter(|n| *n > 1));
         panic!("boom");
@@ -472,24 +472,6 @@ fn enumerated_filters_print_the_chosen_value() {
 }
 
 #[test]
-fn unsatisfiable_enumerated_filter_reports_while_printing() {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        Hegel::new(|tc| {
-            let _ = tc.draw(gs::sampled_from(vec![1]).filter(|n| *n > 5));
-        })
-        .settings(
-            Settings::new()
-                .test_cases(2)
-                .database(None)
-                .verbosity(Verbosity::Verbose),
-        )
-        .run();
-    }));
-    let message = format!("{:?}", result.unwrap_err().downcast_ref::<String>());
-    assert!(message.contains("Unsatisfiable filter"), "{message}");
-}
-
-#[test]
 fn invalid_collection_sizes_report_while_printing() {
     for body in [
         (|tc: hegel::TestCase| {
@@ -499,17 +481,11 @@ fn invalid_collection_sizes_report_while_printing() {
             let _ = tc.draw(gs::hashsets(gs::booleans()).min_size(5).max_size(2));
         },
         |tc| {
-            let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2])).min_size(5));
-        },
-        |tc| {
             let _ = tc.draw(
                 gs::hashmaps(gs::booleans(), gs::booleans())
                     .min_size(5)
                     .max_size(2),
             );
-        },
-        |tc| {
-            let _ = tc.draw(gs::hashmaps(gs::sampled_from(vec![1, 2]), gs::booleans()).min_size(5));
         },
     ] {
         let result = catch_unwind(AssertUnwindSafe(|| {
