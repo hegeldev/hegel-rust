@@ -27,7 +27,7 @@ fn chars_and_strings_print_escaped() {
     assert_eq!(render(&'\n', 79), "'\\n'");
     assert_eq!(render("hi", 79), "\"hi\"");
     assert_eq!(render(&"hi", 79), "\"hi\"");
-    assert_eq!(render(&String::from("a\nb"), 79), "\"a\\nb\"");
+    assert_eq!(render(&String::from("a\nb"), 79), "\"a\\nb\".to_string()");
 }
 
 #[test]
@@ -362,7 +362,7 @@ mod debug_repr {
 
     #[derive(Debug, PrettyPrintable)]
     struct Nested {
-        name: String,
+        name: &'static str,
         values: [i32; 5],
         pair: (bool, char),
     }
@@ -370,7 +370,7 @@ mod debug_repr {
     #[test]
     fn debug_repr_layout_matches_the_derive() {
         let value = Nested {
-            name: "abcdef".to_string(),
+            name: "abcdef",
             values: [100, 200, 300, 400, 500],
             pair: (true, 'x'),
         };

@@ -36,7 +36,10 @@ struct Pair(i32, String);
 
 #[test]
 fn tuple_struct_prints_like_a_call() {
-    assert_eq!(render(&Pair(1, "a".to_string()), 79), "Pair(1, \"a\")");
+    assert_eq!(
+        render(&Pair(1, "a".to_string()), 79),
+        "Pair(1, \"a\".to_string())"
+    );
 }
 
 #[derive(PrettyPrintable)]
@@ -140,16 +143,16 @@ fn nested_derives_compose_and_wrap() {
         tags: vec!["alpha".to_string(), "beta".to_string()],
     };
     assert_eq!(
-        render(&value, 79),
-        "Nested { point: Point { x: 1, y: 2 }, tags: vec![\"alpha\", \"beta\"] }"
+        render(&value, 100),
+        "Nested { point: Point { x: 1, y: 2 }, tags: vec![\"alpha\".to_string(), \"beta\".to_string()] }"
     );
     assert_eq!(
-        render(&value, 40),
-        "Nested {\n    point: Point { x: 1, y: 2 },\n    tags: vec![\"alpha\", \"beta\"] }"
+        render(&value, 60),
+        "Nested {\n    point: Point { x: 1, y: 2 },\n    tags: vec![\"alpha\".to_string(), \"beta\".to_string()] }"
     );
     assert_eq!(
         render(&value, 30),
-        "Nested {\n    point: Point {\n        x: 1,\n        y: 2 },\n    tags: vec![\"alpha\",\n         \"beta\"] }"
+        "Nested {\n    point: Point {\n        x: 1,\n        y: 2 },\n    tags: vec![\"alpha\".to_string(),\n         \"beta\".to_string()] }"
     );
 }
 

@@ -608,7 +608,7 @@ pretty_via_debug!(char, str);
 
 impl PrettyPrintable for String {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.as_str().pretty_print(printer);
+        printer.text(&format!("{self:?}.to_string()"));
     }
 }
 

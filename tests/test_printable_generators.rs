@@ -105,9 +105,9 @@ fn wide_values_wrap_across_lines() {
     assert_eq!(
         lines,
         vec![
-            "let draw_1 = vec![\"aaaaaaaaaaaaaaaaaaaa\",",
-            "     \"aaaaaaaaaaaaaaaaaaaa\",",
-            "     \"aaaaaaaaaaaaaaaaaaaa\"];",
+            "let draw_1 = vec![\"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "     \"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "     \"aaaaaaaaaaaaaaaaaaaa\".to_string()];",
         ]
     );
 }
@@ -174,7 +174,10 @@ fn sets_and_maps_print_in_draw_order() {
         let _ = tc.draw(gs::hashsets(gs::text().max_size(2)).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HashSet::from([\"\"]);"]);
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = HashSet::from([\"\".to_string()]);"]
+    );
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashmaps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
@@ -186,7 +189,10 @@ fn sets_and_maps_print_in_draw_order() {
         let _ = tc.draw(gs::hashmaps(gs::text().max_size(2), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HashMap::from([(\"\", false)]);"]);
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = HashMap::from([(\"\".to_string(), false)]);"]
+    );
 }
 
 #[test]
@@ -404,7 +410,10 @@ fn draws_after_notes_keep_document_order() {
 
 #[test]
 fn every_leaf_generator_prints() {
-    assert_eq!(printed_draw_lines(gs::text()), vec!["let draw_1 = \"\";"]);
+    assert_eq!(
+        printed_draw_lines(gs::text()),
+        vec!["let draw_1 = \"\".to_string();"]
+    );
     printed_draw_lines(gs::characters());
     printed_draw_lines(gs::from_regex("[a-z]{2}"));
     assert_eq!(
