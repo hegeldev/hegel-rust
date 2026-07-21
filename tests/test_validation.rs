@@ -359,3 +359,18 @@ mod given_error_conditions {
         .run();
     }
 }
+
+#[test]
+fn test_explain_phase_requires_shrink_phase() {
+    expect_panic(
+        || {
+            Settings::new().phases([hegel::Phase::Explain]);
+        },
+        "Phase::Explain requires Phase::Shrink",
+    );
+}
+
+#[test]
+fn test_explain_phase_with_shrink_phase_is_accepted() {
+    Settings::new().phases([hegel::Phase::Shrink, hegel::Phase::Explain]);
+}

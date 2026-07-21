@@ -876,6 +876,10 @@ hegel_result_t hegel_settings_set_database_key(hegel_context_t *ctx,
  Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
  values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
  Passing 0 produces a run that does nothing.
+
+ `HEGEL_PHASE_EXPLAIN` refines the shrunk counterexample, so it requires
+ `HEGEL_PHASE_SHRINK`; a set with explain but not shrink returns
+ `HEGEL_E_INVALID_ARG` and leaves the settings unchanged.
  */
 hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
                                          hegel_settings_t *s,

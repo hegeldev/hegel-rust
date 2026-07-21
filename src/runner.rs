@@ -1,5 +1,5 @@
 use crate::antithesis::TestLocation;
-use crate::test_case::TestCase;
+use crate::test_case::{TestCase, invalid_argument};
 
 /// Health checks that can be suppressed during test execution.
 ///
@@ -231,6 +231,9 @@ impl Settings {
     ///
     /// Defaults to all phases: `[Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target, Phase::Shrink, Phase::Explain]`.
     ///
+    /// [`Phase::Explain`] refines the shrunk counterexample, so including it
+    /// without [`Phase::Shrink`] is an error.
+    ///
     /// Example — skip shrinking (useful when you only need a witness, not a
     /// minimal counterexample):
     ///
@@ -241,6 +244,9 @@ impl Settings {
     /// ```
     pub fn phases(mut self, phases: impl IntoIterator<Item = Phase>) -> Self {
         self.phases = phases.into_iter().collect();
+        if self.phases.contains(&Phase::Explain) && !self.phases.contains(&Phase::Shrink) {
+            invalid_argument!("Phase::Explain requires Phase::Shrink");
+        }
         self
     }
 

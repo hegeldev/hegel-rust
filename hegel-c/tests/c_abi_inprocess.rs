@@ -19,12 +19,12 @@ use hegel_c::{
     hegel_failure_comment_count, hegel_failure_free, hegel_failure_origin,
     hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
     hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
-    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
-    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
-    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
-    hegel_settings_set_mode, hegel_settings_set_phases,
+    hegel_new_state_machine, hegel_next_test_case, hegel_phase_t, hegel_pool_add,
+    hegel_pool_generate, hegel_run_free, hegel_run_result, hegel_run_result_error,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
+    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
+    hegel_settings_set_database_key, hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
     hegel_test_case_choice_count, hegel_test_case_clone, hegel_test_case_free,
@@ -128,6 +128,23 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_settings_set_phases(ctx, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE
         );
+        let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+        assert_eq!(hegel_settings_new(ctx, &mut s), HEGEL_OK);
+        assert_eq!(
+            hegel_settings_set_phases(ctx, s, hegel_phase_t::HEGEL_PHASE_EXPLAIN as u32),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("HEGEL_PHASE_EXPLAIN requires HEGEL_PHASE_SHRINK"));
+        assert_eq!(
+            hegel_settings_set_phases(
+                ctx,
+                s,
+                hegel_phase_t::HEGEL_PHASE_EXPLAIN as u32
+                    | hegel_phase_t::HEGEL_PHASE_SHRINK as u32
+            ),
+            HEGEL_OK
+        );
+        assert_eq!(hegel_settings_free(ctx, s), HEGEL_OK);
         assert_eq!(
             hegel_settings_set_suppress_health_check(ctx, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE

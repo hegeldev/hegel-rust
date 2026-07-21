@@ -1092,6 +1092,10 @@ pub unsafe extern "C" fn hegel_settings_set_database_key(
 /// Enable a specific set of phases, given as a bitwise OR of `hegel_phase_t`
 /// values. Phases not included are disabled. The default is `HEGEL_PHASE_ALL`.
 /// Passing 0 produces a run that does nothing.
+///
+/// `HEGEL_PHASE_EXPLAIN` refines the shrunk counterexample, so it requires
+/// `HEGEL_PHASE_SHRINK`; a set with explain but not shrink returns
+/// `HEGEL_E_INVALID_ARG` and leaves the settings unchanged.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_set_phases(
     ctx: *mut HegelContext,
@@ -1104,6 +1108,13 @@ pub unsafe extern "C" fn hegel_settings_set_phases(
         Ok(h) => h,
         Err(rc) => return rc,
     };
+    if phases & (HEGEL_PHASE_EXPLAIN as u32) != 0 && phases & (HEGEL_PHASE_SHRINK as u32) == 0 {
+        set_last_error(
+            ctx,
+            "hegel_settings_set_phases: HEGEL_PHASE_EXPLAIN requires HEGEL_PHASE_SHRINK",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
     let mut v = Vec::new();
     if phases & (HEGEL_PHASE_EXPLICIT as u32) != 0 {
         v.push(Phase::Explicit);
