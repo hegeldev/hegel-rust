@@ -58,7 +58,7 @@ impl<G, T> VecGenerator<G, T> {
             }
         }
         tc.start_span(labels::LIST);
-        printer.begin_group(1, "[");
+        printer.begin_group(5, "vec![");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut result = Vec::new();
         while collection.more() {
@@ -78,7 +78,7 @@ impl<G, T> VecGenerator<G, T> {
             speculation.commit();
             result.push(element);
         }
-        printer.end_group(1, "]");
+        printer.end_group(5, "]");
         tc.stop_span(false);
         result
     }
@@ -175,7 +175,7 @@ where
             }
         }
         tc.start_span(labels::SET);
-        printer.begin_group(1, "{");
+        printer.begin_group(15, "HashSet::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
         while collection.more() {
@@ -194,7 +194,7 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
-        printer.end_group(1, "}");
+        printer.end_group(15, "])");
         tc.stop_span(false);
         set
     }
@@ -297,7 +297,7 @@ where
             }
         }
         tc.start_span(labels::MAP);
-        printer.begin_group(1, "{");
+        printer.begin_group(15, "HashMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
@@ -306,19 +306,21 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
+            speculation.printer().text("(");
             let key = draw_key(&self.keys, tc, speculation.printer());
             if map.contains_key(&key) {
                 speculation.abort();
                 collection.reject(Some("duplicate key"));
             } else {
-                speculation.printer().text(": ");
+                speculation.printer().text(", ");
                 let value = draw_value(&self.values, tc, speculation.printer());
+                speculation.printer().text(")");
                 speculation.commit();
                 map.insert(key, value);
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
-        printer.end_group(1, "}");
+        printer.end_group(15, "])");
         tc.stop_span(false);
         map
     }

@@ -534,8 +534,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let draw_1 = [0, 0];"),
-            "expected `let draw_1 = [0, 0];` in the captured report:\n{}",
+            output.contains("let draw_1 = vec![0, 0];"),
+            "expected `let draw_1 = vec![0, 0];` in the captured report:\n{}",
             output
         );
         assert!(
@@ -569,8 +569,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let some_numbers = [0, 0];"),
-            "expected `let some_numbers = [0, 0];` in the captured report:\n{}",
+            output.contains("let some_numbers = vec![0, 0];"),
+            "expected `let some_numbers = vec![0, 0];` in the captured report:\n{}",
             output
         );
         assert!(
