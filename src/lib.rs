@@ -235,7 +235,7 @@ pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
 pub use generators::PrintableGenerator;
-pub use pretty::{DeferredPrinter, PrettyPrintable, PrettyPrinter};
+pub use pretty::{DeferredPrinter, Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
 #[doc(hidden)]
@@ -354,7 +354,7 @@ pub use hegel_macros::DefaultGenerator;
 /// and its type must implement `Debug` instead.
 ///
 /// ```
-/// use hegel::{PrettyPrintable, PrettyPrinter};
+/// use hegel::{Document, PrettyPrintable};
 ///
 /// #[derive(PrettyPrintable)]
 /// struct Person {
@@ -369,10 +369,10 @@ pub use hegel_macros::DefaultGenerator;
 ///     age: 36,
 ///     home: "/home/ada".into(),
 /// };
-/// let mut printer = PrettyPrinter::new(79);
-/// person.pretty_print(&mut printer);
+/// let mut doc = Document::new();
+/// person.pretty_print(doc.printer());
 /// assert_eq!(
-///     printer.value(),
+///     doc.finish(),
 ///     "Person { name: \"Ada\".to_string(), age: 36, home: \"/home/ada\" }"
 /// );
 /// ```

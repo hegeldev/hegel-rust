@@ -1,14 +1,20 @@
 //! Pretty-printing of generated values.
 //!
-//! [`PrettyPrinter`] wraps libhegel's layout engine (an Oppen-style
-//! pretty-printer ported from Hypothesis's `hypothesis.vendor.pretty`).
-//! Output is built from three primitives: [`PrettyPrinter::text`] emits
-//! literal text, [`PrettyPrinter::breakable`] marks a point that renders as
-//! a separator when the enclosing group fits on one line and as a newline
-//! plus indentation when it does not, and [`PrettyPrinter::begin_group`] /
-//! [`PrettyPrinter::end_group`] delimit the groups those decisions are made
-//! over. A group either fits — every breakable renders as its separator —
-//! or breaks as a whole, outermost groups first.
+//! [`Document`] owns one pretty-printed document: its builder methods
+//! choose the layout options, [`Document::printer`] exposes the surface to
+//! write through, and [`Document::finish`] consumes it to render exactly
+//! once at the end.
+//!
+//! [`PrettyPrinter`] is that write surface, wrapping libhegel's layout
+//! engine (an Oppen-style pretty-printer ported from Hypothesis's
+//! `hypothesis.vendor.pretty`). Output is built from three primitives:
+//! [`PrettyPrinter::text`] emits literal text, [`PrettyPrinter::breakable`]
+//! marks a point that renders as a separator when the enclosing group fits
+//! on one line and as a newline plus indentation when it does not, and
+//! [`PrettyPrinter::begin_group`] / [`PrettyPrinter::end_group`] delimit
+//! the groups those decisions are made over. A group either fits — every
+//! breakable renders as its separator — or breaks as a whole, outermost
+//! groups first.
 //!
 //! [`PrettyPrintable`] is the protocol a value uses to describe its own
 //! representation, in Rust-expression syntax wherever possible. It is
@@ -18,27 +24,103 @@
 //! through [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
 
 use crate::ffi::PrinterHandle;
+use crate::test_case::invalid_argument;
 
-/// A pretty-printer that lays out text within a maximum line width.
+/// The line width documents are laid out to when none is configured.
+pub(crate) const DEFAULT_MAX_WIDTH: u64 = 79;
+
+/// One pretty-printed document: the owner of its layout options, its
+/// content, and its rendering.
 ///
-/// See the [module docs](self) for the printing model. Rejections of the
-/// layout protocol (an [`end_group`](PrettyPrinter::end_group) with no open
-/// group) panic, since they indicate a bug in the calling printing code.
+/// Configure the layout with the builder methods (before anything is
+/// printed), write content through [`printer`](Document::printer), and
+/// render by consuming the document with [`finish`](Document::finish) —
+/// rendering happens exactly once, at the end. The [`PrettyPrinter`] this
+/// hands out is write-only, so code that is *given* a printer (a
+/// [`PrettyPrintable`] implementation, a
+/// [`PrintableGenerator`](crate::PrintableGenerator)) can never render or
+/// otherwise observe the document it is contributing to.
 ///
 /// # Example
 ///
 /// ```
-/// use hegel::PrettyPrinter;
+/// use hegel::Document;
 ///
-/// let mut p = PrettyPrinter::new(10);
+/// let mut doc = Document::new().max_width(10);
+/// let p = doc.printer();
 /// p.begin_group(1, "[");
 /// p.text("first");
 /// p.text(",");
 /// p.breakable(" ");
 /// p.text("second");
 /// p.end_group("]");
-/// assert_eq!(p.value(), "[first,\n second]");
+/// assert_eq!(doc.finish(), "[first,\n second]");
 /// ```
+#[derive(Debug)]
+pub struct Document {
+    max_width: u64,
+    printer: Option<PrettyPrinter>,
+}
+
+impl Document {
+    /// Create an empty document with the default layout options (a maximum
+    /// line width of 79 characters).
+    pub fn new() -> Self {
+        Document {
+            max_width: DEFAULT_MAX_WIDTH,
+            printer: None,
+        }
+    }
+
+    /// Keep lines within `max_width` characters where the group structure
+    /// allows it. Defaults to 79.
+    ///
+    /// Layout options describe the whole document, so they must be chosen
+    /// up front: calling this after [`printer`](Document::printer) has been
+    /// used is an error, as is a `max_width` of 0.
+    pub fn max_width(mut self, max_width: usize) -> Self {
+        if self.printer.is_some() {
+            invalid_argument!("max_width must be set before the document is printed to");
+        }
+        if max_width == 0 {
+            invalid_argument!("max_width must be positive");
+        }
+        self.max_width = max_width as u64;
+        self
+    }
+
+    /// The printer to write this document's content through.
+    pub fn printer(&mut self) -> &mut PrettyPrinter {
+        self.printer
+            .get_or_insert_with(|| PrettyPrinter::from_handle(PrinterHandle::new(self.max_width)))
+    }
+
+    /// Splice any outstanding deferred content into place, lay the document
+    /// out, and return it.
+    ///
+    /// Consuming the document is what makes rendering a once-at-the-end
+    /// operation; there is no way to observe a partially built document.
+    pub fn finish(mut self) -> String {
+        match &mut self.printer {
+            Some(printer) => printer.value(),
+            None => String::new(),
+        }
+    }
+}
+
+impl Default for Document {
+    fn default() -> Self {
+        Document::new()
+    }
+}
+
+/// The write surface of a pretty-printed document.
+///
+/// See the [module docs](self) for the printing model. Obtained from
+/// [`Document::printer`] — or received, already positioned, by printing
+/// code such as a [`PrettyPrintable`] implementation. Rejections of the
+/// layout protocol (an [`end_group`](PrettyPrinter::end_group) with no open
+/// group) panic, since they indicate a bug in the calling printing code.
 #[derive(Debug)]
 pub struct PrettyPrinter {
     /// `None` is the no-op printer: every emitting method returns without
@@ -48,14 +130,6 @@ pub struct PrettyPrinter {
 }
 
 impl PrettyPrinter {
-    /// Create a printer that keeps lines within `max_width` characters where
-    /// the group structure allows it. Panics if `max_width` is 0.
-    pub fn new(max_width: usize) -> Self {
-        PrettyPrinter {
-            handle: Some(PrinterHandle::new(max_width as u64)),
-        }
-    }
-
     /// Create a printer that discards everything printed to it.
     ///
     /// This is how a [`PrintableGenerator`](crate::PrintableGenerator) with
@@ -158,12 +232,13 @@ impl PrettyPrinter {
     }
 
     /// Splice in any outstanding deferred content, flush pending break
-    /// points, and return everything printed so far. The discarding printer
-    /// returned by [`noop`](PrettyPrinter::noop) always yields the empty
-    /// string.
-    pub fn value(&mut self) -> String {
+    /// points, and return everything printed so far. Only ever called by an
+    /// owner of the document — [`Document::finish`], or the run lifecycle
+    /// reading a test case's document — never by printing code, which only
+    /// sees the write surface.
+    pub(crate) fn value(&mut self) -> String {
         let Some(handle) = &self.handle else {
-            return String::new();
+            unreachable!("only rendering printers have their value read");
         };
         let _ = handle.resolve();
         handle.value().unwrap()
@@ -174,8 +249,8 @@ impl PrettyPrinter {
     ///
     /// Whatever is printed through the returned [`DeferredPrinter`] — at any
     /// later point, e.g. while a test body runs — appears at the hole's
-    /// position when [`value`](PrettyPrinter::value) renders the document,
-    /// with line-breaking behaving as if it had been printed inline. This is
+    /// position when the document renders (see [`Document::finish`]), with
+    /// line-breaking behaving as if it had been printed inline. This is
     /// how a generator whose value's representation is only known during
     /// test execution (a Hegel-controlled random number generator, say)
     /// prints: it reserves a hole at draw time and records into it as the
@@ -564,7 +639,7 @@ pub trait PrettyPrintable {
 /// [`print_as_debug`](crate::Generator::print_as_debug).
 ///
 /// ```
-/// use hegel::{PrettyPrintable, PrettyPrinter};
+/// use hegel::{Document, PrettyPrintable};
 ///
 /// #[derive(Debug)]
 /// struct Point {
@@ -573,9 +648,9 @@ pub trait PrettyPrintable {
 /// }
 /// hegel::pretty_print_as_debug!(Point);
 ///
-/// let mut p = PrettyPrinter::new(79);
-/// Point { x: 1, y: 2 }.pretty_print(&mut p);
-/// assert_eq!(p.value(), "Point { x: 1, y: 2 }");
+/// let mut doc = Document::new();
+/// Point { x: 1, y: 2 }.pretty_print(doc.printer());
+/// assert_eq!(doc.finish(), "Point { x: 1, y: 2 }");
 /// ```
 #[macro_export]
 macro_rules! pretty_print_as_debug {

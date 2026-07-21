@@ -574,25 +574,24 @@ enum ShadowingVariant {
 fn test_derive_fields_shadowing_macro_identifiers() {
     check_can_generate_examples(gs::default::<ShadowingFields>());
     check_can_generate_examples(gs::default::<ShadowingVariant>());
-    let mut printer = hegel::PrettyPrinter::new(79);
+    let mut doc = hegel::Document::new();
+    let printer = doc.printer();
     use hegel::PrettyPrintable;
     ShadowingFields {
         __tc: 1,
         __printer: true,
     }
-    .pretty_print(&mut printer);
-    assert_eq!(
-        printer.value(),
-        "ShadowingFields { __tc: 1, __printer: true }"
-    );
-    let mut printer = hegel::PrettyPrinter::new(79);
+    .pretty_print(printer);
+    assert_eq!(doc.finish(), "ShadowingFields { __tc: 1, __printer: true }");
+    let mut doc = hegel::Document::new();
+    let printer = doc.printer();
     ShadowingVariant::Fields {
         __tc: 2,
         __printer: false,
     }
-    .pretty_print(&mut printer);
+    .pretty_print(printer);
     assert_eq!(
-        printer.value(),
+        doc.finish(),
         "ShadowingVariant::Fields { __tc: 2, __printer: false }"
     );
 }

@@ -140,7 +140,7 @@ pub(crate) struct TestCaseGlobalData {
 }
 
 /// The width drawn-value documents are laid out to.
-const PRINTER_MAX_WIDTH: u64 = 79;
+const PRINTER_MAX_WIDTH: u64 = crate::pretty::DEFAULT_MAX_WIDTH;
 
 /// Marks a printed draw as in progress: `span_depth` is raised for the
 /// duration of the enclosing `draw_and_print` call so that a `tc.note()` or

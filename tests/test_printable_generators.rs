@@ -340,9 +340,10 @@ fn derived_generator_printing_matches_derived_pretty_printable() {
             assert!(!hit, "boom");
         });
         let value = captured.lock().unwrap().take().unwrap();
-        let mut printer = hegel::PrettyPrinter::new(79);
-        hegel::PrettyPrintable::pretty_print(&value, &mut printer);
-        assert_eq!(lines, vec![format!("let draw_1 = {};", printer.value())]);
+        let mut doc = hegel::Document::new();
+        let printer = doc.printer();
+        hegel::PrettyPrintable::pretty_print(&value, printer);
+        assert_eq!(lines, vec![format!("let draw_1 = {};", doc.finish())]);
     }
 }
 

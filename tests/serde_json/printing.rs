@@ -14,9 +14,9 @@ fn raw_values_print_their_drawn_value() {
 }
 
 fn render<T: hegel::PrettyPrintable + ?Sized>(value: &T) -> String {
-    let mut printer = hegel::PrettyPrinter::new(79);
-    value.pretty_print(&mut printer);
-    printer.value()
+    let mut doc = hegel::Document::new();
+    value.pretty_print(doc.printer());
+    doc.finish()
 }
 
 #[test]
