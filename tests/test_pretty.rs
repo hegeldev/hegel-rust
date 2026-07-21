@@ -127,13 +127,25 @@ fn maps_and_sets_print_as_from_constructors() {
 }
 
 #[test]
-fn smart_pointers_and_references_delegate() {
-    assert_eq!(render(&Box::new(5), 79), "5");
-    assert_eq!(render(&std::rc::Rc::new("x"), 79), "\"x\"");
-    assert_eq!(render(&std::sync::Arc::new(vec![1]), 79), "vec![1]");
+fn smart_pointers_print_their_constructors() {
+    assert_eq!(render(&Box::new(5), 79), "Box::new(5)");
+    assert_eq!(render(&std::rc::Rc::new("x"), 79), "Rc::new(\"x\")");
+    assert_eq!(
+        render(&std::sync::Arc::new(vec![1]), 79),
+        "Arc::new(vec![1])"
+    );
+    assert_eq!(
+        render(&Box::new(vec!["aaaa"; 3]), 20),
+        "Box::new(vec![\"aaaa\",\n              \"aaaa\",\n              \"aaaa\"])"
+    );
+}
+
+#[test]
+fn references_delegate_to_their_targets() {
     let mut value = 9;
     let reference = &mut value;
     assert_eq!(render(&reference, 79), "9");
+    assert_eq!(render(&"x", 79), "\"x\"");
 }
 
 #[test]
@@ -316,12 +328,7 @@ fn end_group_dedents_by_the_full_open_delimiter_width() {
     printer.end_group(")");
     printer.hard_break();
     printer.text("x");
-    assert_eq!(
-        printer.value(),
-        "Some([first,
-      second])
-x"
-    );
+    assert_eq!(printer.value(), "Some([first,\n      second])\nx");
 }
 
 mod debug_repr {
@@ -447,4 +454,10 @@ fn noop_printer_speculation_commits_aborts_and_drops() {
         speculation.printer().text("dropped");
     }
     assert_eq!(printer.value(), "");
+}
+
+#[test]
+fn boxed_unsized_values_print_their_targets() {
+    let boxed: Box<str> = "abc".into();
+    assert_eq!(render(&boxed, 79), "\"abc\"");
 }

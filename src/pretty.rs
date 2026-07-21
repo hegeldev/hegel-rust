@@ -695,7 +695,33 @@ macro_rules! pretty_delegating {
     )+};
 }
 
-pretty_delegating!(&T, &mut T, Box<T>, std::rc::Rc<T>, std::sync::Arc<T>);
+pretty_delegating!(&T, &mut T);
+
+macro_rules! pretty_smart_pointer {
+    ($($t:ty, $open:literal);+) => {$(
+        impl<T: PrettyPrintable> PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.begin_group($open.len(), $open);
+                (**self).pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    )+};
+}
+
+pretty_smart_pointer!(
+    Box<T>, "Box::new(";
+    std::rc::Rc<T>, "Rc::new(";
+    std::sync::Arc<T>, "Arc::new("
+);
+
+/// `Box::new` cannot build a boxed unsized value, so `Box<str>` prints its
+/// target instead of a constructor.
+impl PrettyPrintable for Box<str> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        (**self).pretty_print(printer);
+    }
+}
 
 /// Print `items` as a delimited, comma-separated sequence: inline when it
 /// fits, one element per line (aligned just inside `open`) when it does not.
