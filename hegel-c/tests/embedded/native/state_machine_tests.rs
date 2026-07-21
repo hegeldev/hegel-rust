@@ -16,10 +16,9 @@ fn int(v: i64) -> ChoiceValue {
     ChoiceValue::Integer(BigInt::from(v))
 }
 
-/// A step-cap choice larger than `MAX_STEP_CAP`, so the cap truncates to
-/// `MAX_STEP_CAP` and never makes `next_rule` halt within a test.
-fn cap() -> ChoiceValue {
-    int(1_000_000)
+/// always run at least one step
+fn go() -> ChoiceValue {
+    ChoiceValue::Boolean(false)
 }
 
 /// The node recording the rule index chosen by the enumeration fallback:
@@ -32,75 +31,85 @@ fn assert_forced_index_node(ntc: &NativeTestCase, pos: usize, n: i64, index: i64
 }
 
 #[test]
+fn first_step_stop_decision_is_a_forced_keep_going_boolean() {
+    let mut ntc = replay(&[go(), int(0), int(2)], 8);
+    machine(3).next_rule(&mut ntc).unwrap();
+    assert!(ntc.nodes[0].was_forced);
+    assert_eq!(ntc.nodes[0].value, ChoiceValue::Boolean(false));
+}
+
+#[test]
 fn zero_p_disabled_enables_every_rule() {
-    let mut ntc = replay(&[cap(), int(0), int(2)], 8);
+    let mut ntc = replay(&[go(), int(0), int(2)], 8);
     let rule = machine(3).next_rule(&mut ntc).unwrap();
     assert_eq!(rule, Some(2));
     assert_eq!(ntc.nodes.len(), 4);
     assert!(ntc.nodes[3].was_forced);
     assert_eq!(ntc.nodes[3].value, ChoiceValue::Boolean(false));
-    assert_eq!(ntc.spans.len(), 2);
+    assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        (crate::hegel_label_t::HEGEL_LABEL_INTEGER as u64).to_string()
-    );
-    assert_eq!(
-        ntc.spans[1usize].label,
         (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
     );
-    assert!(!ntc.spans[1usize].discarded);
+    assert!(!ntc.spans[0usize].discarded);
 }
 
 #[test]
-fn step_cap_truncates_to_max_and_halts_after_that_many_steps() {
+fn bounded_case_runs_exactly_step_count_steps_under_simplest_template() {
     let mut ntc = NativeTestCase::for_choices_and_template(
-        &[cap()],
+        &[],
         None,
         Some(ChoiceTemplate::simplest(None)),
         4096,
         None,
     );
+    ntc.family().set_stateful_step_count(5);
     let mut sm = machine(2);
-    for _ in 0..MAX_STEP_CAP {
+    for _ in 0..5 {
         assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
     }
-    let drawn = ntc.nodes.len();
     assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
     assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
-    assert_eq!(ntc.nodes.len(), drawn);
 }
 
 #[test]
-fn small_step_cap_halts_after_that_many_steps() {
+fn bounded_case_runs_at_least_one_step_even_with_step_count_one() {
     let mut ntc = NativeTestCase::for_choices_and_template(
-        &[int(2)],
+        &[],
         None,
         Some(ChoiceTemplate::simplest(None)),
         64,
         None,
     );
+    ntc.family().set_stateful_step_count(0);
     let mut sm = machine(2);
-    assert!(sm.next_rule(&mut ntc).unwrap().is_some());
-    assert!(sm.next_rule(&mut ntc).unwrap().is_some());
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
 }
 
 #[test]
-fn unbounded_families_draw_no_step_cap_and_never_halt() {
+fn free_stop_decision_can_halt_before_the_cap() {
+    let prefix = [
+        go(),
+        int(254),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+    ];
+    let mut ntc = replay(&prefix, 16);
+    let mut sm = machine(2);
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
+}
+
+#[test]
+fn unbounded_families_never_halt() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(2);
-    for _ in 0..2 * MAX_STEP_CAP {
+    for _ in 0..100 {
         assert!(sm.next_rule(&mut ntc).unwrap().is_some());
     }
-    let cap_draws = ntc
-        .nodes
-        .iter()
-        .filter(
-            |n| matches!(&*n.kind, ChoiceKind::Integer(k) if k.max_value == BigInt::from(i64::MAX)),
-        )
-        .count();
-    assert_eq!(cap_draws, 0);
 }
 
 #[test]
@@ -119,7 +128,7 @@ fn p_disabled_is_drawn_on_first_next_rule_only() {
 
 #[test]
 fn last_undecided_rule_is_forced_enabled() {
-    let prefix = [cap(), int(254), int(0), ChoiceValue::Boolean(true), int(1)];
+    let prefix = [go(), int(254), int(0), ChoiceValue::Boolean(true), int(1)];
     let mut ntc = replay(&prefix, 8);
     let rule = machine(2).next_rule(&mut ntc).unwrap().unwrap();
     assert_eq!(rule, 1);
@@ -130,20 +139,27 @@ fn last_undecided_rule_is_forced_enabled() {
 
 #[test]
 fn decided_flag_is_rewritten_as_forced_draw_on_later_queries() {
-    let prefix = [cap(), int(254), int(0), ChoiceValue::Boolean(false), int(0)];
+    let prefix = [
+        go(),
+        int(254),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
+        int(0),
+    ];
     let mut ntc = replay(&prefix, 8);
     let mut sm = machine(2);
     assert_eq!(sm.next_rule(&mut ntc).unwrap().unwrap(), 0);
     assert_eq!(sm.next_rule(&mut ntc).unwrap().unwrap(), 0);
-    assert_eq!(ntc.nodes.len(), 6);
-    assert!(ntc.nodes[5].was_forced);
-    assert_eq!(ntc.nodes[5].value, ChoiceValue::Boolean(false));
+    assert_eq!(ntc.nodes.len(), 7);
+    assert!(ntc.nodes[6].was_forced);
+    assert_eq!(ntc.nodes[6].value, ChoiceValue::Boolean(false));
 }
 
 #[test]
 fn known_disabled_rule_is_skipped_without_redrawing_its_flag() {
     let prefix = [
-        cap(),
+        go(),
         int(254),
         int(1),
         ChoiceValue::Boolean(true),
@@ -160,7 +176,7 @@ fn known_disabled_rule_is_skipped_without_redrawing_its_flag() {
 #[test]
 fn fallback_early_exits_at_the_speculative_index() {
     let prefix = [
-        cap(),
+        go(),
         int(254),
         int(0),
         ChoiceValue::Boolean(true),
@@ -179,7 +195,7 @@ fn fallback_early_exits_at_the_speculative_index() {
 #[test]
 fn fallback_draws_from_allowed_when_speculative_index_is_past_the_end() {
     let prefix = [
-        cap(),
+        go(),
         int(254),
         int(0),
         ChoiceValue::Boolean(true),
@@ -200,7 +216,7 @@ fn fallback_draws_from_allowed_when_speculative_index_is_past_the_end() {
 }
 
 #[test]
-fn overrun_while_drawing_the_step_cap_propagates() {
+fn overrun_while_drawing_the_stop_decision_propagates() {
     let mut ntc = replay(&[], 0);
     let mut sm = machine(2);
     assert!(matches!(sm.next_rule(&mut ntc), Err(EngineError::Overrun)));
@@ -208,14 +224,14 @@ fn overrun_while_drawing_the_step_cap_propagates() {
 
 #[test]
 fn overrun_while_drawing_p_disabled_propagates() {
-    let mut ntc = replay(&[cap()], 1);
+    let mut ntc = replay(&[go()], 1);
     let mut sm = machine(2);
     assert!(matches!(sm.next_rule(&mut ntc), Err(EngineError::Overrun)));
 }
 
 #[test]
 fn overrun_while_drawing_a_try_index_propagates() {
-    let mut ntc = replay(&[cap(), int(0)], 2);
+    let mut ntc = replay(&[go(), int(0)], 2);
     let mut sm = machine(2);
     assert!(matches!(sm.next_rule(&mut ntc), Err(EngineError::Overrun)));
 }
@@ -223,7 +239,7 @@ fn overrun_while_drawing_a_try_index_propagates() {
 #[test]
 fn overrun_while_recording_the_early_exit_index_propagates() {
     let prefix = [
-        cap(),
+        go(),
         int(254),
         int(0),
         ChoiceValue::Boolean(true),
@@ -242,7 +258,7 @@ fn overrun_while_recording_the_early_exit_index_propagates() {
 #[test]
 fn overrun_while_recording_the_post_loop_index_propagates() {
     let prefix = [
-        cap(),
+        go(),
         int(254),
         int(0),
         ChoiceValue::Boolean(true),
@@ -263,18 +279,18 @@ fn overrun_while_recording_the_post_loop_index_propagates() {
 
 #[test]
 fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
-    let mut ntc = replay(&[cap(), int(254), int(0)], 3);
+    let mut ntc = replay(&[go(), int(254), int(0)], 3);
     let mut sm = machine(2);
     assert!(matches!(sm.next_rule(&mut ntc), Err(EngineError::Overrun)));
     assert_eq!(ntc.status(), Some(Status::EarlyStop));
     ntc.freeze();
-    assert_eq!(ntc.spans.len(), 2);
+    assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
-        ntc.spans[1usize].label,
+        ntc.spans[0usize].label,
         (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
     );
-    assert_eq!(ntc.spans[1usize].start, 3);
-    assert_eq!(ntc.spans[1usize].end, 3);
+    assert_eq!(ntc.spans[0usize].start, 3);
+    assert_eq!(ntc.spans[0usize].end, 3);
 }
 
 #[test]

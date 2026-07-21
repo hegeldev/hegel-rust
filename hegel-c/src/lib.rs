@@ -897,7 +897,8 @@ pub unsafe extern "C" fn hegel_settings_set_test_cases(
 
 /// Target number of steps to run per stateful test case. The default is
 /// 50. Each stateful case runs at least one step and at most `n`; the
-/// engine chooses where in that range to stop.
+/// engine chooses where in that range to stop. `n` must be at least 1.
+/// A smaller value is a reportable `HEGEL_E_INVALID_ARG`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
     ctx: *mut HegelContext,
@@ -909,6 +910,15 @@ pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
         Ok(h) => h,
         Err(rc) => return rc,
     };
+    if n < 1 {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_settings_set_stateful_step_count: step count must be at least 1, got {n}"
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
     handle.inner = handle.inner.clone().stateful_step_count(n);
     HEGEL_OK
 }

@@ -565,6 +565,18 @@ mod stateful {
         );
     }
 
+    #[test]
+    fn test_stateful_step_count_below_one_is_a_usage_error() {
+        expect_panic(
+            || {
+                Hegel::new(|_tc: TestCase| {})
+                    .settings(Settings::new().database(None).stateful_step_count(0))
+                    .run();
+            },
+            "step count must be at least 1",
+        );
+    }
+
     /// Records which rule ran at each step, one sequence per test case.
     struct SwarmRecorderMachine {
         runs: Arc<Mutex<Vec<Vec<usize>>>>,

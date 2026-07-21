@@ -975,7 +975,10 @@ impl<'a> Engine<'a> {
     /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
     /// the choice-tree non-determinism diagnostic, if recording the run's
     /// path contradicted an earlier run.
-    pub(crate) fn test_function(&mut self, ntc: NativeTestCase) -> (RunResult, Option<String>) {
+    pub(crate) async fn test_function(
+        &mut self,
+        ntc: NativeTestCase,
+    ) -> (RunResult, Option<String>) {
         ntc.family()
             .set_stateful_step_count(self.settings.stateful_step_count);
         let tc_start = std::time::Instant::now();
