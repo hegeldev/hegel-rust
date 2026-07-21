@@ -7,21 +7,32 @@ mod common;
 use common::{last_error, make_settings_no_db, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelPrinter, hegel_context_free, hegel_context_new, hegel_mark_complete,
-    hegel_note, hegel_printer_abort_speculative, hegel_printer_begin_group,
+    HegelContext, HegelPrinter, HegelPrinterOptions, hegel_context_free, hegel_context_new,
+    hegel_mark_complete, hegel_note, hegel_printer_abort_speculative, hegel_printer_begin_group,
     hegel_printer_begin_speculative, hegel_printer_breakable, hegel_printer_comment,
     hegel_printer_commit_speculative, hegel_printer_deferred, hegel_printer_end_group,
     hegel_printer_free, hegel_printer_hard_break, hegel_printer_if_break, hegel_printer_is_live,
-    hegel_printer_new, hegel_printer_resolve, hegel_printer_shift_indent, hegel_printer_text,
-    hegel_printer_value, hegel_printer_value_result_free, hegel_printer_value_result_t,
-    hegel_run_free, hegel_settings_free, hegel_status_t, hegel_test_case_clone,
-    hegel_test_case_free, hegel_test_case_printer,
+    hegel_printer_new, hegel_printer_options_free, hegel_printer_options_new,
+    hegel_printer_options_set_max_width, hegel_printer_resolve, hegel_printer_shift_indent,
+    hegel_printer_text, hegel_printer_value, hegel_printer_value_result_free,
+    hegel_printer_value_result_t, hegel_run_free, hegel_settings_free, hegel_status_t,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_printer,
 };
 use std::ptr;
 
+unsafe fn max_width_options(ctx: *mut HegelContext, max_width: u64) -> *mut HegelPrinterOptions {
+    let mut options: *mut HegelPrinterOptions = ptr::null_mut();
+    ok(unsafe { hegel_printer_options_new(ctx, &mut options) });
+    assert!(!options.is_null());
+    ok(unsafe { hegel_printer_options_set_max_width(ctx, options, max_width) });
+    options
+}
+
 unsafe fn new_printer(ctx: *mut HegelContext, max_width: u64) -> *mut HegelPrinter {
+    let options = unsafe { max_width_options(ctx, max_width) };
     let mut p: *mut HegelPrinter = ptr::null_mut();
-    ok(unsafe { hegel_printer_new(ctx, max_width, &mut p) });
+    ok(unsafe { hegel_printer_new(ctx, options, &mut p) });
+    ok(unsafe { hegel_printer_options_free(ctx, options) });
     assert!(!p.is_null());
     p
 }
@@ -381,9 +392,18 @@ fn null_handles_and_out_parameters_are_rejected() {
     let ctx = hegel_context_new();
     unsafe {
         assert_eq!(
-            hegel_printer_new(ctx, 79, ptr::null_mut()),
+            hegel_printer_new(ctx, ptr::null(), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_printer_options_new(ctx, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_printer_options_set_max_width(ctx, ptr::null_mut(), 10),
+            HEGEL_E_INVALID_HANDLE
+        );
+        ok(hegel_printer_options_free(ctx, ptr::null_mut()));
         let null: *mut HegelPrinter = ptr::null_mut();
         assert_eq!(
             hegel_printer_text(ctx, null, "a".as_ptr(), 1),
@@ -474,14 +494,29 @@ fn family_document_is_shared_and_survives_completion() {
         ok(hegel_note(ctx, tc, "note one\nsecond line".as_ptr(), 20));
 
         let mut p1: *mut HegelPrinter = ptr::null_mut();
-        ok(hegel_test_case_printer(ctx, tc, 40, &mut p1));
+        ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut p1));
         text(ctx, p1, "let x = 1;");
         ok(hegel_printer_hard_break(ctx, p1));
+
+        let restated = max_width_options(ctx, 79);
+        let mut p_restated: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_test_case_printer(ctx, tc, restated, &mut p_restated));
+        ok(hegel_printer_free(ctx, p_restated));
+        ok(hegel_printer_options_free(ctx, restated));
+
+        let conflicting = max_width_options(ctx, 40);
+        let mut p_conflicting: *mut HegelPrinter = ptr::null_mut();
+        assert_eq!(
+            hegel_test_case_printer(ctx, tc, conflicting, &mut p_conflicting),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("max_width 79 and cannot change to 40"));
+        ok(hegel_printer_options_free(ctx, conflicting));
 
         let mut clone: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, tc, &mut clone));
         let mut p2: *mut HegelPrinter = ptr::null_mut();
-        ok(hegel_test_case_printer(ctx, clone, 999, &mut p2));
+        ok(hegel_test_case_printer(ctx, clone, ptr::null(), &mut p2));
         text(ctx, p2, "from clone");
 
         ok(hegel_note(ctx, tc, ptr::null(), 0));
@@ -518,7 +553,7 @@ fn note_and_test_case_printer_validate_arguments() {
         );
         let mut p: *mut HegelPrinter = ptr::null_mut();
         assert_eq!(
-            hegel_test_case_printer(ctx, ptr::null_mut(), 79, &mut p),
+            hegel_test_case_printer(ctx, ptr::null_mut(), ptr::null(), &mut p),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -527,7 +562,7 @@ fn note_and_test_case_printer_validate_arguments() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
         assert_eq!(
-            hegel_test_case_printer(ctx, tc, 79, ptr::null_mut()),
+            hegel_test_case_printer(ctx, tc, ptr::null(), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
@@ -547,6 +582,53 @@ fn note_and_test_case_printer_validate_arguments() {
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn null_options_lay_out_to_the_default_width_of_79() {
+    let ctx = hegel_context_new();
+    unsafe {
+        for (element_width, expected_break) in [(74, false), (75, true)] {
+            let mut p: *mut HegelPrinter = ptr::null_mut();
+            ok(hegel_printer_new(ctx, ptr::null(), &mut p));
+            ok(hegel_printer_begin_group(ctx, p, 1, "[".as_ptr(), 1));
+            let element = "a".repeat(element_width);
+            text(ctx, p, &element);
+            text(ctx, p, ",");
+            ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
+            text(ctx, p, "b");
+            ok(hegel_printer_end_group(ctx, p, "]".as_ptr(), 1));
+            assert_eq!(value(ctx, p).contains('\n'), expected_break);
+            ok(hegel_printer_free(ctx, p));
+        }
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn options_reject_a_zero_max_width() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut options: *mut HegelPrinterOptions = ptr::null_mut();
+        ok(hegel_printer_options_new(ctx, &mut options));
+        assert_eq!(
+            hegel_printer_options_set_max_width(ctx, options, 0),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("max_width must be positive"));
+        ok(hegel_printer_options_set_max_width(ctx, options, 5));
+        let mut p: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_printer_new(ctx, options, &mut p));
+        ok(hegel_printer_options_free(ctx, options));
+        text(ctx, p, "aaa,");
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".as_ptr(), 1));
+        ok(hegel_printer_breakable(ctx, p, " ".as_ptr(), 1));
+        text(ctx, p, "b");
+        ok(hegel_printer_end_group(ctx, p, "]".as_ptr(), 1));
+        assert_eq!(value(ctx, p), "aaa,[\n b]");
+        ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
     }
 }

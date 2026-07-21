@@ -49,7 +49,7 @@ pub struct PrettyPrinter {
 
 impl PrettyPrinter {
     /// Create a printer that keeps lines within `max_width` characters where
-    /// the group structure allows it.
+    /// the group structure allows it. Panics if `max_width` is 0.
     pub fn new(max_width: usize) -> Self {
         PrettyPrinter {
             handle: Some(PrinterHandle::new(max_width as u64)),
