@@ -18,10 +18,6 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
         let index = indices.do_draw(tc);
         self.elements[index].clone()
     }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        Some(self.elements.to_vec())
-    }
 }
 
 impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<T>
@@ -81,14 +77,6 @@ impl<'a, T, B: Generator<T>> Generator<T> for OneOfGenerator<'a, T, B> {
         draw_one_of(tc, self.generators.len() - 1, |index| {
             self.generators[index].do_draw(tc)
         })
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        let mut all = Vec::new();
-        for g in &self.generators {
-            all.extend(g.enumerate_values()?);
-        }
-        Some(all)
     }
 }
 
@@ -214,13 +202,6 @@ macro_rules! impl_one_of {
                     $($idx => self.$field.do_draw(tc),)*
                     _ => self.$last_field.do_draw(tc),
                 })
-            }
-
-            fn enumerate_values(&self) -> Option<Vec<T>> {
-                let mut all = Vec::new();
-                $(all.extend(self.$field.enumerate_values()?);)*
-                all.extend(self.$last_field.enumerate_values()?);
-                Some(all)
             }
         }
 
