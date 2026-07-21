@@ -500,7 +500,7 @@ impl TestCase {
                 printer.text(&" ".repeat(indent));
                 printer.shift_indent(indent as isize);
                 printer.text(&format!("let {display_name} = "));
-                let value = generator.do_draw_and_print(self, printer);
+                let value = self.draw_and_print(&generator, printer);
                 printer.text(";");
                 printer.shift_indent(-(indent as isize));
                 printer.hard_break();
@@ -519,6 +519,28 @@ impl TestCase {
     /// failing-test summary.
     pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
         generator.do_draw(self)
+    }
+
+    /// Draw a value from a generator, printing its representation to
+    /// `printer` as it is drawn.
+    ///
+    /// This is how a compositional [`PrintableGenerator`] draws an inner
+    /// generator from its own
+    /// [`do_draw_and_print`](PrintableGenerator::do_draw_and_print) (and how
+    /// [`draw`](Self::draw) runs its argument): routing every inner draw
+    /// through this one entry point keeps the printed region of a draw a
+    /// framework concern rather than something each generator re-implements.
+    ///
+    /// A generator that merely forwards to an inner printable generator
+    /// without printing or drawing anything itself should call the inner
+    /// generator's `do_draw_and_print` directly instead, so the forwarding
+    /// layer doesn't register as a second region.
+    pub fn draw_and_print<T>(
+        &self,
+        generator: impl PrintableGenerator<T>,
+        printer: &mut PrettyPrinter,
+    ) -> T {
+        generator.do_draw_and_print(self, printer)
     }
 
     /// Assume a condition is true. If false, reject the current test input.

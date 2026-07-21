@@ -219,6 +219,13 @@ pub trait Generator<T> {
 pub trait PrintableGenerator<T>: Generator<T> {
     /// Produce a value, printing its representation to `printer` as it is
     /// drawn.
+    ///
+    /// A compositional implementation draws each inner generator with
+    /// [`TestCase::draw_and_print`], the framework's one entry point for
+    /// printed inner draws; a generator that merely forwards to an inner
+    /// printable generator without printing or drawing anything itself calls
+    /// the inner generator's `do_draw_and_print` directly instead, so the
+    /// forwarding layer doesn't register as a second region.
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
 
     /// Convert this generator into a type-erased boxed printable generator,
@@ -413,7 +420,7 @@ where
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
-        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.do_draw_and_print(tc, printer))
+        self.draw_flat_mapped(tc, |next_gen, tc| tc.draw_and_print(next_gen, printer))
     }
 }
 
@@ -475,7 +482,7 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         self.draw_filtered(tc, printer, |source, tc, printer| {
-            source.do_draw_and_print(tc, printer)
+            tc.draw_and_print(source, printer)
         })
     }
 }
