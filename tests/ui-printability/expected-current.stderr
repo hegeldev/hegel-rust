@@ -1,0 +1,24 @@
+error[E0277]: `BoxedGenerator<'_, String>` cannot print the values it draws
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:12:29
+ |
+LL |     let _: Config = tc.draw(generator);
+ |                        ---- ^^^^^^^^^ `BoxedGenerator<'_, String>` does not implement `PrintableGenerator<String>`
+ |                        |
+ |                        required by a bound introduced by this call
+ |
+ = help: the trait `PrintableGenerator<String>` is not implemented for `BoxedGenerator<'_, String>`
+ = note: make it printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`
+ = note: or draw without reporting the value via `tc.draw_silent(..)`
+ = help: the following other types implement trait `PrintableGenerator<T>`:
+note: required for `ConfigGenerator<BoxedGenerator<'_, String>>` to implement `PrintableGenerator<Config>`
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:4:17
+ |
+LL | #[derive(Debug, DefaultGenerator)]
+ |                 ^^^^^^^^^^^^^^^^ type parameter would need to implement `PrintableGenerator<Config>`
+ = help: consider manually implementing `PrintableGenerator<Config>` to avoid undesired bounds
+note: required by a bound in `TestCase::draw`
+ --> src/test_case.rs
+ |
+LL |     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
+ |                                           ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
+ = note: this error originates in the derive macro `DefaultGenerator` (in Nightly builds, run with -Z macro-backtrace for more info)
