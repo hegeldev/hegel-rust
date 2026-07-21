@@ -555,3 +555,44 @@ fn test_derive_enum_variant_builder_accepts_plain_generators() {
     .settings(hegel::Settings::new().database(None))
     .run();
 }
+
+/// Field names that shadow the derive machinery's own identifiers: the
+/// generated bindings are hygienically renamed, so these all compile and
+/// print correctly.
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+struct ShadowingFields {
+    __tc: u8,
+    __printer: bool,
+}
+
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+enum ShadowingVariant {
+    Fields { __tc: u8, __printer: bool },
+}
+
+#[test]
+fn test_derive_fields_shadowing_macro_identifiers() {
+    check_can_generate_examples(gs::default::<ShadowingFields>());
+    check_can_generate_examples(gs::default::<ShadowingVariant>());
+    let mut printer = hegel::PrettyPrinter::new(79);
+    use hegel::PrettyPrintable;
+    ShadowingFields {
+        __tc: 1,
+        __printer: true,
+    }
+    .pretty_print(&mut printer);
+    assert_eq!(
+        printer.value(),
+        "ShadowingFields { __tc: 1, __printer: true }"
+    );
+    let mut printer = hegel::PrettyPrinter::new(79);
+    ShadowingVariant::Fields {
+        __tc: 2,
+        __printer: false,
+    }
+    .pretty_print(&mut printer);
+    assert_eq!(
+        printer.value(),
+        "ShadowingVariant::Fields { __tc: 2, __printer: false }"
+    );
+}
