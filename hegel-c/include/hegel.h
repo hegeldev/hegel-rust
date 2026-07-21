@@ -842,9 +842,12 @@ hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
  (`user_data` is ignored). The engine emits while it runs inside
  `hegel_next_test_case`, so the callback is invoked on whichever thread
  makes that call, and it — along with whatever `user_data` points to —
- must stay valid until the run has been freed with `hegel_run_free`. This
- sets only the *destination*; how much output the engine emits is
- controlled by `hegel_settings_set_verbosity`.
+ must stay valid until the run has been freed with `hegel_run_free`.
+ Because it runs inside `hegel_next_test_case`, while the run handle is in
+ use, the callback must not call back into libhegel on the same run (e.g.
+ `hegel_next_test_case` or `hegel_run_free`). This sets only the
+ *destination*; how much output the engine emits is controlled by
+ `hegel_settings_set_verbosity`.
 
  Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run` or
  `HEGEL_E_INVALID_HANDLE` for a NULL `settings`. The handle written to
