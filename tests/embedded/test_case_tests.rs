@@ -19,7 +19,13 @@ fn emitting_test_case() -> (RunHandle, TestCase) {
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, current_output_sink());
+    let tc = TestCase::new(
+        Arc::new(c_tc),
+        true,
+        Mode::TestRun,
+        false,
+        current_output_sink(),
+    );
     (run, tc)
 }
 

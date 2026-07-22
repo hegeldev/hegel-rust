@@ -136,6 +136,7 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    pub(crate) nondeterministic: bool,
 }
 
 impl Settings {
@@ -164,6 +165,7 @@ impl Settings {
             report_multiple_failures: false,
             print_blob: false,
             backend: None,
+            nondeterministic: false,
         }
     }
 
@@ -285,6 +287,29 @@ impl Settings {
         self.report_multiple_failures = report_multiple_failures;
         self
     }
+
+    /// Declare the whole run nondeterministic: the test may behave
+    /// differently across executions of identical generated data — most
+    /// commonly because it uses concurrent stateful testing
+    /// ([`stateful::run_concurrent`](crate::stateful::run_concurrent), which
+    /// requires this declaration).
+    ///
+    /// Failures from a nondeterministic run are reported faithfully from the
+    /// discovering execution, but nothing that assumes deterministic replay
+    /// happens: no shrinking, no flakiness detection, no database
+    /// persistence or reuse, no targeting, and no reproduce blob — and with
+    /// shrinking off, generation stops at the first bug, so the run reports
+    /// at most one failure. `#[hegel::reproduce_failure]` is not supported
+    /// on a nondeterministic test.
+    ///
+    /// This is a run-level property: it applies to every test case of the
+    /// run, even ones that happen to draw a concurrency level of 1. In the
+    /// `#[hegel::test]` attribute, declare it as
+    /// `#[hegel::test(nondeterministic = true)]`.
+    pub fn nondeterministic(mut self, nondeterministic: bool) -> Self {
+        self.nondeterministic = nondeterministic;
+        self
+    }
 }
 
 impl Default for Settings {
@@ -396,6 +421,14 @@ where
     /// Panics if any test case fails.
     pub fn run(self) {
         if let Some(blob) = self.reproduce_failure {
+            assert!(
+                !self.settings.nondeterministic,
+                "#[hegel::reproduce_failure] is not supported on a test declared \
+                 nondeterministic: a nondeterministic run cannot replay a recorded \
+                 choice sequence faithfully, and its failures carry no reproduce \
+                 blob. Remove the reproduce_failure attribute (or the \
+                 nondeterministic declaration) to run this test."
+            );
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
                 &self.settings,

@@ -178,7 +178,8 @@ impl<'a> Engine<'a> {
         };
 
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
-        let target_enabled = settings.phases.contains(&Phase::Target);
+        let nondeterministic = settings.nondeterministic;
+        let target_enabled = settings.phases.contains(&Phase::Target) && !nondeterministic;
         let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
         let mut replay_aligned = false;
         let report_multiple = settings.report_multiple_failures;
@@ -266,7 +267,7 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let shrink_enabled = settings.phases.contains(&Phase::Shrink);
+        let shrink_enabled = settings.phases.contains(&Phase::Shrink) && !nondeterministic;
         let found_in_reuse = !self.interesting.is_empty();
 
         let actually_generate =
@@ -333,8 +334,11 @@ impl<'a> Engine<'a> {
                 }
 
                 let case_rng = self.rng.spawn();
-                let prefix =
-                    crate::native::data_tree::generate_novel_prefix(&self.tree_root, &mut self.rng);
+                let prefix = if nondeterministic {
+                    Vec::new()
+                } else {
+                    crate::native::data_tree::generate_novel_prefix(&self.tree_root, &mut self.rng)
+                };
                 let ntc = if prefix.is_empty() {
                     NativeTestCase::new_random(case_rng)
                 } else {
@@ -411,7 +415,8 @@ impl<'a> Engine<'a> {
                     optimiser.optimise_targets().await;
                 }
 
-                if run.status == Status::Valid
+                if !nondeterministic
+                    && run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
                 {
@@ -443,10 +448,7 @@ impl<'a> Engine<'a> {
             log_phase("Generate", "End");
         }
 
-        if !self.interesting.is_empty()
-            && !replay_aligned
-            && settings.phases.contains(&Phase::Shrink)
-        {
+        if !self.interesting.is_empty() && !replay_aligned && shrink_enabled {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
@@ -604,10 +606,15 @@ impl<'a> Engine<'a> {
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
-                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                let reproduce_blob = if nondeterministic {
+                    None
+                } else {
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    Some(crate::native::blob::encode_failure(&choices))
+                };
                 Failure {
                     origin,
-                    reproduce_blob: Some(crate::native::blob::encode_failure(&choices)),
+                    reproduce_blob,
                 }
             })
             .collect())
@@ -934,10 +941,16 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Self {
-        let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
-            Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
-            Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
-            Database::Disabled => None,
+        let db: Option<Box<dyn TestCaseDatabase>> = if settings.nondeterministic {
+            None
+        } else {
+            match &settings.database {
+                Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
+                Database::Unset => {
+                    Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples")))
+                }
+                Database::Disabled => None,
+            }
         };
         Engine {
             settings,
@@ -994,15 +1007,19 @@ impl<'a> Engine<'a> {
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
     fn record_run(&mut self, run: &RunResult, elapsed: std::time::Duration) -> Option<String> {
-        let mismatch = crate::native::data_tree::record_tree_full(
-            &mut self.tree_root,
-            &run.nodes,
-            run.status,
-            run.origin.as_deref(),
-            &run.target_observations,
-            &run.span_events,
-            &[],
-        );
+        let mismatch = if self.settings.nondeterministic {
+            None
+        } else {
+            crate::native::data_tree::record_tree_full(
+                &mut self.tree_root,
+                &run.nodes,
+                run.status,
+                run.origin.as_deref(),
+                &run.target_observations,
+                &run.span_events,
+                &[],
+            )
+        };
         self.calls += 1;
         self.total_test_time += elapsed;
         if run.nodes.is_empty() && run.status >= Status::Invalid {

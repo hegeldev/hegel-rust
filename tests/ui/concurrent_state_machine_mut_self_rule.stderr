@@ -1,0 +1,5 @@
+error: #[rule] and #[invariant] methods in a concurrent state machine must take `&self`: the model is shared by reference across worker threads, so mutable state needs interior mutability (locks, atomics, ...)
+  --> tests/ui/concurrent_state_machine_mut_self_rule.rs:11:5
+   |
+11 |     fn mutate(&mut self, _: hegel::TestCase) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

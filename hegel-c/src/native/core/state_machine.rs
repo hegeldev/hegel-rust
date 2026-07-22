@@ -8,9 +8,21 @@ use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
 
-/// Upper bound on the per-test-case step cap drawn by
-/// [`NativeStateMachine::next_rule`].
-const MAX_STEP_CAP: i64 = 50;
+/// Upper bound on the round cap drawn by [`NativeStateMachine::next_group`]
+/// at concurrency 1, where each round hands out exactly one rule — so a
+/// sequential test gets roughly the same total number of steps as the
+/// pre-concurrency engine's per-test-case step cap.
+const MAX_SEQUENTIAL_ROUND_CAP: i64 = 50;
+
+/// Upper bound on the round cap drawn by [`NativeStateMachine::next_group`]
+/// at concurrency > 1. Together with [`MAX_ROUND_STEP_CAP`] this keeps each
+/// worker thread's total step budget per test case comparable to a
+/// sequential test's ([`MAX_SEQUENTIAL_ROUND_CAP`]).
+const MAX_CONCURRENT_ROUND_CAP: i64 = 10;
+
+/// Upper bound on the per-thread step cap drawn each round by
+/// [`NativeStateMachine::next_rule`] at concurrency > 1.
+const MAX_ROUND_STEP_CAP: i64 = 5;
 
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
@@ -18,40 +30,62 @@ fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> 
     Ok(i.to_i128().unwrap() as usize)
 }
 
-/// Per-test-case feature flags over rule indices, deciding which rules are
-/// enabled for the current test case.
+/// Draw a cap in `[1, max_cap]`: an integer in `[1, i64::MAX]` truncated to
+/// `max_cap` (so usually exactly `max_cap`, but shrinkable all the way down
+/// to 1).
+fn draw_cap(ntc: &mut NativeTestCase, max_cap: i64) -> Result<i64, EngineError> {
+    let raw = draws::generate_integer(ntc, &BigInt::from(1), &BigInt::from(i64::MAX))?;
+    Ok(min(raw.to_i128().unwrap() as i64, max_cap))
+}
+
+/// Per-thread feature flags over rule indices, deciding which rules are
+/// enabled for the calling thread over the whole test case.
 ///
 /// The disabling probability is decided up front so that any subset from
-/// all-enabled down to a single surviving rule is reachable (all-disabled is
-/// not: see `at_least_one_of`); rules are then decided lazily as they are
-/// first asked about. Decided flags are re-recorded as forced draws on later
-/// queries, so deleting the original deciding draw during shrinking just
-/// moves the decision to the next query point.
+/// all-enabled down to a single surviving rule per group is reachable
+/// (all-disabled is not: see `at_least_one_of`); rules are then decided
+/// lazily as they are first asked about. Decided flags are re-recorded as
+/// forced draws on later queries, so deleting the original deciding draw
+/// during shrinking just moves the decision to the next query point.
 struct FeatureFlags {
     p_disabled: f64,
-    /// Decision per rule index; `None` until first queried.
+    /// Decision per global rule index; `None` until first queried.
     is_disabled: Vec<Option<bool>>,
-    /// Rule indices still candidates for the "at least one rule enabled"
-    /// guarantee. Starts as all rules; emptied when any member is enabled.
-    /// When it shrinks to a single undecided candidate, that rule is forced
-    /// enabled — disabling every rule would make the test unable to
-    /// progress.
-    at_least_one_of: HashSet<usize>,
+    /// Per concurrency group: the global rule indices still candidates for
+    /// that group's "at least one rule enabled" guarantee. Each starts as
+    /// the group's full membership and is emptied when any member is
+    /// enabled. When a group's set shrinks to a single undecided candidate,
+    /// that rule is forced enabled — disabling every rule of a group would
+    /// leave rounds on that group unable to progress.
+    at_least_one_of: Vec<HashSet<usize>>,
 }
 
 impl FeatureFlags {
-    fn new(ntc: &mut NativeTestCase, num_rules: usize) -> Result<Self, EngineError> {
+    fn new(
+        ntc: &mut NativeTestCase,
+        groups: &[Vec<usize>],
+        num_rules: usize,
+    ) -> Result<Self, EngineError> {
         let raw = ntc.draw_integer(BigInt::from(0), BigInt::from(254))?;
         Ok(FeatureFlags {
             p_disabled: raw.to_i128().unwrap() as f64 / 255.0,
             is_disabled: vec![None; num_rules],
-            at_least_one_of: (0..num_rules).collect(),
+            at_least_one_of: groups
+                .iter()
+                .map(|members| members.iter().copied().collect())
+                .collect(),
         })
     }
 
-    fn is_enabled(&mut self, ntc: &mut NativeTestCase, i: usize) -> Result<bool, EngineError> {
+    fn is_enabled(
+        &mut self,
+        ntc: &mut NativeTestCase,
+        group: usize,
+        i: usize,
+    ) -> Result<bool, EngineError> {
         ntc.start_span(HEGEL_LABEL_FEATURE_FLAG as u64);
-        let forced = if self.at_least_one_of.len() == 1 && self.at_least_one_of.contains(&i) {
+        let candidates = &self.at_least_one_of[group];
+        let forced = if candidates.len() == 1 && candidates.contains(&i) {
             Some(false)
         } else {
             self.is_disabled[i]
@@ -59,128 +93,277 @@ impl FeatureFlags {
         let is_disabled = ntc.weighted(self.p_disabled, forced)?;
         self.is_disabled[i] = Some(is_disabled);
         if !is_disabled {
-            self.at_least_one_of.clear();
+            self.at_least_one_of[group].clear();
         }
-        self.at_least_one_of.remove(&i);
+        self.at_least_one_of[group].remove(&i);
         ntc.stop_span(false);
         Ok(!is_disabled)
     }
 }
 
-/// Engine-side driver for a single stateful (rule-based) test case.
-///
-/// The test body registers a fixed set of rules and asks the engine which
-/// rule to run at each step.
+/// Per-thread-index state: swarm flags and the per-round step budget, all
+/// drawn from the calling thread's own choice stream so draws on one thread
+/// never affect draws on another.
 #[derive(Default)]
+struct ThreadState {
+    /// Swarm feature flags, drawn lazily on the thread's first selection and
+    /// persisting for the whole test case.
+    flags: Option<FeatureFlags>,
+    /// This round's step cap, drawn on the thread's first `next_rule` call
+    /// of the round (concurrency > 1 only; reset at each join point).
+    step_cap: Option<i64>,
+    /// Rules handed to this thread so far this round.
+    steps_drawn: i64,
+}
+
+impl ThreadState {
+    fn start_round(&mut self) {
+        self.step_cap = None;
+        self.steps_drawn = 0;
+    }
+}
+
+/// Engine-side driver for a single stateful (rule-based) test case,
+/// sequential or concurrent.
+///
+/// The test body registers a fixed set of rules — each belonging to exactly
+/// one concurrency group — plus the invariants and the concurrency level,
+/// and drives execution in rounds: the root handle asks [`Self::next_group`]
+/// whether to run another round (and which group is current), then each
+/// worker thread pulls rules for that round via [`Self::next_rule`] until it
+/// returns `None`. Rules in the same group may run concurrently; rules in
+/// different groups never overlap, because only the current group's rules
+/// are handed out and the group changes only at the join points between
+/// rounds. A sequential machine is the special case of one group and
+/// concurrency 1, where each round hands out exactly one rule.
 pub struct NativeStateMachine {
     rule_names: Vec<String>,
     /// Registered for future use (e.g. per-invariant metrics); the engine does
     /// not drive invariant execution.
     #[allow(dead_code)]
     invariant_names: Vec<String>,
-    flags: Option<FeatureFlags>,
-    /// Per-test-case cap on the number of rules handed out, drawn on the
-    /// first `next_rule` call: an integer in `[1, i64::MAX]` truncated to
-    /// [`MAX_STEP_CAP`] (so usually exactly [`MAX_STEP_CAP`]).
-    step_cap: Option<i64>,
-    /// Number of rules handed out so far.
-    steps_drawn: i64,
+    /// Registered for future use (e.g. diagnostics); selection works on
+    /// group indices only.
+    #[allow(dead_code)]
+    group_names: Vec<String>,
+    /// Per group: the global indices of its member rules, in registration
+    /// order. Selection draws range over the current group's list only, so
+    /// every selection is in-group by construction.
+    groups: Vec<Vec<usize>>,
+    concurrency: i64,
+    /// The group whose rules are handed out this round; `None` until the
+    /// first `next_group` call.
+    current_group: Option<usize>,
+    /// Per-test-case cap on the number of rounds, drawn on the first
+    /// `next_group` call from the root handle's stream.
+    round_cap: Option<i64>,
+    rounds_started: i64,
+    threads: Vec<ThreadState>,
 }
 
 impl NativeStateMachine {
-    pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
+    pub fn new(
+        group_names: Vec<String>,
+        rule_names: Vec<String>,
+        rule_groups: Vec<usize>,
+        invariant_names: Vec<String>,
+        concurrency: i64,
+    ) -> Self {
         hegel_internal_assert!(
             !rule_names.is_empty(),
             "Stateful testing: there must be at least one rule"
         );
+        hegel_internal_assert!(
+            !group_names.is_empty(),
+            "Stateful testing: there must be at least one concurrency group"
+        );
+        hegel_internal_assert!(
+            rule_groups.len() == rule_names.len(),
+            "Stateful testing: rule_groups must be parallel to rule_names"
+        );
+        hegel_internal_assert!(
+            concurrency >= 1,
+            "Stateful testing: concurrency must be at least 1"
+        );
 
+        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); group_names.len()];
+        for (rule, &group) in rule_groups.iter().enumerate() {
+            hegel_internal_assert!(
+                group < group_names.len(),
+                "Stateful testing: rule group index out of range"
+            );
+            groups[group].push(rule);
+        }
+        for members in &groups {
+            hegel_internal_assert!(
+                !members.is_empty(),
+                "Stateful testing: every concurrency group must have at least one rule"
+            );
+        }
+
+        let threads = (0..concurrency).map(|_| ThreadState::default()).collect();
         NativeStateMachine {
             rule_names,
             invariant_names,
-            flags: None,
-            step_cap: None,
-            steps_drawn: 0,
+            group_names,
+            groups,
+            concurrency,
+            current_group: None,
+            round_cap: None,
+            rounds_started: 0,
+            threads,
         }
     }
 
-    /// Draw the index of the next rule to run, in `[0, num_rules)`, or
-    /// `None` once the test case has run enough steps.
+    /// Start the next round: draw whether another round should run at all
+    /// and, if so, which concurrency group is current for it. Returns
+    /// `false` once the test case has run enough rounds.
     ///
-    /// The first call draws the test case's step cap. Once `step_cap` rules
-    /// have been handed out, every further call returns `None` without
-    /// drawing. Families marked as unbounded (single-test-case runs) draw
-    /// no cap and never return `None`.
-    pub fn next_rule(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
-        if ntc.family().state_machine_steps_unbounded() {
-            return Ok(Some(self.select_rule(ntc)?));
+    /// Must be called from the root handle at each join point, including
+    /// before the first `next_rule` call. The first call draws the test
+    /// case's round cap. Families marked as unbounded (single-test-case
+    /// runs) draw no cap and never return `false`: rounds continue forever.
+    pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<bool, EngineError> {
+        if !ntc.family().state_machine_steps_unbounded() {
+            let cap = match self.round_cap {
+                Some(cap) => cap,
+                None => {
+                    let max_cap = if self.concurrency == 1 {
+                        MAX_SEQUENTIAL_ROUND_CAP
+                    } else {
+                        MAX_CONCURRENT_ROUND_CAP
+                    };
+                    let cap = draw_cap(ntc, max_cap)?;
+                    self.round_cap = Some(cap);
+                    cap
+                }
+            };
+            if self.rounds_started >= cap {
+                return Ok(false);
+            }
         }
-        let step_cap = match self.step_cap {
-            Some(cap) => cap,
-            None => {
-                let raw = draws::generate_integer(ntc, &BigInt::from(1), &BigInt::from(i64::MAX))?;
-                let cap = min(raw.to_i128().unwrap() as i64, MAX_STEP_CAP);
-                self.step_cap = Some(cap);
-                cap
+        let group = if self.groups.len() == 1 {
+            0
+        } else {
+            draw_index(ntc, self.groups.len())?
+        };
+        self.current_group = Some(group);
+        self.rounds_started += 1;
+        for thread in &mut self.threads {
+            thread.start_round();
+        }
+        Ok(true)
+    }
+
+    /// Draw the index of the next rule for `thread_index` to run this round
+    /// — always a rule belonging to the current group, in
+    /// `[0, num_rules)` — or `None` once the thread's round budget is
+    /// exhausted and it should wait for the next join point.
+    ///
+    /// Consults only per-thread state (plus the machine's current group), so
+    /// draws on one thread never affect draws on another. At concurrency 1
+    /// no per-round step cap is drawn: every round hands out exactly one
+    /// rule, so a join point follows each rule.
+    pub fn next_rule(
+        &mut self,
+        ntc: &mut NativeTestCase,
+        thread_index: i64,
+    ) -> Result<Option<i64>, EngineError> {
+        let thread_idx = usize::try_from(thread_index)
+            .ok()
+            .filter(|&t| t < self.threads.len())
+            .ok_or_else(|| {
+                EngineError::InvalidArgument(format!(
+                    "thread_index must be in [0, {}), got {thread_index}",
+                    self.concurrency
+                ))
+            })?;
+        let Some(group) = self.current_group else {
+            return Err(EngineError::InvalidArgument(
+                "state machine rule requested before the first next_group call".to_string(),
+            ));
+        };
+
+        let cap = if self.concurrency == 1 {
+            1
+        } else {
+            match self.threads[thread_idx].step_cap {
+                Some(cap) => cap,
+                None => {
+                    let cap = draw_cap(ntc, MAX_ROUND_STEP_CAP)?;
+                    self.threads[thread_idx].step_cap = Some(cap);
+                    cap
+                }
             }
         };
-        if self.steps_drawn >= step_cap {
+        if self.threads[thread_idx].steps_drawn >= cap {
             return Ok(None);
         }
-        let index = self.select_rule(ntc)?;
-        self.steps_drawn += 1;
+        let index = self.select_rule(ntc, thread_idx, group)?;
+        self.threads[thread_idx].steps_drawn += 1;
         Ok(Some(index))
     }
 
-    /// Select the next rule's index, in `[0, num_rules)`.
+    /// Select the next rule's global index from the current group's member
+    /// list.
     ///
-    /// Up to three rejection-sampling tries, then a fallback that
-    /// enumerates the enabled rules.
-    fn select_rule(&mut self, ntc: &mut NativeTestCase) -> Result<i64, EngineError> {
-        let n = self.rule_names.len();
-        if self.flags.is_none() {
-            self.flags = Some(FeatureFlags::new(ntc, n)?);
+    /// Every selection draw is an index in `[0, group_size)` mapped back to
+    /// the global rule index, so each selection is in-group by construction.
+    /// Up to three rejection-sampling tries against the thread's swarm
+    /// flags, then a fallback that enumerates the group's enabled rules.
+    fn select_rule(
+        &mut self,
+        ntc: &mut NativeTestCase,
+        thread_idx: usize,
+        group: usize,
+    ) -> Result<i64, EngineError> {
+        if self.threads[thread_idx].flags.is_none() {
+            self.threads[thread_idx].flags =
+                Some(FeatureFlags::new(ntc, &self.groups, self.rule_names.len())?);
         }
-        let flags = self.flags.as_mut().unwrap();
+        let members = &self.groups[group];
+        let n = members.len();
+        let flags = self.threads[thread_idx].flags.as_mut().unwrap();
 
         let mut known_bad: HashSet<usize> = HashSet::new();
         for _ in 0..3 {
-            let i = draw_index(ntc, n)?;
-            if !known_bad.contains(&i) {
-                if flags.is_enabled(ntc, i)? {
-                    return Ok(i as i64);
+            let k = draw_index(ntc, n)?;
+            if !known_bad.contains(&k) {
+                if flags.is_enabled(ntc, group, members[k])? {
+                    return Ok(members[k] as i64);
                 }
-                known_bad.insert(i);
+                known_bad.insert(k);
             }
         }
 
         let max_good = n - known_bad.len();
         let speculative = draw_index(ntc, max_good)?;
         let mut allowed: Vec<usize> = Vec::new();
-        for i in 0..n {
-            if known_bad.contains(&i) {
+        for k in 0..n {
+            if known_bad.contains(&k) {
                 continue;
             }
-            if flags.is_enabled(ntc, i)? {
-                allowed.push(i);
+            if flags.is_enabled(ntc, group, members[k])? {
+                allowed.push(k);
                 if allowed.len() > speculative {
                     ntc.draw_integer_forced(
                         BigInt::from(0),
                         BigInt::from(n as i64 - 1),
-                        BigInt::from(i as i64),
+                        BigInt::from(k as i64),
                     )?;
-                    return Ok(i as i64);
+                    return Ok(members[k] as i64);
                 }
             }
         }
         hegel_internal_assert!(!allowed.is_empty());
-        let k = draw_index(ntc, allowed.len())?;
-        let i = allowed[k];
+        let j = draw_index(ntc, allowed.len())?;
+        let k = allowed[j];
         ntc.draw_integer_forced(
             BigInt::from(0),
             BigInt::from(n as i64 - 1),
-            BigInt::from(i as i64),
+            BigInt::from(k as i64),
         )?;
-        Ok(i as i64)
+        Ok(members[k] as i64)
     }
 }
 
