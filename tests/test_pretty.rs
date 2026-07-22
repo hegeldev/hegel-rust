@@ -242,7 +242,7 @@ fn deferred_holes_fill_in_before_rendering() {
     let mut doc = Document::new();
     let printer = doc.printer();
     printer.text("a");
-    let mut slot = printer.deferred();
+    let mut slot = printer.clone();
     printer.text("d");
     slot.text("b\nc");
     assert_eq!(doc.finish(), "ab\ncd");
@@ -253,7 +253,7 @@ fn deferred_slots_outliving_their_document_ignore_writes() {
     let mut doc = Document::new();
     let printer = doc.printer();
     printer.text("a");
-    let mut slot = printer.deferred();
+    let mut slot = printer.clone();
     slot.text("b");
     assert_eq!(doc.finish(), "ab");
     slot.text("ignored");
@@ -444,7 +444,7 @@ fn noop_printer_discards_everything() {
     printer.shift_indent(2);
     printer.comment("nothing to see");
     printer.end_group("]");
-    let mut slot = printer.deferred();
+    let mut slot = printer.clone();
     slot.text("later\ntext");
     slot.breakable(" ");
     assert!(!printer.should_print());
@@ -499,4 +499,41 @@ fn setting_the_width_after_printing_panics() {
     let mut doc = Document::new();
     doc.printer().text("a");
     doc.max_width(40);
+}
+
+#[test]
+fn printers_move_between_threads() {
+    fn assert_send<T: Send>() {}
+    assert_send::<PrettyPrinter>();
+    assert_send::<Document>();
+
+    let mut doc = Document::new();
+    doc.printer().text("a");
+    let mut child = doc.printer().clone();
+    doc.printer().text("c");
+    std::thread::spawn(move || {
+        child.text("b");
+    })
+    .join()
+    .unwrap();
+    assert_eq!(doc.finish(), "abc");
+}
+
+#[test]
+fn cloning_a_dead_region_yields_a_noop_printer() {
+    let mut doc = Document::new();
+    let child = doc.printer().clone();
+    doc.finish();
+    let mut grandchild = child.clone();
+    assert!(!grandchild.should_print());
+    grandchild.text("ignored");
+}
+
+#[test]
+#[should_panic(expected = "matching begin_group")]
+fn unbalanced_groups_in_a_child_region_panic_at_finish() {
+    let mut doc = Document::new();
+    let mut child = doc.printer().clone();
+    child.end_group(")");
+    doc.finish();
 }
