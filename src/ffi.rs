@@ -949,6 +949,14 @@ impl std::fmt::Debug for PrinterHandle {
     }
 }
 
+/// How a printer operation failed: the region it addresses is dead (a
+/// straggling writer after the document was read — callers treat this as a
+/// silent no-op), or genuine misuse carrying libhegel's diagnostic.
+pub(crate) enum PrinterCallError {
+    DeadRegion,
+    Other(String),
+}
+
 /// Run `f` with an engine printer-options handle configured for `max_width`,
 /// freeing the handle afterwards (options only parameterize construction, so
 /// they never outlive the constructing call).
@@ -979,29 +987,33 @@ impl PrinterHandle {
         PrinterHandle { raw }
     }
 
-    fn check(rc: hegel_result_t) -> Result<(), String> {
-        if rc != hegel_result_t::HEGEL_OK {
-            return Err(last_error_string());
+    fn check(rc: hegel_result_t) -> Result<(), PrinterCallError> {
+        match rc {
+            hegel_result_t::HEGEL_OK => Ok(()),
+            // The handle pointer is always live here, so an invalid-handle
+            // code can only mean its region has died (the document was
+            // already read, or the region's anchor was retracted).
+            hegel_result_t::HEGEL_E_INVALID_HANDLE => Err(PrinterCallError::DeadRegion),
+            _ => Err(PrinterCallError::Other(last_error_string())),
         }
-        Ok(())
     }
 
     /// Emit literal text. Must not contain newlines.
-    pub(crate) fn text(&self, s: &str) -> Result<(), String> {
+    pub(crate) fn text(&self, s: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_text(ctx, self.raw, s.as_ptr(), s.len())
         }))
     }
 
     /// Emit a break point rendering as `sep` when the enclosing group fits.
-    pub(crate) fn breakable(&self, sep: &str) -> Result<(), String> {
+    pub(crate) fn breakable(&self, sep: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_breakable(ctx, self.raw, sep.as_ptr(), sep.len())
         }))
     }
 
     /// Emit an unconditional newline plus the current indentation.
-    pub(crate) fn hard_break(&self) -> Result<(), String> {
+    pub(crate) fn hard_break(&self) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_hard_break(ctx, self.raw)
         }))
@@ -1010,7 +1022,7 @@ impl PrinterHandle {
     /// Attach a comment (passed in full rendered form) to the line currently
     /// being written: it is emitted at the end of that line, forces every
     /// open group to break, and is excluded from width accounting.
-    pub(crate) fn comment(&self, text: &str) -> Result<(), String> {
+    pub(crate) fn comment(&self, text: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_comment(ctx, self.raw, text.as_ptr(), text.len())
         }))
@@ -1018,7 +1030,7 @@ impl PrinterHandle {
 
     /// Open a group: emit `open`, then indent subsequent break points by
     /// `indent`.
-    pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), String> {
+    pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_begin_group(ctx, self.raw, indent, open.as_ptr(), open.len())
         }))
@@ -1026,14 +1038,14 @@ impl PrinterHandle {
 
     /// Close the innermost group: undo its `begin_group` indentation, then
     /// emit `close`.
-    pub(crate) fn end_group(&self, close: &str) -> Result<(), String> {
+    pub(crate) fn end_group(&self, close: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_end_group(ctx, self.raw, close.as_ptr(), close.len())
         }))
     }
 
     /// Adjust the indentation applied by subsequent break points.
-    pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), String> {
+    pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_shift_indent(ctx, self.raw, delta)
         }))
@@ -1042,7 +1054,7 @@ impl PrinterHandle {
     /// Open a deferred hole at this handle's current position and return a
     /// handle onto its slot. Content written to the slot is spliced in at
     /// the hole's position when [`PrinterHandle::resolve`] runs.
-    pub(crate) fn deferred(&self) -> Result<PrinterHandle, String> {
+    pub(crate) fn deferred(&self) -> Result<PrinterHandle, PrinterCallError> {
         let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_deferred(ctx, self.raw, &mut raw)
@@ -1052,7 +1064,7 @@ impl PrinterHandle {
 
     /// Splice every deferred hole's content in at its position; all slots of
     /// the session die.
-    pub(crate) fn resolve(&self) -> Result<(), String> {
+    pub(crate) fn resolve(&self) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_resolve(ctx, self.raw)
         }))
@@ -1060,28 +1072,28 @@ impl PrinterHandle {
 
     /// Open a speculative region: subsequent output buffers until committed
     /// or aborted.
-    pub(crate) fn begin_speculative(&self) -> Result<(), String> {
+    pub(crate) fn begin_speculative(&self) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_begin_speculative(ctx, self.raw)
         }))
     }
 
     /// Close the innermost speculative region, keeping its content.
-    pub(crate) fn commit_speculative(&self) -> Result<(), String> {
+    pub(crate) fn commit_speculative(&self) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_commit_speculative(ctx, self.raw)
         }))
     }
 
     /// Close the innermost speculative region, discarding its content.
-    pub(crate) fn abort_speculative(&self) -> Result<(), String> {
+    pub(crate) fn abort_speculative(&self) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
             hegel_c::hegel_printer_abort_speculative(ctx, self.raw)
         }))
     }
 
     /// Flush pending break points and read everything printed so far.
-    pub(crate) fn value(&self) -> Result<String, String> {
+    pub(crate) fn value(&self) -> Result<String, PrinterCallError> {
         let mut result = hegel_c::hegel_printer_value_result_t {
             data: ptr::null_mut(),
             len: 0,

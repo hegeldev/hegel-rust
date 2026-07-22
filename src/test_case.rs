@@ -136,7 +136,7 @@ pub(crate) struct TestCaseGlobalData {
     /// annotation actually renders: a note about "commented parts" would
     /// only confuse if every commented slice belonged to unprinted machinery
     /// draws (silent draws, loop bookkeeping) and no comment is visible.
-    explain_together: Mutex<Option<(crate::pretty::DeferredPrinter, String)>>,
+    explain_together: Mutex<Option<(PrettyPrinter, String)>>,
 }
 
 /// The width drawn-value documents are laid out to.
@@ -470,7 +470,7 @@ impl TestCase {
         }
         if let Some(text) = explain.together {
             self.with_printer(|printer| {
-                let slot = printer.deferred();
+                let slot = printer.clone();
                 *self.global.explain_together.lock() = Some((slot, text));
             });
         }

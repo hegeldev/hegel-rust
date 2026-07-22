@@ -23,7 +23,21 @@
 //! available for any `Debug` type — without writing an implementation —
 //! through [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
 
-use crate::ffi::PrinterHandle;
+use crate::ffi::{PrinterCallError, PrinterHandle};
+use std::cell::Cell;
+use std::marker::PhantomData;
+
+/// Accept a printer operation's outcome: misuse panics with libhegel's
+/// diagnostic, while writing to a dead region — a straggling thread printing
+/// after the document was read, or into a region whose anchor was retracted
+/// — is a silent no-op, so a writer that outlives its document never brings
+/// the process down.
+fn tolerate(result: Result<(), PrinterCallError>) {
+    match result {
+        Ok(()) | Err(PrinterCallError::DeadRegion) => {}
+        Err(PrinterCallError::Other(message)) => panic!("{message}"),
+    }
+}
 use crate::test_case::invalid_argument;
 
 /// The line width documents are laid out to when none is configured.
@@ -121,12 +135,26 @@ impl Default for Document {
 /// code such as a [`PrettyPrintable`] implementation. Rejections of the
 /// layout protocol (an [`end_group`](PrettyPrinter::end_group) with no open
 /// group) panic, since they indicate a bug in the calling printing code.
-#[derive(Debug)]
 pub struct PrettyPrinter {
     /// `None` is the no-op printer: every emitting method returns without
     /// doing anything, so one drawing body can serve both the silent and the
     /// printing draw paths.
     handle: Option<PrinterHandle>,
+    /// A printer belongs to one thread at a time (it may move — the type is
+    /// `Send` — but never be shared), exactly like [`TestCase`]: the region
+    /// model makes cross-thread output deterministic only because each
+    /// region has a single writer.
+    ///
+    /// [`TestCase`]: crate::TestCase
+    _single_owner: PhantomData<Cell<()>>,
+}
+
+impl std::fmt::Debug for PrettyPrinter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrettyPrinter")
+            .field("handle", &self.handle)
+            .finish()
+    }
 }
 
 impl PrettyPrinter {
@@ -141,7 +169,10 @@ impl PrettyPrinter {
     /// [`should_print`](PrettyPrinter::should_print) so the silent path
     /// stays cheap.
     pub fn noop() -> Self {
-        PrettyPrinter { handle: None }
+        PrettyPrinter {
+            handle: None,
+            _single_owner: PhantomData,
+        }
     }
 
     /// Whether printing to this printer produces output: `false` for the
@@ -157,6 +188,7 @@ impl PrettyPrinter {
     pub(crate) fn from_handle(handle: PrinterHandle) -> Self {
         PrettyPrinter {
             handle: Some(handle),
+            _single_owner: PhantomData,
         }
     }
 
@@ -170,11 +202,11 @@ impl PrettyPrinter {
         let mut first = true;
         for segment in s.split('\n') {
             if !first {
-                handle.hard_break().unwrap();
+                tolerate(handle.hard_break());
             }
             first = false;
             if !segment.is_empty() {
-                handle.text(segment).unwrap();
+                tolerate(handle.text(segment));
             }
         }
     }
@@ -184,13 +216,13 @@ impl PrettyPrinter {
     /// indentation if the group breaks.
     pub fn breakable(&mut self, sep: &str) {
         let Some(handle) = &self.handle else { return };
-        handle.breakable(sep).unwrap();
+        tolerate(handle.breakable(sep));
     }
 
     /// Emit an unconditional newline followed by the current indentation.
     pub fn hard_break(&mut self) {
         let Some(handle) = &self.handle else { return };
-        handle.hard_break().unwrap();
+        tolerate(handle.hard_break());
     }
 
     /// Open a group: emit `open`, then increase the indentation applied by
@@ -198,7 +230,7 @@ impl PrettyPrinter {
     /// `open`, so continuation lines align just inside the delimiter).
     pub fn begin_group(&mut self, indent: usize, open: &str) {
         let Some(handle) = &self.handle else { return };
-        handle.begin_group(indent as u64, open).unwrap();
+        tolerate(handle.begin_group(indent as u64, open));
     }
 
     /// Close the innermost group: undo the indentation its
@@ -206,13 +238,13 @@ impl PrettyPrinter {
     /// Panics if no group is open.
     pub fn end_group(&mut self, close: &str) {
         let Some(handle) = &self.handle else { return };
-        handle.end_group(close).unwrap();
+        tolerate(handle.end_group(close));
     }
 
     /// Adjust the indentation applied by subsequent break points by `delta`.
     pub fn shift_indent(&mut self, delta: isize) {
         let Some(handle) = &self.handle else { return };
-        handle.shift_indent(delta as i64).unwrap();
+        tolerate(handle.shift_indent(delta as i64));
     }
 
     /// Attach a comment to the line currently being written: `text` is
@@ -228,7 +260,7 @@ impl PrettyPrinter {
     /// must not contain newlines; a comment is a single-line construct.
     pub fn comment(&mut self, text: &str) {
         let Some(handle) = &self.handle else { return };
-        handle.comment(&format!("  // {text}")).unwrap();
+        tolerate(handle.comment(&format!("  // {text}")));
     }
 
     /// Splice in any outstanding deferred content, flush pending break
@@ -241,26 +273,12 @@ impl PrettyPrinter {
             unreachable!("only rendering printers have their value read");
         };
         let _ = handle.resolve();
-        handle.value().unwrap()
-    }
-
-    /// Open a deferred hole at the current position and return a handle to
-    /// fill it in later.
-    ///
-    /// Whatever is printed through the returned [`DeferredPrinter`] — at any
-    /// later point, e.g. while a test body runs — appears at the hole's
-    /// position when the document renders (see [`Document::finish`]), with
-    /// line-breaking behaving as if it had been printed inline. This is
-    /// how a generator whose value's representation is only known during
-    /// test execution (a Hegel-controlled random number generator, say)
-    /// prints: it reserves a hole at draw time and records into it as the
-    /// value is used.
-    pub fn deferred(&mut self) -> DeferredPrinter {
-        DeferredPrinter {
-            handle: self
-                .handle
-                .as_ref()
-                .map(|handle| handle.deferred().unwrap()),
+        match handle.value() {
+            Ok(rendered) => rendered,
+            Err(PrinterCallError::Other(message)) => panic!("{message}"),
+            Err(PrinterCallError::DeadRegion) => {
+                unreachable!("a document's own region never dies before it renders")
+            }
         }
     }
 
@@ -275,7 +293,7 @@ impl PrettyPrinter {
     /// accepted one.
     pub fn speculate(&mut self) -> Speculation<'_> {
         if let Some(handle) = &self.handle {
-            handle.begin_speculative().unwrap();
+            tolerate(handle.begin_speculative());
         }
         Speculation {
             printer: self,
@@ -284,40 +302,38 @@ impl PrettyPrinter {
     }
 }
 
-/// A handle onto a deferred hole in a [`PrettyPrinter`] document; see
-/// [`PrettyPrinter::deferred`].
+/// Cloning a printer opens a *child region*: a hole in the document,
+/// anchored at the printer's current position, that the clone writes into.
 ///
-/// Once the document renders (or the speculative region the hole was opened
-/// inside is aborted), the slot is dead and every method becomes a silent
-/// no-op — a value that outlives its test case can keep trying to record
-/// without consequence.
-#[derive(Debug)]
-pub struct DeferredPrinter {
-    /// `None` when the slot was opened on a no-op printer: writes discard.
-    handle: Option<crate::ffi::PrinterHandle>,
-}
-
-impl DeferredPrinter {
-    /// Emit literal text into the slot. Newlines are honored as line breaks.
-    pub fn text(&mut self, s: &str) {
-        let Some(handle) = &self.handle else { return };
-        let mut first = true;
-        for segment in s.split('\n') {
-            if !first {
-                let _ = handle.hard_break();
-            }
-            first = false;
-            if !segment.is_empty() {
-                let _ = handle.text(segment);
-            }
+/// Whatever the clone prints — at any later point, from any thread that owns
+/// it — appears at the anchor when the document renders, with line-breaking
+/// behaving as if it had been printed inline. This is how output crosses
+/// threads deterministically (each clone's output lands where the clone was
+/// made, however the threads were scheduled), and how a generator whose
+/// value's representation is only known during test execution (a
+/// Hegel-controlled random number generator, say) prints: it clones the
+/// printer at draw time and records into the clone as the value is used.
+///
+/// A child region dies when the document renders, or when a speculative
+/// region its anchor sat inside is aborted; a dead region's writes are
+/// silent no-ops, so a clone that outlives its document can keep trying to
+/// record without consequence. Cloning a no-op printer yields a no-op
+/// printer, and cloning into a dead region yields a printer whose writes
+/// discard.
+impl Clone for PrettyPrinter {
+    fn clone(&self) -> Self {
+        let handle = match &self.handle {
+            None => None,
+            Some(handle) => match handle.deferred() {
+                Ok(child) => Some(child),
+                Err(PrinterCallError::DeadRegion) => None,
+                Err(PrinterCallError::Other(message)) => unreachable!("{message}"),
+            },
+        };
+        PrettyPrinter {
+            handle,
+            _single_owner: PhantomData,
         }
-    }
-
-    /// Emit a potential break point into the slot, rendering as `sep` when
-    /// the enclosing group fits on one line.
-    pub fn breakable(&mut self, sep: &str) {
-        let Some(handle) = &self.handle else { return };
-        let _ = handle.breakable(sep);
     }
 }
 
@@ -339,7 +355,7 @@ impl Speculation<'_> {
     pub fn commit(mut self) {
         self.resolved = true;
         if let Some(handle) = &self.printer.handle {
-            handle.commit_speculative().unwrap();
+            tolerate(handle.commit_speculative());
         }
     }
 
@@ -347,7 +363,7 @@ impl Speculation<'_> {
     pub fn abort(mut self) {
         self.resolved = true;
         if let Some(handle) = &self.printer.handle {
-            handle.abort_speculative().unwrap();
+            tolerate(handle.abort_speculative());
         }
     }
 }

@@ -6,7 +6,7 @@ use rand::rand_core::TryRng;
 use rand::rngs::StdRng;
 
 use crate::generators::{Generator, PrintableGenerator, TestCase, binary, integers};
-use crate::pretty::{DeferredPrinter, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 
 /// Generator for random number generators. Created by [`randoms()`].
 ///
@@ -59,7 +59,7 @@ impl PrintableGenerator<HegelRandom> for RandomsGenerator {
             };
         }
         printer.begin_group(1, "HegelRandom { consumed: [");
-        let slot = printer.deferred();
+        let slot = printer.clone();
         printer.end_group("] }");
         HegelRandom {
             source: RandomSource::Artificial(
@@ -74,10 +74,10 @@ impl PrintableGenerator<HegelRandom> for RandomsGenerator {
 }
 
 /// Records the values an artificially-random [`HegelRandom`] hands out into
-/// the deferred hole reserved for it at draw time.
+/// the child region cloned off the printer at draw time.
 #[derive(Debug)]
 struct RngPrintSlot {
-    printer: DeferredPrinter,
+    printer: PrettyPrinter,
     recorded: usize,
 }
 
