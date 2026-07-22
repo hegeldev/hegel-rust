@@ -413,6 +413,13 @@ fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &Tes
 
 /// Ask the engine whether the machine should run another round, and which
 /// concurrency group is current for it.
+///
+/// The start of the test case counts as a join point, so both runners call
+/// this *before* running any rules: the machine has no current group until
+/// the first call draws one (the engine rejects a rule request made before
+/// it), and the first call is also what draws the test case's round cap.
+/// Since the cap is at least 1, the first call of a fresh machine always
+/// starts a round; `None` only ever follows earlier rounds.
 fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
     match tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id)) {
         Ok(group) => group.map(|g| g as usize),
@@ -455,11 +462,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
 
     let mut steps_attempted: i64 = 0;
 
-    while is_single || steps_attempted < 1000 {
-        if machine_next_group(&tc, machine_id).is_none() {
-            break;
-        }
-
+    while (is_single || steps_attempted < 1000) && machine_next_group(&tc, machine_id).is_some() {
         loop {
             let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, 0)) {
                 Ok(Some(i)) => i,
