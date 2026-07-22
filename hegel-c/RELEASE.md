@@ -2,7 +2,7 @@ RELEASE_TYPE: minor
 
 This release replaces the stateful-testing interface with one that also supports *concurrent* stateful testing, and adds a run-level nondeterminism declaration.
 
-State machines now carry concurrency groups, per-rule group assignments, and a concurrency level, and execution proceeds in rounds: the root handle asks `hegel_state_machine_next_group` (new) whether to run another round, then each worker thread pulls rules for that round with `hegel_state_machine_next_rule` until it signals the join point. Rules in the same group may run concurrently; rules in different groups never overlap. Swarm selection is now per thread, with the "at least one rule enabled" guarantee applying within each group. The new `hegel_generate_concurrency` primitive draws a concurrency level in `[1, max_value]`, weighted toward `max_value`.
+State machines now carry concurrency groups, per-rule group assignments, and a concurrency level, and execution proceeds in rounds: the root handle asks `hegel_state_machine_next_group` (new) whether to run another round — it reports the round's current group index, e.g. for trace output, or a `-1` sentinel for termination — then each worker thread pulls rules for that round with `hegel_state_machine_next_rule` until it signals the join point. Rules in the same group may run concurrently; rules in different groups never overlap. Swarm selection is now per thread, with the "at least one rule enabled" guarantee applying within each group. The new `hegel_generate_concurrency` primitive draws a concurrency level in `[1, max_value]`, weighted toward `max_value`.
 
 This is a breaking C ABI change:
 

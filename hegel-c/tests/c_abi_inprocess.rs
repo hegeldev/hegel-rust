@@ -1129,9 +1129,9 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_state_machine_next_rule(ctx, null_tc, 0, 0, &mut out_id),
             HEGEL_E_INVALID_HANDLE
         );
-        let mut cont = true;
+        let mut group_idx = 0i64;
         assert_eq!(
-            hegel_state_machine_next_group(ctx, null_tc, 0, &mut cont),
+            hegel_state_machine_next_group(ctx, null_tc, 0, &mut group_idx),
             HEGEL_E_INVALID_HANDLE
         );
         let mut level = 0i64;
@@ -1357,12 +1357,13 @@ fn state_machine_and_primitive_boolean_paths() {
         let mut rounds = 0;
         loop {
             assert_eq!(
-                hegel_state_machine_next_group(ctx, tc, out_id, &mut cont),
+                hegel_state_machine_next_group(ctx, tc, out_id, &mut group_idx),
                 HEGEL_OK
             );
-            if !cont {
+            if group_idx == HEGEL_STATE_MACHINE_DONE {
                 break;
             }
+            assert_eq!(group_idx, 0, "a single-group machine is always in group 0");
             rounds += 1;
             assert!(rounds <= 50, "the engine's round cap never exceeds 50");
             assert_eq!(

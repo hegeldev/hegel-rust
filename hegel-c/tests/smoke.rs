@@ -132,7 +132,7 @@ type FnNewStateMachine = unsafe extern "C" fn(
     i64,
     *mut i64,
 ) -> c_int;
-type FnStateMachineNextGroup = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut bool) -> c_int;
+type FnStateMachineNextGroup = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, i64, *mut i64) -> c_int;
 type FnGenerateConcurrency = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
 type FnPrimitiveBoolean =
@@ -638,9 +638,9 @@ fn caller_usage_errors_return_error_not_abort() {
             (a.state_machine_next_rule)(ctx, tc, 9999, 0, &mut rule_idx),
             HEGEL_E_INVALID_ARG
         );
-        let mut cont = false;
+        let mut group: i64 = 0;
         assert_eq!(
-            (a.state_machine_next_group)(ctx, tc, 9999, &mut cont),
+            (a.state_machine_next_group)(ctx, tc, 9999, &mut group),
             HEGEL_E_INVALID_ARG
         );
 
@@ -1076,16 +1076,17 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let mut current_run = 0usize;
             let mut previous: Option<i64> = None;
             'case: for _ in 0..60 {
-                let mut cont = false;
-                let rc = (a.state_machine_next_group)(ctx, tc, machine_id, &mut cont);
+                let mut group: i64 = i64::MAX;
+                let rc = (a.state_machine_next_group)(ctx, tc, machine_id, &mut group);
                 if rc == HEGEL_E_STOP_TEST {
                     overran = true;
                     break;
                 }
                 assert_eq!(rc, HEGEL_OK, "state_machine_next_group failed: rc={}", rc);
-                if !cont {
+                if group == -1 {
                     break;
                 }
+                assert_eq!(group, 0, "a single-group machine is always in group 0");
                 loop {
                     let mut index: i64 = i64::MAX;
                     let rc = (a.state_machine_next_rule)(ctx, tc, machine_id, 0, &mut index);

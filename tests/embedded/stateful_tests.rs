@@ -244,6 +244,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
     assert!(
         tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
             .unwrap()
+            .is_some()
     );
     let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
     assert!(matches!(event, WorkerEvent::RoundDone));
@@ -267,6 +268,7 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     assert!(
         tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
             .unwrap()
+            .is_some()
     );
     let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
     let WorkerEvent::Panicked {
@@ -294,6 +296,7 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
     assert!(
         tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
             .unwrap()
+            .is_some()
     );
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {

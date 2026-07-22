@@ -79,7 +79,7 @@ fn count_draws_with_max(ntc: &NativeTestCase, max_value: i64) -> usize {
 fn zero_p_disabled_enables_every_rule() {
     let mut ntc = replay(&[cap(), int(0), int(2)], 8);
     let mut sm = machine(3);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap();
     assert_eq!(rule, Some(2));
     assert_eq!(ntc.nodes.len(), 4);
@@ -102,13 +102,13 @@ fn round_cap_truncates_to_max_and_next_group_halts_after_that_many_rounds() {
     let mut ntc = simplest_after(&[cap()], 4096);
     let mut sm = machine(2);
     for _ in 0..MAX_SEQUENTIAL_ROUND_CAP {
-        assert!(sm.next_group(&mut ntc).unwrap());
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     }
     let drawn = ntc.nodes.len();
-    assert!(!sm.next_group(&mut ntc).unwrap());
-    assert!(!sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
     assert_eq!(ntc.nodes.len(), drawn);
 }
 
@@ -117,22 +117,22 @@ fn small_round_cap_halts_after_that_many_rounds() {
     let mut ntc = simplest_after(&[int(2)], 64);
     let mut sm = machine(2);
     for _ in 0..2 {
-        assert!(sm.next_group(&mut ntc).unwrap());
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     }
-    assert!(!sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
 }
 
 #[test]
 fn sequential_machine_hands_out_exactly_one_rule_per_round() {
     let mut ntc = simplest_after(&[cap()], 4096);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
 }
@@ -143,7 +143,7 @@ fn unbounded_families_draw_no_caps_and_next_group_never_halts() {
     ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(2);
     for _ in 0..2 * MAX_SEQUENTIAL_ROUND_CAP {
-        assert!(sm.next_group(&mut ntc).unwrap());
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     }
@@ -154,7 +154,7 @@ fn unbounded_families_draw_no_caps_and_next_group_never_halts() {
 fn p_disabled_is_drawn_on_first_next_rule_only() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     let mut sm = machine(3);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     sm.next_rule(&mut ntc, 0).unwrap();
     sm.next_group(&mut ntc).unwrap();
     sm.next_rule(&mut ntc, 0).unwrap();
@@ -166,7 +166,7 @@ fn last_undecided_rule_is_forced_enabled() {
     let prefix = [cap(), int(254), int(0), ChoiceValue::Boolean(true), int(1)];
     let mut ntc = replay(&prefix, 8);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 1);
     assert_eq!(ntc.nodes.len(), 6);
@@ -179,9 +179,9 @@ fn decided_flag_is_rewritten_as_forced_draw_on_later_queries() {
     let prefix = [cap(), int(254), int(0), ChoiceValue::Boolean(false), int(0)];
     let mut ntc = replay(&prefix, 8);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap().unwrap(), 0);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap().unwrap(), 0);
     assert_eq!(ntc.nodes.len(), 6);
     assert!(ntc.nodes[5].was_forced);
@@ -201,7 +201,7 @@ fn known_disabled_rule_is_skipped_without_redrawing_its_flag() {
     ];
     let mut ntc = replay(&prefix, 16);
     let mut sm = machine(3);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 2);
     assert_eq!(ntc.nodes.len(), 7);
@@ -221,7 +221,7 @@ fn fallback_early_exits_at_the_speculative_index() {
     ];
     let mut ntc = replay(&prefix, 16);
     let mut sm = machine(3);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 2);
     assert_eq!(ntc.nodes.len(), 10);
@@ -245,7 +245,7 @@ fn fallback_draws_from_allowed_when_speculative_index_is_past_the_end() {
     ];
     let mut ntc = replay(&prefix, 16);
     let mut sm = machine(4);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 3);
     assert_eq!(ntc.nodes.len(), 12);
@@ -254,11 +254,11 @@ fn fallback_draws_from_allowed_when_speculative_index_is_past_the_end() {
 }
 
 #[test]
-fn next_group_draws_the_current_group_when_there_are_several() {
+fn next_group_draws_and_returns_the_current_group_when_there_are_several() {
     let prefix = [cap(), int(1), int(254), int(0)];
     let mut ntc = replay(&prefix, 8);
     let mut sm = grouped_machine(&[0, 0, 1], 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert_eq!(sm.next_group(&mut ntc).unwrap(), Some(1));
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 2);
     assert_eq!(ntc.nodes.len(), 5);
@@ -273,14 +273,9 @@ fn selection_stays_in_the_current_group() {
         ntc.family().set_state_machine_steps_unbounded();
         let mut sm = grouped_machine(&[0, 1, 0, 1, 1], 2);
         for _ in 0..30 {
-            assert!(sm.next_group(&mut ntc).unwrap());
-            let group_node = ntc.nodes.len() - 1;
-            let drawn_group = match &ntc.nodes[group_node].value {
-                ChoiceValue::Integer(v) => v.to_i128().unwrap() as usize,
-                other => panic!("expected the group draw, got {other:?}"),
-            };
+            let group = sm.next_group(&mut ntc).unwrap().unwrap();
             let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap() as usize;
-            assert_eq!([0, 1, 0, 1, 1][rule], drawn_group);
+            assert_eq!([0, 1, 0, 1, 1][rule], group);
         }
     }
 }
@@ -297,7 +292,7 @@ fn at_least_one_rule_per_group_is_forced_enabled() {
     ];
     let mut ntc = replay(&prefix, 16);
     let mut sm = grouped_machine(&[0, 0, 1], 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 1);
     assert_eq!(ntc.nodes.len(), 7);
@@ -309,13 +304,13 @@ fn at_least_one_rule_per_group_is_forced_enabled() {
 fn concurrent_threads_draw_their_own_step_caps_and_flags() {
     let mut ntc = simplest_after(&[cap()], 4096);
     let mut sm = machine_concurrent(2, 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), None);
     assert_eq!(count_draws_with_max(&ntc, 254), 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), Some(0));
 }
@@ -324,7 +319,7 @@ fn concurrent_threads_draw_their_own_step_caps_and_flags() {
 fn concurrent_per_round_step_cap_truncates_to_its_max() {
     let mut ntc = simplest_after(&[cap(), cap()], 4096);
     let mut sm = machine_concurrent(2, 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     for _ in 0..MAX_ROUND_STEP_CAP {
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     }
@@ -337,9 +332,9 @@ fn concurrent_round_cap_truncates_to_its_max() {
     let mut ntc = simplest_after(&[cap()], 4096);
     let mut sm = machine_concurrent(2, 3);
     for _ in 0..MAX_CONCURRENT_ROUND_CAP {
-        assert!(sm.next_group(&mut ntc).unwrap());
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
     }
-    assert!(!sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
 }
 
 #[test]
@@ -356,7 +351,7 @@ fn next_rule_before_next_group_is_an_invalid_argument() {
 fn out_of_range_thread_index_is_an_invalid_argument() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     let mut sm = machine_concurrent(2, 2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 2),
         Err(EngineError::InvalidArgument(_))
@@ -378,7 +373,7 @@ fn overrun_while_drawing_the_round_cap_propagates() {
 fn overrun_while_drawing_p_disabled_propagates() {
     let mut ntc = replay(&[cap()], 1);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
         Err(EngineError::Overrun)
@@ -389,7 +384,7 @@ fn overrun_while_drawing_p_disabled_propagates() {
 fn overrun_while_drawing_a_try_index_propagates() {
     let mut ntc = replay(&[cap(), int(0)], 2);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
         Err(EngineError::Overrun)
@@ -410,7 +405,7 @@ fn overrun_while_recording_the_early_exit_index_propagates() {
     ];
     let mut ntc = replay(&prefix, 9);
     let mut sm = machine(3);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
         Err(EngineError::Overrun)
@@ -434,7 +429,7 @@ fn overrun_while_recording_the_post_loop_index_propagates() {
     ];
     let mut ntc = replay(&prefix, 11);
     let mut sm = machine(4);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
         Err(EngineError::Overrun)
@@ -445,7 +440,7 @@ fn overrun_while_recording_the_post_loop_index_propagates() {
 fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     let mut ntc = replay(&[cap(), int(254), int(0)], 3);
     let mut sm = machine(2);
-    assert!(sm.next_group(&mut ntc).unwrap());
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
         Err(EngineError::Overrun)
@@ -468,7 +463,7 @@ fn all_selected_rules_are_in_range() {
         ntc.family().set_state_machine_steps_unbounded();
         let mut sm = machine(5);
         for _ in 0..30 {
-            assert!(sm.next_group(&mut ntc).unwrap());
+            assert!(sm.next_group(&mut ntc).unwrap().is_some());
             assert!(sm.next_rule(&mut ntc, 0).unwrap().unwrap() < 5);
         }
     }
@@ -480,7 +475,7 @@ fn simplest_template_always_selects_rule_zero() {
     ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(3);
     for _ in 0..5 {
-        assert!(sm.next_group(&mut ntc).unwrap());
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap().unwrap(), 0);
     }
 }

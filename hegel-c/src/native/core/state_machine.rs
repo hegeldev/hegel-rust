@@ -216,14 +216,15 @@ impl NativeStateMachine {
     }
 
     /// Start the next round: draw whether another round should run at all
-    /// and, if so, which concurrency group is current for it. Returns
-    /// `false` once the test case has run enough rounds.
+    /// and, if so, which concurrency group is current for it. Returns the
+    /// current group's index, or `None` once the test case has run enough
+    /// rounds.
     ///
     /// Must be called from the root handle at each join point, including
     /// before the first `next_rule` call. The first call draws the test
     /// case's round cap. Families marked as unbounded (single-test-case
-    /// runs) draw no cap and never return `false`: rounds continue forever.
-    pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<bool, EngineError> {
+    /// runs) draw no cap and never return `None`: rounds continue forever.
+    pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<usize>, EngineError> {
         if !ntc.family().state_machine_steps_unbounded() {
             let cap = match self.round_cap {
                 Some(cap) => cap,
@@ -239,7 +240,7 @@ impl NativeStateMachine {
                 }
             };
             if self.rounds_started >= cap {
-                return Ok(false);
+                return Ok(None);
             }
         }
         let group = if self.groups.len() == 1 {
@@ -252,7 +253,7 @@ impl NativeStateMachine {
         for thread in &mut self.threads {
             thread.start_round();
         }
-        Ok(true)
+        Ok(Some(group))
     }
 
     /// Draw the index of the next rule for `thread_index` to run this round
