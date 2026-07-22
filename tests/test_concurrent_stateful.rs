@@ -599,7 +599,7 @@ fn budget_exhaustion_during_the_concurrency_draw_is_an_overrun() {
 }
 
 #[test]
-fn budget_exhaustion_during_the_main_threads_round_draws_is_an_overrun() {
+fn budget_exhaustion_during_machine_creation_is_an_overrun() {
     let (_, result) = capture_hegel_output(|| {
         Hegel::new(|tc| {
             exhaust_budget_on_a_clone(&tc);

@@ -312,6 +312,26 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 }
 
 #[test]
+fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
+    let (_run, tc, _lines) = capturing_test_case();
+    let machine_id = tc
+        .with_ctc(|ctc| ctc.new_state_machine(&["a", "b"], &["r0", "r1"], &[0, 1], &[], 1))
+        .unwrap();
+    let exhausted = with_test_context(|| {
+        catch_unwind(AssertUnwindSafe(|| {
+            loop {
+                tc.draw_silent(gs::integers::<i64>());
+            }
+        }))
+    })
+    .expect_err("the family budget is finite");
+    assert!(exhausted.downcast_ref::<StopTest>().is_some());
+    let unwound = catch_unwind(AssertUnwindSafe(|| machine_next_group(&tc, machine_id)))
+        .expect_err("the group draw must observe the exhausted budget");
+    assert!(unwound.downcast_ref::<StopTest>().is_some());
+}
+
+#[test]
 fn worker_loop_exits_when_the_event_channel_is_gone() {
     let (_run, tc, _lines) = capturing_test_case();
     let m = HitCounter {
