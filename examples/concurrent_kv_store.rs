@@ -1,26 +1,13 @@
-//! Concurrent stateful testing: a tiny in-memory key-value store whose
-//! `increment` has a classic lost-update race — it reads the current value,
-//! releases the lock, and writes back the incremented value, so two workers
-//! incrementing the same key at once can each write over the other.
-//!
-//! The state machine hammers the store from several worker threads (the
-//! `rw` group's rules may overlap with each other; `snapshot` only overlaps
-//! with itself), and the invariant — checked between rounds, while the
-//! workers are parked — compares the sum of all stored values with the
-//! number of increments actually performed.
+//! A tiny in-memory key-value store whose `increment` has a lost-update
+//! race — it reads the current value, releases the lock, and writes
+//! back the incremented value, so two workers incrementing the same key
+//! at once can each write over the other.
 //!
 //! Run it with:
 //!
 //! ```text
 //! cargo test --example concurrent_kv_store
 //! ```
-//!
-//! Concurrency bugs are nondeterministic, so the test declares its run
-//! `nondeterministic = true`: Hegel reports the failure from the run that
-//! discovered it, with no replay, shrinking, or reproduce blob. Most runs
-//! find the race within the default 100 test cases and fail with the
-//! invariant's `increments were lost` assertion, printing the discovering
-//! run's interleaved trace; an unlucky run can pass.
 
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -61,13 +48,9 @@ impl KvStore {
         true
     }
 
-    /// BUG: the lock is released between the read and the write, so two
-    /// concurrent increments of the same key can both read the same value
-    /// and one update is lost. The fix would be to hold the lock across the
-    /// whole read-modify-write.
     fn increment(&self, key: u64) {
         let value = self.get(key).unwrap_or(0);
-        std::thread::yield_now();
+        std::thread::yield_now(); // Makes it easier to find the race.
         self.put(key, value + 1);
     }
 
