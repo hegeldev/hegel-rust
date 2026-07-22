@@ -156,3 +156,27 @@ fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
         "usize::MAX converts exactly on every target"
     );
 }
+
+/// A printer handle held by one thread rejects operations from another. We
+/// stand in for "another thread is mid-operation" by setting the handle's
+/// own `busy` flag on this thread, which the guard observes identically to a
+/// real second thread — but deterministically, with no race to lose.
+#[test]
+fn concurrent_use_of_one_printer_handle_is_rejected() {
+    unsafe {
+        let ctx = hegel_context_new();
+        let mut p: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_printer_new(ctx, ptr::null(), &mut p));
+
+        (*p).busy.store(true, Ordering::Release);
+        assert_eq!(
+            hegel_printer_text(ctx, p, "a".as_ptr(), 1),
+            HEGEL_E_CONCURRENT_USE
+        );
+        (*p).busy.store(false, Ordering::Release);
+
+        ok(hegel_printer_text(ctx, p, "a".as_ptr(), 1));
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_context_free(ctx));
+    }
+}

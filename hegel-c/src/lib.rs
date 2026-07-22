@@ -3309,6 +3309,11 @@ pub unsafe extern "C" fn hegel_target(
 pub struct HegelPrinter {
     inner: Arc<Mutex<Printer>>,
     target: PrinterTarget,
+    /// Whether some thread is mid-operation on this handle. Handles are
+    /// single-owner — see the concurrent-use contract on the struct docs —
+    /// and this flag is how a second thread caught racing the same handle
+    /// gets `HEGEL_E_CONCURRENT_USE` instead of silently interleaving.
+    busy: AtomicBool,
 }
 
 /// The line width a printer document is laid out to when the client does not
@@ -3423,6 +3428,42 @@ unsafe fn printer_arg<'a>(
     }
 }
 
+/// One thread's exclusive claim on a printer handle for the duration of a
+/// call, released on drop. Mirrors the test-case handles' concurrent-use
+/// detection.
+struct PrinterBusyGuard<'a>(&'a AtomicBool);
+
+impl Drop for PrinterBusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Resolve a printer handle for an operation, claiming it for the calling
+/// thread: `HEGEL_E_INVALID_HANDLE` for a NULL pointer, and
+/// `HEGEL_E_CONCURRENT_USE` — with a diagnostic — if another thread is
+/// mid-operation on the same handle (each handle may be driven by at most
+/// one thread at a time; clone a region per thread instead).
+unsafe fn printer_guard<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    printer: *const HegelPrinter,
+) -> Result<(&'a HegelPrinter, PrinterBusyGuard<'a>), hegel_result_t> {
+    let handle = unsafe { printer_arg(ctx, fn_name, printer) }?;
+    if handle
+        .busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        set_last_error(
+            ctx,
+            &format!("{fn_name}: printer handle is in use by another thread"),
+        );
+        return Err(HEGEL_E_CONCURRENT_USE);
+    }
+    Ok((handle, PrinterBusyGuard(&handle.busy)))
+}
+
 /// Translate a printer-core error onto `ctx`. Every printer error reports
 /// API misuse. A dead slot is a handle in an invalid *state* — the handle
 /// itself has expired — so it maps to `HEGEL_E_INVALID_HANDLE`, matching how
@@ -3492,6 +3533,7 @@ pub unsafe extern "C" fn hegel_printer_new(
     let handle = HegelPrinter {
         inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
         target: PrinterTarget::Main,
+        busy: AtomicBool::new(false),
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
@@ -3538,8 +3580,8 @@ pub unsafe extern "C" fn hegel_printer_if_break(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_if_break";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
@@ -3569,8 +3611,8 @@ pub unsafe extern "C" fn hegel_printer_text(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_text";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
@@ -3599,8 +3641,8 @@ pub unsafe extern "C" fn hegel_printer_breakable(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_breakable";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let sep = match unsafe { printer_text_arg(ctx, FN, "sep", sep, len) } {
@@ -3638,8 +3680,8 @@ pub unsafe extern "C" fn hegel_printer_comment(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_comment";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
@@ -3663,8 +3705,8 @@ pub unsafe extern "C" fn hegel_printer_hard_break(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_hard_break";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     match handle.inner.lock().hard_break(handle.target) {
@@ -3689,8 +3731,8 @@ pub unsafe extern "C" fn hegel_printer_begin_group(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_begin_group";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let open = match unsafe { printer_text_arg(ctx, FN, "open", open, open_len) } {
@@ -3723,8 +3765,8 @@ pub unsafe extern "C" fn hegel_printer_end_group(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_end_group";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let close = match unsafe { printer_text_arg(ctx, FN, "close", close, close_len) } {
@@ -3750,8 +3792,8 @@ pub unsafe extern "C" fn hegel_printer_shift_indent(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_shift_indent";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     let delta = isize::try_from(delta.clamp(isize::MIN as i64, isize::MAX as i64)).unwrap();
@@ -3783,8 +3825,8 @@ pub unsafe extern "C" fn hegel_printer_deferred(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_deferred";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     if out_printer.is_null() {
@@ -3797,6 +3839,7 @@ pub unsafe extern "C" fn hegel_printer_deferred(
             let child = HegelPrinter {
                 inner: Arc::clone(&handle.inner),
                 target: PrinterTarget::Slot(slot),
+                busy: AtomicBool::new(false),
             };
             unsafe { *out_printer = into_raw_send_sync(child) };
             HEGEL_OK
@@ -3820,8 +3863,8 @@ pub unsafe extern "C" fn hegel_printer_begin_speculative(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_begin_speculative";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     match handle.inner.lock().begin_speculative(handle.target) {
@@ -3843,8 +3886,8 @@ pub unsafe extern "C" fn hegel_printer_commit_speculative(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_commit_speculative";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     match handle.inner.lock().commit_speculative(handle.target) {
@@ -3866,8 +3909,8 @@ pub unsafe extern "C" fn hegel_printer_abort_speculative(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_abort_speculative";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     match handle.inner.lock().abort_speculative(handle.target) {
@@ -3894,8 +3937,8 @@ pub unsafe extern "C" fn hegel_printer_resolve(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_resolve";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     if handle.target != PrinterTarget::Main {
@@ -3922,8 +3965,8 @@ pub unsafe extern "C" fn hegel_printer_is_live(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_is_live";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     if out_live.is_null() {
@@ -3970,8 +4013,8 @@ pub unsafe extern "C" fn hegel_printer_value(
 ) -> hegel_result_t {
     clear_last_error(ctx);
     const FN: &str = "hegel_printer_value";
-    let handle = match unsafe { printer_arg(ctx, FN, printer) } {
-        Ok(h) => h,
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
         Err(rc) => return rc,
     };
     if out_result.is_null() {
@@ -4084,6 +4127,7 @@ pub unsafe extern "C" fn hegel_test_case_printer(
     let handle = HegelPrinter {
         inner,
         target: tc.print_target,
+        busy: AtomicBool::new(false),
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
