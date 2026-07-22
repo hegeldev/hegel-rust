@@ -421,14 +421,15 @@ where
     /// Panics if any test case fails.
     pub fn run(self) {
         if let Some(blob) = self.reproduce_failure {
-            assert!(
-                !self.settings.nondeterministic,
-                "#[hegel::reproduce_failure] is not supported on a test declared \
-                 nondeterministic: a nondeterministic run cannot replay a recorded \
-                 choice sequence faithfully, and its failures carry no reproduce \
-                 blob. Remove the reproduce_failure attribute (or the \
-                 nondeterministic declaration) to run this test."
-            );
+            if self.settings.nondeterministic {
+                crate::test_case::invalid_argument!(
+                    "#[hegel::reproduce_failure] is not supported on a test declared \
+                     nondeterministic: a nondeterministic run cannot replay a recorded \
+                     choice sequence faithfully, and its failures carry no reproduce \
+                     blob. Remove the reproduce_failure attribute (or the \
+                     nondeterministic declaration) to run this test."
+                );
+            }
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
                 &self.settings,

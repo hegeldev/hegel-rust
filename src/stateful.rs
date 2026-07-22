@@ -738,15 +738,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
-        loop {
-            match commands.recv() {
-                Ok(WorkerCommand::RunRound) => {
-                    let event = run_worker_round(worker, &tc, m, rules, machine_id);
-                    if events.send(event).is_err() {
-                        break;
-                    }
-                }
-                Ok(WorkerCommand::Terminate) | Err(_) => break,
+        while let Ok(WorkerCommand::RunRound) = commands.recv() {
+            let event = run_worker_round(worker, &tc, m, rules, machine_id);
+            if events.send(event).is_err() {
+                break;
             }
         }
     });

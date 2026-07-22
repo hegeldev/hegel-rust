@@ -339,11 +339,11 @@ impl NativeStateMachine {
         let max_good = n - known_bad.len();
         let speculative = draw_index(ntc, max_good)?;
         let mut allowed: Vec<usize> = Vec::new();
-        for k in 0..n {
+        for (k, &rule) in members.iter().enumerate() {
             if known_bad.contains(&k) {
                 continue;
             }
-            if flags.is_enabled(ntc, group, members[k])? {
+            if flags.is_enabled(ntc, group, rule)? {
                 allowed.push(k);
                 if allowed.len() > speculative {
                     ntc.draw_integer_forced(
@@ -351,7 +351,7 @@ impl NativeStateMachine {
                         BigInt::from(n as i64 - 1),
                         BigInt::from(k as i64),
                     )?;
-                    return Ok(members[k] as i64);
+                    return Ok(rule as i64);
                 }
             }
         }
