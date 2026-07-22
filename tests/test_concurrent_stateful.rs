@@ -656,3 +656,38 @@ fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
         "no reproducer line is printed even with print_blob:\n{text}"
     );
 }
+
+#[test]
+fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
+    static CASES: AtomicI64 = AtomicI64::new(0);
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc: TestCase| {
+            let case = CASES.fetch_add(1, Ordering::SeqCst);
+            let x: i64 = tc.draw(gs::integers());
+            if case == 2 {
+                panic!("boom on the third case with {x}");
+            }
+        })
+        .settings(
+            Settings::new()
+                .nondeterministic(true)
+                .database(None)
+                .verbosity(Verbosity::Verbose),
+        )
+        .run();
+    });
+    let payload = result.expect_err("the third case fails the run");
+    assert_matches_regex(&panic_message(&payload), "boom on the third case");
+    let draw_lines = lines.iter().filter(|l| l.contains("let ")).count();
+    assert_eq!(
+        draw_lines, 4,
+        "all three cases stream live and the failure report repeats the \
+         discovering case's draw: {lines:?}"
+    );
+    let diagnostics = lines.iter().filter(|l| l.contains("panicked at")).count();
+    assert_eq!(
+        diagnostics, 2,
+        "the diagnostic prints live at discovery and again in the failure \
+         report: {lines:?}"
+    );
+}

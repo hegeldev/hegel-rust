@@ -252,8 +252,11 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// location, message, backtrace) is printed here, at the moment the panic
 /// is caught — on a non-quiet final replay it is returned to the caller to
 /// print (right after the live draw/note lines, which is what keeps each
-/// failure one block), and for a non-final case in verbose mode it goes to
-/// `output`, the run's resolved destination.
+/// failure one block), for a non-final case in verbose mode it goes to
+/// `output`, the run's resolved destination, and at a nondeterministic
+/// run's discovery it is returned to the caller for the deferred failure
+/// report (and, in verbose mode, printed to `output` as well, like any
+/// other non-final case's).
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -314,13 +317,12 @@ pub(crate) fn run_test_case(
 
             let captured = if (is_final || capture_at_discovery) && !quiet {
                 let msg = panic_message(&e);
-                Some(render_diagnostic(
-                    &thread_name,
-                    &thread_id,
-                    &location,
-                    &msg,
-                    &backtrace,
-                ))
+                let diagnostic =
+                    render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+                if verbose && capture_at_discovery {
+                    output.block(&diagnostic);
+                }
+                Some(diagnostic)
             } else {
                 if verbose {
                     let msg = panic_message(&e);
@@ -441,13 +443,15 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
 /// The run's failure candidate retained by a declared-nondeterministic run:
 /// everything captured at discovery time from the last test case that
 /// classified interesting frontend-side. There is no replay for such a run,
-/// so discovery is the only chance to capture — but the *print* decision is
-/// deferred to the run verdict, because a frontend-interesting report can
-/// lose silently to an engine-side family conclusion (an overrunning or
-/// invalidating draw concluded the family first, and `mark_complete` after
-/// a conclusion is a no-op). If the run comes back failed the stash is the
-/// accepted bug and is printed then; if the run passes the stash lost, and
-/// is discarded — a genuine racy bug resurfaces in a later case.
+/// so discovery is the only chance to capture — but printing it *as the
+/// failure report* is deferred to the run verdict (verbose runs stream the
+/// lines live at discovery too, like any other case's), because a
+/// frontend-interesting report can lose silently to an engine-side family
+/// conclusion (an overrunning or invalidating draw concluded the family
+/// first, and `mark_complete` after a conclusion is a no-op). If the run
+/// comes back failed the stash is the accepted bug and the report is
+/// printed then; if the run passes the stash lost, and is discarded — a
+/// genuine racy bug resurfaces in a later case.
 struct NondetStash {
     /// The buffered draw/note lines of the case (empty under
     /// [`Verbosity::Quiet`], where nothing would be printed).
@@ -526,15 +530,25 @@ pub(crate) fn drive<F>(
     }
 
     let nondeterministic = settings.nondeterministic;
+    let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
         if nondeterministic {
             let buffer: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+            // In verbose mode the sink tees: every case's lines still
+            // stream live — as they would in a deterministic verbose run —
+            // while the buffer keeps its copy so a failure's report can
+            // reprint the discovering case at the end, just as a
+            // deterministic run's final replay would.
+            let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
             let case_sink: Option<crate::test_case::OutputSink> = if quiet {
                 None
             } else {
                 let buffer = Arc::clone(&buffer);
                 Some(Arc::new(move |line: &str| {
+                    if let Some(live) = &live {
+                        live.line(line);
+                    }
                     buffer
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())

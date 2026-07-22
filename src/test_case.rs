@@ -303,6 +303,7 @@ pub(crate) fn emit_verbose_line(msg: &str) {
 /// from a different thread than the one that started it) never see the
 /// starting thread's thread-local override, so resolving lazily at emit
 /// time would send their output to the wrong place.
+#[derive(Clone)]
 pub(crate) struct RunOutput {
     sink: Option<OutputSink>,
 }
