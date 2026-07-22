@@ -979,6 +979,8 @@ impl<'a> Engine<'a> {
         &mut self,
         ntc: NativeTestCase,
     ) -> (RunResult, Option<String>) {
+        ntc.family()
+            .set_stateful_step_count(self.settings.stateful_step_count);
         let tc_start = std::time::Instant::now();
         let run = self.execute(ntc).await;
         let mismatch = self.record_run(&run, tc_start.elapsed());
