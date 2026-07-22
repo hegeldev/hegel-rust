@@ -157,3 +157,38 @@ fn reorder_spans_safe_with_stale_endpoints() {
     drive_no_yield(shrinker.reorder_spans()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
+
+#[test]
+fn reorder_spans_survives_spans_shrinking_between_label_groups() {
+    let initial = vec![int_node(3), int_node(1), int_node(9), int_node(7)];
+    let mut spans = Spans::new();
+    spans.push(sib(0, 1, "a", None));
+    spans.push(sib(1, 2, "a", None));
+    spans.push(sib(2, 3, "b", None));
+    spans.push(sib(3, 4, "b", None));
+
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let mut new_spans = Spans::new();
+                new_spans.push(sib(0, 1, "z", None));
+                new_spans.push(sib(1, 2, "z", None));
+                new_spans.push(sib(2, 3, "z", None));
+                (true, nodes.to_vec(), new_spans)
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        spans,
+    );
+    drive_no_yield(shrinker.reorder_spans()).unwrap();
+    let values: Vec<_> = shrinker
+        .current_nodes
+        .iter()
+        .map(|n| match &n.value {
+            ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(values, vec![1, 3, 9, 7]);
+}
