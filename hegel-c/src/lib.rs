@@ -2085,13 +2085,20 @@ unsafe fn names_from_c_array(
 /// the same group may run concurrently; rules in different groups never
 /// overlap.
 ///
+/// Creating the machine draws from the calling handle's stream: the test
+/// case's round cap and each thread's swarm parameters are decided here,
+/// up front, so the machine is fully constructed before any rule is
+/// requested.
+///
 /// On success writes the new machine's id into `*out_state_machine_id`
 /// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
 /// `hegel_state_machine_next_group` / `hegel_state_machine_next_rule`
-/// calls on the *same* test-case family. Returns `HEGEL_E_INVALID_ARG` if
-/// `num_rules` or `num_groups` is zero, an entry of `rule_groups` is
-/// outside `[0, num_groups)`, a group ends up with no rules,
-/// `concurrency < 1`, or on null / non-UTF-8 names.
+/// calls on the *same* test-case family. Returns `HEGEL_E_STOP_TEST` when
+/// the engine's choice budget is exhausted (the caller should abort the
+/// body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+/// Returns `HEGEL_E_INVALID_ARG` if `num_rules` or `num_groups` is zero,
+/// an entry of `rule_groups` is outside `[0, num_groups)`, a group ends up
+/// with no rules, `concurrency < 1`, or on null / non-UTF-8 names.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_state_machine(
     ctx: *mut HegelContext,
@@ -2180,12 +2187,13 @@ pub unsafe extern "C" fn hegel_new_state_machine(
 pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 
 /// Start the machine's next round: draw whether another round should run
-/// at all and, if so, which concurrency group is current for it. Writes
-/// the current group's index in `[0, num_groups)` into
-/// `*out_group_index` when a new round has begun and the worker threads
-/// should pull rules again — the index identifies the round's group, e.g.
-/// for trace output — or `HEGEL_STATE_MACHINE_DONE` (-1) to indicate
-/// termination of the whole state machine.
+/// at all and, if so, which concurrency group is current for it and each
+/// worker thread's step budget for the round. Writes the current group's
+/// index in `[0, num_groups)` into `*out_group_index` when a new round
+/// has begun and the worker threads should pull rules again — the index
+/// identifies the round's group, e.g. for trace output — or
+/// `HEGEL_STATE_MACHINE_DONE` (-1) to indicate termination of the whole
+/// state machine.
 ///
 /// Call this on the *root* test-case handle at every join point — after
 /// each worker thread's `hegel_state_machine_next_rule` stream is

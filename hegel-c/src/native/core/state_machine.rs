@@ -101,26 +101,24 @@ impl FeatureFlags {
     }
 }
 
-/// Per-thread-index state: swarm flags and the per-round step budget, all
-/// drawn from the calling thread's own choice stream so draws on one thread
-/// never affect draws on another.
-#[derive(Default)]
+/// Per-thread-index state, fully constructed at machine creation and
+/// refreshed in place at every join point — so `next_rule` only ever reads
+/// state that already exists.
+///
+/// The flags' disabling probability and the per-round step caps are drawn
+/// from the *creating* handle's stream (at machine creation and in
+/// `next_group` respectively), both quiescent moments, so draws on one
+/// worker thread never affect draws on another; the per-rule enable
+/// decisions inside [`FeatureFlags`] stay lazy and are drawn from the
+/// querying thread's own stream.
 struct ThreadState {
-    /// Swarm feature flags, drawn lazily on the thread's first selection and
-    /// persisting for the whole test case.
-    flags: Option<FeatureFlags>,
-    /// This round's step cap, drawn on the thread's first `next_rule` call
-    /// of the round (concurrency > 1 only; reset at each join point).
-    step_cap: Option<i64>,
-    /// Rules handed to this thread so far this round.
+    /// Swarm feature flags, persisting for the whole test case.
+    flags: FeatureFlags,
+    /// This round's step cap, written by `next_group` at every join point
+    /// (always 1 at concurrency 1; drawn at concurrency > 1).
+    step_cap: i64,
+    /// Rules handed to this thread so far this round; reset by `next_group`.
     steps_drawn: i64,
-}
-
-impl ThreadState {
-    fn start_round(&mut self) {
-        self.step_cap = None;
-        self.steps_drawn = 0;
-    }
 }
 
 /// Engine-side driver for a single stateful (rule-based) test case,
@@ -137,6 +135,9 @@ impl ThreadState {
 /// rounds. A sequential machine is the special case of one group and
 /// concurrency 1, where each round hands out exactly one rule.
 pub struct NativeStateMachine {
+    /// Registered for future use (e.g. diagnostics); selection works on the
+    /// per-group index lists below.
+    #[allow(dead_code)]
     rule_names: Vec<String>,
     /// Registered for future use (e.g. per-invariant metrics); the engine does
     /// not drive invariant execution.
@@ -151,24 +152,32 @@ pub struct NativeStateMachine {
     /// every selection is in-group by construction.
     groups: Vec<Vec<usize>>,
     concurrency: i64,
-    /// The group whose rules are handed out this round; `None` until the
-    /// first `next_group` call.
-    current_group: Option<usize>,
-    /// Per-test-case cap on the number of rounds, drawn on the first
-    /// `next_group` call from the root handle's stream.
-    round_cap: Option<i64>,
+    /// The group whose rules are handed out this round, written by every
+    /// `next_group` call. Meaningful only once `rounds_started > 0`;
+    /// `next_rule` rejects calls made before the first round.
+    current_group: usize,
+    /// Per-test-case cap on the number of rounds, drawn at machine creation
+    /// from the creating handle's stream. Zero — and never consulted — for
+    /// families marked as unbounded at creation.
+    round_cap: i64,
     rounds_started: i64,
     threads: Vec<ThreadState>,
 }
 
 impl NativeStateMachine {
+    /// Create a machine, fully constructed: the round cap and every
+    /// thread's swarm disabling probability are drawn here, from the
+    /// creating handle's stream, so no per-thread state is ever pending.
+    /// For families marked as unbounded (single-test-case runs) no round
+    /// cap is drawn: rounds continue forever.
     pub fn new(
+        ntc: &mut NativeTestCase,
         group_names: Vec<String>,
         rule_names: Vec<String>,
         rule_groups: Vec<usize>,
         invariant_names: Vec<String>,
         concurrency: i64,
-    ) -> Self {
+    ) -> Result<Self, EngineError> {
         hegel_internal_assert!(
             !rule_names.is_empty(),
             "Stateful testing: there must be at least one rule"
@@ -201,58 +210,68 @@ impl NativeStateMachine {
             );
         }
 
-        let threads = (0..concurrency).map(|_| ThreadState::default()).collect();
-        NativeStateMachine {
+        let round_cap = if ntc.family().state_machine_steps_unbounded() {
+            0
+        } else {
+            let max_cap = if concurrency == 1 {
+                MAX_SEQUENTIAL_ROUND_CAP
+            } else {
+                MAX_CONCURRENT_ROUND_CAP
+            };
+            draw_cap(ntc, max_cap)?
+        };
+        let threads = (0..concurrency)
+            .map(|_| {
+                Ok(ThreadState {
+                    flags: FeatureFlags::new(ntc, &groups, rule_names.len())?,
+                    step_cap: 0,
+                    steps_drawn: 0,
+                })
+            })
+            .collect::<Result<Vec<ThreadState>, EngineError>>()?;
+        Ok(NativeStateMachine {
             rule_names,
             invariant_names,
             group_names,
             groups,
             concurrency,
-            current_group: None,
-            round_cap: None,
+            current_group: 0,
+            round_cap,
             rounds_started: 0,
             threads,
-        }
+        })
     }
 
     /// Start the next round: draw whether another round should run at all
-    /// and, if so, which concurrency group is current for it. Returns the
-    /// current group's index, or `None` once the test case has run enough
-    /// rounds.
+    /// and, if so, which concurrency group is current for it and each
+    /// thread's step budget. Returns the current group's index, or `None`
+    /// once the test case has run enough rounds.
     ///
     /// Must be called from the root handle at each join point, including
-    /// before the first `next_rule` call. The first call draws the test
-    /// case's round cap. Families marked as unbounded (single-test-case
-    /// runs) draw no cap and never return `None`: rounds continue forever.
+    /// before the first `next_rule` call. Families marked as unbounded at
+    /// creation (single-test-case runs) never return `None`: rounds
+    /// continue forever.
     pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<usize>, EngineError> {
-        if !ntc.family().state_machine_steps_unbounded() {
-            let cap = match self.round_cap {
-                Some(cap) => cap,
-                None => {
-                    let max_cap = if self.concurrency == 1 {
-                        MAX_SEQUENTIAL_ROUND_CAP
-                    } else {
-                        MAX_CONCURRENT_ROUND_CAP
-                    };
-                    let cap = draw_cap(ntc, max_cap)?;
-                    self.round_cap = Some(cap);
-                    cap
-                }
-            };
-            if self.rounds_started >= cap {
-                return Ok(None);
-            }
+        if !ntc.family().state_machine_steps_unbounded() && self.rounds_started >= self.round_cap {
+            return Ok(None);
         }
         let group = if self.groups.len() == 1 {
             0
         } else {
             draw_index(ntc, self.groups.len())?
         };
-        self.current_group = Some(group);
-        self.rounds_started += 1;
-        for thread in &mut self.threads {
-            thread.start_round();
+        for thread_idx in 0..self.threads.len() {
+            let step_cap = if self.concurrency == 1 {
+                1
+            } else {
+                draw_cap(ntc, MAX_ROUND_STEP_CAP)?
+            };
+            let thread = &mut self.threads[thread_idx];
+            thread.step_cap = step_cap;
+            thread.steps_drawn = 0;
         }
+        self.current_group = group;
+        self.rounds_started += 1;
         Ok(Some(group))
     }
 
@@ -263,8 +282,8 @@ impl NativeStateMachine {
     ///
     /// Consults only per-thread state (plus the machine's current group), so
     /// draws on one thread never affect draws on another. At concurrency 1
-    /// no per-round step cap is drawn: every round hands out exactly one
-    /// rule, so a join point follows each rule.
+    /// every round's budget is exactly one rule, so a join point follows
+    /// each rule.
     pub fn next_rule(
         &mut self,
         ntc: &mut NativeTestCase,
@@ -279,28 +298,16 @@ impl NativeStateMachine {
                     self.concurrency
                 ))
             })?;
-        let Some(group) = self.current_group else {
+        if self.rounds_started == 0 {
             return Err(EngineError::InvalidArgument(
                 "state machine rule requested before the first next_group call".to_string(),
             ));
-        };
+        }
 
-        let cap = if self.concurrency == 1 {
-            1
-        } else {
-            match self.threads[thread_idx].step_cap {
-                Some(cap) => cap,
-                None => {
-                    let cap = draw_cap(ntc, MAX_ROUND_STEP_CAP)?;
-                    self.threads[thread_idx].step_cap = Some(cap);
-                    cap
-                }
-            }
-        };
-        if self.threads[thread_idx].steps_drawn >= cap {
+        if self.threads[thread_idx].steps_drawn >= self.threads[thread_idx].step_cap {
             return Ok(None);
         }
-        let index = self.select_rule(ntc, thread_idx, group)?;
+        let index = self.select_rule(ntc, thread_idx, self.current_group)?;
         self.threads[thread_idx].steps_drawn += 1;
         Ok(Some(index))
     }
@@ -318,13 +325,9 @@ impl NativeStateMachine {
         thread_idx: usize,
         group: usize,
     ) -> Result<i64, EngineError> {
-        if self.threads[thread_idx].flags.is_none() {
-            self.threads[thread_idx].flags =
-                Some(FeatureFlags::new(ntc, &self.groups, self.rule_names.len())?);
-        }
         let members = &self.groups[group];
         let n = members.len();
-        let flags = self.threads[thread_idx].flags.as_mut().unwrap();
+        let flags = &mut self.threads[thread_idx].flags;
 
         let mut known_bad: HashSet<usize> = HashSet::new();
         for _ in 0..3 {

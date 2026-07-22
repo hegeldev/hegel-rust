@@ -349,21 +349,21 @@ impl DataSource for NativeDataSource {
         }
         let rule_groups: Vec<usize> = rule_groups.iter().map(|&g| g as usize).collect();
         self.with_ntc(|ntc| {
+            let machine = crate::native::core::NativeStateMachine::new(
+                ntc,
+                group_names,
+                rule_names,
+                rule_groups,
+                invariant_names,
+                concurrency,
+            )?;
             let mut machines = ntc
                 .family()
                 .state_machines
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let id = machines.len() as i64;
-            machines.push(Arc::new(std::sync::Mutex::new(
-                crate::native::core::NativeStateMachine::new(
-                    group_names,
-                    rule_names,
-                    rule_groups,
-                    invariant_names,
-                    concurrency,
-                ),
-            )));
+            machines.push(Arc::new(std::sync::Mutex::new(machine)));
             Ok(id)
         })
     }

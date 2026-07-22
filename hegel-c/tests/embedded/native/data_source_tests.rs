@@ -211,27 +211,18 @@ fn state_machine_next_rule_returns_in_range_indices() {
 }
 
 #[test]
-fn state_machine_next_group_on_exhausted_source_stops_test() {
+fn new_state_machine_on_exhausted_source_stops_test() {
     let (ds, _handle) = exhausted_source();
-    let id = sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]).unwrap();
     assert!(matches!(
-        ds.state_machine_next_group(id),
-        Err(DataSourceError::StopTest)
-    ));
-    assert!(ds.state_machine_next_group(id).is_err());
-    assert!(sequential_machine(&ds, vec!["a".into()], vec![]).is_err());
-}
-
-#[test]
-fn state_machine_next_rule_on_exhausted_source_stops_test() {
-    let (ds, _handle) = exhausted_source();
-    let id = sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]).unwrap();
-    assert!(matches!(
-        ds.state_machine_next_group(id),
+        sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]),
         Err(DataSourceError::StopTest)
     ));
     assert!(matches!(
-        ds.state_machine_next_rule(id, 0),
+        ds.state_machine_next_group(0),
+        Err(DataSourceError::StopTest)
+    ));
+    assert!(matches!(
+        ds.state_machine_next_rule(0, 0),
         Err(DataSourceError::StopTest)
     ));
 }
