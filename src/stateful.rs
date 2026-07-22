@@ -427,6 +427,15 @@ fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
     }
 }
 
+/// Ask the engine for the next rule `thread_index` should run this round;
+/// `None` once the thread's round budget is exhausted (the join point).
+fn machine_next_rule(tc: &TestCase, machine_id: i64, thread_index: i64) -> Option<i64> {
+    match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, thread_index)) {
+        Ok(next) => next,
+        Err(rc) => raise_for_rc(rc),
+    }
+}
+
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 ///
 /// A sequential machine is the special case of the engine's concurrent
@@ -463,12 +472,12 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let mut steps_attempted: i64 = 0;
 
     while (is_single || steps_attempted < 1000) && machine_next_group(&tc, machine_id).is_some() {
-        loop {
-            let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, 0)) {
-                Ok(Some(i)) => i,
-                Ok(None) => break,
-                Err(rc) => raise_for_rc(rc),
-            };
+        // At concurrency 1 the engine hands out one rule per round, so a
+        // single iteration is expected here — that is what makes invariants
+        // run after every rule. But it is engine policy, not a protocol
+        // guarantee: the protocol is just "pull rules until the join
+        // point", so the loop must not assume it.
+        while let Some(rule_index) = machine_next_rule(&tc, machine_id, 0) {
             hegel_internal_assert!(
                 (0..rules.len() as i64).contains(&rule_index),
                 "state_machine_next_rule returned out-of-range rule index {rule_index}"
@@ -686,11 +695,7 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 ) -> WorkerEvent {
     loop {
         let next = catch_unwind(AssertUnwindSafe(|| {
-            let next =
-                match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, worker as i64)) {
-                    Ok(next) => next,
-                    Err(rc) => raise_for_rc(rc),
-                };
+            let next = machine_next_rule(tc, machine_id, worker as i64);
             if let Some(rule_index) = next {
                 hegel_internal_assert!(
                     (0..rules.len() as i64).contains(&rule_index),
