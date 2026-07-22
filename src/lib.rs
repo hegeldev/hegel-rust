@@ -200,6 +200,11 @@
 //! generate concurrently without perturbing each other's values and the
 //! same seed replays the same values on every stream.
 //!
+//! In a failing example's report, a clone's drawn values appear together,
+//! at the point where the clone was created — not interleaved by wall-clock
+//! timing — so the report is deterministic no matter how the threads were
+//! scheduled.
+//!
 //! Determinism extends only as far as your own code's determinism: if your
 //! threads race on shared state, Hegel replays each stream faithfully but
 //! the test may still behave differently run to run — see [`TestCase`]'s

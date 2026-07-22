@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[diagnostic::on_unimplemented(
     message = "The first parameter in a #[composite] generator must have type TestCase.",
@@ -112,17 +112,6 @@ pub(crate) struct TestCaseGlobalData {
     /// frontend's own draw-name accounting, never backend traffic. No method
     /// holds it while calling back into `TestCase`.
     draw_state: Mutex<DrawState>,
-    /// The pretty-printed document of drawn values and notes, created lazily
-    /// on the first emitting draw or note. Family-wide (fetched through the
-    /// engine's `hegel_test_case_printer`), so clones and children print into
-    /// one document. The mutex is held for a whole top-level draw so that
-    /// concurrent clones emit whole lines, never interleaved fragments.
-    printer: OnceLock<Mutex<PrettyPrinter>>,
-    /// Notes recorded while a draw was printing (`span_depth > 0`, e.g. from
-    /// inside a composite body). Emitting them inline would splice text into
-    /// the middle of the draw's `let … = …;` line, so they are buffered here
-    /// and flushed — in order — once the enclosing draw completes.
-    pending_notes: Mutex<Vec<(usize, String)>>,
     /// Explain-phase annotations for this test case, keyed by the choice
     /// slice `[start, end)` of the shrunk counterexample they describe.
     /// Populated by the lifecycle before the final replay of an explained
@@ -279,6 +268,24 @@ pub struct TestCase {
     /// test case, so two clones can be driven from different threads
     /// concurrently without perturbing each other's values.
     handle: Arc<CTestCase>,
+    /// This instance's printer onto its own region of the family document,
+    /// fetched on first use. The engine anchors a clone's region when the
+    /// clone is made, so where this instance's output appears is fixed even
+    /// though the handle is fetched lazily — and since each instance owns
+    /// its region outright, no lock is ever held across a draw: concurrent
+    /// clones write concurrently, and the document assembles deterministically
+    /// by anchor position.
+    printer: RefCell<Option<PrettyPrinter>>,
+    /// Notes recorded while a draw was printing (`span_depth > 0`, e.g. from
+    /// inside a composite body). Emitting them inline would splice text into
+    /// the middle of the draw's `let … = …;` line, so they are buffered here
+    /// and flushed — in order — once the enclosing draw completes. Shared
+    /// with [`child`](TestCase::child) instances — a composite body's `tc`
+    /// notes into the same buffer its enclosing draw flushes — but fresh for
+    /// every [`clone`](TestCase::clone), whose notes belong to its own
+    /// region. The mutex is never contended: children live on their
+    /// parent's thread.
+    pending_notes: Arc<Mutex<Vec<(usize, String)>>>,
 }
 
 impl Clone for TestCase {
@@ -287,6 +294,8 @@ impl Clone for TestCase {
             global: self.global.clone(),
             local: RefCell::new(self.local.borrow().clone()),
             handle: Arc::new(self.handle.clone_handle()),
+            printer: RefCell::new(None),
+            pending_notes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -427,8 +436,6 @@ impl TestCase {
                     named_draw_repeatable: HashMap::new(),
                     allocated_display_names: HashSet::new(),
                 }),
-                printer: OnceLock::new(),
-                pending_notes: Mutex::new(Vec::new()),
                 explain_comments: Mutex::new(HashMap::new()),
                 explain_together: Mutex::new(None),
             }),
@@ -438,6 +445,8 @@ impl TestCase {
                 on_draw,
             }),
             handle,
+            printer: RefCell::new(None),
+            pending_notes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -694,8 +703,7 @@ impl TestCase {
             (local.indent, local.span_depth > 0)
         };
         if mid_draw {
-            self.global
-                .pending_notes
+            self.pending_notes
                 .lock()
                 .push((indent, message.to_string()));
         } else {
@@ -843,26 +851,27 @@ impl TestCase {
                 on_draw: local.on_draw.clone(),
             }),
             handle: Arc::clone(&self.handle),
+            printer: RefCell::new(None),
+            pending_notes: Arc::clone(&self.pending_notes),
         }
     }
 
-    /// Run `f` with the test case's document printer, creating the document
-    /// on first use. The printer lock is held for all of `f`, so a whole
-    /// top-level draw (or note line) is emitted atomically with respect to
-    /// concurrently-drawing clones.
+    /// Run `f` with this instance's printer onto its own region of the
+    /// family document, fetching the handle on first use. No lock is
+    /// involved: the instance owns its region, concurrent clones each own
+    /// theirs, and the engine assembles the regions by anchor position.
     fn with_printer<R>(&self, f: impl FnOnce(&mut PrettyPrinter) -> R) -> R {
-        let printer = self.global.printer.get_or_init(|| {
-            Mutex::new(PrettyPrinter::from_handle(
-                self.with_ctc(|ctc| ctc.printer(PRINTER_MAX_WIDTH)),
-            ))
+        let mut printer = self.printer.borrow_mut();
+        let printer = printer.get_or_insert_with(|| {
+            PrettyPrinter::from_handle(self.with_ctc(|ctc| ctc.printer(PRINTER_MAX_WIDTH)))
         });
-        f(&mut printer.lock())
+        f(printer)
     }
 
-    /// Emit any notes recorded while a draw was in progress. Must not be
-    /// called while holding the printer lock.
+    /// Emit any notes recorded while a draw was in progress on this
+    /// instance.
     fn flush_pending_notes(&self) {
-        let notes = std::mem::take(&mut *self.global.pending_notes.lock());
+        let notes = std::mem::take(&mut *self.pending_notes.lock());
         if notes.is_empty() {
             return;
         }
@@ -873,19 +882,19 @@ impl TestCase {
         });
     }
 
-    /// Render the document of drawn values and notes accumulated so far and
-    /// push it, line by line, through the output sink. Called by the run
-    /// lifecycle once the test body has finished (successfully or not).
+    /// Render the document of drawn values and notes accumulated so far —
+    /// this instance's region and every region forked from it — and push it,
+    /// line by line, through the output sink. Called by the run lifecycle,
+    /// on the root instance, once the test body has finished (successfully
+    /// or not). A straggling clone still writing on an unjoined thread loses
+    /// its uncommitted draw and its region dies; its later writes are
+    /// harmless no-ops.
     pub(crate) fn emit_rendered_output(&self) {
         if !self.global.emit {
             return;
         }
         self.flush_pending_notes();
-        if self.global.printer.get().is_none() {
-            return;
-        }
-        let output =
-            PrettyPrinter::from_handle(self.with_ctc(|ctc| ctc.printer(PRINTER_MAX_WIDTH))).value();
+        let output = self.with_printer(|printer| printer.value());
         let local = self.local.borrow();
         for line in output.lines() {
             (local.on_draw)(line);

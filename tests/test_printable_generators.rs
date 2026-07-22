@@ -690,3 +690,31 @@ fn pool_draws_print_their_values() {
     assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
     assert!(lines[1].starts_with("let draw_2 = "), "{lines:?}");
 }
+
+#[test]
+fn clone_output_anchors_where_the_clone_was_made() {
+    let lines = failing_lines(|tc| {
+        let worker = tc.clone();
+        let x = tc.draw(gs::just(1u8));
+        let handle = std::thread::spawn(move || worker.draw(gs::just(2u8)));
+        let y = handle.join().unwrap();
+        let z = tc.draw(gs::just(3u8));
+        assert_ne!((x, y, z), (1, 2, 3));
+    });
+    assert_eq!(
+        lines,
+        vec!["let draw_2 = 2;", "let draw_1 = 1;", "let draw_3 = 3;"]
+    );
+}
+
+#[test]
+fn straggling_clones_note_harmlessly_after_the_run() {
+    let stash: Arc<Mutex<Option<hegel::TestCase>>> = Arc::new(Mutex::new(None));
+    let stash_writer = stash.clone();
+    failing_lines(move |tc| {
+        *stash_writer.lock().unwrap() = Some(tc.clone());
+        panic!("boom");
+    });
+    let straggler = stash.lock().unwrap().take().unwrap();
+    straggler.note("nobody is listening");
+}
