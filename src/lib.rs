@@ -405,7 +405,7 @@ pub use hegel_macros::state_machine;
 
 /// Derive a [`ConcurrentStateMachine`](crate::stateful::ConcurrentStateMachine)
 /// implementation from an `impl` block, for concurrent stateful testing via
-/// [`stateful::run_concurrent`](crate::stateful::run_concurrent).
+/// [`stateful::run_concurrent`].
 ///
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
