@@ -69,7 +69,7 @@
 use crate::TestCase;
 use crate::control::{AssumeFailed, hegel_internal_assert};
 use crate::generators::Generator;
-use crate::test_case::raise_for_rc;
+use crate::test_case::{labels, raise_for_rc};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -252,6 +252,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let mut steps_attempted: i64 = 0;
 
     loop {
+        tc.start_span(labels::STATEFUL_RULE);
         let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
             Ok(Some(i)) => i,
             Ok(None) => break,
@@ -271,15 +272,20 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         steps_attempted += 1;
         match result {
             Ok(()) => {
+                tc.stop_span(false);
                 check_invariants(&mut m, &invariants, &tc);
             }
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
+                tc.stop_span(true);
                 tc.note("Rule stopped early due to violated assumption.");
             }
             // Everything else — including StopTest, so an out-of-data case is
             // reported as an overrun instead of returning normally with a
             // half-applied rule — unwinds through the caller.
-            Err(e) => resume_unwind(e),
+            Err(e) => {
+                tc.stop_span(false);
+                resume_unwind(e)
+            }
         };
     }
 }

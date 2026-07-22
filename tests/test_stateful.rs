@@ -266,6 +266,40 @@ mod stateful {
         );
     }
 
+    struct BumpMachine {
+        count: i64,
+    }
+
+    impl StateMachine for BumpMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![
+                Rule::new("bump", |m: &mut BumpMachine, _tc| m.count += 1),
+                Rule::new("noop", |_m: &mut BumpMachine, _tc| {}),
+            ]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("below_three", |m: &mut BumpMachine, _tc| {
+                assert!(m.count < 3);
+            })]
+        }
+    }
+
+    #[test]
+    fn test_irrelevant_steps_are_shrunk_away() {
+        let output = capture_output(false, |tc: TestCase| {
+            hegel::stateful::run(BumpMachine { count: 0 }, tc);
+        });
+        let step_lines = output.lines().filter(|l| l.contains("Step ")).count();
+        assert_eq!(
+            step_lines, 3,
+            "expected the minimal failure to be exactly three bump steps:\n{output}"
+        );
+        assert!(
+            !output.contains("noop"),
+            "irrelevant noop steps should be shrunk away:\n{output}"
+        );
+    }
+
     struct AssumeSkipMachine;
 
     #[hegel::state_machine]
