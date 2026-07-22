@@ -228,7 +228,15 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            for (_label, child_indices) in by_label {
+            for (label, child_indices) in by_label {
+                let child_indices: Vec<usize> = child_indices
+                    .into_iter()
+                    .filter(|&i| {
+                        self.current_spans
+                            .get(i)
+                            .is_some_and(|s| s.parent == parent && s.label == label)
+                    })
+                    .collect();
                 if child_indices.len() <= 1 {
                     continue;
                 }
