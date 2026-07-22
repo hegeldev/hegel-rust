@@ -881,10 +881,11 @@ impl TestCase {
             return;
         }
         self.flush_pending_notes();
-        let Some(printer) = self.global.printer.get() else {
+        if self.global.printer.get().is_none() {
             return;
-        };
-        let output = printer.lock().value();
+        }
+        let output =
+            PrettyPrinter::from_handle(self.with_ctc(|ctc| ctc.printer(PRINTER_MAX_WIDTH))).value();
         let local = self.local.borrow();
         for line in output.lines() {
             (local.on_draw)(line);

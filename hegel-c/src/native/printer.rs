@@ -68,7 +68,9 @@ pub enum PrinterError {
     /// `commit_speculative` or `abort_speculative` was called with no open
     /// speculative region on the target.
     NoSpeculation,
-    /// `resolve` or `value` was called while a speculative region was open.
+    /// `resolve` or `value` was called while a speculative region was open
+    /// on the main output. (An open region on a slot is not an error there:
+    /// `resolve` aborts it and kills the slot.)
     OpenSpeculation,
     /// `value` was called while a deferred session was outstanding.
     UnresolvedDeferred,
@@ -237,6 +239,13 @@ impl Printer {
     /// The width this printer lays lines out to.
     pub fn max_width(&self) -> usize {
         self.max_width
+    }
+
+    /// Change the width lines are laid out to. Safe at any time before
+    /// rendering: commands are recorded width-independently, and the width
+    /// is only consulted when the document is laid out.
+    pub fn set_max_width(&mut self, max_width: usize) {
+        self.max_width = max_width;
     }
 
     /// Emit literal, unbreakable text. Must not contain newlines.
@@ -414,6 +423,13 @@ impl Printer {
 
     /// Close the outstanding deferred session: every slot of the session
     /// dies, and layout errors in the spliced content surface here.
+    ///
+    /// A slot with a speculative region still open — a straggler thread
+    /// caught mid-draw when the document is read — has that region aborted:
+    /// uncommitted content was never part of the document, and the slot dies
+    /// like any other, so the straggler's later writes become dead-slot
+    /// no-ops. Only an open speculative region on the main output (whose
+    /// owner is the caller itself) is an error.
     pub fn resolve(&mut self) -> Result<(), PrinterError> {
         if !self.speculation.is_empty() {
             return Err(PrinterError::OpenSpeculation);
@@ -430,13 +446,11 @@ impl Printer {
             reachable.push(id);
             work.extend(splice_ids(&self.slots[id].commands));
         }
-        if reachable
-            .iter()
-            .any(|&id| !self.slots[id].speculation.is_empty())
-        {
-            return Err(PrinterError::OpenSpeculation);
-        }
         for &id in &reachable {
+            let aborted = std::mem::take(&mut self.slots[id].speculation);
+            for buf in &aborted {
+                self.kill_splices(buf);
+            }
             self.slots[id].dead = true;
         }
         self.pending_resolve = false;
@@ -461,18 +475,18 @@ impl Printer {
         !self.slots[slot.0].dead
     }
 
-    /// Append a note to the main output: each `\n`-separated line of `text`
-    /// is emitted as literal text followed by a hard break, so a note always
+    /// Append a note to `target`: each `\n`-separated line of `text` is
+    /// emitted as literal text followed by a hard break, so a note always
     /// occupies whole lines and keeps width accounting correct even when the
-    /// note contains newlines.
-    pub fn note(&mut self, text: &str) {
+    /// note contains newlines. Errors only for a dead slot target.
+    pub fn note(&mut self, target: Target, text: &str) -> Result<(), PrinterError> {
         for segment in text.split('\n') {
             if !segment.is_empty() {
-                self.dispatch(Target::Main, Cmd::Text(segment.to_string()))
-                    .unwrap();
+                self.dispatch(target, Cmd::Text(segment.to_string()))?;
             }
-            self.dispatch(Target::Main, Cmd::HardBreak).unwrap();
+            self.dispatch(target, Cmd::HardBreak)?;
         }
+        Ok(())
     }
 
     fn dispatch(&mut self, target: Target, cmd: Cmd) -> Result<(), PrinterError> {

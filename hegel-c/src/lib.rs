@@ -4,7 +4,6 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Once;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
@@ -566,13 +565,18 @@ struct FamilyShared {
     /// completion `compare_exchange` in [`Self::complete`], which is what
     /// guarantees send-once.
     ack: Option<mpsc::Sender<()>>,
-    /// The family's pretty-printer document, created lazily by
-    /// `hegel_test_case_printer` / `hegel_note` and shared by every handle in
-    /// the family (clones print into the same document). Family-wide so the
+    /// The family's pretty-printer document, created (empty, at the default
+    /// width) with the family so that every handle's print region can anchor
+    /// deterministically the moment the handle is cloned. Family-wide so the
     /// client can keep appending to — and finally read — the document after
-    /// the case completes, and so notes and drawn values from clones
-    /// interleave in one place.
-    printer: OnceLock<Arc<Mutex<Printer>>>,
+    /// the case completes. Each handle writes into its own region of it; see
+    /// [`HegelTestCase::print_target`].
+    printer: Arc<Mutex<Printer>>,
+    /// Whether an explicit `max_width` has been configured through
+    /// `hegel_test_case_printer` options. The first explicit configuration
+    /// wins; later conflicting ones error. Only read and written under the
+    /// `printer` lock.
+    printer_width_configured: AtomicBool,
 }
 
 impl FamilyShared {
@@ -625,6 +629,13 @@ pub struct HegelTestCase {
     /// stream for the root handle, a cloned stream for a
     /// `hegel_test_case_clone` handle.
     stream: Arc<dyn DataSource + Send + Sync>,
+    /// This handle's region of the family document: the document body for
+    /// the root handle, and for a clone a hole opened in its parent's region
+    /// at the moment the clone was made. Because a handle is only cloned
+    /// from its owning thread, the anchor position — and therefore where the
+    /// clone's output appears in the final document — is deterministic,
+    /// however the threads are later scheduled.
+    print_target: PrinterTarget,
     local: Mutex<LocalState>,
 }
 
@@ -1659,7 +1670,14 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         Ok(stream) => stream,
         Err(e) => return translate_ds_error(ctx, e),
     };
-    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream));
+    let print_target = match src.family.printer.lock().deferred(src.print_target) {
+        Ok(slot) => PrinterTarget::Slot(slot),
+        // The source's region is already dead (the document was read while
+        // this branch of the family straggled): share the dead region, so
+        // the clone's prints are no-ops like its parent's.
+        Err(_) => src.print_target,
+    };
+    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream), print_target);
     unsafe { *out_test_case = clone };
     HEGEL_OK
 }
@@ -1675,27 +1693,33 @@ fn new_family(
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
         ack,
-        printer: OnceLock::new(),
+        printer: Arc::new(Mutex::new(Printer::new(size_arg(
+            DEFAULT_PRINTER_MAX_WIDTH,
+        )))),
+        printer_width_configured: AtomicBool::new(false),
     })
 }
 
 /// Allocate the root handle for `family` — drawing from the family's root
-/// stream — and return its raw pointer.
+/// stream, printing into the document body — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
     let stream = Arc::clone(&family.ds);
-    handle_from_stream(family, stream)
+    handle_from_stream(family, stream, PrinterTarget::Main)
 }
 
 /// Allocate a handle holding one reference to `family` that draws from
-/// `stream`, and return its raw pointer. Each handle has its own `local`
-/// buffer so concurrent handles do not stomp each other's borrowed values.
+/// `stream` and prints into `print_target`, and return its raw pointer. Each
+/// handle has its own `local` buffer so concurrent handles do not stomp each
+/// other's borrowed values.
 fn handle_from_stream(
     family: Arc<FamilyShared>,
     stream: Arc<dyn DataSource + Send + Sync>,
+    print_target: PrinterTarget,
 ) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
         stream,
+        print_target,
         local: Mutex::new(LocalState { completed: false }),
     })
 }
@@ -3263,11 +3287,25 @@ pub unsafe extern "C" fn hegel_target(
 /// `hegel_printer_begin_speculative` buffers output that a rejected draw
 /// (a filter retry, a failed assumption) can retract.
 ///
-/// Create a standalone document with `hegel_printer_new`, or fetch the
-/// document shared by a test-case family with `hegel_test_case_printer`.
-/// Handles are internally synchronized and may be used from any thread; every
-/// handle — including those returned by `hegel_printer_deferred` — must be
-/// released with `hegel_printer_free`.
+/// Create a standalone document with `hegel_printer_new`, or fetch a handle
+/// onto a test-case handle's region of the family document with
+/// `hegel_test_case_printer`.
+///
+/// # Ownership and concurrency
+///
+/// A printer handle addresses one *region* of a document — the document
+/// body for a root handle, or a hole for a handle from
+/// `hegel_printer_deferred`. Handles follow the test-case handles' model: a
+/// handle may move between threads, but belongs to one thread at a time —
+/// concurrent operations on the *same* handle return
+/// `HEGEL_E_CONCURRENT_USE`. To print from several threads, give each
+/// thread its own region: `hegel_printer_deferred` opens a hole at the
+/// handle's current position, and content written into it from any thread,
+/// on any schedule, renders at that anchor point — so concurrent output is
+/// deterministic, and two handles never interleave within one region.
+///
+/// Every handle — including those returned by `hegel_printer_deferred` —
+/// must be released with `hegel_printer_free`.
 pub struct HegelPrinter {
     inner: Arc<Mutex<Printer>>,
     target: PrinterTarget,
@@ -3431,16 +3469,6 @@ unsafe fn printer_text_arg(
         return Err(HEGEL_E_INVALID_ARG);
     }
     Ok(text)
-}
-
-/// Fetch (creating with `max_width` on first use) the document shared by
-/// `tc`'s family.
-fn family_printer(tc: &HegelTestCase, max_width: u64) -> Arc<Mutex<Printer>> {
-    Arc::clone(
-        tc.family
-            .printer
-            .get_or_init(|| Arc::new(Mutex::new(Printer::new(size_arg(max_width))))),
-    )
 }
 
 /// Create a standalone pretty-printer document laid out per `options`
@@ -3989,27 +4017,33 @@ pub unsafe extern "C" fn hegel_printer_value_result_free(
     HEGEL_OK
 }
 
-/// Fetch the pretty-printer document shared by this test case's family,
-/// writing a caller-owned root handle into `*out_printer` (release with
-/// `hegel_printer_free`; the document itself lives as long as any handle or
-/// the family).
+/// Fetch a handle onto this test-case handle's *print region* of the family
+/// document, writing a caller-owned handle into `*out_printer` (release
+/// with `hegel_printer_free`; the document itself lives as long as any
+/// handle or the family).
 ///
-/// The document is created on first use, laid out per `options` (NULL for
-/// all defaults; see `hegel_printer_options_t`). Later calls return the same
-/// document: passing NULL options (or ones that only restate the document's
-/// width) is always fine, while options that request a *different*
-/// `max_width` than the document was created with are an error — the width
-/// of an existing document cannot change, and accepting the request would
-/// silently ignore it. Note that `hegel_note` also creates the document (at
-/// the default width) when it runs first. Every handle in the family —
-/// including `hegel_test_case_clone` handles — shares one document, and the
-/// document remains readable and writable after the case completes, so the
+/// The family document exists from the family's creation. Each test-case
+/// handle owns one region of it: the root handle's region is the document
+/// body, and a `hegel_test_case_clone` handle's region is a hole opened in
+/// its parent's region at the moment the clone was made. Regions make
+/// concurrent printing deterministic: a clone's output appears at its
+/// anchor point — where the clone was created — however the threads that
+/// produced it were scheduled, and two handles never interleave within one
+/// region. The document remains readable after the case completes, so the
 /// client can assemble output while drawing and read it back after
-/// `hegel_mark_complete`.
+/// `hegel_mark_complete` (through a root-handle printer).
+///
+/// `options` may be NULL for defaults (see `hegel_printer_options_t`). The
+/// first call that explicitly configures `max_width` fixes the document's
+/// width; later calls may restate it, but a *different* explicit width is
+/// an error — the width of the shared document cannot be two things.
+/// Content printed before the width is configured (`hegel_note` never
+/// configures it) still renders at the configured width: layout happens
+/// when the document is read.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
 /// `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
-/// width conflict with the existing document.
+/// width conflict.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_printer(
     ctx: *mut HegelContext,
@@ -4027,11 +4061,16 @@ pub unsafe extern "C" fn hegel_test_case_printer(
         return HEGEL_E_INVALID_ARG;
     }
     let options = unsafe { options.as_ref() };
-    let requested = options.and_then(|o| o.max_width);
-    let inner = family_printer(tc, HegelPrinterOptions::resolve_max_width(options));
-    if let Some(requested) = requested {
-        let actual = inner.lock().max_width();
-        if actual != size_arg(requested) {
+    let inner = Arc::clone(&tc.family.printer);
+    if let Some(requested) = options.and_then(|o| o.max_width) {
+        let mut printer = inner.lock();
+        if !tc.family.printer_width_configured.load(Ordering::Acquire) {
+            printer.set_max_width(size_arg(requested));
+            tc.family
+                .printer_width_configured
+                .store(true, Ordering::Release);
+        } else if printer.max_width() != size_arg(requested) {
+            let actual = printer.max_width();
             set_last_error(
                 ctx,
                 &format!(
@@ -4044,23 +4083,24 @@ pub unsafe extern "C" fn hegel_test_case_printer(
     }
     let handle = HegelPrinter {
         inner,
-        target: PrinterTarget::Main,
+        target: tc.print_target,
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
 }
 
-/// Append a note — `len` bytes of UTF-8 at `text` — to the test case's
-/// document. Each `\n`-separated line of the note becomes its own output
-/// line, so notes may contain newlines. Notes and drawn values interleave in
-/// the order they were appended.
+/// Append a note — `len` bytes of UTF-8 at `text` — to this test-case
+/// handle's print region (see `hegel_test_case_printer` for the region
+/// model). Each `\n`-separated line of the note becomes its own output
+/// line, so notes may contain newlines. Notes and drawn values from *one
+/// handle* appear in the order they were appended; a clone's notes appear
+/// in the clone's region.
 ///
-/// If the family's document does not exist yet, this creates it with default
-/// options (`max_width` 79) — a client that wants a different width must
-/// call `hegel_test_case_printer` before its first note, since a later call
-/// requesting a different width is a width-conflict error.
+/// Notes never configure the document's width; they render at whatever
+/// width ends up configured (default 79).
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
+/// region is dead (the document was already read), and
 /// `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
 /// `text` with `len > 0`.
 #[unsafe(no_mangle)]
@@ -4085,10 +4125,10 @@ pub unsafe extern "C" fn hegel_note(
         }
         Err(rc) => return rc,
     };
-    family_printer(tc, DEFAULT_PRINTER_MAX_WIDTH)
-        .lock()
-        .note(&text);
-    HEGEL_OK
+    match tc.family.printer.lock().note(tc.print_target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
 }
 
 /// Mark this test case complete with the given status.

@@ -344,16 +344,31 @@ fn value_with_unresolved_deferred_is_an_error() {
 }
 
 #[test]
-fn resolve_and_value_require_speculation_to_be_closed() {
+fn resolve_and_value_require_main_speculation_to_be_closed() {
     let mut p = printer(79);
     p.begin_speculative(M).unwrap();
     assert_eq!(p.resolve(), Err(PrinterError::OpenSpeculation));
     assert_eq!(p.value(), Err(PrinterError::OpenSpeculation));
+}
 
+#[test]
+fn resolve_aborts_straggling_slot_speculations() {
     let mut p = printer(79);
+    p.text(M, "a").unwrap();
     let slot = p.deferred(M).unwrap();
+    p.text(M, "d").unwrap();
+    p.text(Target::Slot(slot), "b").unwrap();
     p.begin_speculative(Target::Slot(slot)).unwrap();
-    assert_eq!(p.resolve(), Err(PrinterError::OpenSpeculation));
+    p.text(Target::Slot(slot), "uncommitted").unwrap();
+    let nested = p.deferred(Target::Slot(slot)).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "abd");
+    assert!(!p.slot_is_live(slot));
+    assert!(!p.slot_is_live(nested));
+    assert_eq!(
+        p.text(Target::Slot(slot), "late"),
+        Err(PrinterError::DeadSlot)
+    );
 }
 
 #[test]
@@ -906,15 +921,15 @@ fn errors_have_readable_messages() {
 #[test]
 fn note_emits_whole_lines() {
     let mut p = printer(79);
-    p.note("hello");
+    p.note(M, "hello").unwrap();
     assert_eq!(p.value().unwrap(), "hello\n");
 }
 
 #[test]
 fn note_splits_embedded_newlines_into_hard_breaks() {
     let mut p = printer(5);
-    p.note("aaaaaaaa\nbb");
-    p.note("");
+    p.note(M, "aaaaaaaa\nbb").unwrap();
+    p.note(M, "").unwrap();
     assert_eq!(p.value().unwrap(), "aaaaaaaa\nbb\n\n");
 }
 
@@ -923,7 +938,7 @@ fn note_respects_indentation_and_recording() {
     let mut p = printer(79);
     p.shift_indent(M, 2).unwrap();
     let slot = p.deferred(M).unwrap();
-    p.note("after");
+    p.note(M, "after").unwrap();
     p.text(Target::Slot(slot), "x").unwrap();
     p.resolve().unwrap();
     assert_eq!(p.value().unwrap(), "xafter\n  ");

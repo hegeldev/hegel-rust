@@ -532,11 +532,25 @@ typedef struct hegel_failure_t hegel_failure_t;
  `hegel_printer_begin_speculative` buffers output that a rejected draw
  (a filter retry, a failed assumption) can retract.
 
- Create a standalone document with `hegel_printer_new`, or fetch the
- document shared by a test-case family with `hegel_test_case_printer`.
- Handles are internally synchronized and may be used from any thread; every
- handle — including those returned by `hegel_printer_deferred` — must be
- released with `hegel_printer_free`.
+ Create a standalone document with `hegel_printer_new`, or fetch a handle
+ onto a test-case handle's region of the family document with
+ `hegel_test_case_printer`.
+
+ # Ownership and concurrency
+
+ A printer handle addresses one *region* of a document — the document
+ body for a root handle, or a hole for a handle from
+ `hegel_printer_deferred`. Handles follow the test-case handles' model: a
+ handle may move between threads, but belongs to one thread at a time —
+ concurrent operations on the *same* handle return
+ `HEGEL_E_CONCURRENT_USE`. To print from several threads, give each
+ thread its own region: `hegel_printer_deferred` opens a hole at the
+ handle's current position, and content written into it from any thread,
+ on any schedule, renders at that anchor point — so concurrent output is
+ deterministic, and two handles never interleave within one region.
+
+ Every handle — including those returned by `hegel_printer_deferred` —
+ must be released with `hegel_printer_free`.
  */
 typedef struct hegel_printer_t hegel_printer_t;
 
@@ -1888,27 +1902,33 @@ hegel_result_t hegel_printer_value_result_free(hegel_context_t *ctx,
                                                hegel_printer_value_result_t *result);
 
 /*
- Fetch the pretty-printer document shared by this test case's family,
- writing a caller-owned root handle into `*out_printer` (release with
- `hegel_printer_free`; the document itself lives as long as any handle or
- the family).
+ Fetch a handle onto this test-case handle's *print region* of the family
+ document, writing a caller-owned handle into `*out_printer` (release
+ with `hegel_printer_free`; the document itself lives as long as any
+ handle or the family).
 
- The document is created on first use, laid out per `options` (NULL for
- all defaults; see `hegel_printer_options_t`). Later calls return the same
- document: passing NULL options (or ones that only restate the document's
- width) is always fine, while options that request a *different*
- `max_width` than the document was created with are an error — the width
- of an existing document cannot change, and accepting the request would
- silently ignore it. Note that `hegel_note` also creates the document (at
- the default width) when it runs first. Every handle in the family —
- including `hegel_test_case_clone` handles — shares one document, and the
- document remains readable and writable after the case completes, so the
+ The family document exists from the family's creation. Each test-case
+ handle owns one region of it: the root handle's region is the document
+ body, and a `hegel_test_case_clone` handle's region is a hole opened in
+ its parent's region at the moment the clone was made. Regions make
+ concurrent printing deterministic: a clone's output appears at its
+ anchor point — where the clone was created — however the threads that
+ produced it were scheduled, and two handles never interleave within one
+ region. The document remains readable after the case completes, so the
  client can assemble output while drawing and read it back after
- `hegel_mark_complete`.
+ `hegel_mark_complete` (through a root-handle printer).
+
+ `options` may be NULL for defaults (see `hegel_printer_options_t`). The
+ first call that explicitly configures `max_width` fixes the document's
+ width; later calls may restate it, but a *different* explicit width is
+ an error — the width of the shared document cannot be two things.
+ Content printed before the width is configured (`hegel_note` never
+ configures it) still renders at the configured width: layout happens
+ when the document is read.
 
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
  `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
- width conflict with the existing document.
+ width conflict.
  */
 hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1916,17 +1936,18 @@ hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
                                        hegel_printer_t **out_printer);
 
 /*
- Append a note — `len` bytes of UTF-8 at `text` — to the test case's
- document. Each `\n`-separated line of the note becomes its own output
- line, so notes may contain newlines. Notes and drawn values interleave in
- the order they were appended.
+ Append a note — `len` bytes of UTF-8 at `text` — to this test-case
+ handle's print region (see `hegel_test_case_printer` for the region
+ model). Each `\n`-separated line of the note becomes its own output
+ line, so notes may contain newlines. Notes and drawn values from *one
+ handle* appear in the order they were appended; a clone's notes appear
+ in the clone's region.
 
- If the family's document does not exist yet, this creates it with default
- options (`max_width` 79) — a client that wants a different width must
- call `hegel_test_case_printer` before its first note, since a later call
- requesting a different width is a width-conflict error.
+ Notes never configure the document's width; they render at whatever
+ width ends up configured (default 79).
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
+ region is dead (the document was already read), and
  `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
  `text` with `len > 0`.
  */
