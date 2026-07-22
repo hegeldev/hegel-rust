@@ -934,7 +934,10 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(m: M, tc: TestCase, max_
                 "state_machine_next_group returned out-of-range group index {group}"
             );
             round += 1;
-            tc.note(&format!("---------------- Round {round}: group {:?} ----------------", group_names[group]));
+            tc.note(&format!(
+                "---------------- Round {round}: group {:?} ----------------",
+                group_names[group]
+            ));
 
             for tx in &round_txs {
                 let _ = tx.send(WorkerCommand::RunRound);
