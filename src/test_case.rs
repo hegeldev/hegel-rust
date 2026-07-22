@@ -104,6 +104,11 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
+    /// Whether the run was declared nondeterministic
+    /// ([`Settings::nondeterministic`](crate::Settings::nondeterministic)).
+    /// Read by `stateful::run_concurrent` to reject use inside a run that
+    /// hasn't declared it.
+    nondeterministic: bool,
     /// Draw-name bookkeeping shared between every clone of a `TestCase`,
     /// behind a blocking, non-reentrant mutex. The backend handle is no longer
     /// shared here — each `TestCase` instance owns its own libhegel handle (so
@@ -350,17 +355,23 @@ impl TestCase {
         handle: Arc<CTestCase>,
         emit: bool,
         mode: Mode,
+        nondeterministic: bool,
         sink: Option<OutputSink>,
     ) -> Self {
-        let on_draw: OutputSink = match sink {
-            Some(sink) if emit => sink,
-            _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
-            _ => Arc::new(|_| {}),
+        let on_draw: OutputSink = if emit {
+            let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
+            Arc::new(move |msg| match crate::stateful::current_worker_index() {
+                Some(worker) => raw(&format!("[worker {worker}] {msg}")),
+                None => raw(msg),
+            })
+        } else {
+            Arc::new(|_| {})
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
                 emit,
+                nondeterministic,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
                     named_draw_repeatable: HashMap::new(),
@@ -378,6 +389,12 @@ impl TestCase {
 
     pub(crate) fn mode(&self) -> Mode {
         self.global.mode
+    }
+
+    /// Whether the run was declared nondeterministic
+    /// ([`Settings::nondeterministic`](crate::Settings::nondeterministic)).
+    pub(crate) fn nondeterministic(&self) -> bool {
+        self.global.nondeterministic
     }
 
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.

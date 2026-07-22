@@ -204,6 +204,11 @@ impl SettingsHandle {
                     raw,
                     map_backend(settings.backend),
                 ));
+                require_ok(hegel_c::hegel_settings_set_nondeterministic(
+                    ctx,
+                    raw,
+                    settings.nondeterministic,
+                ));
             }
             SettingsHandle { raw }
         })
@@ -686,14 +691,29 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
+    /// Draw a concurrency level in `[1, max_value]`, weighted toward
+    /// `max_value` (the engine owns the distribution).
+    pub(crate) fn generate_concurrency(&self, max_value: i64) -> Result<i64, hegel_result_t> {
+        let mut level: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_generate_concurrency(ctx, self.raw, max_value, &mut level)
+        });
+        rc_to_value(rc, level)
+    }
+
     pub(crate) fn new_state_machine(
         &self,
+        group_names: &[&str],
         rule_names: &[&str],
+        rule_groups: &[i64],
         invariant_names: &[&str],
+        concurrency: i64,
     ) -> Result<i64, hegel_result_t> {
+        let group_cstrings: Vec<CString> = group_names.iter().map(|s| cstring_lossy(s)).collect();
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
+        let group_ptrs: Vec<*const c_char> = group_cstrings.iter().map(|c| c.as_ptr()).collect();
         let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
@@ -702,25 +722,51 @@ impl CTestCase {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
+                group_ptrs.as_ptr(),
+                group_ptrs.len(),
                 rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
+                concurrency,
                 &mut id,
             )
         });
         rc_to_value(rc, id)
     }
 
-    /// Ask the engine for the next rule to run; `None` once the engine has
-    /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
+    /// Start the machine's next round; `false` once the engine has run
+    /// enough rounds. Call on the root test-case handle at every join
+    /// point, including before the first rule is requested.
+    pub(crate) fn state_machine_next_group(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<bool, hegel_result_t> {
+        let mut cont = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine_id, &mut cont)
+        });
+        rc_to_value(rc, cont)
+    }
+
+    /// Ask the engine for the next rule for `thread_index` to run this
+    /// round; `None` once the thread's round budget is exhausted
+    /// (`HEGEL_STATE_MACHINE_DONE`) and it should wait for the join point.
     pub(crate) fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
+        thread_index: i64,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
+            hegel_c::hegel_state_machine_next_rule(
+                ctx,
+                self.raw,
+                state_machine_id,
+                thread_index,
+                &mut out,
+            )
         });
         let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
             None

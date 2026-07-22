@@ -1,0 +1,5 @@
+error: #[rule(...)] requires `group = "..."`
+ --> tests/ui/concurrent_state_machine_empty_rule_args.rs:8:5
+  |
+8 |     #[rule()]
+  |     ^^^^^^^^^

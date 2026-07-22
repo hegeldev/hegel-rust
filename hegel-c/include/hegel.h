@@ -78,8 +78,8 @@
 
 /*
  Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
- when the engine's step budget for the test case is exhausted: stop
- running rules.
+ when the calling thread's round budget is exhausted: stop running rules
+ and wait for the next group / join point.
  */
 #define HEGEL_STATE_MACHINE_DONE -1
 
@@ -386,6 +386,11 @@ typedef enum {
      text generator).
      */
     HEGEL_LABEL_STRING = 30,
+    /*
+     Span around one concurrency-level draw
+     (`hegel_generate_concurrency`).
+     */
+    HEGEL_LABEL_CONCURRENCY = 31,
 } hegel_label_t;
 
 /*
@@ -782,6 +787,28 @@ hegel_result_t hegel_settings_set_report_multiple_failures(hegel_context_t *ctx,
                                                            bool yes);
 
 /*
+ Declare the run nondeterministic: the test may produce different
+ outcomes (or draw different choice sequences) when run on identical
+ data — e.g. because it exercises real concurrency. The frontend must
+ set this whenever a run may be nondeterministic, typically because the
+ test uses concurrent stateful testing.
+
+ When set, the engine reports failures faithfully without attempting
+ anything that assumes deterministic replay: it skips data-tree
+ recording (and with it novel-prefix generation and the
+ nondeterminism mismatch check), span mutation, the per-origin
+ verify + shrink pass (and with it the flakiness check — generation
+ stops at the first bug, so the run reports at most one failure),
+ targeting, and database persistence and reuse. Failures from such a
+ run carry no reproduce blob. The configured phases are left
+ untouched; they simply don't take effect where this flag overrides
+ them.
+ */
+hegel_result_t hegel_settings_set_nondeterministic(hegel_context_t *ctx,
+                                                   hegel_settings_t *s,
+                                                   bool nondeterministic);
+
+/*
  Configure the on-disk example database used by `HEGEL_PHASE_REUSE`
  and the auto-persistence path.
 
@@ -1121,46 +1148,98 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
 
 /*
  Register a *state machine* for engine-owned stateful (rule-based)
- testing: `num_rules` rules and `num_invariants` invariants, each
- identified by a NUL-terminated UTF-8 name. The engine owns rule
- selection — including swarm testing, where each test case enables a
- random subset of rules (at least one) and selection draws only from
- that subset. The caller drives execution: it asks
- `hegel_state_machine_next_rule` which rule to run at each step and
- applies it, until that call signals that no more steps should
- follow.
+ testing, sequential or concurrent: `num_groups` concurrency groups,
+ `num_rules` rules — each assigned to a group by `rule_groups`, an array
+ of group indices parallel to `rule_names` — and `num_invariants`
+ invariants, with names as NUL-terminated UTF-8, plus the concurrency
+ level (the number of worker threads that will pull rules; pass the value
+ drawn by `hegel_generate_concurrency`, or 1 for a sequential machine).
+
+ The engine owns rule selection — including swarm testing, where each
+ thread enables a random subset of rules (at least one per group) and
+ selection draws only from that subset. The caller drives execution in
+ rounds: on the root test-case handle it asks
+ `hegel_state_machine_next_group` whether another round should run, then
+ each worker thread asks `hegel_state_machine_next_rule` which rule to
+ run and applies it, until that call signals the join point. Rules in
+ the same group may run concurrently; rules in different groups never
+ overlap.
 
  On success writes the new machine's id into `*out_state_machine_id`
  and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
- `hegel_state_machine_next_rule` calls on the *same* test case.
- Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
- non-UTF-8 names.
+ `hegel_state_machine_next_group` / `hegel_state_machine_next_rule`
+ calls on the *same* test-case family. Returns `HEGEL_E_INVALID_ARG` if
+ `num_rules` or `num_groups` is zero, an entry of `rule_groups` is
+ outside `[0, num_groups)`, a group ends up with no rules,
+ `concurrency < 1`, or on null / non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
+                                       const char *const *group_names,
+                                       size_t num_groups,
                                        const char *const *rule_names,
+                                       const int64_t *rule_groups,
                                        size_t num_rules,
                                        const char *const *invariant_names,
                                        size_t num_invariants,
+                                       int64_t concurrency,
                                        int64_t *out_state_machine_id);
 
 /*
- Draw the index of the next rule to run, in `[0, num_rules)`, letting
- the engine choose (and shrink) the rule sequence. Swarm testing is
- applied per test case: a random subset of rules is enabled on the
- first call and selection is restricted to that subset for the rest
- of the test case, with restrictions that shrink away in minimal
- counterexamples.
+ Start the machine's next round: draw whether another round should run
+ at all and, if so, which concurrency group is current for it. Writes
+ `false` into `*out_continue` to indicate termination of the whole
+ state machine, `true` when a new round has begun and the worker
+ threads should pull rules again.
 
- `state_machine_id` must be an id returned by
- `hegel_new_state_machine` on this test case. Returns
- `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
- (the caller should abort the body and call `hegel_mark_complete`
- with `HEGEL_STATUS_OVERRUN`).
+ Call this on the *root* test-case handle at every join point — after
+ each worker thread's `hegel_state_machine_next_rule` stream is
+ exhausted — including before the first rule is requested. This applies
+ to sequential machines too: the frontend must advance the group when
+ the rule stream is exhausted, even though there is only a single
+ group. In single-test-case mode (steps unbounded, e.g. under
+ Antithesis) `*out_continue` is never set to false: rounds continue
+ forever.
+
+ `state_machine_id` must be an id returned by `hegel_new_state_machine`
+ on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
+ engine's choice budget is exhausted (the caller should abort the body
+ and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+ */
+hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
+                                              hegel_test_case_t *tc,
+                                              int64_t state_machine_id,
+                                              bool *out_continue);
+
+/*
+ Draw the index of the next rule for worker thread `thread_index` to run
+ this round, letting the engine choose the rule sequence. The returned
+ index is always a rule belonging to the current concurrency group (see
+ `hegel_state_machine_next_group`). Swarm testing is applied per thread:
+ a random subset of rules is enabled (at least one per group) on the
+ thread's first selection and selection is restricted to that subset for
+ the rest of the test case.
+
+ `thread_index` identifies the calling worker and must satisfy
+ `0 <= thread_index < concurrency` (passed at state-machine creation); a
+ thread index rather than the handle identifies the thread because a
+ single thread could hold multiple test-case clones. Draws consult only
+ per-thread and per-clone state, so draws on one thread don't affect
+ draws on another.
+
+ Writes `HEGEL_STATE_MACHINE_DONE` (-1) into `*out_rule_index` when the
+ thread's round budget is exhausted: stop running rules and wait for the
+ next group / join point.
+
+ `state_machine_id` must be an id returned by `hegel_new_state_machine`
+ on this test-case family. Returns `HEGEL_E_STOP_TEST` when the engine's
+ choice budget is exhausted (the caller should abort the body and call
+ `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
  */
 hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
                                              hegel_test_case_t *tc,
                                              int64_t state_machine_id,
+                                             int64_t thread_index,
                                              int64_t *out_rule_index);
 
 /*
@@ -1188,6 +1267,25 @@ hegel_result_t hegel_generate_boolean(hegel_context_t *ctx,
                                       bool forced,
                                       bool has_forced,
                                       bool *out_value);
+
+/*
+ Draw a concurrency level in `[1, max_value]`, for creating a state
+ machine via `hegel_new_state_machine`. The engine owns the
+ distribution, which is weighted toward `max_value` (concurrency bugs
+ need concurrency) rather than shrink-biased toward 1 — which is why
+ this is a dedicated primitive instead of a plain integer draw.
+
+ On success writes the drawn level into `*out_value` and returns
+ `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
+ budget is exhausted for this test case (the caller should abort the
+ body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+ Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value` or
+ `max_value < 1`; the diagnostic is in `hegel_context_last_error`.
+ */
+hegel_result_t hegel_generate_concurrency(hegel_context_t *ctx,
+                                          hegel_test_case_t *tc,
+                                          int64_t max_value,
+                                          int64_t *out_value);
 
 /*
  Draw an integer in `[min_value, max_value]` (both inclusive, both

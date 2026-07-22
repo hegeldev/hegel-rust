@@ -1,11 +1,14 @@
 /*
  * state_machine.c — demo: engine-owned rule selection for stateful testing.
- * Verifies that hegel_new_state_machine / hegel_state_machine_next_rule
- * compose into the building block behind hegel-rust's
- * `hegel::stateful::run` — the engine decides which rule runs at each
- * step (applying swarm testing: each test case enables a random subset
- * of the rules) and how many steps to run, and the caller applies each
- * rule until the engine signals that no more steps should follow.
+ * Verifies that hegel_new_state_machine / hegel_state_machine_next_group /
+ * hegel_state_machine_next_rule compose into the building block behind
+ * hegel-rust's `hegel::stateful::run` — the engine decides which rule runs
+ * at each step (applying swarm testing: each test case enables a random
+ * subset of the rules), how many rules make up each round, and how many
+ * rounds to run; the caller applies each rule until the engine signals the
+ * join point, and advances rounds until the engine signals termination.
+ * This demo drives the sequential special case: one concurrency group and
+ * a concurrency level of 1, where every round hands out exactly one rule.
  *
  * Each test case models a tiny counter machine with three rules:
  *   - increment: counter += 1
@@ -27,8 +30,11 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
+static const char *GROUPS[] = { "counter" };
+#define NUM_GROUPS (sizeof(GROUPS) / sizeof(GROUPS[0]))
 static const char *RULES[] = { "increment", "decrement", "reset" };
-#define NUM_RULES (int64_t) (sizeof(RULES) / sizeof(RULES[0])) 
+#define NUM_RULES (int64_t) (sizeof(RULES) / sizeof(RULES[0]))
+static const int64_t RULE_GROUPS[] = { 0, 0, 0 };
 static const char *INVARIANTS[] = { "non_negative" };
 #define NUM_INVARIANTS (sizeof(INVARIANTS) / sizeof(INVARIANTS[0]))
 
@@ -54,10 +60,18 @@ int main(void) {
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
 
+        int64_t concurrency;
+        if (hegel_generate_concurrency(ctx, tc, 1, &concurrency) != HEGEL_OK) {
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
+            continue;
+        }
+
         int64_t machine;
-        if (hegel_new_state_machine(ctx, tc, RULES, NUM_RULES,
+        if (hegel_new_state_machine(ctx, tc, GROUPS, NUM_GROUPS,
+                                    RULES, RULE_GROUPS, NUM_RULES,
                                     INVARIANTS, NUM_INVARIANTS,
-                                    &machine) != HEGEL_OK) {
+                                    concurrency, &machine) != HEGEL_OK) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
@@ -67,20 +81,29 @@ int main(void) {
         bool overran = false;
         bool bad = false;
         while (true) {
-            int64_t rule;
-            hegel_result_t rc = hegel_state_machine_next_rule(ctx, tc, machine, &rule);
+            bool more_rounds;
+            hegel_result_t rc = hegel_state_machine_next_group(ctx, tc, machine, &more_rounds);
             if (rc != HEGEL_OK) { overran = true; break; }
-            if (rule == HEGEL_STATE_MACHINE_DONE) break;
-            if (rule < 0 || rule >= NUM_RULES) { bad = true; break; }
-            rule_counts[rule]++;
+            if (!more_rounds) break;
 
-            switch (rule) {
-                case 0: counter += 1; break;
-                case 1: if (counter > 0) counter -= 1; break;
-                case 2: counter = 0; break;
+            while (true) {
+                int64_t rule;
+                rc = hegel_state_machine_next_rule(ctx, tc, machine, 0, &rule);
+                if (rc != HEGEL_OK) { overran = true; break; }
+                if (rule == HEGEL_STATE_MACHINE_DONE) break;
+                if (rule < 0 || rule >= NUM_RULES) { bad = true; break; }
+                rule_counts[rule]++;
+
+                switch (rule) {
+                    case 0: counter += 1; break;
+                    case 1: if (counter > 0) counter -= 1; break;
+                    case 2: counter = 0; break;
+                }
             }
+            if (overran || bad) break;
 
-            /* Invariant: the counter never goes negative. */
+            /* Invariant, checked at the join point after each round: the
+             * counter never goes negative. */
             if (counter < 0) { bad = true; break; }
         }
 

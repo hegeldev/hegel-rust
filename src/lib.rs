@@ -403,6 +403,78 @@ pub use hegel_macros::rewrite_draws;
 /// See the [`stateful`] module docs for more information.
 pub use hegel_macros::state_machine;
 
+/// Derive a [`ConcurrentStateMachine`](crate::stateful::ConcurrentStateMachine)
+/// implementation from an `impl` block, for concurrent stateful testing via
+/// [`stateful::run_concurrent`](crate::stateful::run_concurrent).
+///
+/// Methods annotated `#[rule(group = "name")]` become rules assigned to the
+/// named concurrency group; methods annotated `#[invariant]` become
+/// invariants, checked at the join points between rounds. Rules in the same
+/// group may run concurrently with each other; rules in different groups
+/// never overlap. Groups cannot express asymmetric overlap ("put may
+/// overlap get but not delete"); that expressiveness limit is deliberate.
+///
+/// A bare `#[rule]` with no `group = "..."` argument is assigned to a
+/// single shared *anonymous* group, so a machine with no group annotations
+/// is maximally concurrent: any rule may overlap with any other, and naming
+/// groups is how overlap gets *restricted*.
+///
+/// **Warning:** in a machine that mixes annotated and unannotated rules,
+/// the unannotated rules form their own group and therefore **never overlap
+/// with any named group's rules**. The natural misreading of "no group" as
+/// "unconstrained" is exactly backwards there — annotate every rule once
+/// you name any group.
+///
+/// The model is shared by reference across worker threads, so rules and
+/// invariants must take `&self` (mutable state needs interior mutability),
+/// and the model type must be `Sync`. See
+/// [`run_concurrent`](crate::stateful::run_concurrent) for the full
+/// execution model, the required `nondeterministic = true` declaration, and
+/// the lock-poisoning guidance for rules that hold locks across draws.
+///
+/// ```no_run
+/// use std::sync::Mutex;
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// struct KvTest {
+///     store: Mutex<std::collections::HashMap<u8, i64>>,
+/// }
+///
+/// #[hegel::concurrent_state_machine]
+/// impl KvTest {
+///     #[rule(group = "rw")]
+///     fn put(&self, tc: TestCase) {
+///         let key: u8 = tc.draw(gs::integers());
+///         let value: i64 = tc.draw(gs::integers());
+///         self.store.lock().unwrap_or_else(|e| e.into_inner()).insert(key, value);
+///     }
+///
+///     #[rule(group = "rw")]
+///     fn get(&self, tc: TestCase) {
+///         let key: u8 = tc.draw(gs::integers());
+///         let _ = self.store.lock().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
+///     }
+///
+///     #[rule(group = "dump")]
+///     fn dump(&self, _: TestCase) {
+///         let _ = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone();
+///     }
+///
+///     #[invariant]
+///     fn small_enough(&self, _: TestCase) {
+///         assert!(self.store.lock().unwrap_or_else(|e| e.into_inner()).len() <= 256);
+///     }
+/// }
+///
+/// #[hegel::test(nondeterministic = true)]
+/// fn test_kv(tc: TestCase) {
+///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
+///     hegel::stateful::run_concurrent(m, tc, 3);
+/// }
+/// ```
+pub use hegel_macros::concurrent_state_machine;
+
 /// The main entrypoint into Hegel.
 ///
 /// The function must take exactly one parameter of type [`TestCase`]. The test case can be
