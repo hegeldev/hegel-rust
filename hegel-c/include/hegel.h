@@ -386,6 +386,12 @@ typedef enum {
      text generator).
      */
     HEGEL_LABEL_STRING = 30,
+    /*
+     Outer span around one stateful-testing rule invocation, grouping all
+     the draws a single rule makes so the shrinker can delete a whole step
+     at once. Opened by the frontend's state-machine driver.
+     */
+    HEGEL_LABEL_STATEFUL_RULE = 31,
 } hegel_label_t;
 
 /*
