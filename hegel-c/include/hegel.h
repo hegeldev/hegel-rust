@@ -78,8 +78,10 @@
 
 /*
  Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
- when the calling thread's round budget is exhausted: stop running rules
- and wait for the next group / join point.
+ when the calling thread's round budget is exhausted (stop running rules
+ and wait for the next group / join point), and to `*out_group_index` by
+ `hegel_state_machine_next_group` when the whole state machine is done
+ (run no further rounds).
  */
 #define HEGEL_STATE_MACHINE_DONE -1
 
@@ -1188,9 +1190,11 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
 /*
  Start the machine's next round: draw whether another round should run
  at all and, if so, which concurrency group is current for it. Writes
- `false` into `*out_continue` to indicate termination of the whole
- state machine, `true` when a new round has begun and the worker
- threads should pull rules again.
+ the current group's index in `[0, num_groups)` into
+ `*out_group_index` when a new round has begun and the worker threads
+ should pull rules again — the index identifies the round's group, e.g.
+ for trace output — or `HEGEL_STATE_MACHINE_DONE` (-1) to indicate
+ termination of the whole state machine.
 
  Call this on the *root* test-case handle at every join point — after
  each worker thread's `hegel_state_machine_next_rule` stream is
@@ -1198,8 +1202,8 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  to sequential machines too: the frontend must advance the group when
  the rule stream is exhausted, even though there is only a single
  group. In single-test-case mode (steps unbounded, e.g. under
- Antithesis) `*out_continue` is never set to false: rounds continue
- forever.
+ Antithesis) `*out_group_index` is never set to
+ `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
 
  `state_machine_id` must be an id returned by `hegel_new_state_machine`
  on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
@@ -1209,7 +1213,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
 hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
                                               hegel_test_case_t *tc,
                                               int64_t state_machine_id,
-                                              bool *out_continue);
+                                              int64_t *out_group_index);
 
 /*
  Draw the index of the next rule for worker thread `thread_index` to run

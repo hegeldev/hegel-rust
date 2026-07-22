@@ -197,10 +197,10 @@ fn new_state_machine_with_zero_concurrency_is_invalid_argument() {
 fn state_machine_next_rule_returns_in_range_indices() {
     let (ds, _handle) = random_source();
     let id = sequential_machine(&ds, vec!["a".into(), "b".into(), "c".into()], vec![]).unwrap();
-    assert!(ds.state_machine_next_group(id).unwrap());
+    assert!(ds.state_machine_next_group(id).unwrap().is_some());
     assert!(ds.state_machine_next_rule(id, 0).unwrap().unwrap() < 3);
     for _ in 0..20 {
-        if !ds.state_machine_next_group(id).unwrap() {
+        if ds.state_machine_next_group(id).unwrap().is_none() {
             break;
         }
         match ds.state_machine_next_rule(id, 0).unwrap() {
@@ -485,7 +485,7 @@ fn state_machines_are_shared_across_cloned_streams() {
             2,
         )
         .unwrap();
-    assert!(ds.state_machine_next_group(machine).unwrap());
+    assert_eq!(ds.state_machine_next_group(machine).unwrap(), Some(0));
     let child = ds.clone_stream().unwrap();
     assert!(child.state_machine_next_rule(machine, 1).unwrap().unwrap() < 3);
     if let Some(index) = ds.state_machine_next_rule(machine, 0).unwrap() {

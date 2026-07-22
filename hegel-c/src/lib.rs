@@ -2173,15 +2173,19 @@ pub unsafe extern "C" fn hegel_new_state_machine(
 }
 
 /// Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
-/// when the calling thread's round budget is exhausted: stop running rules
-/// and wait for the next group / join point.
+/// when the calling thread's round budget is exhausted (stop running rules
+/// and wait for the next group / join point), and to `*out_group_index` by
+/// `hegel_state_machine_next_group` when the whole state machine is done
+/// (run no further rounds).
 pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 
 /// Start the machine's next round: draw whether another round should run
 /// at all and, if so, which concurrency group is current for it. Writes
-/// `false` into `*out_continue` to indicate termination of the whole
-/// state machine, `true` when a new round has begun and the worker
-/// threads should pull rules again.
+/// the current group's index in `[0, num_groups)` into
+/// `*out_group_index` when a new round has begun and the worker threads
+/// should pull rules again — the index identifies the round's group, e.g.
+/// for trace output — or `HEGEL_STATE_MACHINE_DONE` (-1) to indicate
+/// termination of the whole state machine.
 ///
 /// Call this on the *root* test-case handle at every join point — after
 /// each worker thread's `hegel_state_machine_next_rule` stream is
@@ -2189,8 +2193,8 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 /// to sequential machines too: the frontend must advance the group when
 /// the rule stream is exhausted, even though there is only a single
 /// group. In single-test-case mode (steps unbounded, e.g. under
-/// Antithesis) `*out_continue` is never set to false: rounds continue
-/// forever.
+/// Antithesis) `*out_group_index` is never set to
+/// `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
 ///
 /// `state_machine_id` must be an id returned by `hegel_new_state_machine`
 /// on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
@@ -2201,20 +2205,24 @@ pub unsafe extern "C" fn hegel_state_machine_next_group(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     state_machine_id: i64,
-    out_continue: *mut bool,
+    out_group_index: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_state_machine_next_group", tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_continue.is_null() {
+    if out_group_index.is_null() {
         set_last_error(ctx, "hegel_state_machine_next_group: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
     match tc.stream.state_machine_next_group(state_machine_id) {
-        Ok(cont) => {
-            unsafe { *out_continue = cont };
+        Ok(Some(group)) => {
+            unsafe { *out_group_index = group };
+            HEGEL_OK
+        }
+        Ok(None) => {
+            unsafe { *out_group_index = HEGEL_STATE_MACHINE_DONE };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),

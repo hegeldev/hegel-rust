@@ -368,7 +368,10 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn state_machine_next_group(&self, state_machine_id: i64) -> Result<bool, DataSourceError> {
+    fn state_machine_next_group(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<Option<i64>, DataSourceError> {
         self.with_ntc(|ntc| {
             let machine = {
                 let machines = ntc
@@ -380,7 +383,7 @@ impl DataSource for NativeDataSource {
                 Arc::clone(&machines[idx])
             };
             let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
-            machine.next_group(ntc)
+            Ok(machine.next_group(ntc)?.map(|group| group as i64))
         })
     }
 

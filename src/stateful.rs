@@ -411,10 +411,11 @@ fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &Tes
     }
 }
 
-/// Ask the engine whether the machine should run another round.
-fn machine_next_group(tc: &TestCase, machine_id: i64) -> bool {
+/// Ask the engine whether the machine should run another round, and which
+/// concurrency group is current for it.
+fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
     match tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id)) {
-        Ok(cont) => cont,
+        Ok(group) => group.map(|g| g as usize),
         Err(rc) => raise_for_rc(rc),
     }
 }
@@ -455,7 +456,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let mut steps_attempted: i64 = 0;
 
     while is_single || steps_attempted < 1000 {
-        if !machine_next_group(&tc, machine_id) {
+        if machine_next_group(&tc, machine_id).is_none() {
             break;
         }
 
@@ -926,10 +927,14 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(m: M, tc: TestCase, max_
             round_txs: &round_txs,
         };
 
-        loop {
-            if !machine_next_group(&tc, machine_id) {
-                break;
-            }
+        let mut round = 0u64;
+        while let Some(group) = machine_next_group(&tc, machine_id) {
+            hegel_internal_assert!(
+                group < group_names.len(),
+                "state_machine_next_group returned out-of-range group index {group}"
+            );
+            round += 1;
+            tc.note(&format!("---------------- Round {round}: group {:?} ----------------", group_names[group]));
 
             for tx in &round_txs {
                 let _ = tx.send(WorkerCommand::RunRound);

@@ -736,18 +736,25 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    /// Start the machine's next round; `false` once the engine has run
-    /// enough rounds. Call on the root test-case handle at every join
-    /// point, including before the first rule is requested.
+    /// Start the machine's next round, yielding the index of the round's
+    /// current concurrency group; `None` once the engine has run enough
+    /// rounds (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case
+    /// handle at every join point, including before the first rule is
+    /// requested.
     pub(crate) fn state_machine_next_group(
         &self,
         state_machine_id: i64,
-    ) -> Result<bool, hegel_result_t> {
-        let mut cont = false;
+    ) -> Result<Option<i64>, hegel_result_t> {
+        let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine_id, &mut cont)
+            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine_id, &mut out)
         });
-        rc_to_value(rc, cont)
+        let group = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
+            None
+        } else {
+            Some(out)
+        };
+        rc_to_value(rc, group)
     }
 
     /// Ask the engine for the next rule for `thread_index` to run this

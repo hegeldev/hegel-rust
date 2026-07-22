@@ -143,10 +143,14 @@ pub trait DataSource: Send + Sync {
     ) -> Result<i64, DataSourceError>;
 
     /// Start the machine's next round, drawing which concurrency group is
-    /// current for it. Returns `false` once the test case has run enough
-    /// rounds. Must be called (from the root stream) at every join point,
-    /// including before the first `state_machine_next_rule` call.
-    fn state_machine_next_group(&self, state_machine_id: i64) -> Result<bool, DataSourceError>;
+    /// current for it. Returns that group's index in `[0, num_groups)`, or
+    /// `None` once the test case has run enough rounds. Must be called
+    /// (from the root stream) at every join point, including before the
+    /// first `state_machine_next_rule` call.
+    fn state_machine_next_group(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<Option<i64>, DataSourceError>;
 
     /// Draw the index of the next rule for `thread_index` to run — always a
     /// rule belonging to the current group, in `[0, num_rules)` — or `None`
