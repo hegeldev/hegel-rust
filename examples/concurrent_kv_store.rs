@@ -12,14 +12,15 @@
 //! Run it with:
 //!
 //! ```text
-//! cargo run --example concurrent_kv_store
+//! cargo test --example concurrent_kv_store
 //! ```
 //!
 //! Concurrency bugs are nondeterministic, so the test declares its run
 //! `nondeterministic = true`: Hegel reports the failure from the run that
 //! discovered it, with no replay, shrinking, or reproduce blob. Most runs
 //! find the race within the default 100 test cases and fail with the
-//! invariant's `increments were lost` assertion; an unlucky run can pass.
+//! invariant's `increments were lost` assertion, printing the discovering
+//! run's interleaved trace; an unlucky run can pass.
 
 use hegel::TestCase;
 use hegel::generators as gs;
@@ -122,8 +123,8 @@ impl KvTest {
     }
 }
 
-#[hegel::main(nondeterministic = true)]
-fn main(tc: TestCase) {
+#[hegel::test(nondeterministic = true)]
+fn test_concurrent_kv_store(tc: TestCase) {
     let test = KvTest {
         store: KvStore::new(),
         keys: concurrent_pool(&tc),
@@ -131,3 +132,5 @@ fn main(tc: TestCase) {
     };
     run_concurrent(test, tc, 4);
 }
+
+fn main() {}
