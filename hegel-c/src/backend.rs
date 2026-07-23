@@ -152,15 +152,15 @@ pub trait DataSource: Send + Sync {
         state_machine_id: i64,
     ) -> Result<Option<i64>, DataSourceError>;
 
-    /// Draw the index of the next rule for `thread_index` to run — always a
+    /// Draw the index of the next rule for `worker_index` to run — always a
     /// rule belonging to the current group, in `[0, num_rules)` — or `None`
-    /// once the thread's round budget is exhausted and it should wait for
-    /// the next join point. Consults only per-thread and per-stream state,
-    /// so draws on one thread never affect draws on another.
+    /// once the worker's round budget is exhausted and it should wait for
+    /// the next join point. Consults only per-worker and per-stream state,
+    /// so draws on one worker never affect draws on another.
     fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
-        thread_index: i64,
+        worker_index: i64,
     ) -> Result<Option<i64>, DataSourceError>;
 
     /// Draw a concurrency level in `[1, max_value]`, weighted toward

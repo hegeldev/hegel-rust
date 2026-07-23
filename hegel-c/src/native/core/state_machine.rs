@@ -16,11 +16,11 @@ const MAX_SEQUENTIAL_ROUND_CAP: i64 = 50;
 
 /// Upper bound on the round cap drawn by [`NativeStateMachine::next_group`]
 /// at concurrency > 1. Together with [`MAX_ROUND_STEP_CAP`] this keeps each
-/// worker thread's total step budget per test case comparable to a
+/// worker's total step budget per test case comparable to a
 /// sequential test's ([`MAX_SEQUENTIAL_ROUND_CAP`]).
 const MAX_CONCURRENT_ROUND_CAP: i64 = 10;
 
-/// Upper bound on the per-thread step cap drawn each round by
+/// Upper bound on the per-worker step cap drawn each round by
 /// [`NativeStateMachine::next_rule`] at concurrency > 1.
 const MAX_ROUND_STEP_CAP: i64 = 5;
 
@@ -38,8 +38,8 @@ fn draw_cap(ntc: &mut NativeTestCase, max_cap: i64) -> Result<i64, EngineError> 
     Ok(min(raw.to_i128().unwrap() as i64, max_cap))
 }
 
-/// Per-thread feature flags over rule indices, deciding which rules are
-/// enabled for the calling thread over the whole test case.
+/// Per-worker feature flags over rule indices, deciding which rules are
+/// enabled for the calling worker over the whole test case.
 ///
 /// The disabling probability is decided up front so that any subset from
 /// all-enabled down to a single surviving rule per group is reachable
@@ -101,23 +101,23 @@ impl FeatureFlags {
     }
 }
 
-/// Per-thread-index state, fully constructed at machine creation and
+/// Per-worker state, fully constructed at machine creation and
 /// refreshed in place at every join point — so `next_rule` only ever reads
 /// state that already exists.
 ///
 /// The flags' disabling probability and the per-round step caps are drawn
 /// from the *creating* handle's stream (at machine creation and in
 /// `next_group` respectively), both quiescent moments, so draws on one
-/// worker thread never affect draws on another; the per-rule enable
-/// decisions inside [`FeatureFlags`] stay lazy and are drawn from the
-/// querying thread's own stream.
-struct ThreadState {
+/// worker never affect draws on another; the per-rule enable decisions
+/// inside [`FeatureFlags`] stay lazy and are drawn from the querying
+/// worker's own stream.
+struct WorkerState {
     /// Swarm feature flags, persisting for the whole test case.
     flags: FeatureFlags,
     /// This round's step cap, written by `next_group` at every join point
     /// (always 1 at concurrency 1; drawn at concurrency > 1).
     step_cap: i64,
-    /// Rules handed to this thread so far this round; reset by `next_group`.
+    /// Rules handed to this worker so far this round; reset by `next_group`.
     steps_drawn: i64,
 }
 
@@ -128,7 +128,7 @@ struct ThreadState {
 /// one concurrency group — plus the invariants and the concurrency level,
 /// and drives execution in rounds: the root handle asks [`Self::next_group`]
 /// whether to run another round (and which group is current), then each
-/// worker thread pulls rules for that round via [`Self::next_rule`] until it
+/// worker pulls rules for that round via [`Self::next_rule`] until it
 /// returns `None`. Rules in the same group may run concurrently; rules in
 /// different groups never overlap, because only the current group's rules
 /// are handed out and the group changes only at the join points between
@@ -149,13 +149,13 @@ pub struct NativeStateMachine {
     /// families marked as unbounded at creation.
     round_cap: i64,
     rounds_started: i64,
-    threads: Vec<ThreadState>,
+    workers: Vec<WorkerState>,
 }
 
 impl NativeStateMachine {
     /// Create a machine, fully constructed: the round cap and every
-    /// thread's swarm disabling probability are drawn here, from the
-    /// creating handle's stream, so no per-thread state is ever pending.
+    /// worker's swarm disabling probability are drawn here, from the
+    /// creating handle's stream, so no per-worker state is ever pending.
     /// For families marked as unbounded (single-test-case runs) no round
     /// cap is drawn: rounds continue forever.
     pub fn new(
@@ -202,28 +202,28 @@ impl NativeStateMachine {
             };
             draw_cap(ntc, max_cap)?
         };
-        let threads = (0..concurrency)
+        let workers = (0..concurrency)
             .map(|_| {
-                Ok(ThreadState {
+                Ok(WorkerState {
                     flags: FeatureFlags::new(ntc, &groups, rule_groups.len())?,
                     step_cap: 0,
                     steps_drawn: 0,
                 })
             })
-            .collect::<Result<Vec<ThreadState>, EngineError>>()?;
+            .collect::<Result<Vec<WorkerState>, EngineError>>()?;
         Ok(NativeStateMachine {
             groups,
             concurrency,
             current_group: 0,
             round_cap,
             rounds_started: 0,
-            threads,
+            workers,
         })
     }
 
     /// Start the next round: draw whether another round should run at all
     /// and, if so, which concurrency group is current for it and each
-    /// thread's step budget. Returns the current group's index, or `None`
+    /// worker's step budget. Returns the current group's index, or `None`
     /// once the test case has run enough rounds.
     ///
     /// Must be called from the root handle at each join point, including
@@ -239,41 +239,41 @@ impl NativeStateMachine {
         } else {
             draw_index(ntc, self.groups.len())?
         };
-        for thread_idx in 0..self.threads.len() {
+        for worker_idx in 0..self.workers.len() {
             let step_cap = if self.concurrency == 1 {
                 1
             } else {
                 draw_cap(ntc, MAX_ROUND_STEP_CAP)?
             };
-            let thread = &mut self.threads[thread_idx];
-            thread.step_cap = step_cap;
-            thread.steps_drawn = 0;
+            let worker = &mut self.workers[worker_idx];
+            worker.step_cap = step_cap;
+            worker.steps_drawn = 0;
         }
         self.current_group = group;
         self.rounds_started += 1;
         Ok(Some(group))
     }
 
-    /// Draw the index of the next rule for `thread_index` to run this round
+    /// Draw the index of the next rule for `worker_index` to run this round
     /// — always a rule belonging to the current group, in
-    /// `[0, num_rules)` — or `None` once the thread's round budget is
+    /// `[0, num_rules)` — or `None` once the worker's round budget is
     /// exhausted and it should wait for the next join point.
     ///
-    /// Consults only per-thread state (plus the machine's current group), so
-    /// draws on one thread never affect draws on another. At concurrency 1
+    /// Consults only per-worker state (plus the machine's current group), so
+    /// draws on one worker never affect draws on another. At concurrency 1
     /// every round's budget is exactly one rule, so a join point follows
     /// each rule.
     pub fn next_rule(
         &mut self,
         ntc: &mut NativeTestCase,
-        thread_index: i64,
+        worker_index: i64,
     ) -> Result<Option<i64>, EngineError> {
-        let thread_idx = usize::try_from(thread_index)
+        let worker_idx = usize::try_from(worker_index)
             .ok()
-            .filter(|&t| t < self.threads.len())
+            .filter(|&w| w < self.workers.len())
             .ok_or_else(|| {
                 EngineError::InvalidArgument(format!(
-                    "thread_index must be in [0, {}), got {thread_index}",
+                    "worker_index must be in [0, {}), got {worker_index}",
                     self.concurrency
                 ))
             })?;
@@ -283,11 +283,11 @@ impl NativeStateMachine {
             ));
         }
 
-        if self.threads[thread_idx].steps_drawn >= self.threads[thread_idx].step_cap {
+        if self.workers[worker_idx].steps_drawn >= self.workers[worker_idx].step_cap {
             return Ok(None);
         }
-        let index = self.select_rule(ntc, thread_idx, self.current_group)?;
-        self.threads[thread_idx].steps_drawn += 1;
+        let index = self.select_rule(ntc, worker_idx, self.current_group)?;
+        self.workers[worker_idx].steps_drawn += 1;
         Ok(Some(index))
     }
 
@@ -296,17 +296,17 @@ impl NativeStateMachine {
     ///
     /// Every selection draw is an index in `[0, group_size)` mapped back to
     /// the global rule index, so each selection is in-group by construction.
-    /// Up to three rejection-sampling tries against the thread's swarm
+    /// Up to three rejection-sampling tries against the worker's swarm
     /// flags, then a fallback that enumerates the group's enabled rules.
     fn select_rule(
         &mut self,
         ntc: &mut NativeTestCase,
-        thread_idx: usize,
+        worker_idx: usize,
         group: usize,
     ) -> Result<i64, EngineError> {
         let members = &self.groups[group];
         let n = members.len();
-        let flags = &mut self.threads[thread_idx].flags;
+        let flags = &mut self.workers[worker_idx].flags;
 
         let mut known_bad: HashSet<usize> = HashSet::new();
         for _ in 0..3 {

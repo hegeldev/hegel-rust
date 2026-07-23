@@ -427,10 +427,10 @@ fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
     }
 }
 
-/// Ask the engine for the next rule `thread_index` should run this round;
+/// Ask the engine for the next rule worker `worker_index` should run this round;
 /// `None` once the thread's round budget is exhausted (the join point).
-fn machine_next_rule(tc: &TestCase, machine_id: i64, thread_index: i64) -> Option<i64> {
-    match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, thread_index)) {
+fn machine_next_rule(tc: &TestCase, machine_id: i64, worker_index: i64) -> Option<i64> {
+    match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, worker_index)) {
         Ok(next) => next,
         Err(rc) => raise_for_rc(rc),
     }

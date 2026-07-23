@@ -293,7 +293,7 @@ fn at_least_one_rule_per_group_is_forced_enabled() {
 }
 
 #[test]
-fn concurrent_threads_have_their_own_flags_and_round_budgets() {
+fn concurrent_workers_have_their_own_flags_and_round_budgets() {
     let mut ntc = simplest_after(&[cap()], 4096);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert_eq!(count_draws_with_max(&ntc, 254), 2);
@@ -340,7 +340,7 @@ fn next_rule_before_next_group_is_an_invalid_argument() {
 }
 
 #[test]
-fn out_of_range_thread_index_is_an_invalid_argument() {
+fn out_of_range_worker_index_is_an_invalid_argument() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());

@@ -1341,7 +1341,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 hegel_state_machine_next_rule(ctx, tc, out_id, 1, &mut rule_idx),
                 HEGEL_E_INVALID_ARG
             );
-            assert!(last_error(ctx).contains("thread_index must be in [0, 1)"));
+            assert!(last_error(ctx).contains("worker_index must be in [0, 1)"));
             assert_eq!(
                 hegel_state_machine_next_rule(ctx, tc, out_id, 0, &mut rule_idx),
                 HEGEL_OK

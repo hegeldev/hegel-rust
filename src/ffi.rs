@@ -753,13 +753,13 @@ impl CTestCase {
         rc_to_value(rc, group)
     }
 
-    /// Ask the engine for the next rule for `thread_index` to run this
-    /// round; `None` once the thread's round budget is exhausted
+    /// Ask the engine for the next rule for worker `worker_index` to run
+    /// this round; `None` once the worker's round budget is exhausted
     /// (`HEGEL_STATE_MACHINE_DONE`) and it should wait for the join point.
     pub(crate) fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
-        thread_index: i64,
+        worker_index: i64,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
@@ -767,7 +767,7 @@ impl CTestCase {
                 ctx,
                 self.raw,
                 state_machine_id,
-                thread_index,
+                worker_index,
                 &mut out,
             )
         });

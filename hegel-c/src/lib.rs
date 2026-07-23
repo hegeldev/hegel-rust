@@ -2061,22 +2061,22 @@ unsafe fn names_from_c_array(
 /// (identified by index only), `num_rules` rules — each assigned to a group
 /// by `rule_groups`, an array of group indices parallel to `rule_names` —
 /// and `num_invariants` invariants, with names as NUL-terminated UTF-8,
-/// plus the concurrency level (the number of worker threads that will pull
-/// rules; pass the value drawn by `hegel_generate_concurrency`, or 1 for a
-/// sequential machine).
+/// plus the concurrency level (the number of workers — typically worker
+/// threads — that will pull rules; pass the value drawn by
+/// `hegel_generate_concurrency`, or 1 for a sequential machine).
 ///
 /// The engine owns rule selection — including swarm testing, where each
-/// thread enables a random subset of rules (at least one per group) and
+/// worker enables a random subset of rules (at least one per group) and
 /// selection draws only from that subset. The caller drives execution in
 /// rounds: on the root test-case handle it asks
 /// `hegel_state_machine_next_group` whether another round should run, then
-/// each worker thread asks `hegel_state_machine_next_rule` which rule to
-/// run and applies it, until that call signals the join point. Rules in
+/// each worker asks `hegel_state_machine_next_rule` which rule to run and
+/// applies it, until that call signals the join point. Rules in
 /// the same group may run concurrently; rules in different groups never
 /// overlap.
 ///
 /// Creating the machine draws from the calling handle's stream: the test
-/// case's round cap and each thread's swarm parameters are decided here,
+/// case's round cap and each worker's swarm parameters are decided here,
 /// up front, so the machine is fully constructed before any rule is
 /// requested.
 ///
@@ -2157,7 +2157,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
 }
 
 /// Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
-/// when the calling thread's round budget is exhausted (stop running rules
+/// when the calling worker's round budget is exhausted (stop running rules
 /// and wait for the next group / join point), and to `*out_group_index` by
 /// `hegel_state_machine_next_group` when the whole state machine is done
 /// (run no further rounds).
@@ -2165,15 +2165,15 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 
 /// Start the machine's next round: draw whether another round should run
 /// at all and, if so, which concurrency group is current for it and each
-/// worker thread's step budget for the round. Writes the current group's
+/// worker's step budget for the round. Writes the current group's
 /// index in `[0, num_groups)` into `*out_group_index` when a new round
-/// has begun and the worker threads should pull rules again — the index
+/// has begun and the workers should pull rules again — the index
 /// identifies the round's group, e.g. for trace output — or
 /// `HEGEL_STATE_MACHINE_DONE` (-1) to indicate termination of the whole
 /// state machine.
 ///
 /// Call this on the root test-case handle (the handle used for
-/// hegel_new_state_machine) at every join point — after each worker thread's
+/// hegel_new_state_machine) at every join point — after each worker's
 /// `hegel_state_machine_next_rule` stream is exhausted — including before the
 /// first rule is requested. This applies to sequential machines too: the
 /// frontend must advance the group when the rule stream is exhausted, even
@@ -2214,23 +2214,23 @@ pub unsafe extern "C" fn hegel_state_machine_next_group(
     }
 }
 
-/// Draw the index of the next rule for worker thread `thread_index` to run
-/// this round, letting the engine choose the rule sequence. The returned
-/// index is always a rule belonging to the current concurrency group (see
-/// `hegel_state_machine_next_group`). Swarm testing is applied per thread:
+/// Draw the index of the next rule for worker `worker_index` to run this
+/// round, letting the engine choose the rule sequence. The returned index
+/// is always a rule belonging to the current concurrency group (see
+/// `hegel_state_machine_next_group`). Swarm testing is applied per worker:
 /// a random subset of rules is enabled (at least one per group) on the
-/// thread's first selection and selection is restricted to that subset for
+/// worker's first selection and selection is restricted to that subset for
 /// the rest of the test case.
 ///
-/// `thread_index` identifies the calling worker and must satisfy
-/// `0 <= thread_index < concurrency` (passed at state-machine creation); a
-/// thread index rather than the handle identifies the thread because a
-/// single thread could hold multiple test-case clones. Draws consult only
-/// per-thread and per-clone state, so draws on one thread don't affect
+/// `worker_index` identifies the calling worker and must satisfy
+/// `0 <= worker_index < concurrency` (passed at state-machine creation);
+/// an index rather than the handle identifies the worker because a single
+/// OS thread could hold multiple test-case clones. Draws consult only
+/// per-worker and per-clone state, so draws on one worker don't affect
 /// draws on another.
 ///
 /// Writes `HEGEL_STATE_MACHINE_DONE` (-1) into `*out_rule_index` when the
-/// thread's round budget is exhausted: stop running rules and wait for the
+/// worker's round budget is exhausted: stop running rules and wait for the
 /// next group / join point.
 ///
 /// `state_machine_id` must be an id returned by `hegel_new_state_machine`
@@ -2242,7 +2242,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     state_machine_id: i64,
-    thread_index: i64,
+    worker_index: i64,
     out_rule_index: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -2256,7 +2256,7 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     }
     match tc
         .stream
-        .state_machine_next_rule(state_machine_id, thread_index)
+        .state_machine_next_rule(state_machine_id, worker_index)
     {
         Ok(Some(index)) => {
             unsafe { *out_rule_index = index };
