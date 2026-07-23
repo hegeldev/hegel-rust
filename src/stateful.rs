@@ -467,11 +467,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let mut steps_attempted: i64 = 0;
 
     while (is_single || steps_attempted < 1000) && machine_next_group(&tc, machine_id).is_some() {
-        // At concurrency 1 the engine hands out one rule per round, so a
-        // single iteration is expected here — that is what makes invariants
-        // run after every rule. But it is engine policy, not a protocol
-        // guarantee: the protocol is just "pull rules until the join
-        // point", so the loop must not assume it.
+        // The engine hands out one rule per round at concurrency 1, but
+        // that is engine policy, not protocol: pull rules until the join
+        // point.
         while let Some(rule_index) = machine_next_rule(&tc, machine_id, 0) {
             hegel_internal_assert!(
                 (0..rules.len() as i64).contains(&rule_index),
@@ -591,22 +589,16 @@ fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
     }
 }
 
-/// A command from [`run_concurrent`]'s main thread to a worker.
-enum WorkerCommand {
-    /// A new round has begun: pull rules until the engine signals the join
-    /// point, then report a [`WorkerEvent`].
-    RunRound,
-    /// The test case is over: exit the worker loop.
-    Terminate,
-}
-
 /// What a worker reports back to the main thread at the end of its round.
 enum WorkerEvent {
     /// The rule stream was exhausted normally.
     RoundDone,
-    /// A control draw (`next_rule`) raised `AssumeFailed` — the engine
-    /// concluded the family invalid mid-round (e.g. span nesting past its
-    /// limit), so the whole case is invalid.
+    /// An `AssumeFailed` raised by a control draw (`next_rule`) — the
+    /// engine concluded the family invalid mid-round (e.g. span nesting
+    /// past its limit), so the whole case is invalid. A rule body's own
+    /// `AssumeFailed` never reaches the main thread as this event:
+    /// [`run_worker_round`] intercepts it (a rejected rule just ends early)
+    /// and moves on to the next rule.
     Invalid,
     /// The family's choice budget is exhausted (`StopTest`): the whole case
     /// is an overrun.
@@ -615,64 +607,35 @@ enum WorkerEvent {
     /// or a `LoopDone`, ferried verbatim for the main thread to re-raise.
     ControlPayload(Box<dyn std::any::Any + Send>),
     /// A real panic, with the worker-side capture to re-install on the main
-    /// thread and its rendered location/message for noting dropped panics.
+    /// thread.
     Panicked {
         payload: Box<dyn std::any::Any + Send>,
         info: Option<PanicInfo>,
-        location: String,
-        message: String,
     },
     /// Synthesized by the main thread when a worker exited without
     /// reporting: never constructed by workers.
     Died,
 }
 
-/// How a caught unwind inside a worker classifies.
-enum UnwindClass {
-    Assume,
-    Overrun,
-    Control(Box<dyn std::any::Any + Send>),
-    Panic(WorkerEvent),
-}
-
-/// Map an unwind caught outside any rule body — one raised by the round's
-/// control draws — to the worker's terminal event: any `AssumeFailed` there
-/// means the engine concluded the family invalid, so there is no rule to
-/// skip and the whole case is invalid.
-fn terminal_event(e: Box<dyn std::any::Any + Send>) -> WorkerEvent {
-    match classify_worker_unwind(e) {
-        UnwindClass::Assume => WorkerEvent::Invalid,
-        UnwindClass::Overrun => WorkerEvent::Overrun,
-        UnwindClass::Control(e) => WorkerEvent::ControlPayload(e),
-        UnwindClass::Panic(event) => event,
-    }
-}
-
-fn classify_worker_unwind(e: Box<dyn std::any::Any + Send>) -> UnwindClass {
+/// Classify an unwind caught inside a worker as the event it ferries to
+/// the main thread.
+fn classify_worker_unwind(e: Box<dyn std::any::Any + Send>) -> WorkerEvent {
     if e.downcast_ref::<AssumeFailed>().is_some() {
-        return UnwindClass::Assume;
+        return WorkerEvent::Invalid;
     }
     if e.downcast_ref::<StopTest>().is_some() {
-        return UnwindClass::Overrun;
+        return WorkerEvent::Overrun;
     }
     if e.downcast_ref::<InvalidArgument>().is_some()
         || e.downcast_ref::<InternalError>().is_some()
         || e.downcast_ref::<LoopDone>().is_some()
     {
-        return UnwindClass::Control(e);
+        return WorkerEvent::ControlPayload(e);
     }
-    let info = run_lifecycle::take_panic_info();
-    let location = info
-        .as_ref()
-        .map(|(_, _, location, _)| location.clone())
-        .unwrap_or_else(|| "<unknown>".to_string());
-    let message = run_lifecycle::panic_message(&e);
-    UnwindClass::Panic(WorkerEvent::Panicked {
+    WorkerEvent::Panicked {
         payload: e,
-        info,
-        location,
-        message,
-    })
+        info: run_lifecycle::take_panic_info(),
+    }
 }
 
 /// One worker's round: pull rules for `worker` until the engine signals the
@@ -702,7 +665,7 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
         let rule_index = match next {
             Ok(Some(rule_index)) => rule_index,
             Ok(None) => return WorkerEvent::RoundDone,
-            Err(e) => return terminal_event(e),
+            Err(e) => return classify_worker_unwind(e),
         };
 
         let rule = &rules[rule_index as usize];
@@ -712,12 +675,10 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
         match result {
             Ok(()) => {}
             Err(e) => match classify_worker_unwind(e) {
-                UnwindClass::Assume => {
+                WorkerEvent::Invalid => {
                     tc.note("Rule stopped early due to violated assumption.");
                 }
-                UnwindClass::Overrun => return WorkerEvent::Overrun,
-                UnwindClass::Control(e) => return WorkerEvent::ControlPayload(e),
-                UnwindClass::Panic(event) => return event,
+                event => return event,
             },
         }
     }
@@ -726,8 +687,15 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// A worker thread's whole-test-case loop: enter the test context (the
 /// panic hook captures nothing on a thread outside it, and internal errors
 /// must raise catchably), mirror the main thread's backtrace-capture
-/// setting, then run a round per [`WorkerCommand::RunRound`] until told to
-/// terminate.
+/// setting, then run one round per `rounds` message until the channel
+/// closes.
+///
+/// The closed channel is what terminates workers: the main thread holds
+/// the senders as locals of its `thread::scope` body, so *any* exit from
+/// that body — the normal end of the test case or an unwind from a join
+/// point (a panicking invariant, an invariant's `AssumeFailed`, a draw
+/// that exhausts the budget) — drops them, wakes the parked workers, and
+/// lets the scope's implicit join complete instead of hanging.
 fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     worker: usize,
     tc: TestCase,
@@ -735,38 +703,19 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     rules: &[ConcurrentRule<M>],
     machine_id: i64,
     capture_backtraces: bool,
-    commands: mpsc::Receiver<WorkerCommand>,
+    rounds: mpsc::Receiver<()>,
     events: mpsc::Sender<WorkerEvent>,
 ) {
     WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
-        while let Ok(WorkerCommand::RunRound) = commands.recv() {
+        while rounds.recv().is_ok() {
             let event = run_worker_round(worker, &tc, m, rules, machine_id);
             if events.send(event).is_err() {
                 break;
             }
         }
     });
-}
-
-/// Signals termination to every worker when dropped, so *any* exit from the
-/// scope body — the normal end of the test case or an unwind from a join
-/// point (a panicking invariant, an invariant's `AssumeFailed`, a draw that
-/// exhausts the budget) — wakes the parked workers and lets the scope's
-/// implicit join complete instead of hanging. Sending is idempotent:
-/// workers exit on the first `Terminate` they see, and sends to an
-/// already-exited worker fail harmlessly.
-struct TerminationGuard<'a> {
-    round_txs: &'a [mpsc::Sender<WorkerCommand>],
-}
-
-impl Drop for TerminationGuard<'_> {
-    fn drop(&mut self) {
-        for tx in self.round_txs {
-            let _ = tx.send(WorkerCommand::Terminate);
-        }
-    }
 }
 
 /// Execute a concurrent stateful test: repeatedly run rounds of rules from
@@ -915,7 +864,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     let rules = &rules;
 
     std::thread::scope(|scope| {
-        let mut round_txs: Vec<mpsc::Sender<WorkerCommand>> = Vec::with_capacity(concurrency);
+        let mut round_txs: Vec<mpsc::Sender<()>> = Vec::with_capacity(concurrency);
         let mut event_rxs: Vec<mpsc::Receiver<WorkerEvent>> = Vec::with_capacity(concurrency);
         for worker in 0..concurrency {
             let (round_tx, round_rx) = mpsc::channel();
@@ -936,9 +885,6 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
                 );
             });
         }
-        let _guard = TerminationGuard {
-            round_txs: &round_txs,
-        };
 
         let mut round = 0u64;
         while let Some(group) = machine_next_group(&tc, machine_id) {
@@ -953,7 +899,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             ));
 
             for tx in &round_txs {
-                let _ = tx.send(WorkerCommand::RunRound);
+                let _ = tx.send(());
             }
             let events: Vec<WorkerEvent> = event_rxs
                 .iter()
@@ -985,8 +931,6 @@ fn resolve_round(events: Vec<WorkerEvent>, tc: &TestCase) {
         worker: usize,
         payload: Box<dyn std::any::Any + Send>,
         info: Option<PanicInfo>,
-        location: String,
-        message: String,
     }
 
     let mut control: Option<Box<dyn std::any::Any + Send>> = None;
@@ -1003,17 +947,10 @@ fn resolve_round(events: Vec<WorkerEvent>, tc: &TestCase) {
                     control = Some(payload);
                 }
             }
-            WorkerEvent::Panicked {
-                payload,
-                info,
-                location,
-                message,
-            } => panics.push(WorkerPanic {
+            WorkerEvent::Panicked { payload, info } => panics.push(WorkerPanic {
                 worker,
                 payload,
                 info,
-                location,
-                message,
             }),
             WorkerEvent::Died => {
                 if control.is_none() {
@@ -1029,9 +966,15 @@ fn resolve_round(events: Vec<WorkerEvent>, tc: &TestCase) {
 
     let note_dropped = |dropped: &[WorkerPanic]| {
         for p in dropped {
+            let location = p
+                .info
+                .as_ref()
+                .map_or("<unknown>", |(_, _, location, _)| location.as_str());
             tc.note(&format!(
                 "Dropped concurrent panic from worker {} at {}: {}",
-                p.worker, p.location, p.message
+                p.worker,
+                location,
+                run_lifecycle::panic_message(&p.payload)
             ));
         }
     };

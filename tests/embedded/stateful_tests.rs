@@ -46,12 +46,19 @@ fn string_panic(message: &str) -> Box<dyn std::any::Any + Send> {
     Box::new(message.to_string())
 }
 
-fn panicked_event(message: &str, location: &str, info: Option<PanicInfo>) -> WorkerEvent {
+fn panic_info(location: &str) -> PanicInfo {
+    (
+        "worker-thread".to_string(),
+        "7".to_string(),
+        location.to_string(),
+        Backtrace::disabled(),
+    )
+}
+
+fn panicked_event(message: &str, info: Option<PanicInfo>) -> WorkerEvent {
     WorkerEvent::Panicked {
         payload: string_panic(message),
         info,
-        location: location.to_string(),
-        message: message.to_string(),
     }
 }
 
@@ -73,7 +80,7 @@ fn resolve_round_control_payloads_win_over_overrun_and_panic() {
     let events = vec![
         WorkerEvent::Overrun,
         WorkerEvent::ControlPayload(Box::new(InternalError("ferried".to_string()))),
-        panicked_event("late panic", "a.rs:1:1", None),
+        panicked_event("late panic", None),
     ];
     let payload = resolve_round_unwind(events, &tc);
     let internal = payload.downcast_ref::<InternalError>().unwrap();
@@ -84,7 +91,7 @@ fn resolve_round_control_payloads_win_over_overrun_and_panic() {
 fn resolve_round_overrun_wins_over_panic_and_notes_the_dropped_panic() {
     let (_run, tc, lines) = capturing_test_case();
     let events = vec![
-        panicked_event("induced panic", "b.rs:2:2", None),
+        panicked_event("induced panic", Some(panic_info("b.rs:2:2"))),
         WorkerEvent::Overrun,
     ];
     let payload = resolve_round_unwind(events, &tc);
@@ -100,10 +107,7 @@ fn resolve_round_overrun_wins_over_panic_and_notes_the_dropped_panic() {
 #[test]
 fn resolve_round_invalid_wins_over_panic_and_raises_assume_failed() {
     let (_run, tc, lines) = capturing_test_case();
-    let events = vec![
-        WorkerEvent::Invalid,
-        panicked_event("induced panic", "c.rs:3:3", None),
-    ];
+    let events = vec![WorkerEvent::Invalid, panicked_event("induced panic", None)];
     let payload = resolve_round_unwind(events, &tc);
     assert!(payload.downcast_ref::<AssumeFailed>().is_some());
     assert_eq!(lines.lock().unwrap().len(), 1);
@@ -113,16 +117,10 @@ fn resolve_round_invalid_wins_over_panic_and_raises_assume_failed() {
 fn resolve_round_lowest_worker_index_panic_wins_and_losers_are_noted() {
     let (_run, tc, lines) = capturing_test_case();
     run_lifecycle::take_panic_info();
-    let info: PanicInfo = (
-        "worker-thread".to_string(),
-        "7".to_string(),
-        "winner.rs:1:1".to_string(),
-        Backtrace::disabled(),
-    );
     let events = vec![
         WorkerEvent::RoundDone,
-        panicked_event("the winner", "winner.rs:1:1", Some(info)),
-        panicked_event("the loser", "loser.rs:9:9", None),
+        panicked_event("the winner", Some(panic_info("winner.rs:1:1"))),
+        panicked_event("the loser", Some(panic_info("loser.rs:9:9"))),
     ];
     let payload = resolve_round_unwind(events, &tc);
     assert_eq!(payload.downcast_ref::<String>().unwrap(), "the winner");
@@ -146,66 +144,32 @@ fn resolve_round_treats_a_dead_worker_as_an_internal_error() {
 }
 
 #[test]
-fn classify_worker_unwind_maps_each_control_payload() {
+fn classify_worker_unwind_maps_every_payload() {
     assert!(matches!(
         classify_worker_unwind(Box::new(AssumeFailed)),
-        UnwindClass::Assume
-    ));
-    assert!(matches!(
-        classify_worker_unwind(Box::new(StopTest)),
-        UnwindClass::Overrun
-    ));
-    assert!(matches!(
-        classify_worker_unwind(Box::new(InvalidArgument("bad".to_string()))),
-        UnwindClass::Control(_)
-    ));
-    assert!(matches!(
-        classify_worker_unwind(Box::new(InternalError("bug".to_string()))),
-        UnwindClass::Control(_)
-    ));
-    assert!(matches!(
-        classify_worker_unwind(Box::new(LoopDone)),
-        UnwindClass::Control(_)
-    ));
-}
-
-#[test]
-fn terminal_event_maps_every_unwind_class() {
-    assert!(matches!(
-        terminal_event(Box::new(AssumeFailed)),
         WorkerEvent::Invalid
     ));
     assert!(matches!(
-        terminal_event(Box::new(StopTest)),
+        classify_worker_unwind(Box::new(StopTest)),
         WorkerEvent::Overrun
     ));
     assert!(matches!(
-        terminal_event(Box::new(InternalError("bug".to_string()))),
+        classify_worker_unwind(Box::new(InvalidArgument("bad".to_string()))),
+        WorkerEvent::ControlPayload(_)
+    ));
+    assert!(matches!(
+        classify_worker_unwind(Box::new(InternalError("bug".to_string()))),
+        WorkerEvent::ControlPayload(_)
+    ));
+    assert!(matches!(
+        classify_worker_unwind(Box::new(LoopDone)),
         WorkerEvent::ControlPayload(_)
     ));
     run_lifecycle::take_panic_info();
     assert!(matches!(
-        terminal_event(string_panic("raw panic")),
-        WorkerEvent::Panicked { .. }
+        classify_worker_unwind(string_panic("raw panic")),
+        WorkerEvent::Panicked { info: None, .. }
     ));
-}
-
-#[test]
-fn classify_worker_unwind_renders_a_panic_without_captured_info() {
-    run_lifecycle::take_panic_info();
-    let class = classify_worker_unwind(string_panic("raw panic"));
-    let UnwindClass::Panic(WorkerEvent::Panicked {
-        info,
-        location,
-        message,
-        ..
-    }) = class
-    else {
-        panic!("expected a panic classification");
-    };
-    assert!(info.is_none());
-    assert_eq!(location, "<unknown>");
-    assert_eq!(message, "raw panic");
 }
 
 struct HitCounter {
@@ -274,18 +238,12 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
             .is_some()
     );
     let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
-    let WorkerEvent::Panicked {
-        info,
-        location,
-        message,
-        ..
-    } = event
-    else {
+    let WorkerEvent::Panicked { payload, info } = event else {
         panic!("expected a ferried panic");
     };
-    assert_eq!(message, "rule boom");
+    assert_eq!(run_lifecycle::panic_message(&payload), "rule boom");
+    let (_, _, location, _) = info.unwrap();
     assert!(location.contains("stateful_tests.rs"), "{location}");
-    assert!(info.is_some());
 }
 
 #[test]
@@ -345,25 +303,7 @@ fn worker_loop_exits_when_the_event_channel_is_gone() {
     let (round_tx, round_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     drop(event_rx);
-    round_tx.send(WorkerCommand::RunRound).unwrap();
-    std::thread::scope(|scope| {
-        let m = &m;
-        let rules = &rules;
-        scope.spawn(move || worker_loop(0, tc, m, rules, machine_id, false, round_rx, event_tx));
-    });
-}
-
-#[test]
-fn worker_loop_exits_when_the_command_channel_is_gone() {
-    let (_run, tc, _lines) = capturing_test_case();
-    let m = HitCounter {
-        hits: AtomicI64::new(0),
-    };
-    let rules = m.rules();
-    let machine_id = register_machine(&tc, &["hit"], 1);
-    let (round_tx, round_rx) = mpsc::channel::<WorkerCommand>();
-    let (event_tx, _event_rx) = mpsc::channel();
-    drop(round_tx);
+    round_tx.send(()).unwrap();
     std::thread::scope(|scope| {
         let m = &m;
         let rules = &rules;

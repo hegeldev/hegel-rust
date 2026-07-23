@@ -277,14 +277,12 @@ impl NativeStateMachine {
         } else {
             draw_index(ntc, self.groups.len())?
         };
-        for worker_idx in 0..self.workers.len() {
-            let step_cap = if self.concurrency == 1 {
+        for worker in &mut self.workers {
+            worker.step_cap = if self.concurrency == 1 {
                 1
             } else {
                 draw_cap(ntc, MAX_ROUND_STEP_CAP)?
             };
-            let worker = &mut self.workers[worker_idx];
-            worker.step_cap = step_cap;
             worker.steps_drawn = 0;
         }
         self.current_group = group;
