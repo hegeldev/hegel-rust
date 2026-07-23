@@ -238,7 +238,6 @@ impl Optimiser<'_, '_> {
     /// as an improvement (lateral moves are the principal mechanism for
     /// escaping local maxima, but they shouldn't keep the climber spinning
     /// forever). Returns `true` iff the trial was committed.
-    #[allow(clippy::too_many_arguments)]
     async fn try_replace(
         &mut self,
         target: &str,

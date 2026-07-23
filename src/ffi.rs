@@ -454,7 +454,6 @@ impl CTestCase {
     }
 
     /// Draw a float according to the full spec libhegel accepts.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,
@@ -839,7 +838,6 @@ impl std::fmt::Debug for StringGenerator {
 impl StringGenerator {
     /// Build a text generator over the alphabet described by the fields.
     /// `max_codepoint` of `None` means unconstrained.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text(
         min_size: u64,
         max_size: u64,

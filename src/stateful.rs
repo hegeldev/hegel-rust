@@ -733,7 +733,6 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// must raise catchably), mirror the main thread's backtrace-capture
 /// setting, then run a round per [`WorkerCommand::RunRound`] until told to
 /// terminate.
-#[allow(clippy::too_many_arguments)]
 fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     worker: usize,
     tc: TestCase,

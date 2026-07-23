@@ -807,7 +807,6 @@ impl TestCase {
     }
 
     /// Draw a float according to the full libhegel spec.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,
