@@ -261,7 +261,6 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
 /// closing unwind instead of synthesizing one.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_test_case(
     c_tc: CTestCase,
     test_fn: &mut dyn FnMut(TestCase),
