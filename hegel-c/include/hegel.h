@@ -1221,6 +1221,15 @@ hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
  worker's first selection and selection is restricted to that subset for
  the rest of the test case.
 
+ `tc` may be any handle of the machine's test-case family: the machine's
+ state is family-wide, and the handle only determines which choice
+ stream the selection draws land in. At concurrency 1, it's safe to use
+ the root handle for everything. At concurrency > 1, each worker should
+ draw from its own `hegel_test_case_clone` handle (a single handle may
+ be driven by at most one thread at a time), cloned once before the
+ first round and kept for the whole test case, while the root handle
+ stays with whoever drives `hegel_state_machine_next_group`.
+
  `worker_index` identifies the calling worker and must satisfy
  `0 <= worker_index < concurrency` (passed at state-machine creation);
  an index rather than the handle identifies the worker because a single
