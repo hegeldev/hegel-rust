@@ -428,16 +428,16 @@ typedef enum {
  Verbosity of engine-emitted output (logs, per-case traces). Set via
  `hegel_settings_set_verbosity`.
 
- - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
  - `HEGEL_VERBOSITY_NORMAL`: a short summary line per run (default).
+ - `HEGEL_VERBOSITY_QUIET`: nothing besides the final result.
  - `HEGEL_VERBOSITY_VERBOSE`: per-test-case progress and drawn values,
    panic diagnostics as they happen.
  - `HEGEL_VERBOSITY_DEBUG`: as verbose, plus Hypothesis-style
    shrinker trace output.
  */
 typedef enum {
-    HEGEL_VERBOSITY_QUIET = 0,
-    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_NORMAL = 0,
+    HEGEL_VERBOSITY_QUIET = 1,
     HEGEL_VERBOSITY_VERBOSE = 2,
     HEGEL_VERBOSITY_DEBUG = 3,
 } hegel_verbosity_t;

@@ -1,3 +1,15 @@
+RELEASE_TYPE: minor
+
+This release changes the numeric values of `hegel_verbosity_t` so that the default, `HEGEL_VERBOSITY_NORMAL`, is 0. A zero-initialized value now selects the default level
+([#357](https://github.com/hegeldev/hegel-rust/issues/357)):
+
+```c
+/* before */
+HEGEL_VERBOSITY_QUIET = 0, HEGEL_VERBOSITY_NORMAL = 1
+
+/* after */
+HEGEL_VERBOSITY_NORMAL = 0, HEGEL_VERBOSITY_QUIET = 1
+```
 RELEASE_TYPE: patch
 
 This patch fixes an engine panic during shrinking. When the span-reordering pass ran against a test case with several groups of same-label sibling spans, and reordering one group produced an improvement that shortened the recorded span list, the pass went on to index the remaining groups with positions from the old, longer list. The run then aborted with `Engine panic: index out of bounds` instead of reporting the shrunk counterexample (re-running the test recovered via the failure database, but the first run's result was lost). Span groups are now re-validated against the current spans after each improvement, and groups that no longer exist are skipped.
