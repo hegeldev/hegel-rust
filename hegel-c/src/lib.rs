@@ -993,20 +993,9 @@ pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
 
 /// Declare the run nondeterministic: the test may produce different
 /// outcomes (or draw different choice sequences) when run on identical
-/// data — e.g. because it exercises real concurrency. The frontend must
-/// set this whenever a run may be nondeterministic, typically because the
-/// test uses concurrent stateful testing.
-///
-/// When set, the engine reports failures faithfully without attempting
-/// anything that assumes deterministic replay: it skips data-tree
-/// recording (and with it novel-prefix generation and the
-/// nondeterminism mismatch check), span mutation, the per-origin
-/// verify + shrink pass (and with it the flakiness check — generation
-/// stops at the first bug, so the run reports at most one failure),
-/// targeting, and database persistence and reuse. Failures from such a
-/// run carry no reproduce blob. The configured phases are left
-/// untouched; they simply don't take effect where this flag overrides
-/// them.
+/// data — e.g. because of thread scheduling. The frontend must set this
+/// whenever a run may be nondeterministic, typically because the test
+/// uses concurrent stateful testing.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_set_nondeterministic(
     ctx: *mut HegelContext,
@@ -2183,13 +2172,13 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 /// `HEGEL_STATE_MACHINE_DONE` (-1) to indicate termination of the whole
 /// state machine.
 ///
-/// Call this on the *root* test-case handle at every join point — after
-/// each worker thread's `hegel_state_machine_next_rule` stream is
-/// exhausted — including before the first rule is requested. This applies
-/// to sequential machines too: the frontend must advance the group when
-/// the rule stream is exhausted, even though there is only a single
-/// group. In single-test-case mode (steps unbounded, e.g. under
-/// Antithesis) `*out_group_index` is never set to
+/// Call this on the root test-case handle (the handle used for
+/// hegel_new_state_machine) at every join point — after each worker thread's
+/// `hegel_state_machine_next_rule` stream is exhausted — including before the
+/// first rule is requested. This applies to sequential machines too: the
+/// frontend must advance the group when the rule stream is exhausted, even
+/// though there is only a single group. In single-test-case mode (steps
+/// unbounded, e.g. under Antithesis) `*out_group_index` is never set to
 /// `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
 ///
 /// `state_machine_id` must be an id returned by `hegel_new_state_machine`
