@@ -122,7 +122,6 @@ type FnPoolGenerate = unsafe extern "C" fn(*mut u8, *mut u8, i64, bool, *mut i64
 type FnNewStateMachine = unsafe extern "C" fn(
     *mut u8,
     *mut u8,
-    *const *const c_char,
     usize,
     *const *const c_char,
     *const i64,
@@ -1027,8 +1026,6 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 break;
             }
 
-            let group_name = CString::new("rw").unwrap();
-            let group_ptrs = [group_name.as_ptr()];
             let rule_groups: Vec<i64> = vec![0; rule_ptrs.len()];
 
             let mut concurrency: i64 = 0;
@@ -1040,8 +1037,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
-                group_ptrs.as_ptr(),
-                group_ptrs.len(),
+                1,
                 ptr::null(),
                 rule_groups.as_ptr(),
                 0,
@@ -1059,8 +1055,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
-                group_ptrs.as_ptr(),
-                group_ptrs.len(),
+                1,
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),

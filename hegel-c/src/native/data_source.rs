@@ -302,10 +302,10 @@ impl DataSource for NativeDataSource {
 
     fn new_state_machine(
         &self,
-        group_names: Vec<String>,
+        num_groups: usize,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
-        invariant_names: Vec<String>,
+        _invariant_names: Vec<String>,
         concurrency: i64,
     ) -> Result<i64, DataSourceError> {
         if rule_names.is_empty() {
@@ -313,7 +313,7 @@ impl DataSource for NativeDataSource {
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        if group_names.is_empty() {
+        if num_groups == 0 {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no concurrency groups".to_string(),
             ));
@@ -331,30 +331,26 @@ impl DataSource for NativeDataSource {
                 "state machine concurrency must be at least 1, got {concurrency}"
             )));
         }
-        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); group_names.len()];
+        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
         for (rule, &group) in rule_groups.iter().enumerate() {
             let Some(members) = usize::try_from(group).ok().and_then(|g| groups.get_mut(g)) else {
                 return Err(DataSourceError::InvalidArgument(format!(
-                    "rule_groups[{rule}] must be in [0, {}), got {group}",
-                    group_names.len()
+                    "rule_groups[{rule}] must be in [0, {num_groups}), got {group}"
                 )));
             };
             members.push(rule);
         }
         if let Some(empty) = groups.iter().position(|members| members.is_empty()) {
             return Err(DataSourceError::InvalidArgument(format!(
-                "concurrency group {:?} has no rules",
-                group_names[empty]
+                "concurrency group {empty} has no rules"
             )));
         }
         let rule_groups: Vec<usize> = rule_groups.iter().map(|&g| g as usize).collect();
         self.with_ntc(|ntc| {
             let machine = crate::native::core::NativeStateMachine::new(
                 ntc,
-                group_names,
-                rule_names,
+                num_groups,
                 rule_groups,
-                invariant_names,
                 concurrency,
             )?;
             let mut machines = ntc

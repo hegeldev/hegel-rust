@@ -1103,8 +1103,6 @@ fn state_machine_and_primitive_boolean_paths() {
     let ctx = hegel_context_new();
     unsafe {
         let null_tc: *mut HegelTestCase = ptr::null_mut();
-        let group_g = CString::new("g").unwrap();
-        let groups: [*const c_char; 1] = [group_g.as_ptr()];
         let rule_a = CString::new("a").unwrap();
         let rules: [*const c_char; 1] = [rule_a.as_ptr()];
         let rule_groups: [i64; 1] = [0];
@@ -1113,7 +1111,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 null_tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1157,7 +1154,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1173,7 +1169,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 ptr::null(),
                 rule_groups.as_ptr(),
@@ -1190,24 +1185,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                ptr::null(),
-                1,
-                rules.as_ptr(),
-                rule_groups.as_ptr(),
-                1,
-                ptr::null(),
-                0,
-                1,
-                &mut out_id,
-            ),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("group_names pointer is null"));
-        assert_eq!(
-            hegel_new_state_machine(
-                ctx,
-                tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 ptr::null(),
@@ -1225,7 +1202,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 null_entry.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1243,7 +1219,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 bad_entry.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1261,7 +1236,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1279,7 +1253,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 oor_groups.as_ptr(),
@@ -1296,7 +1269,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
@@ -1328,7 +1300,6 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_new_state_machine(
                 ctx,
                 tc,
-                groups.as_ptr(),
                 1,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),

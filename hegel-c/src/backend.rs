@@ -126,16 +126,16 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(), DataSourceError>;
 
     /// Register a state machine for engine-owned (swarm) rule selection:
-    /// concurrency groups, rules (each assigned to a group by index into
-    /// `group_names`, via `rule_groups`, parallel to `rule_names`),
-    /// invariants, and the concurrency level. Returns an opaque
-    /// state-machine id. Errors with `InvalidArgument` if `rule_names` or
-    /// `group_names` is empty, `rule_groups` is not parallel to
-    /// `rule_names` or contains an out-of-range index, a group has no
-    /// rules, or `concurrency < 1`.
+    /// `num_groups` concurrency groups (identified by index only), rules
+    /// (each assigned to a group via `rule_groups`, parallel to
+    /// `rule_names`), invariants, and the concurrency level. Returns an
+    /// opaque state-machine id. Errors with `InvalidArgument` if
+    /// `rule_names` is empty, `num_groups` is zero, `rule_groups` is not
+    /// parallel to `rule_names` or contains an out-of-range index, a group
+    /// has no rules, or `concurrency < 1`.
     fn new_state_machine(
         &self,
-        group_names: Vec<String>,
+        num_groups: usize,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         invariant_names: Vec<String>,

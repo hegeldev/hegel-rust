@@ -135,18 +135,6 @@ struct ThreadState {
 /// rounds. A sequential machine is the special case of one group and
 /// concurrency 1, where each round hands out exactly one rule.
 pub struct NativeStateMachine {
-    /// Registered for future use (e.g. diagnostics); selection works on the
-    /// per-group index lists below.
-    #[allow(dead_code)]
-    rule_names: Vec<String>,
-    /// Registered for future use (e.g. per-invariant metrics); the engine does
-    /// not drive invariant execution.
-    #[allow(dead_code)]
-    invariant_names: Vec<String>,
-    /// Registered for future use (e.g. diagnostics); selection works on
-    /// group indices only.
-    #[allow(dead_code)]
-    group_names: Vec<String>,
     /// Per group: the global indices of its member rules, in registration
     /// order. Selection draws range over the current group's list only, so
     /// every selection is in-group by construction.
@@ -172,33 +160,27 @@ impl NativeStateMachine {
     /// cap is drawn: rounds continue forever.
     pub fn new(
         ntc: &mut NativeTestCase,
-        group_names: Vec<String>,
-        rule_names: Vec<String>,
+        num_groups: usize,
         rule_groups: Vec<usize>,
-        invariant_names: Vec<String>,
         concurrency: i64,
     ) -> Result<Self, EngineError> {
         hegel_internal_assert!(
-            !rule_names.is_empty(),
+            !rule_groups.is_empty(),
             "Stateful testing: there must be at least one rule"
         );
         hegel_internal_assert!(
-            !group_names.is_empty(),
+            num_groups >= 1,
             "Stateful testing: there must be at least one concurrency group"
-        );
-        hegel_internal_assert!(
-            rule_groups.len() == rule_names.len(),
-            "Stateful testing: rule_groups must be parallel to rule_names"
         );
         hegel_internal_assert!(
             concurrency >= 1,
             "Stateful testing: concurrency must be at least 1"
         );
 
-        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); group_names.len()];
+        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
         for (rule, &group) in rule_groups.iter().enumerate() {
             hegel_internal_assert!(
-                group < group_names.len(),
+                group < num_groups,
                 "Stateful testing: rule group index out of range"
             );
             groups[group].push(rule);
@@ -223,16 +205,13 @@ impl NativeStateMachine {
         let threads = (0..concurrency)
             .map(|_| {
                 Ok(ThreadState {
-                    flags: FeatureFlags::new(ntc, &groups, rule_names.len())?,
+                    flags: FeatureFlags::new(ntc, &groups, rule_groups.len())?,
                     step_cap: 0,
                     steps_drawn: 0,
                 })
             })
             .collect::<Result<Vec<ThreadState>, EngineError>>()?;
         Ok(NativeStateMachine {
-            rule_names,
-            invariant_names,
-            group_names,
             groups,
             concurrency,
             current_group: 0,
