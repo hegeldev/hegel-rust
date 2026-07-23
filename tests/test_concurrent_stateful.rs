@@ -113,14 +113,8 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
         "the join points must note the round's concurrency group:\n{text}"
     );
-    assert!(
-        text.contains("[worker 0] Rule: boom"),
-        "buffered rule notes must be tagged with the worker index:\n{text}"
-    );
-    assert!(
-        text.contains("[worker 0]   let draw_1"),
-        "buffered draw lines must be tagged with the worker index:\n{text}"
-    );
+    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\] Rule: boom");
+    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\]   let draw_1");
     assert!(
         text.contains("test_concurrent_stateful.rs"),
         "the diagnostic must carry the worker's real panic location:\n{text}"
@@ -496,6 +490,63 @@ fn a_machine_without_rules_is_a_usage_error() {
     });
     let payload = result.expect_err("a machine with no rules cannot run");
     assert_matches_regex(&panic_message(&payload), "no rules");
+}
+
+struct GroupedTicker {
+    ticks: &'static AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl GroupedTicker {
+    #[rule]
+    fn tick(&self, _: TestCase) {
+        assert!(
+            self.ticks.fetch_add(1, Ordering::SeqCst) < 25,
+            "enough ticks"
+        );
+    }
+}
+
+/// The worker index of a `[worker N +X.XXXms] ...` line, `None` for
+/// main-thread lines.
+fn worker_of(line: &str) -> Option<usize> {
+    line.strip_prefix("[worker ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|index| index.parse().ok())
+}
+
+#[test]
+fn the_failure_report_groups_each_rounds_lines_by_worker() {
+    static TICKS: AtomicI64 = AtomicI64::new(0);
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| run_concurrent(GroupedTicker { ticks: &TICKS }, tc, 2, 2))
+            .settings(Settings::new().nondeterministic(true).database(None))
+            .run();
+    });
+    result.expect_err("the ticker must run out of ticks and fail");
+    let mut previous: Option<usize> = None;
+    let mut saw_second_worker = false;
+    for line in &lines {
+        match worker_of(line) {
+            Some(worker) => {
+                if let Some(previous) = previous {
+                    assert!(
+                        worker >= previous,
+                        "worker lines within a round must be grouped by index:\n{}",
+                        lines.join("\n")
+                    );
+                }
+                saw_second_worker |= worker == 1;
+                previous = Some(worker);
+            }
+            None => previous = None,
+        }
+    }
+    assert!(
+        saw_second_worker,
+        "a two-worker case must report lines from worker 1:\n{}",
+        lines.join("\n")
+    );
 }
 
 #[test]
