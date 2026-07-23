@@ -1,0 +1,3 @@
+RELEASE_TYPE: patch
+
+This patch fixes a panic in Hegel's backtrace formatting. When a failing test's short backtrace contained the `__rust_end_short_backtrace` and `__rust_begin_short_backtrace` markers in an arrangement where the frame the end marker selected came after the begin marker, the formatter computed a start index greater than its end index and panicked with `slice index starts at N but ends at M` while slicing the frame list. That panic replaced the real test failure with an unrelated engine-side crash. The formatter now detects the inconsistent range and falls back to keeping the full backtrace instead of panicking.
