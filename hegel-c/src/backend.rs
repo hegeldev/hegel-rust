@@ -128,19 +128,25 @@ pub trait DataSource: Send + Sync {
     /// Register a state machine for engine-owned (swarm) rule selection:
     /// `num_groups` concurrency groups (identified by index only), rules
     /// (each assigned to a group via `rule_groups`, parallel to
-    /// `rule_names`), invariants, and the concurrency level. Returns an
-    /// opaque state-machine id. Errors with `InvalidArgument` if
-    /// `rule_names` is empty, `num_groups` is zero, `rule_groups` is not
-    /// parallel to `rule_names` or contains an out-of-range index, a group
-    /// has no rules, or `concurrency < 1`.
+    /// `rule_names`), invariants, and concurrency bounds. Draws the
+    /// machine's concurrency level in
+    /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
+    /// (concurrency bugs need concurrency); `min == max` fixes the level
+    /// without consuming entropy. Returns the opaque state-machine id and
+    /// the drawn level. Errors with `InvalidArgument` if `rule_names` is
+    /// empty, `num_groups` is zero, `rule_groups` is not parallel to
+    /// `rule_names` or contains an out-of-range index, a group has no
+    /// rules, `min_concurrency < 1`, or
+    /// `max_concurrency < min_concurrency`.
     fn new_state_machine(
         &self,
         num_groups: usize,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
-        concurrency: i64,
-    ) -> Result<i64, DataSourceError>;
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), DataSourceError>;
 
     /// Start the machine's next round, drawing which concurrency group is
     /// current for it. Returns that group's index in `[0, num_groups)`, or
@@ -162,11 +168,6 @@ pub trait DataSource: Send + Sync {
         state_machine_id: i64,
         worker_index: i64,
     ) -> Result<Option<i64>, DataSourceError>;
-
-    /// Draw a concurrency level in `[1, max_value]`, weighted toward
-    /// `max_value` (concurrency bugs need concurrency). Errors with
-    /// `InvalidArgument` when `max_value < 1`.
-    fn generate_concurrency(&self, max_value: i64) -> Result<i64, DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.
     ///

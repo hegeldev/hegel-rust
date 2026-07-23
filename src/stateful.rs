@@ -452,9 +452,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
     let machine_id = match tc
-        .with_ctc(|ctc| ctc.new_state_machine(1, &rule_names, &rule_groups, &invariant_names, 1))
+        .with_ctc(|ctc| ctc.new_state_machine(1, &rule_names, &rule_groups, &invariant_names, 1, 1))
     {
-        Ok(id) => id,
+        Ok((id, _)) => id,
         Err(rc) => raise_for_rc(rc),
     };
 
@@ -772,12 +772,13 @@ impl Drop for TerminationGuard<'_> {
 /// the current concurrency group on `concurrency` worker threads, checking
 /// invariants at the join points between rounds.
 ///
-/// The engine draws the actual concurrency level for each test case, in
-/// `[1, max_concurrency]` and weighted toward `max_concurrency`
-/// (concurrency bugs need concurrency). The model is shared by reference
-/// across the worker threads, so rules and invariants take `&self` and any
-/// mutable model state needs interior mutability (locks, atomics, a
-/// [`ConcurrentPool`], ...).
+/// The engine draws the actual concurrency level for each test case when
+/// the state machine is created, in `[min_concurrency, max_concurrency]`
+/// and weighted toward `max_concurrency` (concurrency bugs need
+/// concurrency); pass `min_concurrency == max_concurrency` for a fixed
+/// level. The model is shared by reference across the worker threads, so
+/// rules and invariants take `&self` and any mutable model state needs
+/// interior mutability (locks, atomics, a [`ConcurrentPool`], ...).
 ///
 /// # The run must be declared nondeterministic
 ///
@@ -845,10 +846,15 @@ impl Drop for TerminationGuard<'_> {
 /// #[hegel::test(nondeterministic = true)]
 /// fn test_counter(tc: TestCase) {
 ///     let m = CounterTest { counter: Mutex::new(0) };
-///     hegel::stateful::run_concurrent(m, tc, 3);
+///     hegel::stateful::run_concurrent(m, tc, 1, 3);
 /// }
 /// ```
-pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(m: M, tc: TestCase, max_concurrency: i64) {
+pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
+    m: M,
+    tc: TestCase,
+    min_concurrency: i64,
+    max_concurrency: i64,
+) {
     if !tc.nondeterministic() {
         raise_control(InvalidArgument(
             "stateful::run_concurrent requires the run to be declared nondeterministic: \
@@ -876,23 +882,20 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(m: M, tc: TestCase, max_
         rule_groups.push(index as i64);
     }
 
-    let concurrency = match tc.with_ctc(|ctc| ctc.generate_concurrency(max_concurrency)) {
-        Ok(level) => level,
-        Err(rc) => raise_for_rc(rc),
-    };
-    tc.note(&format!("Concurrency level: {concurrency}"));
-    let machine_id = match tc.with_ctc(|ctc| {
+    let (machine_id, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
             group_names.len(),
             &rule_names,
             &rule_groups,
             &invariant_names,
-            concurrency,
+            min_concurrency,
+            max_concurrency,
         )
     }) {
-        Ok(id) => id,
+        Ok(created) => created,
         Err(rc) => raise_for_rc(rc),
     };
+    tc.note(&format!("Concurrency level: {concurrency}"));
 
     tc.note("Initial invariant check.");
     check_concurrent_invariants(&m, &invariants, &tc);

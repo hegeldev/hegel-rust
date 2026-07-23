@@ -129,11 +129,12 @@ type FnNewStateMachine = unsafe extern "C" fn(
     *const *const c_char,
     usize,
     i64,
+    i64,
+    *mut i64,
     *mut i64,
 ) -> c_int;
 type FnStateMachineNextGroup = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, i64, *mut i64) -> c_int;
-type FnGenerateConcurrency = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
 type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnStringGeneratorText = unsafe extern "C" fn(
@@ -195,7 +196,6 @@ struct Api<'a> {
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_group: Symbol<'a, FnStateMachineNextGroup>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
-    generate_concurrency: Symbol<'a, FnGenerateConcurrency>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
     string_generator_text: Symbol<'a, FnStringGeneratorText>,
     target: Symbol<'a, FnTarget>,
@@ -238,7 +238,6 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_group: lib.get(b"hegel_state_machine_next_group\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
-            generate_concurrency: lib.get(b"hegel_generate_concurrency\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_generate_boolean\0").unwrap(),
             string_generator_text: lib.get(b"hegel_string_generator_text\0").unwrap(),
             target: lib.get(b"hegel_target\0").unwrap(),
@@ -1028,12 +1027,8 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
 
             let rule_groups: Vec<i64> = vec![0; rule_ptrs.len()];
 
-            let mut concurrency: i64 = 0;
-            let rc = (a.generate_concurrency)(ctx, tc, 1, &mut concurrency);
-            assert_eq!(rc, HEGEL_OK, "generate_concurrency failed: rc={}", rc);
-            assert_eq!(concurrency, 1);
-
             let mut machine_id: i64 = -1;
+            let mut concurrency: i64 = 0;
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
@@ -1043,8 +1038,10 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 0,
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
-                concurrency,
+                1,
+                1,
                 &mut machine_id,
+                &mut concurrency,
             );
             assert_eq!(
                 rc, HEGEL_E_INVALID_ARG,
@@ -1061,11 +1058,14 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
-                concurrency,
+                1,
+                1,
                 &mut machine_id,
+                &mut concurrency,
             );
             assert_eq!(rc, HEGEL_OK, "new_state_machine failed: rc={}", rc);
             assert_eq!(machine_id, 0);
+            assert_eq!(concurrency, 1);
 
             let mut overran = false;
             let mut current_run = 0usize;

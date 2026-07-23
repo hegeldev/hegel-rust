@@ -16,14 +16,14 @@ use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase,
     hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
     hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
-    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_concurrency,
-    hegel_generate_integer, hegel_label_t, hegel_mark_complete, hegel_mode_t, hegel_new_collection,
-    hegel_new_pool, hegel_new_state_machine, hegel_next_test_case, hegel_pool_add,
-    hegel_pool_generate, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_mode, hegel_settings_set_phases,
+    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
+    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
+    hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_start_span, hegel_state_machine_next_group, hegel_state_machine_next_rule,
     hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
@@ -1090,13 +1090,12 @@ fn primitives_after_overrun_all_report_stop_test() {
     }
 }
 
-/// Exercise the state-machine, concurrency-draw, and weighted-boolean C-ABI
-/// entry points (`hegel_new_state_machine`,
-/// `hegel_state_machine_next_group`, `hegel_state_machine_next_rule`,
-/// `hegel_generate_concurrency`, `hegel_generate_boolean`) in-process: the
-/// invalid-handle and argument-validation paths, plus the happy paths. The
-/// smoke test that drives these over dlopen doesn't contribute coverage, so
-/// they are measured here.
+/// Exercise the state-machine and weighted-boolean C-ABI entry points
+/// (`hegel_new_state_machine`, `hegel_state_machine_next_group`,
+/// `hegel_state_machine_next_rule`, `hegel_generate_boolean`) in-process:
+/// the invalid-handle and argument-validation paths, plus the happy paths.
+/// The smoke test that drives these over dlopen doesn't contribute
+/// coverage, so they are measured here.
 #[test]
 fn state_machine_and_primitive_boolean_paths() {
     let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
@@ -1107,6 +1106,7 @@ fn state_machine_and_primitive_boolean_paths() {
         let rules: [*const c_char; 1] = [rule_a.as_ptr()];
         let rule_groups: [i64; 1] = [0];
         let mut out_id = 0i64;
+        let mut out_concurrency = 0i64;
         assert_eq!(
             hegel_new_state_machine(
                 ctx,
@@ -1118,7 +1118,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_HANDLE
         );
@@ -1129,11 +1131,6 @@ fn state_machine_and_primitive_boolean_paths() {
         let mut group_idx = 0i64;
         assert_eq!(
             hegel_state_machine_next_group(ctx, null_tc, 0, &mut group_idx),
-            HEGEL_E_INVALID_HANDLE
-        );
-        let mut level = 0i64;
-        assert_eq!(
-            hegel_generate_concurrency(ctx, null_tc, 3, &mut level),
             HEGEL_E_INVALID_HANDLE
         );
         let mut bv = false;
@@ -1161,10 +1158,30 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
+                ptr::null_mut(),
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
                 ptr::null_mut(),
             ),
             HEGEL_E_INVALID_ARG
         );
+        assert!(last_error(ctx).contains("out parameter is null"));
         assert_eq!(
             hegel_new_state_machine(
                 ctx,
@@ -1176,7 +1193,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1192,7 +1211,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1209,7 +1230,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1226,7 +1249,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1243,7 +1268,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 bad_inv.as_ptr(),
                 1,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1260,7 +1287,9 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1276,25 +1305,31 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 0,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_E_INVALID_ARG
         );
-        assert!(last_error(ctx).contains("concurrency must be at least 1"));
-
+        assert!(last_error(ctx).contains("concurrency bounds must satisfy 1 <= min <= max"));
         assert_eq!(
-            hegel_generate_concurrency(ctx, tc, 3, ptr::null_mut()),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                3,
+                2,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
-        assert_eq!(
-            hegel_generate_concurrency(ctx, tc, 0, &mut level),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("max_value >= 1"));
-        assert_eq!(hegel_generate_concurrency(ctx, tc, 1, &mut level), HEGEL_OK);
-        assert_eq!(level, 1);
-        assert_eq!(hegel_generate_concurrency(ctx, tc, 3, &mut level), HEGEL_OK);
-        assert!((1..=3).contains(&level));
+        assert!(last_error(ctx).contains("concurrency bounds must satisfy 1 <= min <= max"));
 
         assert_eq!(
             hegel_new_state_machine(
@@ -1307,9 +1342,15 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 0,
                 1,
+                1,
                 &mut out_id,
+                &mut out_concurrency,
             ),
             HEGEL_OK
+        );
+        assert_eq!(
+            out_concurrency, 1,
+            "fixed bounds yield the fixed level without consuming entropy"
         );
         assert_eq!(
             hegel_state_machine_next_rule(ctx, tc, out_id, 0, ptr::null_mut()),
@@ -1357,6 +1398,30 @@ fn state_machine_and_primitive_boolean_paths() {
             );
         }
         assert!(rounds >= 1);
+
+        let mut ranged_id = 0i64;
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                2,
+                4,
+                &mut ranged_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK
+        );
+        assert_ne!(ranged_id, out_id);
+        assert!(
+            (2..=4).contains(&out_concurrency),
+            "the drawn level respects the bounds, got {out_concurrency}"
+        );
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),

@@ -43,7 +43,7 @@ fn test_concurrent_counter_passes(tc: TestCase) {
     let m = Counter {
         value: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 1);
+    run_concurrent(m, tc, 1, 1);
 }
 
 struct Grouped {
@@ -85,7 +85,7 @@ fn test_grouped_machine_passes(tc: TestCase) {
     let m = Grouped {
         log: Mutex::new(Vec::new()),
     };
-    run_concurrent(m, tc, 3);
+    run_concurrent(m, tc, 1, 3);
 }
 
 struct Boom;
@@ -102,7 +102,7 @@ impl Boom {
 #[test]
 fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 1))
+        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
             .settings(Settings::new().nondeterministic(true).database(None))
             .run();
     });
@@ -138,7 +138,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
 #[test]
 fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 1))
+        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -159,7 +159,7 @@ fn run_concurrent_requires_the_nondeterministic_declaration() {
             let m = Counter {
                 value: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1);
+            run_concurrent(m, tc, 1, 1);
         })
         .settings(Settings::new().database(None))
         .run();
@@ -201,7 +201,7 @@ impl Exhaust {
 #[test]
 fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Exhaust, tc, 1))
+        Hegel::new(|tc| run_concurrent(Exhaust, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -231,7 +231,7 @@ impl DeepSpans {
 #[test]
 fn an_engine_invalid_conclusion_classifies_the_case_as_invalid() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(DeepSpans, tc, 1))
+        Hegel::new(|tc| run_concurrent(DeepSpans, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -260,7 +260,7 @@ impl NestAndBoom {
 #[test]
 fn a_panic_that_loses_to_an_engine_side_conclusion_is_discarded() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(NestAndBoom, tc, 1))
+        Hegel::new(|tc| run_concurrent(NestAndBoom, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -293,7 +293,7 @@ impl UsageError {
 #[test]
 fn a_workers_usage_error_aborts_the_run_verbatim() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(UsageError, tc, 1))
+        Hegel::new(|tc| run_concurrent(UsageError, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -328,7 +328,7 @@ fn an_invariant_assumption_failure_at_a_join_point_invalidates_the_case() {
             let m = LateReject {
                 checks: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 2);
+            run_concurrent(m, tc, 1, 2);
         })
         .settings(
             Settings::new()
@@ -407,7 +407,7 @@ fn test_concurrent_pool_across_workers(tc: TestCase) {
         pool: concurrent_pool(&tc),
         next: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 3);
+    run_concurrent(m, tc, 1, 3);
 }
 
 struct RacyCounter {
@@ -446,7 +446,7 @@ fn racy_smoke_test_reports_only_genuine_failures() {
                 value: AtomicI64::new(0),
                 increments: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 4);
+            run_concurrent(m, tc, 1, 4);
         })
         .settings(
             Settings::new()
@@ -485,7 +485,7 @@ impl hegel::stateful::ConcurrentStateMachine for NoRules {
 #[test]
 fn a_machine_without_rules_is_a_usage_error() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(NoRules, tc, 1))
+        Hegel::new(|tc| run_concurrent(NoRules, tc, 1, 1))
             .settings(
                 Settings::new()
                     .nondeterministic(true)
@@ -496,6 +496,32 @@ fn a_machine_without_rules_is_a_usage_error() {
     });
     let payload = result.expect_err("a machine with no rules cannot run");
     assert_matches_regex(&panic_message(&payload), "no rules");
+}
+
+#[test]
+fn invalid_concurrency_bounds_are_a_usage_error() {
+    for (min, max) in [(0, 1), (2, 1)] {
+        let (_, result) = capture_hegel_output(|| {
+            Hegel::new(move |tc| {
+                let m = Counter {
+                    value: AtomicI64::new(0),
+                };
+                run_concurrent(m, tc, min, max);
+            })
+            .settings(
+                Settings::new()
+                    .nondeterministic(true)
+                    .database(None)
+                    .verbosity(Verbosity::Quiet),
+            )
+            .run();
+        });
+        let payload = result.expect_err("invalid concurrency bounds cannot run");
+        assert_matches_regex(
+            &panic_message(&payload),
+            "concurrency bounds must satisfy 1 <= min <= max",
+        );
+    }
 }
 
 /// Exhaust the whole family draw budget on a clone stream, leaving the root
@@ -537,7 +563,7 @@ fn pool_add_on_an_exhausted_stream_is_an_overrun() {
             let m = AddAfterExhaustion {
                 pool: concurrent_pool(&tc),
             };
-            run_concurrent(m, tc, 1);
+            run_concurrent(m, tc, 1, 1);
         })
         .settings(
             Settings::new()
@@ -584,7 +610,7 @@ fn budget_exhaustion_during_the_concurrency_draw_is_an_overrun() {
             let m = Counter {
                 value: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 2);
+            run_concurrent(m, tc, 1, 2);
         })
         .settings(
             Settings::new()
@@ -606,7 +632,7 @@ fn budget_exhaustion_during_machine_creation_is_an_overrun() {
             let m = Counter {
                 value: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1);
+            run_concurrent(m, tc, 1, 1);
         })
         .settings(
             Settings::new()

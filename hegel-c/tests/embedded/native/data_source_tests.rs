@@ -94,7 +94,8 @@ fn sequential_machine(
     invariant_names: Vec<String>,
 ) -> Result<i64, DataSourceError> {
     let rule_groups = vec![0; rule_names.len()];
-    ds.new_state_machine(1, rule_names, rule_groups, invariant_names, 1)
+    ds.new_state_machine(1, rule_names, rule_groups, invariant_names, 1, 1)
+        .map(|(id, _)| id)
 }
 
 #[test]
@@ -132,7 +133,7 @@ fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
 fn new_state_machine_with_no_groups_is_invalid_argument() {
     let (ds, _handle) = random_source();
     let err = ds
-        .new_state_machine(0, vec!["a".into()], vec![0], vec![], 1)
+        .new_state_machine(0, vec!["a".into()], vec![0], vec![], 1, 1)
         .unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("no concurrency groups"));
@@ -143,7 +144,7 @@ fn new_state_machine_with_no_groups_is_invalid_argument() {
 fn new_state_machine_with_non_parallel_rule_groups_is_invalid_argument() {
     let (ds, _handle) = random_source();
     let err = ds
-        .new_state_machine(1, vec!["a".into()], vec![0, 0], vec![], 1)
+        .new_state_machine(1, vec!["a".into()], vec![0, 0], vec![], 1, 1)
         .unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("parallel"));
@@ -154,7 +155,7 @@ fn new_state_machine_with_out_of_range_group_is_invalid_argument() {
     let (ds, _handle) = random_source();
     for group in [-1, 1] {
         let err = ds
-            .new_state_machine(1, vec!["a".into()], vec![group], vec![], 1)
+            .new_state_machine(1, vec!["a".into()], vec![group], vec![], 1, 1)
             .unwrap_err();
         assert!(matches!(err, DataSourceError::InvalidArgument(_)));
         assert!(err.to_string().contains("rule_groups[0] must be in [0, 1)"));
@@ -165,20 +166,26 @@ fn new_state_machine_with_out_of_range_group_is_invalid_argument() {
 fn new_state_machine_with_empty_group_is_invalid_argument() {
     let (ds, _handle) = random_source();
     let err = ds
-        .new_state_machine(2, vec!["a".into()], vec![0], vec![], 1)
+        .new_state_machine(2, vec!["a".into()], vec![0], vec![], 1, 1)
         .unwrap_err();
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("concurrency group 1 has no rules"));
 }
 
 #[test]
-fn new_state_machine_with_zero_concurrency_is_invalid_argument() {
+fn new_state_machine_with_bad_concurrency_bounds_is_invalid_argument() {
     let (ds, _handle) = random_source();
-    let err = ds
-        .new_state_machine(1, vec!["a".into()], vec![0], vec![], 0)
-        .unwrap_err();
-    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
-    assert!(err.to_string().contains("concurrency must be at least 1"));
+    for (min, max) in [(0, 1), (-1, -1), (3, 2)] {
+        let err = ds
+            .new_state_machine(1, vec!["a".into()], vec![0], vec![], min, max)
+            .unwrap_err();
+        assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+        assert!(
+            err.to_string()
+                .contains("concurrency bounds must satisfy 1 <= min <= max")
+        );
+        assert!(!ds.test_aborted());
+    }
 }
 
 #[test]
@@ -216,26 +223,24 @@ fn new_state_machine_on_exhausted_source_stops_test() {
 }
 
 #[test]
-fn generate_concurrency_is_in_range_and_validates_max() {
+fn new_state_machine_draws_concurrency_within_bounds() {
     let (ds, _handle) = random_source();
-    assert_eq!(ds.generate_concurrency(1).unwrap(), 1);
-    for _ in 0..20 {
-        let level = ds.generate_concurrency(4).unwrap();
-        assert!((1..=4).contains(&level));
+    for expected_id in 0..20 {
+        let (id, level) = ds
+            .new_state_machine(1, vec!["a".into()], vec![0], vec![], 2, 4)
+            .unwrap();
+        assert_eq!(id, expected_id);
+        assert!((2..=4).contains(&level));
     }
-    let err = ds.generate_concurrency(0).unwrap_err();
-    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
-    assert!(err.to_string().contains("max_value >= 1"));
-    assert!(!ds.test_aborted());
 }
 
 #[test]
-fn generate_concurrency_on_exhausted_source_stops_test() {
-    let (ds, _handle) = exhausted_source();
-    assert!(matches!(
-        ds.generate_concurrency(4),
-        Err(DataSourceError::StopTest)
-    ));
+fn new_state_machine_with_fixed_bounds_returns_fixed_level() {
+    let (ds, _handle) = random_source();
+    let (_, level) = ds
+        .new_state_machine(1, vec!["a".into()], vec![0], vec![], 3, 3)
+        .unwrap();
+    assert_eq!(level, 3);
 }
 
 #[test]
@@ -455,12 +460,13 @@ fn collections_are_shared_across_cloned_streams() {
 #[test]
 fn state_machines_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let machine = ds
+    let (machine, _) = ds
         .new_state_machine(
             1,
             vec!["a".into(), "b".into(), "c".into()],
             vec![0, 0, 0],
             vec![],
+            2,
             2,
         )
         .unwrap();

@@ -1,6 +1,6 @@
 RELEASE_TYPE: patch
 
-This patch adds concurrent stateful testing: a state machine whose rules run *concurrently* against the system under test, from a drawn number of worker threads.
+This patch adds concurrent stateful testing: a state machine whose rules run *concurrently* against the system under test, from a number of worker threads drawn within caller-supplied bounds (weighted toward the maximum — concurrency bugs need concurrency).
 
 ```rust
 use std::sync::Mutex;
@@ -28,7 +28,7 @@ impl KvTest {
 #[hegel::test(nondeterministic = true)]
 fn test_kv_store(tc: TestCase) {
     let m = KvTest { store: Mutex::new(Default::default()) };
-    hegel::stateful::run_concurrent(m, tc, 3); // maximum concurrency level
+    hegel::stateful::run_concurrent(m, tc, 1, 3); // min/max concurrency levels
 }
 ```
 

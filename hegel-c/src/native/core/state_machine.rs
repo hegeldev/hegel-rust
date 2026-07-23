@@ -24,6 +24,34 @@ const MAX_CONCURRENT_ROUND_CAP: i64 = 10;
 /// [`NativeStateMachine::next_rule`] at concurrency > 1.
 const MAX_ROUND_STEP_CAP: i64 = 5;
 
+/// Probability that [`draw_concurrency`] draws `max_value` outright rather
+/// than a uniform level in `[min_value, max_value]`.
+const P_MAX_CONCURRENCY: f64 = 0.75;
+
+/// Draw the machine's concurrency level in `[min_value, max_value]`.
+///
+/// The distribution is weighted toward `max_value` (concurrency bugs need
+/// concurrency) rather than shrink-biased toward `min_value`: with
+/// probability [`P_MAX_CONCURRENCY`] the draw is `max_value` outright,
+/// otherwise uniform-ish over the full range. `min_value == max_value`
+/// returns the value without consuming entropy.
+fn draw_concurrency(
+    ntc: &mut NativeTestCase,
+    min_value: i64,
+    max_value: i64,
+) -> Result<i64, EngineError> {
+    if min_value == max_value {
+        return Ok(max_value);
+    }
+    draws::spanned(ntc, draws::LABEL_CONCURRENCY, |ntc| {
+        if ntc.weighted(P_MAX_CONCURRENCY, None)? {
+            return Ok(max_value);
+        }
+        let v = ntc.draw_integer(BigInt::from(min_value), BigInt::from(max_value))?;
+        Ok(v.to_i128().unwrap() as i64)
+    })
+}
+
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
     let i = ntc.draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?;
@@ -125,8 +153,8 @@ struct WorkerState {
 /// sequential or concurrent.
 ///
 /// The test body registers a fixed set of rules — each belonging to exactly
-/// one concurrency group — plus the invariants and the concurrency level,
-/// and drives execution in rounds: the root handle asks [`Self::next_group`]
+/// one concurrency group — plus the invariants and the concurrency bounds
+/// (the level itself is drawn at creation), and drives execution in rounds: the root handle asks [`Self::next_group`]
 /// whether to run another round (and which group is current), then each
 /// worker pulls rules for that round via [`Self::next_rule`] until it
 /// returns `None`. Rules in the same group may run concurrently; rules in
@@ -153,16 +181,19 @@ pub struct NativeStateMachine {
 }
 
 impl NativeStateMachine {
-    /// Create a machine, fully constructed: the round cap and every
-    /// worker's swarm disabling probability are drawn here, from the
-    /// creating handle's stream, so no per-worker state is ever pending.
-    /// For families marked as unbounded (single-test-case runs) no round
-    /// cap is drawn: rounds continue forever.
+    /// Create a machine, fully constructed: the concurrency level (in
+    /// `[min_concurrency, max_concurrency]`, weighted toward the maximum —
+    /// see [`draw_concurrency`]), the round cap, and every worker's swarm
+    /// disabling probability are drawn here, from the creating handle's
+    /// stream, so no per-worker state is ever pending. For families marked
+    /// as unbounded (single-test-case runs) no round cap is drawn: rounds
+    /// continue forever.
     pub fn new(
         ntc: &mut NativeTestCase,
         num_groups: usize,
         rule_groups: Vec<usize>,
-        concurrency: i64,
+        min_concurrency: i64,
+        max_concurrency: i64,
     ) -> Result<Self, EngineError> {
         hegel_internal_assert!(
             !rule_groups.is_empty(),
@@ -173,8 +204,8 @@ impl NativeStateMachine {
             "Stateful testing: there must be at least one concurrency group"
         );
         hegel_internal_assert!(
-            concurrency >= 1,
-            "Stateful testing: concurrency must be at least 1"
+            min_concurrency >= 1 && min_concurrency <= max_concurrency,
+            "Stateful testing: concurrency bounds must satisfy 1 <= min <= max"
         );
 
         let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
@@ -192,6 +223,7 @@ impl NativeStateMachine {
             );
         }
 
+        let concurrency = draw_concurrency(ntc, min_concurrency, max_concurrency)?;
         let round_cap = if ntc.family().state_machine_steps_unbounded() {
             0
         } else {
@@ -219,6 +251,12 @@ impl NativeStateMachine {
             rounds_started: 0,
             workers,
         })
+    }
+
+    /// The concurrency level drawn at creation: the number of workers that
+    /// will pull rules from this machine.
+    pub fn concurrency(&self) -> i64 {
+        self.concurrency
     }
 
     /// Start the next round: draw whether another round should run at all

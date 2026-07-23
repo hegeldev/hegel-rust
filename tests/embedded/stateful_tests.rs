@@ -33,8 +33,13 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 /// on `tc` and return its id.
 fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> i64 {
     let rule_groups = vec![0i64; rules.len()];
-    tc.with_ctc(|ctc| ctc.new_state_machine(1, rules, &rule_groups, &[], concurrency))
-        .unwrap()
+    let (id, level) = tc
+        .with_ctc(|ctc| {
+            ctc.new_state_machine(1, rules, &rule_groups, &[], concurrency, concurrency)
+        })
+        .unwrap();
+    assert_eq!(level, concurrency);
+    id
 }
 
 fn string_panic(message: &str) -> Box<dyn std::any::Any + Send> {
@@ -312,8 +317,8 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 #[test]
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
-    let machine_id = tc
-        .with_ctc(|ctc| ctc.new_state_machine(2, &["r0", "r1"], &[0, 1], &[], 1))
+    let (machine_id, _) = tc
+        .with_ctc(|ctc| ctc.new_state_machine(2, &["r0", "r1"], &[0, 1], &[], 1, 1))
         .unwrap();
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {
