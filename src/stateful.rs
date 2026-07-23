@@ -451,15 +451,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rule_groups = vec![0i64; rules.len()];
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
-    let machine_id = match tc.with_ctc(|ctc| {
-        ctc.new_state_machine(
-            &[ANONYMOUS_GROUP],
-            &rule_names,
-            &rule_groups,
-            &invariant_names,
-            1,
-        )
-    }) {
+    let machine_id = match tc
+        .with_ctc(|ctc| ctc.new_state_machine(1, &rule_names, &rule_groups, &invariant_names, 1))
+    {
         Ok(id) => id,
         Err(rc) => raise_for_rc(rc),
     };
@@ -889,7 +883,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(m: M, tc: TestCase, max_
     tc.note(&format!("Concurrency level: {concurrency}"));
     let machine_id = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
-            &group_names,
+            group_names.len(),
             &rule_names,
             &rule_groups,
             &invariant_names,

@@ -1150,12 +1150,13 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
 
 /*
  Register a *state machine* for engine-owned stateful (rule-based)
- testing, sequential or concurrent: `num_groups` concurrency groups,
- `num_rules` rules — each assigned to a group by `rule_groups`, an array
- of group indices parallel to `rule_names` — and `num_invariants`
- invariants, with names as NUL-terminated UTF-8, plus the concurrency
- level (the number of worker threads that will pull rules; pass the value
- drawn by `hegel_generate_concurrency`, or 1 for a sequential machine).
+ testing, sequential or concurrent: `num_groups` concurrency groups
+ (identified by index only), `num_rules` rules — each assigned to a group
+ by `rule_groups`, an array of group indices parallel to `rule_names` —
+ and `num_invariants` invariants, with names as NUL-terminated UTF-8,
+ plus the concurrency level (the number of worker threads that will pull
+ rules; pass the value drawn by `hegel_generate_concurrency`, or 1 for a
+ sequential machine).
 
  The engine owns rule selection — including swarm testing, where each
  thread enables a random subset of rules (at least one per group) and
@@ -1184,7 +1185,6 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
-                                       const char *const *group_names,
                                        size_t num_groups,
                                        const char *const *rule_names,
                                        const int64_t *rule_groups,

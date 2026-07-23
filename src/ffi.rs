@@ -702,17 +702,15 @@ impl CTestCase {
 
     pub(crate) fn new_state_machine(
         &self,
-        group_names: &[&str],
+        num_groups: usize,
         rule_names: &[&str],
         rule_groups: &[i64],
         invariant_names: &[&str],
         concurrency: i64,
     ) -> Result<i64, hegel_result_t> {
-        let group_cstrings: Vec<CString> = group_names.iter().map(|s| cstring_lossy(s)).collect();
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
-        let group_ptrs: Vec<*const c_char> = group_cstrings.iter().map(|c| c.as_ptr()).collect();
         let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
@@ -721,8 +719,7 @@ impl CTestCase {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
-                group_ptrs.as_ptr(),
-                group_ptrs.len(),
+                num_groups,
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),

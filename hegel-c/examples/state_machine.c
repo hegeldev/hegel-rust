@@ -30,8 +30,7 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
-static const char *GROUPS[] = { "counter" };
-#define NUM_GROUPS (sizeof(GROUPS) / sizeof(GROUPS[0]))
+#define NUM_GROUPS 1
 static const char *RULES[] = { "increment", "decrement", "reset" };
 #define NUM_RULES (int64_t) (sizeof(RULES) / sizeof(RULES[0]))
 static const int64_t RULE_GROUPS[] = { 0, 0, 0 };
@@ -68,7 +67,7 @@ int main(void) {
         }
 
         int64_t machine;
-        if (hegel_new_state_machine(ctx, tc, GROUPS, NUM_GROUPS,
+        if (hegel_new_state_machine(ctx, tc, NUM_GROUPS,
                                     RULES, RULE_GROUPS, NUM_RULES,
                                     INVARIANTS, NUM_INVARIANTS,
                                     concurrency, &machine) != HEGEL_OK) {

@@ -2068,12 +2068,13 @@ unsafe fn names_from_c_array(
 }
 
 /// Register a *state machine* for engine-owned stateful (rule-based)
-/// testing, sequential or concurrent: `num_groups` concurrency groups,
-/// `num_rules` rules — each assigned to a group by `rule_groups`, an array
-/// of group indices parallel to `rule_names` — and `num_invariants`
-/// invariants, with names as NUL-terminated UTF-8, plus the concurrency
-/// level (the number of worker threads that will pull rules; pass the value
-/// drawn by `hegel_generate_concurrency`, or 1 for a sequential machine).
+/// testing, sequential or concurrent: `num_groups` concurrency groups
+/// (identified by index only), `num_rules` rules — each assigned to a group
+/// by `rule_groups`, an array of group indices parallel to `rule_names` —
+/// and `num_invariants` invariants, with names as NUL-terminated UTF-8,
+/// plus the concurrency level (the number of worker threads that will pull
+/// rules; pass the value drawn by `hegel_generate_concurrency`, or 1 for a
+/// sequential machine).
 ///
 /// The engine owns rule selection — including swarm testing, where each
 /// thread enables a random subset of rules (at least one per group) and
@@ -2103,7 +2104,6 @@ unsafe fn names_from_c_array(
 pub unsafe extern "C" fn hegel_new_state_machine(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    group_names: *const *const c_char,
     num_groups: usize,
     rule_names: *const *const c_char,
     rule_groups: *const i64,
@@ -2122,18 +2122,6 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         set_last_error(ctx, "hegel_new_state_machine: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let groups = match unsafe {
-        names_from_c_array(
-            ctx,
-            "hegel_new_state_machine",
-            "group_names",
-            group_names,
-            num_groups,
-        )
-    } {
-        Ok(v) => v,
-        Err(rc) => return rc,
-    };
     let rules = match unsafe {
         names_from_c_array(
             ctx,
@@ -2169,7 +2157,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     };
     match tc
         .stream
-        .new_state_machine(groups, rules, rule_groups, invariants, concurrency)
+        .new_state_machine(num_groups, rules, rule_groups, invariants, concurrency)
     {
         Ok(id) => {
             unsafe { *out_state_machine_id = id };

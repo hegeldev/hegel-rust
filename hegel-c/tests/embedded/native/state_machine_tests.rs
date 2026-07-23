@@ -12,16 +12,7 @@ fn machine_concurrent(
     num_rules: usize,
     concurrency: i64,
 ) -> NativeStateMachine {
-    let names = (0..num_rules).map(|i| format!("rule_{i}")).collect();
-    NativeStateMachine::new(
-        ntc,
-        vec!["g".to_string()],
-        names,
-        vec![0; num_rules],
-        vec!["inv".to_string()],
-        concurrency,
-    )
-    .unwrap()
+    NativeStateMachine::new(ntc, 1, vec![0; num_rules], concurrency).unwrap()
 }
 
 fn grouped_machine(
@@ -29,19 +20,7 @@ fn grouped_machine(
     rule_groups: &[usize],
     num_groups: usize,
 ) -> NativeStateMachine {
-    let names = (0..rule_groups.len())
-        .map(|i| format!("rule_{i}"))
-        .collect();
-    let group_names = (0..num_groups).map(|g| format!("group_{g}")).collect();
-    NativeStateMachine::new(
-        ntc,
-        group_names,
-        names,
-        rule_groups.to_vec(),
-        vec!["inv".to_string()],
-        1,
-    )
-    .unwrap()
+    NativeStateMachine::new(ntc, num_groups, rule_groups.to_vec(), 1).unwrap()
 }
 
 fn replay(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
@@ -379,15 +358,7 @@ fn try_machine(
     ntc: &mut NativeTestCase,
     num_rules: usize,
 ) -> Result<NativeStateMachine, EngineError> {
-    let names = (0..num_rules).map(|i| format!("rule_{i}")).collect();
-    NativeStateMachine::new(
-        ntc,
-        vec!["g".to_string()],
-        names,
-        vec![0; num_rules],
-        vec!["inv".to_string()],
-        1,
-    )
+    NativeStateMachine::new(ntc, 1, vec![0; num_rules], 1)
 }
 
 #[test]
@@ -527,68 +498,26 @@ fn no_rules_is_error() {
 #[should_panic(expected = "Stateful testing: there must be at least one concurrency group")]
 fn no_groups_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(
-        &mut ntc,
-        Vec::new(),
-        vec!["rule".to_string()],
-        vec![0],
-        Vec::new(),
-        1,
-    );
-}
-
-#[test]
-#[should_panic(expected = "Stateful testing: rule_groups must be parallel to rule_names")]
-fn non_parallel_rule_groups_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(
-        &mut ntc,
-        vec!["g".to_string()],
-        vec!["rule".to_string()],
-        vec![0, 0],
-        Vec::new(),
-        1,
-    );
+    let _ = NativeStateMachine::new(&mut ntc, 0, vec![0], 1);
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: rule group index out of range")]
 fn out_of_range_rule_group_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(
-        &mut ntc,
-        vec!["g".to_string()],
-        vec!["rule".to_string()],
-        vec![1],
-        Vec::new(),
-        1,
-    );
+    let _ = NativeStateMachine::new(&mut ntc, 1, vec![1], 1);
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: every concurrency group must have at least one rule")]
 fn empty_group_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(
-        &mut ntc,
-        vec!["g0".to_string(), "g1".to_string()],
-        vec!["rule".to_string()],
-        vec![0],
-        Vec::new(),
-        1,
-    );
+    let _ = NativeStateMachine::new(&mut ntc, 2, vec![0], 1);
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: concurrency must be at least 1")]
 fn zero_concurrency_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(
-        &mut ntc,
-        vec!["g".to_string()],
-        vec!["rule".to_string()],
-        vec![0],
-        Vec::new(),
-        0,
-    );
+    let _ = NativeStateMachine::new(&mut ntc, 1, vec![0], 0);
 }
