@@ -386,7 +386,7 @@ impl DataSource for NativeDataSource {
     fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
-        thread_index: i64,
+        worker_index: i64,
     ) -> Result<Option<i64>, DataSourceError> {
         self.with_ntc(|ntc| {
             let machine = {
@@ -399,7 +399,7 @@ impl DataSource for NativeDataSource {
                 Arc::clone(&machines[idx])
             };
             let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
-            machine.next_rule(ntc, thread_index)
+            machine.next_rule(ntc, worker_index)
         })
     }
 
