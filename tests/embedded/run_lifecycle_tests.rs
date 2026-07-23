@@ -134,6 +134,37 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
     );
 }
 
+fn rec(worker: Option<usize>, line: &str) -> (Option<usize>, String) {
+    (worker, line.to_string())
+}
+
+#[test]
+fn group_concurrent_output_groups_each_round_by_worker() {
+    let records = vec![
+        rec(None, "Round 1"),
+        rec(Some(1), "w1 a"),
+        rec(Some(0), "w0 a"),
+        rec(Some(1), "w1 b"),
+        rec(Some(0), "w0 b"),
+        rec(None, "Round 2"),
+        rec(Some(1), "w1 c"),
+        rec(Some(0), "w0 c"),
+    ];
+    assert_eq!(
+        group_concurrent_output(records),
+        [
+            "Round 1", "w0 a", "w0 b", "w1 a", "w1 b", "Round 2", "w0 c", "w1 c"
+        ]
+    );
+}
+
+#[test]
+fn group_concurrent_output_leaves_worker_free_output_unchanged() {
+    let records = vec![rec(None, "a"), rec(None, "b")];
+    assert_eq!(group_concurrent_output(records), ["a", "b"]);
+    assert!(group_concurrent_output(Vec::new()).is_empty());
+}
+
 fn test_settings() -> Settings {
     Settings::new()
         .database(None)

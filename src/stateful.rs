@@ -104,7 +104,8 @@ thread_local! {
 
 /// The calling thread's concurrent-worker index, if it is one of
 /// [`run_concurrent`]'s worker threads. Read by the output machinery to tag
-/// buffered lines so interleaved output stays readable.
+/// each worker line with its worker's index and time offset, and to regroup
+/// the failure report's buffered lines worker by worker within each round.
 pub(crate) fn current_worker_index() -> Option<usize> {
     WORKER_INDEX.with(|cell| cell.get())
 }
@@ -779,6 +780,14 @@ impl Drop for TerminationGuard<'_> {
 /// level. The model is shared by reference across the worker threads, so
 /// rules and invariants take `&self` and any mutable model state needs
 /// interior mutability (locks, atomics, a [`ConcurrentPool`], ...).
+///
+/// A failure's trace shows each round's lines grouped by worker — each
+/// worker's draws and notes in program order, one worker after another,
+/// between markers naming each round's concurrency group. Worker lines
+/// are tagged `[worker N +X.XXXms]` with the time offset from the start
+/// of the test case, so the wall-clock arrival order across workers stays
+/// recoverable even though the report reads worker by worker. Verbose
+/// runs additionally stream every line live, in arrival order.
 ///
 /// # The run must be declared nondeterministic
 ///

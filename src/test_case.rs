@@ -361,8 +361,17 @@ impl TestCase {
     ) -> Self {
         let on_draw: OutputSink = if emit {
             let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
+            // The offset base is captured once per test case and shared by
+            // every worker's clone through the cloned closure, so offsets
+            // are comparable across workers: the failure report groups each
+            // round's lines by worker, and the offsets are what remains of
+            // the arrival order.
+            let case_start = std::time::Instant::now();
             Arc::new(move |msg| match crate::stateful::current_worker_index() {
-                Some(worker) => raw(&format!("[worker {worker}] {msg}")),
+                Some(worker) => {
+                    let ms = case_start.elapsed().as_secs_f64() * 1000.0;
+                    raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
+                }
                 None => raw(msg),
             })
         } else {
