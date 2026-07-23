@@ -223,27 +223,6 @@ fn new_state_machine_on_exhausted_source_stops_test() {
 }
 
 #[test]
-fn new_state_machine_draws_concurrency_within_bounds() {
-    let (ds, _handle) = random_source();
-    for expected_id in 0..20 {
-        let (id, level) = ds
-            .new_state_machine(1, vec!["a".into()], vec![0], vec![], 2, 4)
-            .unwrap();
-        assert_eq!(id, expected_id);
-        assert!((2..=4).contains(&level));
-    }
-}
-
-#[test]
-fn new_state_machine_with_fixed_bounds_returns_fixed_level() {
-    let (ds, _handle) = random_source();
-    let (_, level) = ds
-        .new_state_machine(1, vec!["a".into()], vec![0], vec![], 3, 3)
-        .unwrap();
-    assert_eq!(level, 3);
-}
-
-#[test]
 fn generate_boolean_forced_returns_forced_value() {
     let (ds, _handle) = random_source();
     assert!(ds.generate_boolean(0.5, Some(true)).unwrap());

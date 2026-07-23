@@ -571,12 +571,6 @@ pub(crate) fn drive<F>(
     while let Some(c_tc) = run.next_test_case() {
         if nondeterministic {
             let buffer: Arc<std::sync::Mutex<Vec<WorkerLine>>> = Arc::default();
-            // In verbose mode the sink tees: every case's lines still
-            // stream live in arrival order — as they would in a
-            // deterministic verbose run — while the buffer keeps its copy
-            // (tagged with the emitting worker's index, read on the
-            // emitting thread) so a failure's report can reprint the
-            // discovering case at the end, regrouped worker by worker.
             let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
             let case_sink: Option<crate::test_case::OutputSink> = if quiet {
                 None
@@ -639,14 +633,6 @@ pub(crate) fn drive<F>(
             panic!("{message}");
         }
         RunStatus::HEGEL_RUN_STATUS_FAILED if nondeterministic => {
-            // The stashed candidate is necessarily the accepted bug: the
-            // engine concludes a case interesting only via `mark_complete`,
-            // generation stops at the first accepted bug (shrinking is off
-            // run-wide), and the run ends immediately after it — so the last
-            // stash written is the failure the engine is reporting. A stash
-            // whose report lost to an engine-side family conclusion
-            // (overrun, invalid) can only be *followed* by more cases, never
-            // be the last one of a failed run.
             let stash = stash.expect("a failed nondeterministic run has a stashed failure");
             for line in &stash.lines {
                 output.line(line);

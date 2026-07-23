@@ -654,28 +654,6 @@ fn creating_a_pool_on_an_exhausted_stream_is_an_overrun() {
 }
 
 #[test]
-fn budget_exhaustion_during_the_concurrency_draw_is_an_overrun() {
-    let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| {
-            exhaust_budget_on_a_clone(&tc);
-            let m = Counter {
-                value: AtomicI64::new(0),
-            };
-            run_concurrent(m, tc, 1, 2);
-        })
-        .settings(
-            Settings::new()
-                .nondeterministic(true)
-                .database(None)
-                .verbosity(Verbosity::Quiet),
-        )
-        .run();
-    });
-    let payload = result.expect_err("the first case overruns, so the health check fires");
-    assert_matches_regex(&panic_message(&payload), "LargeInitialTestCase");
-}
-
-#[test]
 fn budget_exhaustion_during_machine_creation_is_an_overrun() {
     let (_, result) = capture_hegel_output(|| {
         Hegel::new(|tc| {

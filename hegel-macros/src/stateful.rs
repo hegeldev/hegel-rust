@@ -138,11 +138,6 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
             let has_invariant = method.attrs.iter().any(&is_invariant);
             method.attrs.retain(|a| !is_rule(a) && !is_invariant(a));
 
-            // The model is shared by reference across worker threads:
-            // `ConcurrentRule.apply` is `fn(&M, TestCase)`, so rules and
-            // invariants must take `&self` — a `&mut self` method cannot be
-            // called through the shared borrow. Mutable model state needs
-            // interior mutability instead.
             if rule_attr.is_some() || has_invariant {
                 let takes_shared_self = method.sig.receiver().is_some_and(|receiver| {
                     matches!(&*receiver.ty, syn::Type::Reference(r) if r.mutability.is_none())
