@@ -8,6 +8,7 @@ mod integers;
 mod mutation;
 mod ordering;
 mod scheduling;
+pub(crate) mod search;
 mod sequence;
 mod spans;
 mod strings;
@@ -15,9 +16,10 @@ mod strings;
 pub use scheduling::ShrinkPass;
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Instant;
 
-use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
@@ -36,18 +38,40 @@ pub enum ShrinkRun<'a> {
     },
 }
 
-/// A callback that runs a test case for the shrinker.
-/// Returns `(is_interesting, actual_nodes, actual_spans)`.
+/// The boxed future a [`ShrinkProbe`] resolves to: the
+/// `(is_interesting, actual_nodes, actual_spans)` outcome of one run.
+pub type ProbeFuture<'s> =
+    Pin<Box<dyn Future<Output = (bool, Vec<ChoiceNode>, Spans)> + Send + 's>>;
+
+/// Runs one test case for the shrinker, returning
+/// `(is_interesting, actual_nodes, actual_spans)`.
 /// `actual_nodes` is the sequence of ChoiceNodes produced during the run.
 /// For [`ShrinkRun::Full`], it may be shorter than the candidate length
 /// (for early exit / flatmap bindings), or have different values where the
 /// candidate was punned because the kind changed at that position.
 /// `actual_spans` is the span tree recorded by the same run.
-pub type TestFn<'a> = dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>, Spans) + 'a;
+///
+/// The method hand-desugars `async fn` into a boxed future so the trait
+/// stays dyn-compatible while the future may borrow the probe itself —
+/// the engine's probe suspends mid-call to hand the test case to the
+/// driver. Synchronous probes (the shape every shrinker unit test uses)
+/// get this for free through the blanket [`FnMut`] impl.
+pub trait ShrinkProbe {
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s>;
+}
+
+impl<F> ShrinkProbe for F
+where
+    F: FnMut(ShrinkRun<'_>) -> (bool, Vec<ChoiceNode>, Spans),
+{
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
+        Box::pin(std::future::ready(self(req)))
+    }
+}
 
 /// A callback for shrinker debug output (per-pass-step lines and the
 /// end-of-shrink profiling report).  Wired only at `Verbosity::Debug`.
-pub type DebugFn<'a> = dyn FnMut(&str) + 'a;
+pub type DebugFn<'a> = dyn FnMut(&str) + Send + 'a;
 
 /// Sentinel signalling that the wall-clock shrink deadline has passed.
 ///
@@ -64,7 +88,7 @@ pub(crate) struct ShrinkStop;
 pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkStop>;
 
 pub struct Shrinker<'a> {
-    test_fn: Box<TestFn<'a>>,
+    test_fn: Box<dyn ShrinkProbe + Send + 'a>,
     pub current_nodes: Vec<ChoiceNode>,
     /// Spans recorded by the run that produced `current_nodes`.  Updated whenever
     /// `consider` accepts a smaller candidate so span-aware passes (try_trivial_spans,
@@ -133,7 +157,7 @@ impl<'a> Shrinker<'a> {
     /// `mutate_and_shrink` and the coarse alternative-reduction pass explore
     /// random continuations.
     pub fn with_probe(
-        test_fn: Box<TestFn<'a>>,
+        test_fn: Box<dyn ShrinkProbe + Send + 'a>,
         initial_nodes: Vec<ChoiceNode>,
         initial_spans: Spans,
     ) -> Self {
@@ -175,7 +199,7 @@ impl<'a> Shrinker<'a> {
     /// either the start of a pass step (`"Trying shrink pass: <name>"`)
     /// or one line of the end-of-shrink profiling report.  Wired by the
     /// test runner at `Verbosity::Debug`.
-    pub fn set_debug<F: FnMut(&str) + 'a>(&mut self, f: F) {
+    pub fn set_debug<F: FnMut(&str) + Send + 'a>(&mut self, f: F) {
         self.debug = Some(Box::new(f));
     }
 
@@ -203,7 +227,7 @@ impl<'a> Shrinker<'a> {
     /// exits early (actual is shorter than candidate) or when value
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
-    pub fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
+    pub async fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
         if sort_key(nodes) == sort_key(&self.current_nodes) {
             return Ok(true);
         }
@@ -232,7 +256,7 @@ impl<'a> Shrinker<'a> {
         }
 
         let (is_interesting, actual_nodes, actual_spans) =
-            self.run_test_fn(ShrinkRun::Full(nodes))?;
+            self.run_test_fn(ShrinkRun::Full(nodes)).await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
@@ -249,21 +273,25 @@ impl<'a> Shrinker<'a> {
     /// `replace`, and the inspection re-runs in individual passes all funnel
     /// through it, so a passed deadline stops every further test-body run and
     /// the `?` operator unwinds the current pass.
-    pub(super) fn run_test_fn(
+    pub(super) async fn run_test_fn(
         &mut self,
-        run: ShrinkRun,
+        run: ShrinkRun<'_>,
     ) -> ShrinkResult<(bool, Vec<ChoiceNode>, Spans)> {
         if self.past_deadline() {
             return Err(ShrinkStop);
         }
-        Ok((self.test_fn)(run))
+        Ok(self.test_fn.run(run).await)
     }
 
     /// Run a probe: replay `prefix` then continue with random draws (capped at
     /// `max_size` choices), the continuation drawn from the engine's RNG by the
     /// test closure. If the resulting run is interesting and shortlex-smaller
     /// than `current_nodes`, update `current_nodes`.
-    pub(super) fn probe(&mut self, prefix: &[ChoiceValue], max_size: usize) -> ShrinkResult<()> {
+    pub(super) async fn probe(
+        &mut self,
+        prefix: &[ChoiceValue],
+        max_size: usize,
+    ) -> ShrinkResult<()> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkStop);
         }
@@ -272,8 +300,9 @@ impl<'a> Shrinker<'a> {
         {
             return Ok(());
         }
-        let (is_interesting, actual_nodes, actual_spans) =
-            self.run_test_fn(ShrinkRun::Probe { prefix, max_size })?;
+        let (is_interesting, actual_nodes, actual_spans) = self
+            .run_test_fn(ShrinkRun::Probe { prefix, max_size })
+            .await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
             self.accept_improvement(actual_nodes, actual_spans);
@@ -354,7 +383,7 @@ impl<'a> Shrinker<'a> {
     /// as a failed replacement (rather than panicking later in `sort_key`)
     /// matches the semantic invariant: a value that doesn't fit the node's
     /// kind can't be assigned to it.
-    pub fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> ShrinkResult<bool> {
+    pub async fn replace(&mut self, values: &HashMap<usize, ChoiceValue>) -> ShrinkResult<bool> {
         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
         for (&i, v) in values {
             if i >= attempt.len() {
@@ -375,7 +404,7 @@ impl<'a> Shrinker<'a> {
             };
             attempt[i] = attempt[i].with_value(coerced);
         }
-        self.consider(&attempt)
+        self.consider(&attempt).await
     }
 
     /// Format an end-of-shrink profile report and feed it line-by-line to
@@ -441,189 +470,156 @@ impl<'a> Shrinker<'a> {
     /// they apply), then deletion / zeroing, then the value-level
     /// minimization passes, finishing with the index-generic and
     /// entropy-based passes.
-    pub fn shrink(&mut self) {
+    ///
+    /// Returns an explicitly boxed future (rather than being an `async fn`)
+    /// because `shrink` is recursive — `shrink_clone_streams` runs a full
+    /// nested shrink per clone node — and the type erasure is what lets the
+    /// compiler prove the future `Send` without chasing the cycle.
+    pub fn shrink(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(self.shrink_inner())
+    }
+
+    async fn shrink_inner(&mut self) {
         let mut passes: Vec<ShrinkPass> = vec![
             ShrinkPass::new(
                 "remove_discarded",
-                Box::new(|sh| sh.remove_discarded().map(|_| ())),
+                Box::new(|sh| boxed_pass(async move { sh.remove_discarded().await.map(|_| ()) })),
             ),
-            ShrinkPass::new("try_trivial_spans", Box::new(|sh| sh.try_trivial_spans())),
-            ShrinkPass::new("pass_to_descendant", Box::new(|sh| sh.pass_to_descendant())),
-            ShrinkPass::new("reorder_spans", Box::new(|sh| sh.reorder_spans())),
-            ShrinkPass::new("node_program_5", Box::new(|sh| sh.node_program(5))),
-            ShrinkPass::new("node_program_4", Box::new(|sh| sh.node_program(4))),
-            ShrinkPass::new("node_program_3", Box::new(|sh| sh.node_program(3))),
-            ShrinkPass::new("node_program_2", Box::new(|sh| sh.node_program(2))),
-            ShrinkPass::new("node_program_1", Box::new(|sh| sh.node_program(1))),
-            ShrinkPass::new("delete_chunks", Box::new(|sh| sh.delete_chunks())),
-            ShrinkPass::new("zero_choices", Box::new(|sh| sh.zero_choices())),
-            ShrinkPass::new("swap_integer_sign", Box::new(|sh| sh.swap_integer_sign())),
+            ShrinkPass::new(
+                "try_trivial_spans",
+                Box::new(|sh| boxed_pass(sh.try_trivial_spans())),
+            ),
+            ShrinkPass::new(
+                "pass_to_descendant",
+                Box::new(|sh| boxed_pass(sh.pass_to_descendant())),
+            ),
+            ShrinkPass::new(
+                "reorder_spans",
+                Box::new(|sh| boxed_pass(sh.reorder_spans())),
+            ),
+            ShrinkPass::new(
+                "node_program_5",
+                Box::new(|sh| boxed_pass(sh.node_program(5))),
+            ),
+            ShrinkPass::new(
+                "node_program_4",
+                Box::new(|sh| boxed_pass(sh.node_program(4))),
+            ),
+            ShrinkPass::new(
+                "node_program_3",
+                Box::new(|sh| boxed_pass(sh.node_program(3))),
+            ),
+            ShrinkPass::new(
+                "node_program_2",
+                Box::new(|sh| boxed_pass(sh.node_program(2))),
+            ),
+            ShrinkPass::new(
+                "node_program_1",
+                Box::new(|sh| boxed_pass(sh.node_program(1))),
+            ),
+            ShrinkPass::new(
+                "delete_chunks",
+                Box::new(|sh| boxed_pass(sh.delete_chunks())),
+            ),
+            ShrinkPass::new("zero_choices", Box::new(|sh| boxed_pass(sh.zero_choices()))),
+            ShrinkPass::new(
+                "swap_integer_sign",
+                Box::new(|sh| boxed_pass(sh.swap_integer_sign())),
+            ),
             ShrinkPass::new(
                 "binary_search_integer_towards_zero",
-                Box::new(|sh| sh.binary_search_integer_towards_zero()),
+                Box::new(|sh| boxed_pass(sh.binary_search_integer_towards_zero())),
             ),
-            ShrinkPass::new("bind_deletion", Box::new(|sh| sh.bind_deletion())),
+            ShrinkPass::new(
+                "bind_deletion",
+                Box::new(|sh| boxed_pass(sh.bind_deletion())),
+            ),
             ShrinkPass::new(
                 "minimize_individual_choices",
-                Box::new(|sh| sh.minimize_individual_choices()),
+                Box::new(|sh| boxed_pass(sh.minimize_individual_choices())),
             ),
             ShrinkPass::new(
                 "lower_common_node_offset",
-                Box::new(|sh| sh.lower_common_node_offset()),
+                Box::new(|sh| boxed_pass(sh.lower_common_node_offset())),
             ),
             ShrinkPass::new(
                 "redistribute_integers",
-                Box::new(|sh| sh.redistribute_integers()),
+                Box::new(|sh| boxed_pass(sh.redistribute_integers())),
             ),
             ShrinkPass::new(
                 "lower_integers_together",
-                Box::new(|sh| sh.lower_integers_together()),
+                Box::new(|sh| boxed_pass(sh.lower_integers_together())),
             ),
-            ShrinkPass::new("shrink_duplicates", Box::new(|sh| sh.shrink_duplicates())),
-            ShrinkPass::new("sort_values", Box::new(|sh| sh.sort_values())),
+            ShrinkPass::new(
+                "shrink_duplicates",
+                Box::new(|sh| boxed_pass(sh.shrink_duplicates())),
+            ),
+            ShrinkPass::new("sort_values", Box::new(|sh| boxed_pass(sh.sort_values()))),
             ShrinkPass::new(
                 "swap_adjacent_blocks",
-                Box::new(|sh| sh.swap_adjacent_blocks()),
+                Box::new(|sh| boxed_pass(sh.swap_adjacent_blocks())),
             ),
-            ShrinkPass::new("shrink_floats", Box::new(|sh| sh.shrink_floats())),
+            ShrinkPass::new(
+                "shrink_floats",
+                Box::new(|sh| boxed_pass(sh.shrink_floats())),
+            ),
             ShrinkPass::new(
                 "redistribute_numeric_pairs",
-                Box::new(|sh| sh.redistribute_numeric_pairs()),
+                Box::new(|sh| boxed_pass(sh.redistribute_numeric_pairs())),
             ),
-            ShrinkPass::new("shrink_bytes", Box::new(|sh| sh.shrink_bytes())),
+            ShrinkPass::new("shrink_bytes", Box::new(|sh| boxed_pass(sh.shrink_bytes()))),
             ShrinkPass::new(
                 "redistribute_bytes_pairs",
-                Box::new(|sh| sh.redistribute_bytes_pairs()),
+                Box::new(|sh| boxed_pass(sh.redistribute_bytes_pairs())),
             ),
-            ShrinkPass::new("shrink_strings", Box::new(|sh| sh.shrink_strings())),
+            ShrinkPass::new(
+                "shrink_strings",
+                Box::new(|sh| boxed_pass(sh.shrink_strings())),
+            ),
             ShrinkPass::new(
                 "lower_duplicated_characters",
-                Box::new(|sh| sh.lower_duplicated_characters()),
+                Box::new(|sh| boxed_pass(sh.lower_duplicated_characters())),
             ),
             ShrinkPass::new(
                 "normalize_unicode_chars",
-                Box::new(|sh| sh.normalize_unicode_chars()),
+                Box::new(|sh| boxed_pass(sh.normalize_unicode_chars())),
             ),
             ShrinkPass::new(
                 "redistribute_string_pairs",
-                Box::new(|sh| sh.redistribute_string_pairs()),
+                Box::new(|sh| boxed_pass(sh.redistribute_string_pairs())),
             ),
-            ShrinkPass::new("lower_and_bump", Box::new(|sh| sh.lower_and_bump())),
+            ShrinkPass::new(
+                "lower_and_bump",
+                Box::new(|sh| boxed_pass(sh.lower_and_bump())),
+            ),
             ShrinkPass::new(
                 "try_shortening_via_increment",
-                Box::new(|sh| sh.try_shortening_via_increment()),
+                Box::new(|sh| boxed_pass(sh.try_shortening_via_increment())),
             ),
             ShrinkPass::new(
                 "shrink_clone_streams",
-                Box::new(|sh| sh.shrink_clone_streams()),
+                Box::new(|sh| boxed_pass(sh.shrink_clone_streams())),
             ),
-            ShrinkPass::new("mutate_and_shrink", Box::new(|sh| sh.mutate_and_shrink())),
+            ShrinkPass::new(
+                "mutate_and_shrink",
+                Box::new(|sh| boxed_pass(sh.mutate_and_shrink())),
+            ),
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
-        let _ = self.fixate_shrink_passes(&mut passes);
+        let _ = self.fixate_shrink_passes(&mut passes).await;
         self.emit_profile_report(&passes, initial_size, initial_calls);
     }
 }
 
-/// Binary search for the smallest value in [lo, hi] where f returns true.
-///
-/// Assumes f(hi) is true (not checked). Returns lo if f(lo) is true,
-/// otherwise finds a locally minimal true value.
-///
-/// The probe returns `Result<bool, E>` so a shrink pass can abort the search
-/// by returning `Err` (a [`ShrinkStop`]); the error is propagated with `?` on
-/// the same line as the probe, so no extra branch is introduced. The plain
-/// `bool` [`bin_search_down`] below is the infallible form used by targeting.
-pub(super) fn bin_search_down_r<E>(
-    lo: i128,
-    hi: i128,
-    f: &mut impl FnMut(i128) -> Result<bool, E>,
-) -> Result<i128, E> {
-    if f(lo)? {
-        return Ok(lo);
-    }
-    let mut lo = lo;
-    let mut hi = hi;
-    while lo.checked_add(1).is_some_and(|n| n < hi) {
-        let mid = lo + (hi - lo) / 2;
-        if f(mid)? {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    Ok(hi)
-}
-
-/// [`BigInt`] counterpart of [`bin_search_down`], used by the integer shrink
-/// passes which now carry values as arbitrary-precision integers. Same
-/// contract: assumes `f(hi)` is true, returns the smallest locally-true value
-/// in `[lo, hi]`.
-pub(super) fn bin_search_down_big_r<E>(
-    lo: BigInt,
-    hi: BigInt,
-    f: &mut impl FnMut(&BigInt) -> Result<bool, E>,
-) -> Result<BigInt, E> {
-    if f(&lo)? {
-        return Ok(lo);
-    }
-    let mut lo = lo;
-    let mut hi = hi;
-    while &lo + 1 < hi {
-        let mid = &lo + (&hi - &lo) / 2;
-        if f(&mid)? {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    Ok(hi)
-}
-
-/// Finds a (hopefully large) integer `n >= 0` such that `f(n)` is true and
-/// `f(n+1)` is false. `f(0)` is assumed to be true and is not checked.
-///
-/// Used by shrink passes that want to maximise a step size — e.g. "lower
-/// both nodes by k" needs the largest k for which the joint replacement
-/// is still interesting.
-///
-/// Uses `checked_mul` on the exponential probe and `lo + (hi - lo) / 2` on
-/// the binary-search midpoint: a predicate that accepts an unbounded range
-/// (e.g. a `lower_integers_together` pass over full-range `i128` nodes)
-/// would otherwise walk `hi` off the end of `usize`.
-pub(crate) fn find_integer_r<E>(mut f: impl FnMut(usize) -> Result<bool, E>) -> Result<usize, E> {
-    for i in 1..5 {
-        if !f(i)? {
-            return Ok(i - 1);
-        }
-    }
-    let mut lo = 4;
-    let mut hi = 5;
-    while f(hi)? {
-        lo = hi;
-        let Some(next) = hi.checked_mul(2) else {
-            return Ok(lo);
-        };
-        hi = next;
-    }
-    while lo + 1 < hi {
-        let mid = lo + (hi - lo) / 2;
-        if f(mid)? {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    Ok(lo)
-}
-
-/// Infallible `bool` form of [`find_integer_r`], used by the targeting
-/// hill-climber.
-pub(crate) fn find_integer(mut f: impl FnMut(usize) -> bool) -> usize {
-    match find_integer_r(|x| Ok::<bool, std::convert::Infallible>(f(x))) {
-        Ok(v) => v,
-    }
+/// Box a shrink-pass step future behind the object type
+/// [`ShrinkPassFn`](scheduling::ShrinkPassFn) expects; having a named
+/// function (rather than `Box::pin` inline) is what lets the higher-ranked
+/// pass closures in [`Shrinker::shrink`] infer their return type.
+fn boxed_pass<'s>(
+    fut: impl Future<Output = ShrinkResult<()>> + Send + 's,
+) -> Pin<Box<dyn Future<Output = ShrinkResult<()>> + Send + 's>> {
+    Box::pin(fut)
 }
 
 #[cfg(test)]

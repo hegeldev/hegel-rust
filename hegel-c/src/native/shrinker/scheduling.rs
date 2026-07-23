@@ -10,11 +10,23 @@
 //! finer-grained step is a future refinement; the scheduling skeleton
 //! here stays the same either way.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use super::{ShrinkResult, Shrinker};
 
 /// A boxed shrink-pass step. Returns [`ShrinkStop`](super::ShrinkStop) once the
-/// shrink deadline has passed so the scheduler unwinds promptly.
-pub type ShrinkPassFn<'a> = Box<dyn FnMut(&mut Shrinker<'a>) -> ShrinkResult<()> + 'a>;
+/// shrink deadline has passed so the scheduler unwinds promptly. The step
+/// borrows the shrinker for the duration of the returned future, which is
+/// boxed via [`boxed_pass`](super::boxed_pass) so the closure's return type
+/// is nameable.
+pub type ShrinkPassFn<'a> = Box<
+    dyn for<'s> FnMut(
+            &'s mut Shrinker<'a>,
+        ) -> Pin<Box<dyn Future<Output = ShrinkResult<()>> + Send + 's>>
+        + Send
+        + 'a,
+>;
 
 /// SplitMix64 step — used as a deterministic, dependency-free RNG to
 /// scramble pass ordering when `fixate_shrink_passes` falls into the
@@ -80,20 +92,23 @@ impl<'a> Shrinker<'a> {
     ///
     /// Returns when no pass made any progress over a full outer
     /// iteration. Called by [`Shrinker::shrink`].
-    pub fn fixate_shrink_passes(&mut self, passes: &mut [ShrinkPass<'a>]) -> ShrinkResult<()> {
+    pub async fn fixate_shrink_passes(
+        &mut self,
+        passes: &mut [ShrinkPass<'a>],
+    ) -> ShrinkResult<()> {
         const MAX_FAILURES: usize = 20;
         let mut any_ran = true;
         let mut shuffle_state: u64 = 0x9E3779B97F4A7C15;
         while any_ran {
             any_ran = false;
-            let mut can_discard = self.remove_discarded()?;
+            let mut can_discard = self.remove_discarded().await?;
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;
             let mut reorder_keys: Vec<i32> = vec![0; passes.len()];
             let mut shuffle_requested = false;
             for idx in 0..passes.len() {
                 if can_discard {
-                    can_discard = self.remove_discarded()?;
+                    can_discard = self.remove_discarded().await?;
                 }
                 let before_nodes_len = self.current_nodes.len();
                 let epoch_before_pass = self.improvements;
@@ -118,7 +133,7 @@ impl<'a> Shrinker<'a> {
                     passes[idx].calls += 1;
                     let epoch_before_iter = self.improvements;
                     let initial_calls = self.calls;
-                    (passes[idx].run)(self)?;
+                    (passes[idx].run)(self).await?;
                     if self.improvements > epoch_before_iter {
                         passes[idx].shrinks += 1;
                         if self.current_nodes.len() < before_nodes_len {
@@ -164,7 +179,10 @@ impl<'a> Shrinker<'a> {
             for (dest, &src) in permutation.iter().enumerate() {
                 new_order[dest] = Some(std::mem::replace(
                     &mut passes[src],
-                    ShrinkPass::new("__placeholder__", Box::new(|_| Ok(()))),
+                    ShrinkPass::new(
+                        "__placeholder__",
+                        Box::new(|_| Box::pin(std::future::ready(Ok(())))),
+                    ),
                 ));
             }
             for (dest, slot) in new_order.into_iter().enumerate() {

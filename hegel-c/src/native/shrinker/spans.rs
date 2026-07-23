@@ -4,10 +4,42 @@
 //! structured sub-sequences of the choice list rather than individual
 //! nodes.
 
-use super::ordering::shrink_ordering;
+use super::ordering::{PermutationJudge, shrink_ordering};
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
-use crate::native::core::sort_key;
+use crate::native::core::{ChoiceNode, sort_key};
+
+/// The [`PermutationJudge`] behind [`Shrinker::reorder_spans`]: splices the
+/// sibling spans' node ranges into the proposed order and asks `consider`
+/// whether the reordered sequence is still interesting.
+struct ReorderJudge<'e, 'a> {
+    shrinker: &'e mut Shrinker<'a>,
+    snapshot_nodes: &'e [ChoiceNode],
+    endpoints: &'e [(usize, usize)],
+}
+
+impl PermutationJudge for ReorderJudge<'_, '_> {
+    fn accept<'s>(&'s mut self, permutation: &'s [usize]) -> super::ordering::JudgeFuture<'s> {
+        Box::pin(async move {
+            hegel_internal_debug_assert_eq!(permutation.len(), self.endpoints.len());
+            let mut attempt: Vec<ChoiceNode> = Vec::with_capacity(self.snapshot_nodes.len());
+            attempt.extend_from_slice(&self.snapshot_nodes[..self.endpoints[0].0]);
+            for (k, &(_, target_end)) in self.endpoints.iter().enumerate() {
+                let src_idx = permutation[k];
+                let (src_start, src_end) = self.endpoints[src_idx];
+                attempt.extend_from_slice(&self.snapshot_nodes[src_start..src_end]);
+                if k + 1 < self.endpoints.len() {
+                    attempt.extend_from_slice(
+                        &self.snapshot_nodes[target_end..self.endpoints[k + 1].0],
+                    );
+                } else {
+                    attempt.extend_from_slice(&self.snapshot_nodes[target_end..]);
+                }
+            }
+            self.shrinker.consider(&attempt).await
+        })
+    }
+}
 
 impl<'a> Shrinker<'a> {
     /// Delete every contiguous non-overlapping discarded span in one pass.
@@ -20,7 +52,7 @@ impl<'a> Shrinker<'a> {
     /// (b) the deletion attempts succeeded.  Returns `false` when the
     /// shrinker has discarded data that can't be removed (a follow-up
     /// pass shouldn't try this work again on the same target).
-    pub(crate) fn remove_discarded(&mut self) -> ShrinkResult<bool> {
+    pub(crate) async fn remove_discarded(&mut self) -> ShrinkResult<bool> {
         loop {
             let mut discarded: Vec<(usize, usize)> = Vec::new();
             for span in self.current_spans.iter() {
@@ -42,7 +74,7 @@ impl<'a> Shrinker<'a> {
                 attempt.drain(u..v);
             }
 
-            if !self.consider(&attempt)? {
+            if !self.consider(&attempt).await? {
                 return Ok(false);
             }
         }
@@ -57,7 +89,7 @@ impl<'a> Shrinker<'a> {
     /// structures whose simplest form is shape-dependent (e.g. an
     /// inner span that becomes shorter under simplest values) still
     /// converge.
-    pub(crate) fn try_trivial_spans(&mut self) -> ShrinkResult<()> {
+    pub(crate) async fn try_trivial_spans(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_spans.len() {
             let epoch_before = self.improvements;
@@ -85,7 +117,7 @@ impl<'a> Shrinker<'a> {
             }
 
             let (is_interesting, actual_nodes, actual_spans) =
-                self.run_test_fn(ShrinkRun::Full(&attempt))?;
+                self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
             self.calls += 1;
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
                 self.accept_improvement(actual_nodes, actual_spans);
@@ -99,7 +131,7 @@ impl<'a> Shrinker<'a> {
                         let mut spliced = self.current_nodes[..span.start].to_vec();
                         spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
                         spliced.extend_from_slice(&self.current_nodes[span.end..]);
-                        self.consider(&spliced)?;
+                        self.consider(&spliced).await?;
                     }
                 }
             }
@@ -118,7 +150,7 @@ impl<'a> Shrinker<'a> {
     /// the descendant is strictly contained in the ancestor and is
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
-    pub(crate) fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
+    pub(crate) async fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
         let spans: Vec<(usize, usize, String)> = self
             .current_spans
             .iter()
@@ -158,7 +190,7 @@ impl<'a> Shrinker<'a> {
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
                     attempt.extend_from_slice(&self.current_nodes[a_end..]);
-                    self.consider(&attempt)?;
+                    self.consider(&attempt).await?;
                 }
             }
         }
@@ -177,7 +209,7 @@ impl<'a> Shrinker<'a> {
     /// position. This is the pass that ensures `test_not_equal(x, y)`
     /// collapses to a canonical `(x="", y="0")` rather than the
     /// symmetric alternative.
-    pub(crate) fn reorder_spans(&mut self) -> ShrinkResult<()> {
+    pub(crate) async fn reorder_spans(&mut self) -> ShrinkResult<()> {
         let parents: Vec<Option<usize>> = {
             let mut seen: std::collections::BTreeSet<Option<usize>> =
                 std::collections::BTreeSet::new();
@@ -196,7 +228,15 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            for (_label, child_indices) in by_label {
+            for (label, child_indices) in by_label {
+                let child_indices: Vec<usize> = child_indices
+                    .into_iter()
+                    .filter(|&i| {
+                        self.current_spans
+                            .get(i)
+                            .is_some_and(|s| s.parent == parent && s.label == label)
+                    })
+                    .collect();
                 if child_indices.len() <= 1 {
                     continue;
                 }
@@ -228,25 +268,13 @@ impl<'a> Shrinker<'a> {
                 shrink_ordering::<crate::native::core::NodesSortKey<'_>, _, _>(
                     n,
                     |i| cached_keys[i],
-                    |permutation| -> ShrinkResult<bool> {
-                        hegel_internal_debug_assert_eq!(permutation.len(), n);
-                        let mut attempt: Vec<_> = Vec::with_capacity(snapshot_nodes.len());
-                        attempt.extend_from_slice(&snapshot_nodes[..endpoints[0].0]);
-                        for (k, &(_, target_end)) in endpoints.iter().enumerate() {
-                            let src_idx = permutation[k];
-                            let (src_start, src_end) = endpoints[src_idx];
-                            attempt.extend_from_slice(&snapshot_nodes[src_start..src_end]);
-                            if k + 1 < endpoints.len() {
-                                attempt.extend_from_slice(
-                                    &snapshot_nodes[target_end..endpoints[k + 1].0],
-                                );
-                            } else {
-                                attempt.extend_from_slice(&snapshot_nodes[target_end..]);
-                            }
-                        }
-                        self.consider(&attempt)
+                    ReorderJudge {
+                        shrinker: &mut *self,
+                        snapshot_nodes: &snapshot_nodes,
+                        endpoints: &endpoints,
                     },
-                )?;
+                )
+                .await?;
             }
         }
         Ok(())

@@ -550,8 +550,7 @@ mod snapshots_shrinking {
 
 mod override_captures_run_output {
     //! `with_output_override` captures *all* of a run's output — the engine's
-    //! own progress lines (which historically went straight to stderr from
-    //! the engine worker thread), the final failure diagnostics with the
+    //! own progress lines, the final failure diagnostics with the
     //! reproducer line, the multi-failure headline, and output produced by
     //! clones driven on other threads. The sink is resolved once when the
     //! run starts, so it travels with the run rather than being looked up

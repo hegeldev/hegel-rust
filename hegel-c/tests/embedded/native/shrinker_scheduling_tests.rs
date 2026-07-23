@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::fixate_shrink_passes`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -21,7 +22,7 @@ fn int_node(value: i128) -> ChoiceNode {
 fn fixate_shrink_passes_runs_passes_to_fixed_point() {
     let initial = vec![int_node(10), int_node(20)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -30,9 +31,9 @@ fn fixate_shrink_passes_runs_passes_to_fixed_point() {
     );
     let mut passes = vec![ShrinkPass::new(
         "zero_choices",
-        Box::new(|sh| sh.zero_choices()),
+        Box::new(|sh| Box::pin(sh.zero_choices())),
     )];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -53,7 +54,7 @@ fn fixate_shrink_passes_runs_passes_to_fixed_point() {
 fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
     let initial = vec![int_node(1); 5];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -62,9 +63,9 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
     );
     let mut passes = vec![ShrinkPass::new(
         "delete_chunks",
-        Box::new(|sh| sh.delete_chunks()),
+        Box::new(|sh| Box::pin(sh.delete_chunks())),
     )];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     assert!(shrinker.current_nodes.is_empty());
     let stats = shrinker.pass_stats(&passes);
     let (_, _, _, deletions) = stats[0];
@@ -73,14 +74,14 @@ fn fixate_shrink_passes_records_deletion_stat_when_pass_shortens() {
 
 #[test]
 fn consider_short_circuits_when_stalled() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    let counter = Rc::new(Cell::new(0_usize));
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                counter_clone.set(counter_clone.get() + 1);
+                counter_clone.fetch_add(1, Ordering::Relaxed);
                 let interesting = matches!(&nodes[0].value,
                     ChoiceValue::Integer(v) if i128::try_from(v).unwrap() < 5);
                 (interesting, nodes.to_vec(), Spans::new())
@@ -90,24 +91,24 @@ fn consider_short_circuits_when_stalled() {
         vec![int_node(5)],
         Spans::new(),
     );
-    shrinker.consider(&[int_node(3)]).unwrap();
-    let baseline = counter.get();
+    drive_no_yield(shrinker.consider(&[int_node(3)])).unwrap();
+    let baseline = counter.load(Ordering::Relaxed);
     shrinker.max_stall = 10;
     shrinker.calls_at_last_shrink = shrinker.calls;
     for v in 10..60 {
-        shrinker.consider(&[int_node(v)]).unwrap();
+        drive_no_yield(shrinker.consider(&[int_node(v)])).unwrap();
     }
     assert!(
-        counter.get() - baseline <= 10,
+        counter.load(Ordering::Relaxed) - baseline <= 10,
         "test_fn invoked {} times post-baseline, expected <= 10",
-        counter.get() - baseline
+        counter.load(Ordering::Relaxed) - baseline
     );
 }
 
 #[test]
 fn max_stall_grows_after_shrink() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let v = match &nodes[0].value {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
@@ -121,13 +122,13 @@ fn max_stall_grows_after_shrink() {
         Spans::new(),
     );
     shrinker.max_stall = 5;
-    let accepted_first = shrinker.consider(&[int_node(9)]).unwrap();
+    let accepted_first = drive_no_yield(shrinker.consider(&[int_node(9)])).unwrap();
     assert!(accepted_first);
     let stall_after_first = shrinker.max_stall;
     for v in [8, 7, 6] {
-        shrinker.consider(&[int_node(v)]).unwrap();
+        drive_no_yield(shrinker.consider(&[int_node(v)])).unwrap();
     }
-    shrinker.consider(&[int_node(1)]).unwrap();
+    drive_no_yield(shrinker.consider(&[int_node(1)])).unwrap();
     assert!(
         shrinker.max_stall > stall_after_first,
         "max_stall failed to grow: {} -> {}",
@@ -138,15 +139,15 @@ fn max_stall_grows_after_shrink() {
 
 #[test]
 fn shrink_terminates_when_stalled() {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    let calls = Rc::new(Cell::new(0_usize));
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
     let initial = vec![int_node(5); 100];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                calls_clone.set(calls_clone.get() + 1);
+                calls_clone.fetch_add(1, Ordering::Relaxed);
                 (true, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -155,11 +156,11 @@ fn shrink_terminates_when_stalled() {
         Spans::new(),
     );
     shrinker.max_stall = 200;
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert!(
-        calls.get() <= 2 + 4 * shrinker.max_stall,
+        calls.load(Ordering::Relaxed) <= 2 + 4 * shrinker.max_stall,
         "shrinker did not terminate fast enough: {} calls, max_stall {}",
-        calls.get(),
+        calls.load(Ordering::Relaxed),
         shrinker.max_stall
     );
 }
@@ -168,7 +169,7 @@ fn shrink_terminates_when_stalled() {
 fn fixate_passes_does_full_run_even_when_stalled() {
     let initial: Vec<ChoiceNode> = (0..20).map(int_node).collect();
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = nodes
                     .iter()
@@ -183,9 +184,14 @@ fn fixate_passes_does_full_run_even_when_stalled() {
     );
     shrinker.max_stall = 5;
     let mut passes: Vec<ShrinkPass> = (1..=5)
-        .map(|i| ShrinkPass::new("node_program", Box::new(move |sh| sh.node_program(i))))
+        .map(|i| {
+            ShrinkPass::new(
+                "node_program",
+                Box::new(move |sh| Box::pin(sh.node_program(i))),
+            )
+        })
         .collect();
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     for sp in &passes {
         assert!(sp.calls > 0, "pass {} never ran", sp.name);
     }
@@ -195,7 +201,7 @@ fn fixate_passes_does_full_run_even_when_stalled() {
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     let initial = vec![int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -203,39 +209,38 @@ fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
         Spans::new(),
     );
     let mut passes = vec![
-        ShrinkPass::new("useless", Box::new(|_| Ok(()))),
+        ShrinkPass::new("useless", Box::new(|_| Box::pin(async { Ok(()) }))),
         ShrinkPass::new(
             "useful",
-            Box::new(|sh| sh.binary_search_integer_towards_zero()),
+            Box::new(|sh| Box::pin(sh.binary_search_integer_towards_zero())),
         ),
     ];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     assert_eq!(passes[0].name, "useful");
     assert_eq!(passes[1].name, "useless");
 }
 
 #[test]
 fn fixate_emits_debug_per_pass_step_when_debug_set() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    let log = Rc::new(RefCell::new(Vec::<String>::new()));
+    use std::sync::{Arc, Mutex};
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
     let log_clone = log.clone();
     let initial = vec![int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.set_debug(move |msg| log_clone.borrow_mut().push(msg.to_string()));
+    shrinker.set_debug(move |msg| log_clone.lock().unwrap().push(msg.to_string()));
     let mut passes = vec![ShrinkPass::new(
         "binary_search_integer_towards_zero",
-        Box::new(|sh| sh.binary_search_integer_towards_zero()),
+        Box::new(|sh| Box::pin(sh.binary_search_integer_towards_zero())),
     )];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
-    let messages = log.borrow();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    let messages = log.lock().unwrap();
     assert!(
         messages
             .iter()
@@ -249,7 +254,7 @@ fn fixate_emits_debug_per_pass_step_when_debug_set() {
 fn fixate_emits_no_debug_when_no_callback_set() {
     let initial = vec![int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -258,9 +263,9 @@ fn fixate_emits_no_debug_when_no_callback_set() {
     );
     let mut passes = vec![ShrinkPass::new(
         "zero_choices",
-        Box::new(|sh| sh.zero_choices()),
+        Box::new(|sh| Box::pin(sh.zero_choices())),
     )];
-    shrinker.fixate_shrink_passes(&mut passes).unwrap();
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
     let v = match &shrinker.current_nodes[0].value {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
@@ -270,22 +275,21 @@ fn fixate_emits_no_debug_when_no_callback_set() {
 
 #[test]
 fn shrink_emits_profile_report_when_debug_set() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    let log = Rc::new(RefCell::new(Vec::<String>::new()));
+    use std::sync::{Arc, Mutex};
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
     let log_clone = log.clone();
     let initial = vec![int_node(5); 3];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.set_debug(move |msg| log_clone.borrow_mut().push(msg.to_string()));
-    shrinker.shrink();
-    let messages = log.borrow();
+    shrinker.set_debug(move |msg| log_clone.lock().unwrap().push(msg.to_string()));
+    drive_no_yield(shrinker.shrink());
+    let messages = log.lock().unwrap();
     let combined = messages.join("\n");
     assert!(
         combined.contains("Shrink pass profiling"),
@@ -311,22 +315,21 @@ fn shrink_emits_profile_report_when_debug_set() {
 
 #[test]
 fn shrink_profile_reports_singular_call_unit() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    let log = Rc::new(RefCell::new(Vec::<String>::new()));
+    use std::sync::{Arc, Mutex};
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
     let log_clone = log.clone();
     let initial = vec![int_node(0)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.set_debug(move |msg| log_clone.borrow_mut().push(msg.to_string()));
-    shrinker.shrink();
-    let combined = log.borrow().join("\n");
+    shrinker.set_debug(move |msg| log_clone.lock().unwrap().push(msg.to_string()));
+    drive_no_yield(shrinker.shrink());
+    let combined = log.lock().unwrap().join("\n");
     assert!(
         !combined.contains("1 calls"),
         "incorrect pluralization for 1 call. log: {}",
@@ -341,16 +344,16 @@ fn shrink_profile_reports_singular_call_unit() {
 
 #[test]
 fn shrink_stops_immediately_when_deadline_already_passed() {
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
-    let calls = Rc::new(Cell::new(0usize));
+    let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
     let initial = vec![int_node(5); 50];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                calls_clone.set(calls_clone.get() + 1);
+                calls_clone.fetch_add(1, Ordering::Relaxed);
                 (true, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -359,13 +362,17 @@ fn shrink_stops_immediately_when_deadline_already_passed() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert!(shrinker.timed_out, "expected the shrink to time out");
     assert_eq!(
         shrinker.calls, 0,
         "no candidate should have been considered"
     );
-    assert_eq!(calls.get(), 0, "the test fn must not have been invoked");
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "the test fn must not have been invoked"
+    );
     assert_eq!(
         shrinker.current_nodes.len(),
         50,
@@ -378,7 +385,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
     use std::time::{Duration, Instant};
     let initial = vec![int_node(10), int_node(20)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (!nodes.is_empty(), nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -386,7 +393,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now() + Duration::from_secs(300));
-    shrinker.shrink();
+    drive_no_yield(shrinker.shrink());
     assert!(!shrinker.timed_out);
     let values: Vec<_> = shrinker
         .current_nodes
@@ -406,7 +413,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
 #[test]
 fn consider_and_probe_stop_when_improvement_cap_reached() {
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -414,12 +421,8 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
         Spans::new(),
     );
     shrinker.max_improvements = 0;
-    assert!(shrinker.consider(&[int_node(0)]).is_err());
-    assert!(
-        shrinker
-            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)
-            .is_err()
-    );
+    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
+    assert!(drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).is_err());
     assert_eq!(shrinker.calls, 0, "the cap stops before any execution");
 }
 
@@ -427,7 +430,7 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
 fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     use std::time::{Duration, Instant};
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -435,13 +438,9 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
-    assert!(shrinker.consider(&[int_node(0)]).is_err());
+    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
     assert!(shrinker.timed_out);
-    assert!(shrinker.consider(&[int_node(0)]).is_err());
-    assert!(
-        shrinker
-            .probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)
-            .is_err()
-    );
+    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
+    assert!(drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).is_err());
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");
 }

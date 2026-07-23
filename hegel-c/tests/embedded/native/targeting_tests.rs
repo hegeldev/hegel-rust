@@ -289,22 +289,25 @@ fn run_optimise<F>(start: Vec<ChoiceValue>, start_score: f64, mut body: F)
 where
     F: FnMut(&dyn DataSource) -> TestCaseResult,
 {
-    let mut run_case = move |ds: Box<dyn DataSource + Send + Sync>| {
+    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+    let exchange = crate::exchange::CaseExchange::new();
+    let fut = async {
+        let mut engine = Engine::new(&settings, None, &exchange);
+        engine
+            .targeting
+            .record(&start, &StdHashMap::from([("".to_string(), start_score)]));
+
+        let mut optimiser = Optimiser {
+            engine: &mut engine,
+            max_valid: 10_000,
+            max_calls: 100_000,
+        };
+        optimiser.optimise_targets().await;
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
         let result = body(&*ds);
         ds.mark_complete(&result);
-    };
-    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
-    let mut engine = Engine::new(&settings, None, &mut run_case);
-    engine
-        .targeting
-        .record(&start, &StdHashMap::from([("".to_string(), start_score)]));
-
-    let mut optimiser = Optimiser {
-        engine: &mut engine,
-        max_valid: 10_000,
-        max_calls: 100_000,
-    };
-    optimiser.optimise_targets();
+    });
 }
 
 /// Drives `hill_climb`'s resize-restart branch and the already-examined

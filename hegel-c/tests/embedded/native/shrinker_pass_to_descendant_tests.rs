@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::pass_to_descendant`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
@@ -42,14 +43,14 @@ fn pass_to_descendant_replaces_outer_with_inner_same_label() {
     spans.push(lab(2, 4, "tree"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.pass_to_descendant().unwrap();
+    drive_no_yield(shrinker.pass_to_descendant()).unwrap();
 
     let values: Vec<_> = shrinker
         .current_nodes
@@ -70,14 +71,14 @@ fn pass_to_descendant_skips_different_labels() {
     spans.push(lab(1, 2, "inner"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.pass_to_descendant().unwrap();
+    drive_no_yield(shrinker.pass_to_descendant()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 3);
 }
 
@@ -89,14 +90,14 @@ fn pass_to_descendant_skips_equal_length_descendant() {
     spans.push(lab(0, 2, "tree"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.pass_to_descendant().unwrap();
+    drive_no_yield(shrinker.pass_to_descendant()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
@@ -116,14 +117,14 @@ fn pass_to_descendant_handles_multiple_descendants() {
     spans.push(lab(2, 3, "tree"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (nodes.len() <= 2, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.pass_to_descendant().unwrap();
+    drive_no_yield(shrinker.pass_to_descendant()).unwrap();
     assert!(shrinker.current_nodes.len() <= 2);
 }
 
@@ -135,13 +136,13 @@ fn pass_to_descendant_safe_when_indices_outrange_after_shrink() {
     spans.push(lab(1, 3, "tree"));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    shrinker.pass_to_descendant().unwrap();
+    drive_no_yield(shrinker.pass_to_descendant()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
 }

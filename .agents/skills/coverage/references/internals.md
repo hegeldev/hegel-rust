@@ -6,9 +6,9 @@ The canonical source of truth for the behaviour is `scripts/check-coverage.py`, 
 
 ## How the coverage script works
 
-1. Runs `cargo llvm-cov --no-report --all-features` to collect coverage data.
-2. Generates an LCOV report. Tries to include TempRustProject subprocess binaries (found as `temp_hegel_test_*` in the target directory), though this depends on the binaries being compiled with coverage instrumentation.
-3. Parses the LCOV data (`DA:<line>,<count>` format — line-level, not region-level).
+1. Runs `cargo llvm-cov --workspace` (with every additive feature) to collect coverage data for both crates, emitting LCOV.
+2. Runs a second `cargo llvm-cov -p hegeltest-c --lib` phase in a hermetic target directory (`target/coverage-hegel-c-lib`) and union-merges the two LCOV files per line. This is a correctness requirement, not redundancy: the workspace pass links two compilations of hegel-c (the shared rlib and the crate's own `--test` build), and every `#[no_mangle] hegel_*` function has the same coverage-record *name* but a different record *hash* in each — `llvm-cov` silently drops one side's counts, so a line inside a `no_mangle` function covered only by hegel-c's embedded tests would deterministically show as uncovered. The isolated phase sees only the lib test's own object (guaranteed by the hermetic target directory), where those counts resolve correctly; merging at the LCOV line level is immune to the collision. Mangled functions are unaffected (unique record names per compilation).
+3. Parses the merged LCOV data (`DA:<line>,<count>` format — line-level, not region-level).
 4. Checks each uncovered line against automatic exclusion patterns.
 5. Lines that don't match any exclusion and don't have `// nocov` are reported as failures.
 6. Automatically removes `// nocov` from lines that turn out to be covered, keeping the annotation count honest.

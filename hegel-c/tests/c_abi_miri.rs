@@ -234,9 +234,9 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
 ///
 /// The run is also started with an output callback (`hegel_run_start`) and
 /// runs at debug verbosity, so the engine invokes the callback — a raw
-/// function pointer with a raw `user_data` pointer — from its worker thread
-/// on every progress line, and Miri checks that cross-thread path for
-/// use-after-free and data races too.
+/// function pointer with a raw `user_data` pointer — on every progress line
+/// while it runs inside `hegel_next_test_case`, and Miri checks that raw
+/// pointer path for use-after-free too.
 #[test]
 fn full_run_generates_fails_and_shrinks() {
     let lines = AtomicUsize::new(0);

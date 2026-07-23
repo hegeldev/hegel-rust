@@ -9,22 +9,42 @@
 //! Embedding contexts that don't speak Rust panics — FFI consumers,
 //! alternative test harnesses, replay tooling — need a thinner entry point
 //! that hands them each test case's raw [`crate::backend::DataSource`] and
-//! lets them drive it directly. That's what [`run_native`] is for.
+//! lets them drive it directly. That's what [`run_native_async`] is for:
+//! libhegel's C ABI (`hegel_run_start` / `hegel_next_test_case`) drives it
+//! one offered test case at a time.
 
 use crate::backend::{DataSource, RunError, TestRunResult};
+use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
 
-/// Drive the native test runner against a callback that receives the raw
-/// data source for each test case.
+/// Synchronous driver for [`run_native_async`], retained for tests: runs the
+/// whole exploration on the calling thread, invoking `run_case` once per
+/// test case the engine wants to run.
 ///
-/// `run_case` is invoked once per test case the engine wants to run. It
-/// receives a boxed [`DataSource`] for the test case; the callback uses this
-/// to generate values, open spans, observe targets, and ultimately call
-/// [`DataSource::mark_complete`] with the test case's outcome.
+/// `run_case` receives a boxed [`DataSource`](crate::backend::DataSource)
+/// for the test case; the callback uses this to generate values, open spans,
+/// observe targets, and ultimately call
+/// [`DataSource::mark_complete`](crate::backend::DataSource::mark_complete)
+/// with the test case's outcome. The callback **must** call `mark_complete`
+/// on its data source before returning; the engine reads the outcome back
+/// through the data source rather than from the callback's return value.
+#[cfg(test)]
+pub(crate) fn run_native(
+    settings: &Settings,
+    database_key: Option<&str>,
+    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+) -> Result<TestRunResult, RunError> {
+    let exchange = CaseExchange::new();
+    let run = run_native_async(settings, database_key, &exchange);
+    crate::exchange::drive(&exchange, run, run_case)
+}
+
+/// Run the native test runner, offering each test case's raw data source to
+/// the driver through `exchange`.
 ///
-/// The callback **must** call [`DataSource::mark_complete`] on its data
-/// source before returning; the engine reads the outcome back through the
-/// data source rather than from the callback's return value.
+/// Dispatches on [`Mode`](crate::settings::Mode) and runs the whole
+/// exploration. Suspends only at the offers, so it can be driven with a
+/// no-op waker (see [`crate::exchange`]).
 ///
 /// The engine only *explores* — database replay, generation, and shrinking —
 /// and every test case is non-final. Each returned
@@ -34,21 +54,20 @@ use crate::settings::{Settings, Verbosity};
 /// message. `Err` is a [`RunError`] — a failure of the run itself (health
 /// check, nondeterminism) rather than of any test case; the embedding reports
 /// it through its own error channel.
-#[doc(hidden)]
-pub fn run_native(
+pub(crate) async fn run_native_async(
     settings: &Settings,
     database_key: Option<&str>,
-    mut run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+    exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, &mut run_case);
+            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });
     }
 
-    let failures = crate::native::test_runner::explore(settings, database_key, &mut run_case)?;
+    let failures = crate::native::test_runner::explore(settings, database_key, exchange).await?;
     Ok(TestRunResult { failures })
 }
 

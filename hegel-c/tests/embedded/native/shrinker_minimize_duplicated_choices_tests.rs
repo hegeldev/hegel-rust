@@ -1,6 +1,7 @@
 //! Unit tests for the generalised `shrink_duplicates` /
 //! `minimize_duplicated_choices`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{
     BooleanChoice, BytesChoice, FloatChoice, IntegerChoice, StringChoice,
@@ -68,7 +69,7 @@ fn string_node(value: Vec<u32>) -> ChoiceNode {
 
 fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
     Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
@@ -80,7 +81,7 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 #[test]
 fn shrink_duplicates_collapses_paired_booleans_to_false() {
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(true)]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Boolean(b) => assert!(!b),
@@ -92,7 +93,7 @@ fn shrink_duplicates_collapses_paired_booleans_to_false() {
 #[test]
 fn shrink_duplicates_collapses_paired_floats_to_zero() {
     let mut shrinker = accepting_shrinker(vec![float_node(3.5), float_node(3.5)]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Float(v) => assert_eq!(v, 0.0),
@@ -105,7 +106,7 @@ fn shrink_duplicates_collapses_paired_floats_to_zero() {
 fn shrink_duplicates_collapses_paired_bytes_to_empty() {
     let mut shrinker =
         accepting_shrinker(vec![bytes_node(vec![1, 2, 3]), bytes_node(vec![1, 2, 3])]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
         match &n.value {
             ChoiceValue::Bytes(b) => assert!(b.is_empty()),
@@ -120,7 +121,7 @@ fn shrink_duplicates_collapses_paired_strings_to_empty() {
         string_node(vec![b'a' as u32, b'b' as u32]),
         string_node(vec![b'a' as u32, b'b' as u32]),
     ]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
         match &n.value {
             ChoiceValue::String(s) => assert!(s.is_empty()),
@@ -133,7 +134,7 @@ fn shrink_duplicates_collapses_paired_strings_to_empty() {
 fn shrink_duplicates_leaves_solo_nodes_alone() {
     let mut shrinker =
         accepting_shrinker(vec![bool_node(true), float_node(3.0), bytes_node(vec![5])]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     match shrinker.current_nodes[0].value {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
@@ -151,7 +152,7 @@ fn shrink_duplicates_leaves_solo_nodes_alone() {
 #[test]
 fn shrink_duplicates_keeps_distinct_values_separate() {
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(false), bool_node(true)]);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
         match n.value {
             ChoiceValue::Boolean(b) => assert!(!b),
@@ -167,7 +168,7 @@ fn shrink_duplicates_keeps_distinct_values_separate() {
 /// shift_right descent uses ~log log instead of ~log accept_improvements.
 fn group_accepts_uniform_at_least(initial: Vec<ChoiceNode>, threshold: i128) -> Shrinker<'static> {
     Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let int_vals: Vec<i128> = nodes
                     .iter()
@@ -194,7 +195,7 @@ fn shrink_duplicates_positive_descent_is_log_log() {
         .map(|_| integer_node(1_000_000_000_000_000, 0, i128::MAX))
         .collect();
     let mut shrinker = group_accepts_uniform_at_least(initial, 100);
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 
     for n in &shrinker.current_nodes {
         match &n.value {
@@ -215,7 +216,7 @@ fn shrink_duplicates_negative_descent_is_log_log() {
         .map(|_| integer_node(-1_000_000_000_000_000, i128::MIN + 1, 0))
         .collect();
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let int_vals: Vec<i128> = nodes
                     .iter()
@@ -234,7 +235,7 @@ fn shrink_duplicates_negative_descent_is_log_log() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 
     for n in &shrinker.current_nodes {
         match &n.value {
@@ -265,14 +266,14 @@ fn shrink_duplicates_skips_group_invalidated_by_concurrent_shrink() {
         integer_node(8, 0, i128::MAX),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(_) => (true, vec![integer_node(0, 0, i128::MAX)], Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 }
 
 /// Cover the `current_valid.len() < 2` return inside the
@@ -289,7 +290,7 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
         .map(|_| integer_node(1_000_000_000_000_000, 0, i128::MAX))
         .collect();
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match &nodes[0].value {
                     ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
@@ -305,7 +306,7 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 }
 
 /// Cover the outer-loop `valid.len() < 2 continue` inside
@@ -323,7 +324,7 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
         integer_node(5, 0, i128::MAX),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let head = match &nodes[0].value {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
@@ -345,6 +346,6 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
         initial,
         Spans::new(),
     );
-    shrinker.shrink_duplicates().unwrap();
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
 }

@@ -1,14 +1,20 @@
 //! Native engine driver.
 //!
 //! [`explore`] is the engine driver: it owns the database replay,
-//! generation, and shrinking phases, using the supplied `run_case` callback
-//! to actually execute each test body, and returns the report — every
-//! distinct bug's shrunk counterexample as a [`Failure`] carrying the
-//! reproduce blob. The caller ([`crate::embed::run_native`], and ultimately
-//! the client) replays each blob to produce the final report. Every test case
-//! `explore` runs is non-final.
+//! generation, and shrinking phases, handing each test case it wants run to
+//! its driver through the supplied [`CaseExchange`] (see [`crate::exchange`]
+//! for the alternation protocol), and returns the report — every distinct
+//! bug's shrunk counterexample as a [`Failure`] carrying the reproduce blob.
+//! The caller ([`crate::embed::run_native_async`]'s driver, and ultimately
+//! the client)
+//! replays each blob to produce the final report. Every test case `explore`
+//! runs is non-final.
 //!
-//! Inside, [`Engine`] wraps the `run_case` callback together with
+//! Everything here is async purely so execution can suspend at the exchange:
+//! there is no executor and no scheduled wakeup anywhere — the engine future
+//! only progresses when its driver polls it.
+//!
+//! Inside, [`Engine`] wraps the exchange together with
 //! a shrink-result cache, exposing `run` / `run_shrink_with_origin` /
 //! `run_probe_with_origin` so the surrounding shrinker
 //! and span-mutation passes can drive replays.
@@ -17,7 +23,8 @@ use std::collections::{HashMap, hash_map::Entry};
 
 use rand::RngExt;
 
-use crate::backend::{DataSource, Failure, RunError, TestCaseResult};
+use crate::backend::{Failure, RunError, TestCaseResult};
+use crate::exchange::CaseExchange;
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
     Spans, Status, sort_key,
@@ -27,8 +34,8 @@ use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkRun, Shrinker};
-use crate::settings::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker};
+use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -95,36 +102,37 @@ const MAX_OVERRUN_DRAWS: u64 = 20;
 ///
 /// The caller replays each blob (via `hegel_test_case_from_blob`) to produce
 /// the final report. Every test case this runs is non-final.
-pub(crate) fn explore(
+pub(crate) async fn explore(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+    exchange: &CaseExchange,
 ) -> Result<Vec<Failure>, RunError> {
     run_main(
         settings,
         database_key,
-        run_case,
+        exchange,
         TOO_SLOW_THRESHOLD,
         std::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
     )
+    .await
 }
 
 /// Run one test case (used by `Mode::SingleTestCase`) and return its
 /// failure, if any.
 ///
 /// A single test case is not a property-test run — there is no exploration,
-/// shrinking, or replay — so it bypasses [`explore`] entirely; `run_case`
-/// runs the one case, which is its own report.
-pub(crate) fn run_single_case(
+/// shrinking, or replay — so it bypasses [`explore`] entirely; the one case
+/// offered through the exchange is its own report.
+pub(crate) async fn run_single_case(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+    exchange: &CaseExchange,
 ) -> Option<Failure> {
     let mut rng = create_rng(settings, database_key);
     let ntc = NativeTestCase::new_random(rng.spawn());
     ntc.family().set_state_machine_steps_unbounded();
     let (data_source, handle) = NativeDataSource::new(ntc);
-    run_case(Box::new(data_source));
+    exchange.offer(Box::new(data_source)).await;
     match NativeDataSource::take_outcome(&handle) {
         TestCaseResult::Interesting(failure) => Some(failure),
         _ => None,
@@ -133,14 +141,16 @@ pub(crate) fn run_single_case(
 
 /// The full multi-test-case engine: database replay, generation, and
 /// shrinking, ending at the exploration report.
-fn run_main(
+async fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: &mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+    exchange: &CaseExchange,
     too_slow_threshold: std::time::Duration,
     shrink_budget: std::time::Duration,
 ) -> Result<Vec<Failure>, RunError> {
-    Engine::new(settings, database_key, run_case).run(too_slow_threshold, shrink_budget)
+    Engine::new(settings, database_key, exchange)
+        .run(too_slow_threshold, shrink_budget)
+        .await
 }
 
 impl<'a> Engine<'a> {
@@ -148,7 +158,7 @@ impl<'a> Engine<'a> {
     /// replay, generation (with targeting and span mutation), shrinking,
     /// and the end-of-run database reconciliation, finishing with the
     /// exploration report of every distinct bug's shrunk counterexample.
-    fn run(
+    async fn run(
         &mut self,
         too_slow_threshold: std::time::Duration,
         shrink_budget: std::time::Duration,
@@ -220,7 +230,7 @@ impl<'a> Engine<'a> {
                     };
                     let ntc =
                         NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE);
-                    let (run, mismatch) = self.test_function(ntc);
+                    let (run, mismatch) = self.test_function(ntc).await;
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
                     }
@@ -270,7 +280,9 @@ impl<'a> Engine<'a> {
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
         {
-            let (run, mismatch) = self.test_function(NativeTestCase::for_simplest(BUFFER_SIZE));
+            let (run, mismatch) = self
+                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE))
+                .await;
             if let Some(msg) = mismatch {
                 return Err(RunError::NonDeterministic(msg));
             }
@@ -332,7 +344,7 @@ impl<'a> Engine<'a> {
                     output.line("Running test case");
                 }
 
-                let (run, mismatch) = self.test_function(ntc);
+                let (run, mismatch) = self.test_function(ntc).await;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -396,14 +408,14 @@ impl<'a> Engine<'a> {
                         max_valid: max_test_cases,
                         max_calls: max_test_cases * 10,
                     };
-                    optimiser.optimise_targets();
+                    optimiser.optimise_targets().await;
                 }
 
                 if run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
                 {
-                    self.try_span_mutation(&run.nodes, &run.spans);
+                    self.try_span_mutation(&run.nodes, &run.spans).await;
                 }
             }
         }
@@ -470,7 +482,7 @@ impl<'a> Engine<'a> {
                     }
                     if let Some(stored_choices) = deserialize_choices(&raw) {
                         let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                        let _ = self.test_function(ntc);
+                        let _ = self.test_function(ntc).await;
                     }
                     if let Some(db) = self.db() {
                         db.delete(&secondary_key, &raw);
@@ -498,7 +510,7 @@ impl<'a> Engine<'a> {
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, mismatch) = self.test_function(verify_ntc);
+                let (verify, mismatch) = self.test_function(verify_ntc).await;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -508,40 +520,23 @@ impl<'a> Engine<'a> {
                     return Err(RunError::Flaky(flaky_diagnostic()));
                 }
 
-                let target_origin = origin.clone();
                 let initial_spans = Spans::from(verify.spans.clone());
                 let shrunk = {
-                    let this: &mut Engine<'_> = &mut *self;
-                    let mut shrinker = Shrinker::with_probe(
-                        Box::new(|req: ShrinkRun| {
-                            if verbosity == Verbosity::Verbose {
-                                output.line("Running test case");
-                            }
-                            let run = match req {
-                                ShrinkRun::Full(nodes) => {
-                                    let choices: Vec<ChoiceValue> =
-                                        nodes.iter().map(|n| n.value.clone()).collect();
-                                    this.cached_test_function(&choices, Some(nodes), 0)
-                                }
-                                ShrinkRun::Probe { prefix, max_size } => this.cached_test_function(
-                                    prefix,
-                                    None,
-                                    max_size.saturating_sub(prefix.len()),
-                                ),
-                            };
-                            let matches = run.status == Status::Interesting
-                                && run.origin.as_deref() == Some(target_origin.as_str());
-                            (matches, run.nodes, Spans::from(run.spans))
-                        }),
-                        verify.nodes,
-                        initial_spans,
-                    );
+                    let probe = EngineShrinkProbe {
+                        engine: &mut *self,
+                        target_origin: origin.clone(),
+                        verbosity,
+                        output: output.clone(),
+                    };
+                    let mut shrinker =
+                        Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
                     shrinker.deadline = Some(shrink_deadline);
-                    let _ = shrinker.initial_coarse_reduction();
+                    let _ = shrinker.initial_coarse_reduction().await;
                     if verbosity == Verbosity::Debug {
-                        shrinker.set_debug(|msg| output.line(msg));
+                        let output = output.clone();
+                        shrinker.set_debug(move |msg| output.line(msg));
                     }
-                    shrinker.shrink();
+                    shrinker.shrink().await;
                     shrink_timed_out |= shrinker.timed_out;
                     shrinker.current_nodes
                 };
@@ -891,8 +886,8 @@ impl<'a> Persister<'a> {
 
 /// The native engine — Hegel's analogue of Hypothesis's `ConjectureRunner`.
 ///
-/// One object owns everything a test run touches: the `run_case` executor
-/// callback, the RNG, the example database (via the [`Persister`]), the choice
+/// One object owns everything a test run touches: the exchange it offers
+/// test cases through, the RNG, the example database (via the [`Persister`]), the choice
 /// tree, the per-origin interesting map, targeting observations, and all
 /// run-level counters. The choice tree is the single source of truth for
 /// already-seen paths: it is *lossless* (each conclusion records nodes via the
@@ -912,7 +907,7 @@ impl<'a> Persister<'a> {
 pub(crate) struct Engine<'a> {
     settings: &'a Settings,
     database_key: Option<&'a str>,
-    run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+    exchange: &'a CaseExchange,
     rng: EngineRng,
     persister: Persister<'a>,
     pub(crate) tree_root: crate::native::data_tree::DataTreeNode,
@@ -937,7 +932,7 @@ impl<'a> Engine<'a> {
     pub(crate) fn new(
         settings: &'a Settings,
         database_key: Option<&'a str>,
-        run_case: &'a mut dyn FnMut(Box<dyn DataSource + Send + Sync>),
+        exchange: &'a CaseExchange,
     ) -> Self {
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
@@ -947,7 +942,7 @@ impl<'a> Engine<'a> {
         Engine {
             settings,
             database_key,
-            run_case,
+            exchange,
             rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
@@ -980,9 +975,12 @@ impl<'a> Engine<'a> {
     /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
     /// the choice-tree non-determinism diagnostic, if recording the run's
     /// path contradicted an earlier run.
-    pub(crate) fn test_function(&mut self, ntc: NativeTestCase) -> (RunResult, Option<String>) {
+    pub(crate) async fn test_function(
+        &mut self,
+        ntc: NativeTestCase,
+    ) -> (RunResult, Option<String>) {
         let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc);
+        let run = self.execute(ntc).await;
         let mismatch = self.record_run(&run, tc_start.elapsed());
         (run, mismatch)
     }
@@ -1042,13 +1040,14 @@ impl<'a> Engine<'a> {
         )
     }
 
-    /// Execute one test case via `run_case`, recording the trie and
-    /// returning a [`RunResult`] populated from the outcome reported by the
-    /// data source's `mark_complete` plus the [`NativeTestCase`]'s realized
-    /// choice nodes. Always a non-final execution.
-    fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
+    /// Execute one test case by offering it through the exchange, recording
+    /// the trie and returning a [`RunResult`] populated from the outcome
+    /// reported by the data source's `mark_complete` plus the
+    /// [`NativeTestCase`]'s realized choice nodes. Always a non-final
+    /// execution.
+    async fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
         let (data_source, handle) = NativeDataSource::new(ntc);
-        (self.run_case)(Box::new(data_source));
+        self.exchange.offer(Box::new(data_source)).await;
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let span_events = NativeDataSource::take_span_events(&handle);
@@ -1088,7 +1087,7 @@ impl<'a> Engine<'a> {
     /// through [`Self::test_function`], which records the run into the tree so a
     /// later replay of the same path is served. There is no separate result
     /// cache: the tree is the single source of truth.
-    fn cached_test_function(
+    async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
@@ -1114,8 +1113,46 @@ impl<'a> Engine<'a> {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
         };
-        let (run, _mismatch) = self.test_function(ntc);
+        let (run, _mismatch) = self.test_function(ntc).await;
         run
+    }
+}
+
+/// The engine side of the shrinker's [`ShrinkProbe`]: routes every requested
+/// run through [`Engine::cached_test_function`] and reports whether the run
+/// reproduced the origin being shrunk. Borrows the engine for the duration of
+/// the shrink, so the shrinker's executions record into the engine's tree and
+/// counters like any other run.
+struct EngineShrinkProbe<'e, 'a> {
+    engine: &'e mut Engine<'a>,
+    target_origin: String,
+    verbosity: Verbosity,
+    output: Output,
+}
+
+impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
+        Box::pin(async move {
+            if self.verbosity == Verbosity::Verbose {
+                self.output.line("Running test case");
+            }
+            let run = match req {
+                ShrinkRun::Full(nodes) => {
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    self.engine
+                        .cached_test_function(&choices, Some(nodes), 0)
+                        .await
+                }
+                ShrinkRun::Probe { prefix, max_size } => {
+                    self.engine
+                        .cached_test_function(prefix, None, max_size.saturating_sub(prefix.len()))
+                        .await
+                }
+            };
+            let matches = run.status == Status::Interesting
+                && run.origin.as_deref() == Some(self.target_origin.as_str());
+            (matches, run.nodes, Spans::from(run.spans))
+        })
     }
 }
 
@@ -1134,7 +1171,7 @@ impl<'a> Engine<'a> {
 /// later identical proposal is served from the tree; tree-served probes are not
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
-    fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
+    async fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
         let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
             rustc_hash::FxHashMap::default();
         for span in spans.iter() {
@@ -1203,7 +1240,7 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let run = self.cached_test_function(&attempt, None, 0);
+            let run = self.cached_test_function(&attempt, None, 0).await;
             if run.status == Status::Interesting {
                 return;
             }

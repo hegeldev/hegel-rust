@@ -96,24 +96,60 @@ use crate::native::core::ChoiceKind;
 use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 
-/// Build an [`Engine`] whose `run_case` runs `body` (returning the test
+/// Build an [`Engine`] whose driver runs `body` (returning the test
 /// case's outcome) and counts how many times the body actually executed,
-/// then hand both to `after`.
+/// then hand both to `after`, driving the whole interaction through a
+/// [`CaseExchange`].
 fn with_counting_ctx<T, B>(mut body: T, after: B)
 where
     T: FnMut(&dyn DataSource) -> TestCaseResult,
-    B: FnOnce(&mut Engine<'_>, &Rc<Cell<usize>>),
+    B: AsyncFnOnce(&mut Engine<'_>, &Rc<Cell<usize>>),
 {
     let exec_count = Rc::new(Cell::new(0usize));
     let counter = exec_count.clone();
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let settings = Settings::new().database(None);
+    let exchange = CaseExchange::new();
+    let fut = async {
+        let mut ctx = Engine::new(&settings, None, &exchange);
+        after(&mut ctx, &exec_count).await;
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
         counter.set(counter.get() + 1);
         let result = body(&*ds);
         ds.mark_complete(&result);
-    };
-    let settings = Settings::new().database(None);
-    let mut ctx = Engine::new(&settings, None, &mut run_case);
-    after(&mut ctx, &exec_count);
+    });
+}
+
+/// Drive [`run_single_case`] to completion with a synchronous `run_case`
+/// callback, the way the old pre-exchange entry point worked.
+fn run_single_case_sync(
+    settings: &Settings,
+    key: Option<&str>,
+    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+) -> Option<Failure> {
+    let exchange = CaseExchange::new();
+    crate::exchange::drive(
+        &exchange,
+        run_single_case(settings, key, &exchange),
+        run_case,
+    )
+}
+
+/// Drive [`run_main`] to completion with a synchronous `run_case` callback,
+/// preserving the old entry point's shape for threshold-injecting tests.
+fn run_main_sync(
+    settings: &Settings,
+    key: Option<&str>,
+    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+    too_slow_threshold: Duration,
+    shrink_budget: Duration,
+) -> Result<Vec<Failure>, crate::backend::RunError> {
+    let exchange = CaseExchange::new();
+    crate::exchange::drive(
+        &exchange,
+        run_main(settings, key, &exchange, too_slow_threshold, shrink_budget),
+        run_case,
+    )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
@@ -131,14 +167,16 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
 
-            let run = ctx.cached_test_function(
-                &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
-                None,
-                0,
-            );
+            let run = ctx
+                .cached_test_function(
+                    &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
+                    None,
+                    0,
+                )
+                .await;
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 0, "tree-known path must not run the body");
             assert_eq!(run.nodes.len(), 1);
@@ -153,14 +191,14 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0);
+            let first = ctx.cached_test_function(&choices, None, 0).await;
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0);
+            let second = ctx.cached_test_function(&choices, None, 0).await;
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
         },
@@ -180,15 +218,15 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
                 Err(()) => TestCaseResult::Overrun,
             }
         },
-        |ctx, count| {
+        async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0);
+            let first = ctx.cached_test_function(&choices, None, 0).await;
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0);
+            let second = ctx.cached_test_function(&choices, None, 0).await;
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
@@ -213,8 +251,10 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
             let _ = rbool(ds);
             TestCaseResult::Valid
         },
-        |ctx, _| {
-            let run = ctx.execute(NativeTestCase::for_choices(&[], None, None));
+        async |ctx, _| {
+            let run = ctx
+                .execute(NativeTestCase::for_choices(&[], None, None))
+                .await;
             assert_eq!(run.status, Status::EarlyStop);
         },
     );
@@ -227,9 +267,9 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
             (Ok(_), Ok(_)) => TestCaseResult::Valid,
             _ => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1);
+            let run = ctx.cached_test_function(&prefix, None, 1).await;
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
@@ -245,7 +285,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             let nodes = vec![
                 bool_node(false),
                 bool_node(true),
@@ -262,7 +302,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans);
+            ctx.try_span_mutation(&nodes, &spans).await;
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -280,7 +320,7 @@ fn span_mutation_returns_interesting_proposal() {
             Ok(true) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             let nodes = vec![
                 bool_node(false),
                 bool_node(false),
@@ -297,7 +337,7 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans);
+            ctx.try_span_mutation(&nodes, &spans).await;
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -319,7 +359,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
-        |ctx, count| {
+        async |ctx, count| {
             let nodes = vec![
                 bool_node(false),
                 bool_node(true),
@@ -337,7 +377,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             ctx.valid_test_cases = 100;
-            ctx.try_span_mutation(&nodes, &spans);
+            ctx.try_span_mutation(&nodes, &spans).await;
 
             assert_eq!(count.get(), 0);
             assert_eq!(ctx.calls, 0);
@@ -373,13 +413,13 @@ fn complete_native(
 
 #[test]
 fn run_single_case_returns_the_failure() {
-    let failure = run_single_case(
+    let failure = run_single_case_sync(
         &Settings::new()
             .database(None)
             .mode(Mode::SingleTestCase)
             .verbosity(Verbosity::Quiet),
         None,
-        &mut |ds| {
+        |ds| {
             ds.mark_complete(&boom("single-case bug"));
         },
     )
@@ -389,13 +429,13 @@ fn run_single_case_returns_the_failure() {
 
 #[test]
 fn run_single_case_returns_none_for_a_passing_case() {
-    let failure = run_single_case(
+    let failure = run_single_case_sync(
         &Settings::new()
             .database(None)
             .mode(Mode::SingleTestCase)
             .verbosity(Verbosity::Quiet),
         None,
-        &mut |ds| {
+        |ds| {
             ds.mark_complete(&TestCaseResult::Valid);
         },
     );
@@ -416,7 +456,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         .test_cases(20)
         .database(None)
         .backend(crate::settings::Backend::Urandom);
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         None,
         &mut run_case,
@@ -441,7 +481,7 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         .test_cases(20)
         .database(None)
         .backend(crate::settings::Backend::Urandom);
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         None,
         &mut run_case,
@@ -496,7 +536,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         .test_cases(200)
         .database(None)
         .derandomize(true);
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         None,
         &mut run_case,
@@ -526,7 +566,7 @@ fn run_main_reports_too_slow_at_call_site() {
         ds.mark_complete(&result);
     };
     let settings = Settings::new().test_cases(100).database(None);
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         None,
         &mut run_case,
@@ -603,8 +643,8 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             }
             TestCaseResult::Valid
         },
-        |ctx, _count| {
-            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1));
+        async |ctx, _count| {
+            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1)).await;
             assert_eq!(run.status, Status::EarlyStop);
 
             let mut tree = DataTreeNode::default();
@@ -628,7 +668,7 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         Some(key),
         &mut run_case,
@@ -1060,7 +1100,7 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
                 }
                 ds.mark_complete(&TestCaseResult::Valid);
             };
-            run_single_case(&settings, key, &mut run_case);
+            run_single_case_sync(&settings, key, &mut run_case);
         }
         drawn
     };
@@ -1092,7 +1132,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         ds.mark_complete(&result);
     };
     let settings = Settings::new().test_cases(50).database(None).seed(Some(7));
-    let exploration = run_main(
+    let exploration = run_main_sync(
         &settings,
         None,
         &mut run_case,

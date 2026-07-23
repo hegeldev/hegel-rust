@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
 
-use super::{ShrinkResult, Shrinker, bin_search_down_r, find_integer_r};
+use super::search::{BinSearchDown, FindInteger};
+use super::{ShrinkResult, Shrinker};
 
 impl<'a> Shrinker<'a> {
-    pub(super) fn shrink_bytes(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn shrink_bytes(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let (min_size, current) = match (
@@ -21,17 +22,22 @@ impl<'a> Shrinker<'a> {
 
             let simplest = vec![0u8; min_size];
             if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(simplest))]))?;
+                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(simplest))]))
+                    .await?;
             }
 
             let cur_len = self.current_byte_value(i).len();
             if cur_len > min_size {
                 let captured = self.current_byte_value(i);
-                bin_search_down_r(min_size as i128, cur_len as i128, &mut |sz| {
+                let mut search = BinSearchDown::new(min_size as i128, cur_len as i128);
+                while let Some(sz) = search.probe() {
                     let sz = sz as usize;
                     let cand = captured[..sz].to_vec();
-                    self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
-                })?;
+                    let ok = self
+                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                        .await?;
+                    search.record(ok);
+                }
             }
 
             let cur_len = self.current_byte_value(i).len();
@@ -42,7 +48,8 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let cand = cur[..sz].to_vec();
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
+                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                    .await?;
             }
 
             let mut j = self.current_byte_value(i).len();
@@ -54,7 +61,8 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut cand = cur.clone();
                 cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))?;
+                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                    .await?;
             }
 
             let mut j = self.current_byte_value(i).len();
@@ -65,11 +73,15 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
                 let hi = cur[j] as i128;
-                bin_search_down_r(0, hi, &mut |e| {
+                let mut search = BinSearchDown::new(0, hi);
+                while let Some(e) = search.probe() {
                     let mut cand = self.current_byte_value(i);
                     cand[j] = e as u8;
-                    self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
-                })?;
+                    let ok = self
+                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                        .await?;
+                    search.record(ok);
+                }
             }
 
             let mut pos = 1;
@@ -86,7 +98,10 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut swapped = cur.clone();
                     swapped.swap(j - 1, j);
-                    if self.replace(&HashMap::from([(i, ChoiceValue::Bytes(swapped))]))? {
+                    if self
+                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(swapped))]))
+                        .await?
+                    {
                         j -= 1;
                     } else {
                         break;
@@ -114,7 +129,7 @@ impl<'a> Shrinker<'a> {
     /// Useful for tests with a total-length constraint across two bytes
     /// values, where the minimal counterexample has the first as short
     /// as possible.
-    pub(super) fn redistribute_bytes_pairs(&mut self) -> ShrinkResult<()> {
+    pub(super) async fn redistribute_bytes_pairs(&mut self) -> ShrinkResult<()> {
         for gap in 1..3usize {
             let mut idx = 0;
             loop {
@@ -124,7 +139,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let i = indices[idx];
                 let j = indices[idx + gap];
-                self.redistribute_bytes_pair(i, j)?;
+                self.redistribute_bytes_pair(i, j).await?;
                 idx += 1;
             }
         }
@@ -142,7 +157,7 @@ impl<'a> Shrinker<'a> {
             .collect()
     }
 
-    fn redistribute_bytes_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
+    async fn redistribute_bytes_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
         let s = self.current_byte_value(i);
         let t = self.current_byte_value(j);
         let kind_j = match self.current_nodes[j].kind.as_ref() {
@@ -155,7 +170,10 @@ impl<'a> Shrinker<'a> {
         }
 
         let combined: Vec<u8> = s.iter().copied().chain(t.iter().copied()).collect();
-        if self.try_redistribute_bytes(i, j, Vec::new(), combined, &kind_j)? {
+        if self
+            .try_redistribute_bytes(i, j, Vec::new(), combined, &kind_j)
+            .await?
+        {
             return Ok(());
         }
 
@@ -163,25 +181,32 @@ impl<'a> Shrinker<'a> {
         let mut t_prepended = Vec::with_capacity(t.len() + 1);
         t_prepended.push(*last);
         t_prepended.extend_from_slice(&t);
-        if !self.try_redistribute_bytes(i, j, s_init.to_vec(), t_prepended, &kind_j)? {
+        if !self
+            .try_redistribute_bytes(i, j, s_init.to_vec(), t_prepended, &kind_j)
+            .await?
+        {
             return Ok(());
         }
 
         let s_len = s.len();
-        find_integer_r(|extra| {
+        let mut search = FindInteger::new();
+        while let Some(extra) = search.probe() {
             let n = 1 + extra;
-            if n > s_len {
-                return Ok(false);
-            }
-            let new_s = s[..s_len - n].to_vec();
-            let mut new_t = s[s_len - n..].to_vec();
-            new_t.extend_from_slice(&t);
-            self.try_redistribute_bytes(i, j, new_s, new_t, &kind_j)
-        })?;
+            let ok = if n > s_len {
+                false
+            } else {
+                let new_s = s[..s_len - n].to_vec();
+                let mut new_t = s[s_len - n..].to_vec();
+                new_t.extend_from_slice(&t);
+                self.try_redistribute_bytes(i, j, new_s, new_t, &kind_j)
+                    .await?
+            };
+            search.record(ok);
+        }
         Ok(())
     }
 
-    fn try_redistribute_bytes(
+    async fn try_redistribute_bytes(
         &mut self,
         i: usize,
         j: usize,
@@ -196,6 +221,7 @@ impl<'a> Shrinker<'a> {
             (i, ChoiceValue::Bytes(new_s)),
             (j, ChoiceValue::Bytes(new_t)),
         ]))
+        .await
     }
 }
 

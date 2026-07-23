@@ -1,12 +1,13 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::future::Future;
+use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
+use std::task::{Context, Poll, Waker};
 
 use parking_lot::Mutex;
 
@@ -18,6 +19,8 @@ mod backend;
 mod control;
 /// cbindgen:ignore
 mod embed;
+/// cbindgen:ignore
+mod exchange;
 /// cbindgen:ignore
 mod native;
 /// cbindgen:ignore
@@ -53,8 +56,11 @@ pub mod __bench {
     }
 }
 
-use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult, TestRunResult};
-use crate::embed::{data_source_for_blob, run_native};
+use crate::backend::{
+    DataSource, DataSourceError, Failure, RunError, TestCaseResult, TestRunResult,
+};
+use crate::embed::{data_source_for_blob, run_native_async};
+use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
 
@@ -405,8 +411,9 @@ struct OutputTarget {
 
 // SAFETY: the raw `user_data` pointer is what makes this `!Send + !Sync` by
 // default, but the documented contract of the output callback is that it must
-// be safe to invoke with this `user_data` from any thread, so handing the
-// pair to the engine's worker thread is sound.
+// be safe to invoke with this `user_data` from whichever thread drives the
+// run, so carrying the pair inside the engine future (which moves with the
+// run handle) is sound.
 unsafe impl Send for OutputTarget {}
 unsafe impl Sync for OutputTarget {}
 
@@ -518,16 +525,8 @@ pub struct HegelSettings {
     inner: Settings,
     /// Optional database key used by the runner for example storage / replay.
     /// Not part of `Settings` itself in upstream hegel; passed as a separate
-    /// argument to `run_native` on `hegel_run_start`.
+    /// argument to `run_native_async` on `hegel_run_start`.
     database_key: Option<String>,
-}
-
-enum WorkerMessage {
-    TestCase {
-        ds: Box<dyn DataSource + Send + Sync>,
-        ack: mpsc::Sender<()>,
-    },
-    Done(Result<TestRunResult, String>),
 }
 
 /// State shared by every handle in a clone *family* — the handle produced by
@@ -551,22 +550,17 @@ struct FamilyShared {
     /// (which is family-wide in the engine) is reported through it.
     ds: Arc<dyn DataSource + Send + Sync>,
     /// Family-wide completion status. Set once via `compare_exchange` in
-    /// [`Self::complete`] so `ds.mark_complete` runs and the ack is sent
-    /// exactly once, no matter which handle reports it.
+    /// [`Self::complete`] so `ds.mark_complete` runs exactly once, no matter
+    /// which handle reports it. For a run-owned family this is also the gate
+    /// `hegel_next_test_case` checks before resuming the engine.
     completed: AtomicBool,
-    /// `Some` for a family rooted in a run's worker thread (the worker blocks
-    /// on this ack until completion); `None` for a standalone family from
-    /// `hegel_test_case_from_blob`. Sent on by the caller that wins the
-    /// completion `compare_exchange` in [`Self::complete`], which is what
-    /// guarantees send-once.
-    ack: Option<mpsc::Sender<()>>,
 }
 
 impl FamilyShared {
     /// Claim family-wide completion. First caller wins: it records `outcome`
-    /// on the data source and sends the worker ack; every later call — a
-    /// racing clone, or the run tearing down an in-flight case — is a no-op.
-    /// This is the single home of the exactly-once completion protocol.
+    /// on the data source; every later call — a racing clone, or the run
+    /// tearing down an in-flight case — is a no-op. This is the single home
+    /// of the exactly-once completion protocol.
     fn complete(&self, outcome: &TestCaseResult) {
         if self
             .completed
@@ -574,9 +568,6 @@ impl FamilyShared {
             .is_ok()
         {
             self.ds.mark_complete(outcome);
-            if let Some(ack) = &self.ack {
-                let _ = ack.send(());
-            }
         }
     }
 }
@@ -626,14 +617,19 @@ fn into_raw_send_sync<T: Send + Sync>(value: T) -> *mut T {
     Box::into_raw(Box::new(value))
 }
 
+/// The engine future a run drives: the whole exploration (database replay,
+/// generation, targeting, shrinking), suspended at each offered test case.
+type EngineFuture = Pin<Box<dyn Future<Output = Result<TestRunResult, RunError>> + Send>>;
+
 /// In-flight property-test run.
 ///
 /// `hegel_run_start` returns one of these. The caller pulls test cases
 /// out via `hegel_next_test_case` until it writes NULL through its out
 /// parameter, then reads the aggregated outcome via `hegel_run_result`,
-/// and finally frees the handle with `hegel_run_free`. The engine runs
-/// on a separate worker thread inside libhegel; the handle owns the
-/// channel that ferries test cases between caller and worker.
+/// and finally frees the handle with `hegel_run_free`. There is no
+/// background thread: the handle owns the suspended engine as a future,
+/// and each `hegel_next_test_case` call resumes it on the calling thread
+/// until it offers the next test case (or finishes).
 ///
 /// Unlike test-case handles (which detect and reject concurrent use),
 /// a run handle must only be used from one thread at a time: calling
@@ -642,9 +638,13 @@ fn into_raw_send_sync<T: Send + Sync>(value: T) -> *mut T {
 /// do not free a run from a garbage-collector finalizer thread while
 /// another thread may still be using it.
 pub struct HegelRun {
-    worker: Option<JoinHandle<()>>,
-    from_worker: mpsc::Receiver<WorkerMessage>,
-    abort: Arc<AtomicBool>,
+    /// The suspended engine. `None` once the run has produced its result —
+    /// normally by returning, or abnormally by panicking during a poll (the
+    /// panic is caught and converted into an errored result).
+    engine: Option<EngineFuture>,
+    /// The exchange the engine offers each test case's data source through;
+    /// the engine future holds the other reference.
+    exchange: Arc<CaseExchange>,
     // The run's own reference to the current test case's family.
     //
     // The handle returned to the caller from `hegel_next_test_case` is freed
@@ -655,10 +655,6 @@ pub struct HegelRun {
     // advances to the next case or is freed.
     current_family: Option<Arc<FamilyShared>>,
     result: Option<HegelRunResult>,
-    /// Set once a TestRunDone (or worker-died Err) has been observed on
-    /// `from_worker`. Stops `hegel_next_test_case` from blocking forever
-    /// on the second post-completion call.
-    drained: bool,
 }
 
 /// Aggregated outcome of a finished run. `hegel_run_result` writes a
@@ -1134,38 +1130,52 @@ pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
     HEGEL_OK
 }
 
-static WORKER_PANIC_HOOK: Once = Once::new();
-
-/// The name given to the engine worker thread spawned by `hegel_run_start`,
-/// for debuggers and crash reports. The panic hook recognises worker threads
-/// via [`IS_HEGEL_WORKER`], not this name.
-const WORKER_THREAD_NAME: &str = "hegel-worker";
+static ENGINE_PANIC_HOOK: Once = Once::new();
 
 thread_local! {
-    /// Set on threads spawned by `hegel_run_start` so the panic hook can
-    /// recognise them. Keying on this rather than the thread *name* means an
-    /// embedding application that happens to name one of its own threads
-    /// "hegel-worker" doesn't get its panic messages swallowed.
-    static IS_HEGEL_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set for the duration of an engine poll (see [`EnginePollGuard`]) so
+    /// the panic hook can recognise engine panics. Keying on this rather
+    /// than anything about the thread means the embedding application's own
+    /// panics on the same thread are reported normally.
+    static IN_ENGINE_POLL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard marking the current thread as inside an engine poll for the
+/// panic hook, cleared on drop — including the unwind of a caught engine
+/// panic.
+struct EnginePollGuard;
+
+impl EnginePollGuard {
+    fn enter() -> Self {
+        IN_ENGINE_POLL.with(|f| f.set(true));
+        EnginePollGuard
+    }
+}
+
+impl Drop for EnginePollGuard {
+    fn drop(&mut self) {
+        IN_ENGINE_POLL.with(|f| f.set(false));
+    }
 }
 
 /// Install (once) a process-global panic hook that swallows the default
 /// `thread '…' panicked at <file>:<line>:<col>` stderr line for panics
-/// raised on the engine worker thread.
+/// raised while the engine is being polled.
 ///
 /// Every engine panic (an internal invariant, an invalid-argument usage
-/// error) is raised on the worker thread, is already caught by the
-/// worker's `catch_unwind`, and is surfaced as a run-level error through
+/// error) is raised inside a poll, is already caught by the poll's
+/// `catch_unwind`, and is surfaced as a run-level error through
 /// `hegel_run_result_error`. Letting the default hook *also* dump a
 /// Rust-internal source location to the embedding process's stderr is pure
 /// noise — a C consumer has no use for `src/native/test_runner.rs:329:21`,
-/// and it leaks implementation detail. Panics on any other thread (notably
-/// the caller's own thread) fall through to the previous hook unchanged.
-fn install_worker_panic_hook() {
-    WORKER_PANIC_HOOK.call_once(|| {
+/// and it leaks implementation detail. Panics outside an engine poll
+/// (notably from the caller's own code) fall through to the previous hook
+/// unchanged.
+fn install_engine_panic_hook() {
+    ENGINE_PANIC_HOOK.call_once(|| {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if IS_HEGEL_WORKER.try_with(|f| f.get()).unwrap_or(false) {
+            if IN_ENGINE_POLL.try_with(|f| f.get()).unwrap_or(false) {
                 return; // nocov
             }
             prev(info);
@@ -1176,28 +1186,29 @@ fn install_worker_panic_hook() {
 /// Start a property-test run with the given settings, writing a handle the
 /// caller pulls test cases out of via `hegel_next_test_case` into `*out_run`.
 ///
-/// The engine runs on a worker thread inside libhegel; this function
-/// returns immediately after spawning it. The caller does not need to
-/// hold the settings handle alive — `hegel_run_start` snapshots the
-/// settings it needs.
+/// This only builds the run: no test case is generated until the first
+/// `hegel_next_test_case` call, and all engine work happens on the thread
+/// making those calls. The caller does not need to hold the settings handle
+/// alive — `hegel_run_start` snapshots the settings it needs.
 ///
 /// `callback` sets where the engine's output for this run goes: each line is
 /// delivered to it (with `user_data` passed through verbatim) instead of
 /// stderr, once per line, NUL-terminated UTF-8 of `len` bytes without a
 /// trailing newline, in a buffer owned by libhegel and valid only for the
 /// duration of the call. A NULL `callback` leaves the run's output on stderr
-/// (`user_data` is ignored). The engine emits from its worker thread, so the
-/// callback must be safe to invoke from a thread other than this one, and it
-/// — along with whatever `user_data` points to — must stay valid until the
-/// run has been freed with `hegel_run_free`. This sets only the
+/// (`user_data` is ignored). The engine emits while it runs inside
+/// `hegel_next_test_case`, so the callback is invoked on whichever thread
+/// makes that call, and it — along with whatever `user_data` points to —
+/// must stay valid until the run has been freed with `hegel_run_free`.
+/// Because it runs inside `hegel_next_test_case`, while the run handle is in
+/// use, the callback must not call back into libhegel on the same run (e.g.
+/// `hegel_next_test_case` or `hegel_run_free`). This sets only the
 /// *destination*; how much output the engine emits is controlled by
 /// `hegel_settings_set_verbosity`.
 ///
-/// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run`,
-/// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`, or `HEGEL_E_BACKEND` if the
-/// worker thread cannot be spawned (with a diagnostic in
-/// `hegel_context_last_error`). The handle written to `*out_run` must be freed
-/// with `hegel_run_free`.
+/// Returns `HEGEL_E_INVALID_ARG` for a NULL `out_run` or
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `settings`. The handle written to
+/// `*out_run` must be freed with `hegel_run_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start(
     ctx: *mut HegelContext,
@@ -1207,7 +1218,7 @@ pub unsafe extern "C" fn hegel_run_start(
     out_run: *mut *mut HegelRun,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    install_worker_panic_hook();
+    install_engine_panic_hook();
     if out_run.is_null() {
         set_last_error(ctx, "hegel_run_start: out parameter is null");
         return HEGEL_E_INVALID_ARG;
@@ -1222,70 +1233,24 @@ pub unsafe extern "C" fn hegel_run_start(
         .output(output_from_callback(callback, user_data));
     let database_key = handle.database_key.clone();
 
-    let (to_caller, from_worker) = mpsc::channel::<WorkerMessage>();
-    let abort = Arc::new(AtomicBool::new(false));
-    let abort_worker = Arc::clone(&abort);
-
-    let worker = thread::Builder::new()
-        .name(WORKER_THREAD_NAME.to_string())
-        .spawn(move || {
-            IS_HEGEL_WORKER.with(|f| f.set(true));
-            let engine = std::panic::AssertUnwindSafe(|| {
-                run_native(&settings, database_key.as_deref(), |ds| {
-                    if abort_worker.load(Ordering::Acquire) {
-                        ds.mark_complete(&TestCaseResult::Valid);
-                        return;
-                    }
-                    let (ack_tx, ack_rx) = mpsc::channel();
-                    let msg = WorkerMessage::TestCase { ds, ack: ack_tx };
-                    if let Err(mpsc::SendError(returned)) = to_caller.send(msg) {
-                        // nocov start
-                        if let WorkerMessage::TestCase { ds, .. } = returned {
-                            ds.mark_complete(&TestCaseResult::Valid);
-                        }
-                        return;
-                        // nocov end
-                    }
-                    let _ = ack_rx.recv();
-                })
-            });
-            let result = match std::panic::catch_unwind(engine) {
-                Ok(Ok(r)) => Ok(r),
-                Ok(Err(run_error)) => Err(run_error.to_string()),
-                // nocov start
-                Err(payload) => Err(format!(
-                    "Engine panic: {}",
-                    crate::panic::panic_message(&payload)
-                )),
-                // nocov end
-            };
-            let _ = to_caller.send(WorkerMessage::Done(result));
-        });
-
-    let worker = match worker {
-        Ok(h) => h,
-        // nocov start
-        Err(e) => {
-            set_last_error(ctx, &format!("hegel_run_start: spawn failed: {}", e));
-            return HEGEL_E_BACKEND;
-            // nocov end
-        }
-    };
+    let exchange = Arc::new(CaseExchange::new());
+    let engine_exchange = Arc::clone(&exchange);
+    let engine: EngineFuture = Box::pin(async move {
+        run_native_async(&settings, database_key.as_deref(), &engine_exchange).await
+    });
 
     let run = Box::into_raw(Box::new(HegelRun {
-        worker: Some(worker),
-        from_worker,
-        abort,
+        engine: Some(engine),
+        exchange,
         current_family: None,
         result: None,
-        drained: false,
     }));
     unsafe { *out_run = run };
     HEGEL_OK
 }
 
-/// Block until the engine produces the next test case, writing a handle for it
-/// into `*out_test_case`.
+/// Run the engine on the calling thread until it produces the next test case,
+/// writing a handle for it into `*out_test_case`.
 ///
 /// The handle is owned by the caller and must be released with
 /// `hegel_test_case_free` (the run keeps its own internal reference, so freeing
@@ -1296,6 +1261,10 @@ pub unsafe extern "C" fn hegel_run_start(
 /// normal completion: `HEGEL_E_NOT_COMPLETE` if the previous test case was not
 /// marked complete (call `hegel_mark_complete` first), `HEGEL_E_INVALID_HANDLE`
 /// for a NULL `run`, or `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
+///
+/// All engine work between test cases — generation, mutation, shrinking —
+/// happens inside this call, so a call may take a while when the engine has
+/// exploring to do.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_next_test_case(
     ctx: *mut HegelContext,
@@ -1329,34 +1298,51 @@ pub unsafe extern "C" fn hegel_next_test_case(
         drop(family);
     }
 
-    if run.drained {
+    let Some(engine) = run.engine.as_mut() else {
         return HEGEL_OK;
-    }
+    };
 
-    match run.from_worker.recv() {
-        Ok(WorkerMessage::TestCase { ds, ack }) => {
-            let family = new_family(ds, Some(ack));
+    match poll_engine(engine) {
+        Ok(Poll::Pending) => {
+            let family = new_family(run.exchange.take());
             let case = handle_from_family(Arc::clone(&family));
             run.current_family = Some(family);
             unsafe { *out_test_case = case };
             HEGEL_OK
         }
-        Ok(WorkerMessage::Done(r)) => {
+        Ok(Poll::Ready(r)) => {
             run.result = Some(match r {
                 Ok(r) => HegelRunResult::from(r),
-                Err(message) => HegelRunResult::from_error(&message),
+                Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
             });
-            run.drained = true;
+            run.engine = None;
             HEGEL_OK
         }
-        Err(_) => {
-            // nocov start
-            run.drained = true;
-            set_last_error(ctx, "hegel_next_test_case: worker exited without a result");
-            HEGEL_E_BACKEND
-            // nocov end
+        Err(payload) => {
+            run.result = Some(HegelRunResult::from_error(&format!(
+                "Engine panic: {}",
+                crate::panic::panic_message(&payload)
+            )));
+            run.engine = None;
+            HEGEL_OK
         }
     }
+}
+
+/// Resume the engine until it offers the next test case (`Pending`) or the
+/// run finishes (`Ready`), catching engine panics so they surface as a
+/// run-level error instead of unwinding into the C caller. The engine only
+/// suspends at its case exchange and is only resumed here, so a no-op waker
+/// suffices — no executor is involved.
+fn poll_engine(
+    engine: &mut EngineFuture,
+) -> Result<Poll<Result<TestRunResult, RunError>>, Box<dyn std::any::Any + Send>> {
+    let _guard = EnginePollGuard::enter();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+    }))
 }
 
 /// Write a caller-owned snapshot of the aggregated result of a finished run
@@ -1422,10 +1408,9 @@ pub unsafe extern "C" fn hegel_run_result_free(
 /// they are released with their own frees.
 ///
 /// If the caller exited its test loop early (e.g. with a still-active
-/// test case), this drains the worker thread cleanly: any in-flight
-/// test case is marked complete, the abort flag is set so the worker
-/// short-circuits, and the worker is joined before the handle is
-/// destroyed.
+/// test case), any in-flight test case is marked complete and the rest of
+/// the exploration is simply dropped — the engine was suspended waiting for
+/// the next `hegel_next_test_case` call, so there is nothing to wind down.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_free(
     ctx: *mut HegelContext,
@@ -1435,32 +1420,21 @@ pub unsafe extern "C" fn hegel_run_free(
     if run.is_null() {
         return HEGEL_OK;
     }
-    let mut run = unsafe { Box::from_raw(run) };
+    let run = unsafe { Box::from_raw(run) };
 
-    run.abort.store(true, Ordering::Release);
-
-    if let Some(family) = run.current_family.take() {
+    if let Some(family) = run.current_family.as_ref() {
         // If the caller bailed out of its loop with this case still in flight,
-        // claim completion for the family (releasing the worker's ack so it
-        // can wind down). Dropping the run's reference here releases the
-        // data source unless the caller still holds a handle to it, in which
-        // case it lives until the caller frees that handle.
+        // claim completion for the family so any handles the caller still
+        // holds observe a concluded case. Dropping the run's reference (as
+        // part of dropping the run below) releases the data source unless the
+        // caller still holds a handle to it, in which case it lives until the
+        // caller frees that handle.
         family.complete(&TestCaseResult::Valid);
-        drop(family);
     }
 
-    while let Ok(msg) = run.from_worker.recv() {
-        if let WorkerMessage::TestCase { ds, ack, .. } = msg {
-            // nocov start
-            ds.mark_complete(&TestCaseResult::Valid);
-            let _ = ack.send(());
-            // nocov end
-        }
-    }
-
-    if let Some(handle) = run.worker.take() {
-        let _ = handle.join();
-    }
+    // Dropping the run drops the suspended engine future, cancelling the rest
+    // of the exploration at its suspension point.
+    drop(run);
     HEGEL_OK
 }
 
@@ -1468,7 +1442,7 @@ pub unsafe extern "C" fn hegel_run_free(
 /// base64 failure blob (obtained from `hegel_failure_reproduction_blob` on a
 /// prior run).
 ///
-/// There is no run handle and no engine worker: the caller drives the
+/// There is no run handle and no engine run: the caller drives the
 /// returned test case with the usual per-test-case primitives
 /// (the `hegel_generate_*` draws, spans, …), concludes it with `hegel_mark_complete`,
 /// and decides for itself whether the blob reproduced the failure (the
@@ -1484,8 +1458,8 @@ pub unsafe extern "C" fn hegel_run_free(
 /// passed through verbatim) instead of stderr, NUL-terminated UTF-8 of `len`
 /// bytes without a trailing newline, in a buffer valid only for the duration
 /// of the call. A NULL `callback` leaves the replay's output on stderr
-/// (`user_data` is ignored). There is no worker thread, so the callback is
-/// only ever invoked on this thread and need not outlive this call.
+/// (`user_data` is ignored). The callback is only ever invoked on this
+/// thread and need not outlive this call.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `s`, or `HEGEL_E_INVALID_ARG`
 /// for a NULL `out_test_case`, a NULL `blob`, or a `blob` that is not a valid
@@ -1532,7 +1506,7 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         );
         return HEGEL_E_INVALID_ARG;
     };
-    let tc = handle_from_family(new_family(ds, None));
+    let tc = handle_from_family(new_family(ds));
     unsafe { *out_test_case = tc };
     HEGEL_OK
 }
@@ -1625,17 +1599,11 @@ pub unsafe extern "C" fn hegel_test_case_clone(
     HEGEL_OK
 }
 
-/// Allocate a fresh family from a data source and optional run ack. `ack` is
-/// `Some` for a run-owned family (the worker blocks on it until completion),
-/// `None` for a standalone (`from_blob`) family.
-fn new_family(
-    ds: Box<dyn DataSource + Send + Sync>,
-    ack: Option<mpsc::Sender<()>>,
-) -> Arc<FamilyShared> {
+/// Allocate a fresh family from a data source.
+fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
-        ack,
     })
 }
 

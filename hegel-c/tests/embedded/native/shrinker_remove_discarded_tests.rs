@@ -1,12 +1,12 @@
 //! Unit tests for `Shrinker::remove_discarded`.
 
 use crate::native::bignum::BigInt;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
+use crate::exchange::drive_no_yield;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
-use crate::native::shrinker::{ShrinkRun, Shrinker};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode::new(
@@ -39,14 +39,14 @@ fn span(start: usize, end: usize, discarded: bool) -> Span {
     }
 }
 
-type BoxedTestFn = Box<dyn FnMut(ShrinkRun) -> (bool, Vec<ChoiceNode>, Spans) + 'static>;
+type BoxedTestFn = Box<dyn ShrinkProbe + Send + 'static>;
 
 /// Closure that always accepts and returns its candidate verbatim with
 /// the supplied spans.
 fn accepting_test_fn(spans_after: Spans) -> BoxedTestFn {
-    let cell: Rc<RefCell<Spans>> = Rc::new(RefCell::new(spans_after));
-    Box::new(move |run| match run {
-        ShrinkRun::Full(nodes) => (true, nodes.to_vec(), cell.borrow().clone()),
+    let cell: Arc<Mutex<Spans>> = Arc::new(Mutex::new(spans_after));
+    Box::new(move |run: ShrinkRun<'_>| match run {
+        ShrinkRun::Full(nodes) => (true, nodes.to_vec(), cell.lock().unwrap().clone()),
         ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
     })
 }
@@ -57,7 +57,7 @@ fn remove_discarded_returns_true_when_no_discards() {
     let mut spans = Spans::new();
     spans.push(span(0, 2, false));
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
@@ -67,7 +67,7 @@ fn remove_discarded_skips_zero_length_discarded_span() {
     let mut spans = Spans::new();
     spans.push(span(0, 0, true));
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
@@ -79,7 +79,7 @@ fn remove_discarded_deletes_a_single_discarded_region() {
     spans.push(span(1, 3, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     assert_eq!(shrinker.current_nodes.len(), 2);
     let values: Vec<_> = shrinker
         .current_nodes
@@ -109,7 +109,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
     spans.push(span(5, 7, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -137,7 +137,7 @@ fn remove_discarded_skips_nested_discarded_spans() {
     spans.push(span(2, 3, true));
 
     let mut shrinker = Shrinker::with_probe(accepting_test_fn(Spans::new()), initial, spans);
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
@@ -157,14 +157,14 @@ fn remove_discarded_returns_false_when_consider_rejects() {
     spans.push(span(0, 2, true));
 
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         spans,
     );
-    assert!(!shrinker.remove_discarded().unwrap());
+    assert!(!drive_no_yield(shrinker.remove_discarded()).unwrap());
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
 
@@ -182,7 +182,7 @@ fn remove_discarded_iterates_when_new_target_still_has_discards() {
     };
     let mut after_first_call = false;
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let spans = if !after_first_call {
                     after_first_call = true;
@@ -197,6 +197,6 @@ fn remove_discarded_iterates_when_new_target_still_has_discards() {
         initial,
         spans,
     );
-    assert!(shrinker.remove_discarded().unwrap());
+    assert!(drive_no_yield(shrinker.remove_discarded()).unwrap());
     assert_eq!(shrinker.current_nodes.len(), 0);
 }

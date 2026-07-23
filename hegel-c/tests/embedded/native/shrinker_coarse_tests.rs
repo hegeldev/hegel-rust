@@ -1,5 +1,6 @@
 //! Unit tests for `Shrinker::initial_coarse_reduction`.
 
+use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
@@ -40,14 +41,14 @@ fn int_value(node: &ChoiceNode) -> i128 {
 fn initial_coarse_reduction_no_op_when_shape_stable() {
     let initial = vec![small_int_node(5)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
 
@@ -60,7 +61,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         small_int_node(0),
     ];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let n = match nodes.first().map(|n| &n.value) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
@@ -74,7 +75,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
 }
 
@@ -82,14 +83,14 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
 fn initial_coarse_reduction_skips_large_values() {
     let initial = vec![big_range_int_node(50)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 50);
 }
 
@@ -101,14 +102,14 @@ fn initial_coarse_reduction_skips_non_zero_min_value() {
     }
     let initial = vec![node];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
 }
 
@@ -118,14 +119,14 @@ fn initial_coarse_reduction_skips_forced_node() {
     node.was_forced = true;
     let initial = vec![node];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 5);
 }
 
@@ -137,7 +138,7 @@ fn initial_coarse_reduction_skips_forced_node() {
 fn initial_coarse_reduction_keeps_same_shape_one_of() {
     let initial = vec![small_int_node(1), small_int_node(0)];
     let mut shrinker = Shrinker::with_probe(
-        Box::new(|run| match run {
+        Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
                 (interesting, nodes.to_vec(), Spans::new())
@@ -147,7 +148,7 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 2);
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 0);
@@ -159,8 +160,8 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
 /// strictly smaller candidate.
 #[test]
 fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let initial = vec![
         small_int_node(3),
@@ -168,10 +169,10 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
         small_int_node(0),
         small_int_node(0),
     ];
-    let probe_calls = Rc::new(Cell::new(0_usize));
+    let probe_calls = Arc::new(AtomicUsize::new(0));
     let probe_calls_for_closure = probe_calls.clone();
     let mut shrinker = Shrinker::with_probe(
-        Box::new(move |run| match run {
+        Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let head = match &nodes[0].value {
                     ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
@@ -190,7 +191,7 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
                 (false, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => {
-                probe_calls_for_closure.set(probe_calls_for_closure.get() + 1);
+                probe_calls_for_closure.fetch_add(1, Ordering::Relaxed);
                 (
                     true,
                     vec![small_int_node(0), small_int_node(0)],
@@ -201,7 +202,10 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
         initial,
         Spans::new(),
     );
-    shrinker.initial_coarse_reduction().unwrap();
-    assert!(probe_calls.get() > 0, "probe branch was never reached");
+    drive_no_yield(shrinker.initial_coarse_reduction()).unwrap();
+    assert!(
+        probe_calls.load(Ordering::Relaxed) > 0,
+        "probe branch was never reached"
+    );
     assert_eq!(shrinker.current_nodes.len(), 2);
 }
