@@ -149,6 +149,10 @@ fn filter_short_backtrace(backtrace_str: &str) -> String {
         }
     }
 
+    if start_idx > end_idx {
+        start_idx = 0;
+        end_idx = lines.len();
+    }
     let filtered: Vec<&str> = lines[start_idx..end_idx].to_vec();
     let mut new_frame_num = 0usize;
     let mut result = Vec::new();
