@@ -8,7 +8,8 @@
  * rounds to run; the caller applies each rule until the engine signals the
  * join point, and advances rounds until the engine signals termination.
  * This demo drives the sequential special case: one concurrency group and
- * a concurrency level of 1, where every round hands out exactly one rule.
+ * concurrency bounds fixed at 1, where every round hands out exactly one
+ * rule.
  *
  * Each test case models a tiny counter machine with three rules:
  *   - increment: counter += 1
@@ -59,18 +60,12 @@ int main(void) {
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
 
-        int64_t concurrency;
-        if (hegel_generate_concurrency(ctx, tc, 1, &concurrency) != HEGEL_OK) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
-            HEGEL_CHECK(hegel_test_case_free, ctx, tc);
-            continue;
-        }
-
         int64_t machine;
+        int64_t concurrency;
         if (hegel_new_state_machine(ctx, tc, NUM_GROUPS,
                                     RULES, RULE_GROUPS, NUM_RULES,
                                     INVARIANTS, NUM_INVARIANTS,
-                                    concurrency, &machine) != HEGEL_OK) {
+                                    1, 1, &machine, &concurrency) != HEGEL_OK) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;

@@ -389,8 +389,8 @@ typedef enum {
      */
     HEGEL_LABEL_STRING = 30,
     /*
-     Span around one concurrency-level draw
-     (`hegel_generate_concurrency`).
+     Span around the concurrency-level draw made by
+     `hegel_new_state_machine`.
      */
     HEGEL_LABEL_CONCURRENCY = 31,
 } hegel_label_t;
@@ -1143,9 +1143,15 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  (identified by index only), `num_rules` rules — each assigned to a group
  by `rule_groups`, an array of group indices parallel to `rule_names` —
  and `num_invariants` invariants, with names as NUL-terminated UTF-8,
- plus the concurrency level (the number of workers — typically worker
- threads — that will pull rules; pass the value drawn by
- `hegel_generate_concurrency`, or 1 for a sequential machine).
+ plus concurrency bounds. The engine draws the machine's concurrency
+ level — the number of workers (typically worker threads) that will pull
+ rules — in `[min_concurrency, max_concurrency]` and writes it into
+ `*out_concurrency`; the caller must run exactly that many workers. The
+ engine owns the distribution, which is weighted toward
+ `max_concurrency` (concurrency bugs need concurrency) rather than
+ shrink-biased toward the minimum. Pass `min_concurrency ==
+ max_concurrency` to fix the level without consuming entropy — `1, 1`
+ for a sequential machine.
 
  The engine owns rule selection — including swarm testing, where each
  worker enables a random subset of rules (at least one per group) and
@@ -1157,20 +1163,22 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  the same group may run concurrently; rules in different groups never
  overlap.
 
- Creating the machine draws from the calling handle's stream: the test
- case's round cap and each worker's swarm parameters are decided here,
- up front, so the machine is fully constructed before any rule is
- requested.
+ Creating the machine draws from the calling handle's stream: the
+ concurrency level, the test case's round cap, and each worker's swarm
+ parameters are decided here, up front, so the machine is fully
+ constructed before any rule is requested.
 
- On success writes the new machine's id into `*out_state_machine_id`
- and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
+ On success writes the new machine's id into `*out_state_machine_id`,
+ the drawn concurrency level into `*out_concurrency`, and returns
+ `HEGEL_OK`. The id is opaque; pass it to subsequent
  `hegel_state_machine_next_group` / `hegel_state_machine_next_rule`
  calls on the *same* test-case family. Returns `HEGEL_E_STOP_TEST` when
  the engine's choice budget is exhausted (the caller should abort the
  body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
  Returns `HEGEL_E_INVALID_ARG` if `num_rules` or `num_groups` is zero,
  an entry of `rule_groups` is outside `[0, num_groups)`, a group ends up
- with no rules, `concurrency < 1`, or on null / non-UTF-8 names.
+ with no rules, `min_concurrency < 1`,
+ `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1180,8 +1188,10 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        size_t num_rules,
                                        const char *const *invariant_names,
                                        size_t num_invariants,
-                                       int64_t concurrency,
-                                       int64_t *out_state_machine_id);
+                                       int64_t min_concurrency,
+                                       int64_t max_concurrency,
+                                       int64_t *out_state_machine_id,
+                                       int64_t *out_concurrency);
 
 /*
  Start the machine's next round: draw whether another round should run
@@ -1231,7 +1241,8 @@ hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
  stays with whoever drives `hegel_state_machine_next_group`.
 
  `worker_index` identifies the calling worker and must satisfy
- `0 <= worker_index < concurrency` (passed at state-machine creation);
+ `0 <= worker_index < concurrency` (the level drawn at state-machine
+ creation and written to `*out_concurrency`);
  an index rather than the handle identifies the worker because a single
  OS thread could hold multiple test-case clones. Draws consult only
  per-worker and per-clone state, so draws on one worker don't affect
@@ -1277,25 +1288,6 @@ hegel_result_t hegel_generate_boolean(hegel_context_t *ctx,
                                       bool forced,
                                       bool has_forced,
                                       bool *out_value);
-
-/*
- Draw a concurrency level in `[1, max_value]`, for creating a state
- machine via `hegel_new_state_machine`. The engine owns the
- distribution, which is weighted toward `max_value` (concurrency bugs
- need concurrency) rather than shrink-biased toward 1 — which is why
- this is a dedicated primitive instead of a plain integer draw.
-
- On success writes the drawn level into `*out_value` and returns
- `HEGEL_OK`. Returns `HEGEL_E_STOP_TEST` when the engine's choice
- budget is exhausted for this test case (the caller should abort the
- body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
- Returns `HEGEL_E_INVALID_ARG` for a NULL `out_value` or
- `max_value < 1`; the diagnostic is in `hegel_context_last_error`.
- */
-hegel_result_t hegel_generate_concurrency(hegel_context_t *ctx,
-                                          hegel_test_case_t *tc,
-                                          int64_t max_value,
-                                          int64_t *out_value);
 
 /*
  Draw an integer in `[min_value, max_value]` (both inclusive, both

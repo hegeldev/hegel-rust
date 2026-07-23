@@ -470,7 +470,7 @@ pub use hegel_macros::state_machine;
 /// #[hegel::test(nondeterministic = true)]
 /// fn test_kv(tc: TestCase) {
 ///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
-///     hegel::stateful::run_concurrent(m, tc, 3);
+///     hegel::stateful::run_concurrent(m, tc, 1, 3);
 /// }
 /// ```
 pub use hegel_macros::concurrent_state_machine;

@@ -6,7 +6,7 @@ pub mod special;
 pub mod text;
 
 use crate::control::hegel_internal_assert;
-use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::bignum::BigInt;
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 use std::sync::Arc;
@@ -190,35 +190,6 @@ pub fn generate_boolean(
         ));
     }
     spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, forced))
-}
-
-/// Probability that [`generate_concurrency`] draws `max_value` outright
-/// rather than a uniform level in `[1, max_value]`.
-const P_MAX_CONCURRENCY: f64 = 0.75;
-
-/// Draw a concurrency level in `[1, max_value]`, validating the maximum.
-///
-/// The distribution is weighted toward `max_value` (concurrency bugs need
-/// concurrency) rather than shrink-biased toward 1: with probability
-/// [`P_MAX_CONCURRENCY`] the draw is `max_value` outright, otherwise
-/// uniform-ish over the full range. `max_value == 1` returns 1 without
-/// consuming entropy.
-pub fn generate_concurrency(ntc: &mut NativeTestCase, max_value: i64) -> Result<i64, EngineError> {
-    if max_value < 1 {
-        return Err(EngineError::InvalidArgument(format!(
-            "generate_concurrency requires max_value >= 1, got {max_value}"
-        )));
-    }
-    if max_value == 1 {
-        return Ok(1);
-    }
-    spanned(ntc, LABEL_CONCURRENCY, |ntc| {
-        if ntc.weighted(P_MAX_CONCURRENCY, None)? {
-            return Ok(max_value);
-        }
-        let v = ntc.draw_integer(BigInt::from(1), BigInt::from(max_value))?;
-        Ok(v.to_i128().unwrap() as i64)
-    })
 }
 
 /// A validated string-draw specification, the payload of a

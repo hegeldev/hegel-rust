@@ -306,8 +306,9 @@ impl DataSource for NativeDataSource {
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         _invariant_names: Vec<String>,
-        concurrency: i64,
-    ) -> Result<i64, DataSourceError> {
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
@@ -326,9 +327,10 @@ impl DataSource for NativeDataSource {
                 rule_names.len()
             )));
         }
-        if concurrency < 1 {
+        if min_concurrency < 1 || max_concurrency < min_concurrency {
             return Err(DataSourceError::InvalidArgument(format!(
-                "state machine concurrency must be at least 1, got {concurrency}"
+                "state machine concurrency bounds must satisfy 1 <= min <= max, \
+                 got [{min_concurrency}, {max_concurrency}]"
             )));
         }
         let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
@@ -351,8 +353,10 @@ impl DataSource for NativeDataSource {
                 ntc,
                 num_groups,
                 rule_groups,
-                concurrency,
+                min_concurrency,
+                max_concurrency,
             )?;
+            let concurrency = machine.concurrency();
             let mut machines = ntc
                 .family()
                 .state_machines
@@ -360,7 +364,7 @@ impl DataSource for NativeDataSource {
                 .unwrap_or_else(|e| e.into_inner());
             let id = machines.len() as i64;
             machines.push(Arc::new(std::sync::Mutex::new(machine)));
-            Ok(id)
+            Ok((id, concurrency))
         })
     }
 
@@ -401,10 +405,6 @@ impl DataSource for NativeDataSource {
             let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
             machine.next_rule(ntc, worker_index)
         })
-    }
-
-    fn generate_concurrency(&self, max_value: i64) -> Result<i64, DataSourceError> {
-        self.with_ntc(|ntc| draws::generate_concurrency(ntc, max_value))
     }
 
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {

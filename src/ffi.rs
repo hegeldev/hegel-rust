@@ -690,24 +690,19 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    /// Draw a concurrency level in `[1, max_value]`, weighted toward
-    /// `max_value` (the engine owns the distribution).
-    pub(crate) fn generate_concurrency(&self, max_value: i64) -> Result<i64, hegel_result_t> {
-        let mut level: i64 = 0;
-        let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_generate_concurrency(ctx, self.raw, max_value, &mut level)
-        });
-        rc_to_value(rc, level)
-    }
-
+    /// Register a state machine. The engine draws the concurrency level in
+    /// `[min_concurrency, max_concurrency]` at creation — weighted toward
+    /// the maximum (the engine owns the distribution) — and returns it
+    /// alongside the new machine's id.
     pub(crate) fn new_state_machine(
         &self,
         num_groups: usize,
         rule_names: &[&str],
         rule_groups: &[i64],
         invariant_names: &[&str],
-        concurrency: i64,
-    ) -> Result<i64, hegel_result_t> {
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
@@ -715,6 +710,7 @@ impl CTestCase {
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
         let mut id: i64 = 0;
+        let mut concurrency: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
                 ctx,
@@ -725,11 +721,13 @@ impl CTestCase {
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
-                concurrency,
+                min_concurrency,
+                max_concurrency,
                 &mut id,
+                &mut concurrency,
             )
         });
-        rc_to_value(rc, id)
+        rc_to_value(rc, (id, concurrency))
     }
 
     /// Start the machine's next round, yielding the index of the round's

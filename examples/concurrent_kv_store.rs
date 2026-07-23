@@ -113,7 +113,7 @@ fn test_concurrent_kv_store(tc: TestCase) {
         keys: concurrent_pool(&tc),
         increments: AtomicI64::new(0),
     };
-    run_concurrent(test, tc, 4);
+    run_concurrent(test, tc, 1, 4);
 }
 
 fn main() {}
