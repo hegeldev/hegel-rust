@@ -204,6 +204,11 @@ impl SettingsHandle {
                     raw,
                     map_backend(settings.backend),
                 ));
+                require_ok(hegel_c::hegel_settings_set_nondeterministic(
+                    ctx,
+                    raw,
+                    settings.nondeterministic,
+                ));
             }
             SettingsHandle { raw }
         })
@@ -449,7 +454,6 @@ impl CTestCase {
     }
 
     /// Draw a float according to the full spec libhegel accepts.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,
@@ -686,11 +690,19 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
+    /// Register a state machine. The engine draws the concurrency level in
+    /// `[min_concurrency, max_concurrency]` at creation — weighted toward
+    /// the maximum (the engine owns the distribution) — and returns it
+    /// alongside the new machine's id.
     pub(crate) fn new_state_machine(
         &self,
+        num_groups: usize,
         rule_names: &[&str],
+        rule_groups: &[i64],
         invariant_names: &[&str],
-    ) -> Result<i64, hegel_result_t> {
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
@@ -698,29 +710,64 @@ impl CTestCase {
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
         let mut id: i64 = 0;
+        let mut concurrency: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
+                num_groups,
                 rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
+                min_concurrency,
+                max_concurrency,
                 &mut id,
+                &mut concurrency,
             )
         });
-        rc_to_value(rc, id)
+        rc_to_value(rc, (id, concurrency))
     }
 
-    /// Ask the engine for the next rule to run; `None` once the engine has
-    /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
-    pub(crate) fn state_machine_next_rule(
+    /// Start the machine's next round, yielding the index of the round's
+    /// current concurrency group; `None` once the engine has run enough
+    /// rounds (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case
+    /// handle at every join point, including before the first rule is
+    /// requested.
+    pub(crate) fn state_machine_next_group(
         &self,
         state_machine_id: i64,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
+            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine_id, &mut out)
+        });
+        let group = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
+            None
+        } else {
+            Some(out)
+        };
+        rc_to_value(rc, group)
+    }
+
+    /// Ask the engine for the next rule for worker `worker_index` to run
+    /// this round; `None` once the worker's round budget is exhausted
+    /// (`HEGEL_STATE_MACHINE_DONE`) and it should wait for the join point.
+    pub(crate) fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+        worker_index: i64,
+    ) -> Result<Option<i64>, hegel_result_t> {
+        let mut out: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_next_rule(
+                ctx,
+                self.raw,
+                state_machine_id,
+                worker_index,
+                &mut out,
+            )
         });
         let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
             None
@@ -786,7 +833,6 @@ impl std::fmt::Debug for StringGenerator {
 impl StringGenerator {
     /// Build a text generator over the alphabet described by the fields.
     /// `max_codepoint` of `None` means unconstrained.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text(
         min_size: u64,
         max_size: u64,

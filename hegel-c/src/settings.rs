@@ -158,6 +158,7 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    pub(crate) nondeterministic: bool,
 }
 
 impl Settings {
@@ -186,6 +187,7 @@ impl Settings {
             ],
             report_multiple_failures: true,
             backend: None,
+            nondeterministic: false,
         }
     }
 
@@ -311,6 +313,33 @@ impl Settings {
     /// Maps to Hypothesis's `report_multiple_bugs` setting.
     pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
         self.report_multiple_failures = report_multiple_failures;
+        self
+    }
+
+    /// Declare the run nondeterministic: the test may produce different
+    /// outcomes (or draw different choice sequences) when run on identical
+    /// data — e.g. because it exercises real concurrency.
+    ///
+    /// When set, the engine reports failures faithfully without attempting
+    /// anything that assumes deterministic replay. Run-wide, it skips:
+    ///
+    /// - data-tree recording (which also disables novel-prefix generation
+    ///   and the choice-tree mismatch check behind
+    ///   [`crate::backend::RunError::NonDeterministic`])
+    /// - span mutation during the generate phase
+    /// - the per-origin verify + shrink pass, as if [`Phase::Shrink`] were
+    ///   disabled — which also removes the [`crate::backend::RunError::Flaky`]
+    ///   check, and means generation stops at the first bug, so the run
+    ///   reports at most one failure
+    /// - targeting, as if [`Phase::Target`] were disabled
+    /// - database persistence and reuse
+    /// - reproduce-blob emission: failures are reported with
+    ///   `reproduce_blob: None`
+    ///
+    /// The configured [`Settings::phases`] are left untouched; they simply
+    /// don't take effect where this flag overrides them.
+    pub fn nondeterministic(mut self, nondeterministic: bool) -> Self {
+        self.nondeterministic = nondeterministic;
         self
     }
 }

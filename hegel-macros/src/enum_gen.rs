@@ -396,7 +396,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
 }
 
 /// Generate a variant generator struct for a data variant.
-#[allow(clippy::too_many_arguments)]
 fn generate_variant_generator(
     enum_name: &syn::Ident,
     variant: &Variant,

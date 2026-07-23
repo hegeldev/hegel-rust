@@ -1005,6 +1005,101 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
 }
 
 #[test]
+fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .nondeterministic(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("stable origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(
+        seen_bug.load(Ordering::SeqCst),
+        "the bug must have been discovered by generation"
+    );
+}
+
+#[test]
+fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let failed_once = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .nondeterministic(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rbool(ds) {
+            Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("racy origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+}
+
+#[test]
+fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
+    db.save(b"k", &seeded);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .nondeterministic(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rbool(ds) {
+            Ok(_) => boom("db origin"),
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].reproduce_blob.is_none());
+    let entries = db.fetch(b"k");
+    assert_eq!(
+        entries,
+        vec![seeded],
+        "the seeded entry must be neither replayed away nor joined by a new save"
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(db.fetch(&secondary).is_empty());
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();

@@ -1,6 +1,9 @@
 [workspace]
 members = [".", "hegel-macros", "hegel-c"]
 
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+
 [package]
 name = "hegeltest"
 version = "0.28.2"
@@ -26,6 +29,9 @@ description = "Property-based testing for Rust, built on Hypothesis"
 # but crates.io enforces that keywords be less than 20 characters.
 keywords = ["testing", "fuzzing", "property-testing"]
 categories = ["development-tools::testing"]
+
+[lints]
+workspace = true
 
 [lib]
 name = "hegel"

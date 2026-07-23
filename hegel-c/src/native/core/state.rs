@@ -1160,7 +1160,6 @@ impl NativeTestCase {
 
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
-    #[allow(clippy::too_many_arguments)]
     fn new_stream(
         prefix: Vec<ChoiceValue>,
         prefix_nodes: Option<Vec<ChoiceNode>>,

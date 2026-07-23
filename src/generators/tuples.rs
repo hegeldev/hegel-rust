@@ -86,7 +86,6 @@ macro_rules! impl_tuple {
         }
 
         #[doc(hidden)]
-        #[allow(clippy::too_many_arguments)]
         pub fn $fn_name<$($T,)+ $($G: Generator<$T>,)+>(
             $($field: $G,)+
         ) -> $name<$($G,)+ $($T,)+> {

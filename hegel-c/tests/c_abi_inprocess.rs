@@ -25,8 +25,9 @@ use hegel_c::{
     hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
     hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    hegel_start_span, hegel_state_machine_next_group, hegel_state_machine_next_rule,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -152,6 +153,10 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_c::hegel_settings_set_derandomize(ctx, ptr::null_mut(), false),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_set_nondeterministic(ctx, ptr::null_mut(), true),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -952,6 +957,65 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     }
 }
 
+/// A full run declared nondeterministic via
+/// `hegel_settings_set_nondeterministic` stops at the first bug and surfaces
+/// it with an origin but no reproduce blob: with replay and shrinking off,
+/// there is no shrunk choice sequence to encode.
+#[test]
+fn nondeterministic_run_failure_has_origin_but_no_blob() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_nondeterministic(ctx, s, true));
+        let run = start(ctx, s);
+        let origin = CString::new("nondeterministic bug").unwrap();
+
+        let mut cases = 0usize;
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            cases += 1;
+            let mut value = 0i64;
+            assert_eq!(
+                hegel_generate_integer(ctx, tc, 0, 100, &mut value),
+                HEGEL_OK
+            );
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
+                origin.as_ptr(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        assert_eq!(cases, 1, "a nondeterministic run stops at the first bug");
+
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        assert_eq!(failure_count_of(ctx, res), 1);
+        let f = failure_at(ctx, res, 0);
+        assert!(!f.is_null());
+        let origin_back = std::ffi::CStr::from_ptr(origin_of(ctx, f))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            origin_back.contains("nondeterministic bug"),
+            "got {origin_back:?}"
+        );
+        assert!(repro_blob_of(ctx, f).is_null());
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 /// Once a test case has overrun its choice budget, the engine marks the data
 /// source aborted, and *every* subsequent primitive — even the bookkeeping
 /// ones (`start_span`, `stop_span`, `new_collection`, `new_pool`, `pool_add`)
@@ -1027,11 +1091,11 @@ fn primitives_after_overrun_all_report_stop_test() {
 }
 
 /// Exercise the state-machine and weighted-boolean C-ABI entry points
-/// (`hegel_new_state_machine`, `hegel_state_machine_next_rule`,
-/// `hegel_generate_boolean`) in-process: the invalid-handle and
-/// argument-validation paths, plus the happy paths. The smoke test that
-/// drives these over dlopen doesn't contribute coverage, so they are
-/// measured here.
+/// (`hegel_new_state_machine`, `hegel_state_machine_next_group`,
+/// `hegel_state_machine_next_rule`, `hegel_generate_boolean`) in-process:
+/// the invalid-handle and argument-validation paths, plus the happy paths.
+/// The smoke test that drives these over dlopen doesn't contribute
+/// coverage, so they are measured here.
 #[test]
 fn state_machine_and_primitive_boolean_paths() {
     let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
@@ -1040,13 +1104,33 @@ fn state_machine_and_primitive_boolean_paths() {
         let null_tc: *mut HegelTestCase = ptr::null_mut();
         let rule_a = CString::new("a").unwrap();
         let rules: [*const c_char; 1] = [rule_a.as_ptr()];
+        let rule_groups: [i64; 1] = [0];
         let mut out_id = 0i64;
+        let mut out_concurrency = 0i64;
         assert_eq!(
-            hegel_new_state_machine(ctx, null_tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                null_tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, null_tc, 0, &mut out_id),
+            hegel_state_machine_next_rule(ctx, null_tc, 0, 0, &mut out_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut group_idx = 0i64;
+        assert_eq!(
+            hegel_state_machine_next_group(ctx, null_tc, 0, &mut group_idx),
             HEGEL_E_INVALID_HANDLE
         );
         let mut bv = false;
@@ -1064,60 +1148,280 @@ fn state_machine_and_primitive_boolean_paths() {
         assert!(!tc.is_null());
 
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, ptr::null_mut()),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                ptr::null_mut(),
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, ptr::null(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                ptr::null_mut(),
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                ptr::null(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names pointer is null"));
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                ptr::null(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("rule_groups is null"));
         let null_entry: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, null_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                null_entry.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names[0] is null"));
         let bad_entry: [*const c_char; 1] = [bad_utf8.as_ptr()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, bad_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                bad_entry.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad_inv: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, bad_inv.as_ptr(), 1, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                bad_inv.as_ptr(),
+                1,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invariant_names[0] is null"));
+        let oor_groups: [i64; 1] = [1];
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                oor_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("rule_groups[0] must be in [0, 1)"));
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                0,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("concurrency bounds must satisfy 1 <= min <= max"));
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                3,
+                2,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("concurrency bounds must satisfy 1 <= min <= max"));
 
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                1,
+                1,
+                &mut out_id,
+                &mut out_concurrency,
+            ),
             HEGEL_OK
         );
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, tc, out_id, ptr::null_mut()),
+            out_concurrency, 1,
+            "fixed bounds yield the fixed level without consuming entropy"
+        );
+        assert_eq!(
+            hegel_state_machine_next_rule(ctx, tc, out_id, 0, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_state_machine_next_group(ctx, tc, out_id, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         let mut rule_idx = -1i64;
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
-            HEGEL_OK
+            hegel_state_machine_next_rule(ctx, tc, out_id, 0, &mut rule_idx),
+            HEGEL_E_INVALID_ARG
         );
-        assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
-        let mut steps = 1;
+        assert!(last_error(ctx).contains("before the first next_group"));
+        let mut rounds = 0;
         loop {
             assert_eq!(
-                hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
+                hegel_state_machine_next_group(ctx, tc, out_id, &mut group_idx),
                 HEGEL_OK
             );
-            if rule_idx == HEGEL_STATE_MACHINE_DONE {
+            if group_idx == HEGEL_STATE_MACHINE_DONE {
                 break;
             }
-            assert_eq!(rule_idx, 0);
-            steps += 1;
-            assert!(steps <= 50, "the engine's step cap never exceeds 50");
+            assert_eq!(group_idx, 0, "a single-group machine is always in group 0");
+            rounds += 1;
+            assert!(rounds <= 50, "the engine's round cap never exceeds 50");
+            assert_eq!(
+                hegel_state_machine_next_rule(ctx, tc, out_id, 1, &mut rule_idx),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("worker_index must be in [0, 1)"));
+            assert_eq!(
+                hegel_state_machine_next_rule(ctx, tc, out_id, 0, &mut rule_idx),
+                HEGEL_OK
+            );
+            assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
+            assert_eq!(
+                hegel_state_machine_next_rule(ctx, tc, out_id, 0, &mut rule_idx),
+                HEGEL_OK
+            );
+            assert_eq!(
+                rule_idx, HEGEL_STATE_MACHINE_DONE,
+                "a sequential machine hands out one rule per round"
+            );
         }
+        assert!(rounds >= 1);
+
+        let mut ranged_id = 0i64;
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                1,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                2,
+                4,
+                &mut ranged_id,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK
+        );
+        assert_ne!(ranged_id, out_id);
+        assert!(
+            (2..=4).contains(&out_concurrency),
+            "the drawn level respects the bounds, got {out_concurrency}"
+        );
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),

@@ -113,6 +113,20 @@ pub fn state_machine(attr: TokenStream, item: TokenStream) -> TokenStream {
     stateful::expand_state_machine(block).into()
 }
 
+#[proc_macro_attribute]
+pub fn concurrent_state_machine(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "#[hegel::concurrent_state_machine] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let block = parse_macro_input!(item as ItemImpl);
+    stateful::expand_concurrent_state_machine(block).into()
+}
+
 /// Rewrite `tc.draw(gen)` calls inside a closure body to the named form used
 /// by `#[hegel::test]`, so failing-test output prints real variable names.
 ///

@@ -122,13 +122,19 @@ type FnPoolGenerate = unsafe extern "C" fn(*mut u8, *mut u8, i64, bool, *mut i64
 type FnNewStateMachine = unsafe extern "C" fn(
     *mut u8,
     *mut u8,
+    usize,
     *const *const c_char,
+    *const i64,
     usize,
     *const *const c_char,
     usize,
+    i64,
+    i64,
+    *mut i64,
     *mut i64,
 ) -> c_int;
-type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
+type FnStateMachineNextGroup = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
+type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, i64, *mut i64) -> c_int;
 type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnStringGeneratorText = unsafe extern "C" fn(
@@ -188,6 +194,7 @@ struct Api<'a> {
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
     new_state_machine: Symbol<'a, FnNewStateMachine>,
+    state_machine_next_group: Symbol<'a, FnStateMachineNextGroup>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
     string_generator_text: Symbol<'a, FnStringGeneratorText>,
@@ -229,6 +236,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
+            state_machine_next_group: lib.get(b"hegel_state_machine_next_group\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_generate_boolean\0").unwrap(),
             string_generator_text: lib.get(b"hegel_string_generator_text\0").unwrap(),
@@ -625,7 +633,12 @@ fn caller_usage_errors_return_error_not_abort() {
         );
         let mut rule_idx = 0i64;
         assert_eq!(
-            (a.state_machine_next_rule)(ctx, tc, 9999, &mut rule_idx),
+            (a.state_machine_next_rule)(ctx, tc, 9999, 0, &mut rule_idx),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut group: i64 = 0;
+        assert_eq!(
+            (a.state_machine_next_group)(ctx, tc, 9999, &mut group),
             HEGEL_E_INVALID_ARG
         );
 
@@ -1012,15 +1025,23 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 break;
             }
 
+            let rule_groups: Vec<i64> = vec![0; rule_ptrs.len()];
+
             let mut machine_id: i64 = -1;
+            let mut concurrency: i64 = 0;
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
+                1,
                 ptr::null(),
+                rule_groups.as_ptr(),
                 0,
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
+                1,
+                1,
                 &mut machine_id,
+                &mut concurrency,
             );
             assert_eq!(
                 rc, HEGEL_E_INVALID_ARG,
@@ -1031,38 +1052,57 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
+                1,
                 rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
+                1,
+                1,
                 &mut machine_id,
+                &mut concurrency,
             );
             assert_eq!(rc, HEGEL_OK, "new_state_machine failed: rc={}", rc);
             assert_eq!(machine_id, 0);
+            assert_eq!(concurrency, 1);
 
             let mut overran = false;
             let mut current_run = 0usize;
             let mut previous: Option<i64> = None;
-            for _ in 0..25 {
-                let mut index: i64 = i64::MAX;
-                let rc = (a.state_machine_next_rule)(ctx, tc, machine_id, &mut index);
+            'case: for _ in 0..60 {
+                let mut group: i64 = i64::MAX;
+                let rc = (a.state_machine_next_group)(ctx, tc, machine_id, &mut group);
                 if rc == HEGEL_E_STOP_TEST {
                     overran = true;
                     break;
                 }
-                assert_eq!(rc, HEGEL_OK, "state_machine_next_rule failed: rc={}", rc);
-                if index == -1 {
+                assert_eq!(rc, HEGEL_OK, "state_machine_next_group failed: rc={}", rc);
+                if group == -1 {
                     break;
                 }
-                assert!((0..3).contains(&index), "rule index {} out of range", index);
-                saw_rule_draw = true;
-                current_run = if previous == Some(index) {
-                    current_run + 1
-                } else {
-                    1
-                };
-                previous = Some(index);
-                longest_single_rule_run = longest_single_rule_run.max(current_run);
+                assert_eq!(group, 0, "a single-group machine is always in group 0");
+                loop {
+                    let mut index: i64 = i64::MAX;
+                    let rc = (a.state_machine_next_rule)(ctx, tc, machine_id, 0, &mut index);
+                    if rc == HEGEL_E_STOP_TEST {
+                        overran = true;
+                        break 'case;
+                    }
+                    assert_eq!(rc, HEGEL_OK, "state_machine_next_rule failed: rc={}", rc);
+                    if index == -1 {
+                        break;
+                    }
+                    assert!((0..3).contains(&index), "rule index {} out of range", index);
+                    saw_rule_draw = true;
+                    current_run = if previous == Some(index) {
+                        current_run + 1
+                    } else {
+                        1
+                    };
+                    previous = Some(index);
+                    longest_single_rule_run = longest_single_rule_run.max(current_run);
+                }
             }
 
             if overran {
