@@ -202,7 +202,7 @@ pub enum StringSpec {
         max_size: usize,
     },
     Regex {
-        compiled: regex::CompiledRegex,
+        compiled: Box<regex::CompiledRegex>,
         fullmatch: bool,
     },
     Email,
@@ -259,7 +259,7 @@ impl StringSpec {
             }
         };
         Ok(StringSpec::Regex {
-            compiled: regex::CompiledRegex::compile(pattern, alphabet)?,
+            compiled: Box::new(regex::CompiledRegex::compile(pattern, alphabet)?),
             fullmatch,
         })
     }

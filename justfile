@@ -128,7 +128,7 @@ c-test-abort:
 
 # Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
 c-header:
-    HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c
+    HEGEL_C_HEADER_WRITE=1 cargo test -p hegeltest-c --test header_drift
 
 # Run a fast core of the suite under Miri to catch undefined behaviour in the
 # native engine and the in-process C-ABI boundary hegeltest drives it through.
