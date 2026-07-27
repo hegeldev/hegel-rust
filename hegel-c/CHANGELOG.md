@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.30.2 - 2026-07-27
+
+This patch fixes an engine panic during shrinking. When the span-reordering pass ran against a test case with several groups of same-label sibling spans, and reordering one group produced an improvement that shortened the recorded span list, the pass went on to index the remaining groups with positions from the old, longer list. The run then aborted with `Engine panic: index out of bounds` instead of reporting the shrunk counterexample (re-running the test recovered via the failure database, but the first run's result was lost). Span groups are now re-validated against the current spans after each improvement, and groups that no longer exist are skipped.
+
 ## 0.30.1 - 2026-07-21
 
 This patch removes libhegel's background worker thread. `hegel_run_start` no longer spawns a thread: the engine is suspended inside the run handle, and each `hegel_next_test_case` call runs it on the calling thread until it hands over the next test case. The API is unchanged, but the threading behaviour is simpler:
