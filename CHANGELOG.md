@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.5 - 2026-07-28
+
+This patch stops packaging internal agent instruction files (`AGENTS.md` and `.agents/`) in the published crate.
+
 ## 0.28.4 - 2026-07-27
 
 This release updates the `hegeltest-c` dependency to 0.30.3.
