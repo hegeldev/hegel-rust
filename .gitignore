@@ -23,18 +23,18 @@ CLAUDE.local.md
 # Place to put temporary reference material
 resources
 
-# whitelist .claude files, rather than blacklist. Some local claude files
-# (skills, agents) have to live in .claude - as opposed to eg CLAUDE.local.md,
+# whitelist .agents files, rather than blacklist. Some local claude files
+# (skills, agents) have to live in .agents - as opposed to eg CLAUDE.local.md,
 # which we gitignore at the top level.
-.claude/*
-!.claude/CLAUDE.md
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/changelog/
-!.claude/skills/coverage/
-!.claude/skills/self-review/
-!.claude/skills/new-generator/
-!.claude/skills/new-default-generator/
-!.claude/skills/add-library-support/
+.agents/*
+!.agents/CLAUDE.md
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/changelog/
+!.agents/skills/coverage/
+!.agents/skills/self-review/
+!.agents/skills/new-generator/
+!.agents/skills/new-default-generator/
+!.agents/skills/add-library-support/
 
 docs/superpowers

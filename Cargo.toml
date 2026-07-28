@@ -8,7 +8,9 @@ edition = "2024"
 # if you bump this, also bump ci.yml, hegel-macros/Cargo.toml, and hegel-c/Cargo.toml
 rust-version = "1.86"
 exclude = [
+  "/.agents",
   "/.claude",
+  "/AGENTS.md",
   "/.github",
   "/nix",
   "/RELEASE-sample.md",
