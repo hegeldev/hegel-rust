@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.28.6 - 2026-07-29
+
+This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.
+
+## 0.28.5 - 2026-07-28
+
+This patch stops packaging internal agent instruction files (`AGENTS.md` and `.agents/`) in the published crate.
+
+## 0.28.4 - 2026-07-27
+
+This release updates the `hegeltest-c` dependency to 0.30.3.
+
+## 0.28.3 - 2026-07-27
+
+This release updates the `hegeltest-c` dependency to 0.30.2.
+
 ## 0.28.2 - 2026-07-21
 
 This patch removes the background thread that drove each test run's engine. The engine now runs on the same thread as the test itself, resumed each time the test asks for its next test case. Test behaviour is unchanged; the `hegel-worker` thread simply no longer exists (e.g. in debugger thread lists), and each test case costs two fewer thread context switches. This is groundwork for supporting platforms without threads, such as WebAssembly.
