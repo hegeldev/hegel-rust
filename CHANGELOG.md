@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.6 - 2026-07-29
+
+This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.
+
 ## 0.28.5 - 2026-07-28
 
 This patch stops packaging internal agent instruction files (`AGENTS.md` and `.agents/`) in the published crate.
