@@ -195,6 +195,48 @@ fn test_state_machine_with_shared_receivers(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+mod attrs_on_rules {
+    #![allow(unexpected_cfgs)]
+    #![forbid(unused_doc_comments)]
+
+    use hegel::TestCase;
+
+    struct AttrMachine {
+        count: u32,
+    }
+
+    #[hegel::state_machine]
+    impl AttrMachine {
+        /// This is a doc comment.
+        #[rule]
+        fn increment(&mut self, _tc: TestCase) {
+            self.count += 1;
+        }
+
+        #[rustfmt::skip]
+        #[rule]
+        fn unformatted(&mut self, _tc: TestCase) {
+            self.count += 1;
+        }
+
+        #[cfg(nonexistent_config)]
+        #[rule]
+        fn never(&mut self, _tc: TestCase) {
+            compile_error!("should be compiled out");
+        }
+
+        /// This is a doc comment.
+        #[invariant]
+        fn documented_invariant(&self, _tc: TestCase) {}
+    }
+
+    #[hegel::test]
+    fn test_attrs_on_rules(tc: TestCase) {
+        let m = AttrMachine { count: 0 };
+        hegel::stateful::run(m, tc);
+    }
+}
+
 mod stateful {
     use super::common::utils::expect_panic;
     use hegel::TestCase;

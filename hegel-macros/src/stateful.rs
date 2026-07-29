@@ -21,14 +21,15 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
         .map(|m| {
             let name_str = m.name.to_string();
             let name = &m.name;
-            // Forward the method's attributes (cfg gates, user attribute
-            // macros, ...) onto the generated vec entry, except doc
-            // comments: those would land on an expression and trip
-            // unused_doc_comments in the user's crate.
+            // Only forward attributes that are valid on expressions, which is a subset of all
+            // attributes. See https://github.com/hegeldev/hegel-rust/pull/353.
+            const FORWARDED: [&str; 7] = [
+                "cfg", "cfg_attr", "allow", "expect", "warn", "deny", "forbid",
+            ];
             let attrs: Vec<&Attribute> = m
                 .attrs
                 .iter()
-                .filter(|a| !a.path().is_ident("doc"))
+                .filter(|a| FORWARDED.iter().any(|name| a.path().is_ident(name)))
                 .collect();
             // Register through a non-capturing closure rather than
             // `Self::#name` directly: `Rule.apply` is `fn(&mut M, TestCase)`,
