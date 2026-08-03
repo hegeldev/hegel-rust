@@ -473,7 +473,7 @@ fn float_choice_to_from_index_round_trip_for_infinity_and_nan() {
     };
     for v in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         let idx = fc.to_index(v).unwrap();
-        let back = fc.from_index(idx).unwrap().expect("rank is valid");
+        let back = fc.from_index(idx).unwrap().unwrap();
         if v.is_nan() {
             assert!(back.is_nan());
         } else {

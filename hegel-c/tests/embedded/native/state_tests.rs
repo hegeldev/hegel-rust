@@ -722,7 +722,7 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
 fn biased_integer_sample_stays_in_range_for_full_i128() {
     let mut rng = EngineRng::seeded(3);
     for _ in 0..1000 {
-        let _ = biased_i128_sample(i128::MIN, i128::MAX, &mut rng).unwrap();
+        biased_i128_sample(i128::MIN, i128::MAX, &mut rng).unwrap();
     }
 }
 
