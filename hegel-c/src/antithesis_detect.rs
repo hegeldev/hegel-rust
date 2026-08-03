@@ -1,11 +1,9 @@
-use std::path::Path;
-
 use crate::backend::RunError;
 
 pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
     #[cfg(not(windows))]
     // nocov start
-    if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {
+    if let Some(output_dir) = crate::sys::env_var("ANTITHESIS_OUTPUT_DIR") {
         return check_antithesis_output_dir(&output_dir);
     }
     // nocov end
@@ -18,7 +16,7 @@ pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
 /// invariant. Split from the env read so it can be unit-tested without
 /// mutating the environment.
 fn check_antithesis_output_dir(output_dir: &str) -> Result<bool, RunError> {
-    if !Path::new(output_dir).exists() {
+    if !crate::sys::fs::exists(output_dir) {
         return Err(RunError::UsageError(format!(
             "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
         )));

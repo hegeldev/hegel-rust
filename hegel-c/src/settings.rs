@@ -92,7 +92,7 @@ pub struct Output {
 type OutputSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Output {
-    /// The default destination: each line goes to stderr via `eprintln!`.
+    /// The default destination: each line is written to stderr.
     pub fn stderr() -> Self {
         Output { sink: None }
     }
@@ -108,7 +108,7 @@ impl Output {
     pub(crate) fn line(&self, line: &str) {
         match &self.sink {
             Some(sink) => sink(line),
-            None => eprintln!("{line}"),
+            None => crate::sys::stderr_line(line),
         }
     }
 }
@@ -344,8 +344,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+        None => crate::sys::env_var(key).is_some(),
+        Some(expected) => crate::sys::env_var(key).as_deref() == Some(expected),
     })
 }
 

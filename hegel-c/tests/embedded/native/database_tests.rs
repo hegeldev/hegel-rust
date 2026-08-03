@@ -378,6 +378,50 @@ fn move_value_falls_back_to_delete_save_when_dst_dir_create_fails() {
     std::fs::set_permissions(dir.path(), perms).unwrap();
 }
 
+#[test]
+fn save_leaves_no_temporary_files_behind() {
+    let (db, _dir) = fresh_db();
+    db.save(b"key", b"value");
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert_eq!(names.len(), 1);
+    assert!(
+        !names[0].contains(".tmp."),
+        "the temporary file must be renamed away, not left in place"
+    );
+}
+
+#[test]
+fn concurrent_saves_use_distinct_temporary_names() {
+    let (db, _dir) = fresh_db();
+    for i in 0..4u8 {
+        db.save(b"key", &[i]);
+    }
+    assert_eq!(db.fetch(b"key").len(), 4);
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_rename_fails() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let target = format!("{root}/occupied");
+    crate::sys::fs::create_dir_all(&target).unwrap();
+    atomic_write(&target, b"value");
+    let names = crate::sys::fs::read_dir(root).unwrap();
+    assert_eq!(
+        names,
+        vec!["occupied".to_string()],
+        "a failed rename must remove its temporary file"
+    );
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_write_fails() {
+    let dir = TempDir::new().unwrap();
+    let target = format!("{}/no-such-dir/value", dir.path().to_str().unwrap());
+    atomic_write(&target, b"value");
+    assert!(!crate::sys::fs::exists(&target));
+}
+
 fn clone_value(children: Vec<ChoiceValue>) -> ChoiceValue {
     ChoiceValue::Clone(std::sync::Arc::new(
         crate::native::core::CloneRecord::from_values(children),

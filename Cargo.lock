@@ -435,8 +435,10 @@ dependencies = [
  "rand",
  "regex",
  "rustc-hash",
+ "rustix",
  "serde_json",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]

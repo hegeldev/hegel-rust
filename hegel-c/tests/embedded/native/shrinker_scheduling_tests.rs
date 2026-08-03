@@ -344,9 +344,11 @@ fn shrink_profile_reports_singular_call_unit() {
 
 #[test]
 fn shrink_stops_immediately_when_deadline_already_passed() {
+    use core::time::Duration;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
+
+    use crate::sys::Instant;
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
     let initial = vec![int_node(5); 50];
@@ -361,7 +363,7 @@ fn shrink_stops_immediately_when_deadline_already_passed() {
         initial,
         Spans::new(),
     );
-    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    shrinker.deadline = Some(Instant::now().unwrap() - Duration::from_secs(1));
     drive_no_yield(shrinker.shrink()).unwrap();
     assert!(shrinker.timed_out, "expected the shrink to time out");
     assert_eq!(
@@ -382,7 +384,9 @@ fn shrink_stops_immediately_when_deadline_already_passed() {
 
 #[test]
 fn shrink_completes_normally_with_a_future_deadline() {
-    use std::time::{Duration, Instant};
+    use core::time::Duration;
+
+    use crate::sys::Instant;
     let initial = vec![int_node(10), int_node(20)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -392,7 +396,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
         initial,
         Spans::new(),
     );
-    shrinker.deadline = Some(Instant::now() + Duration::from_secs(300));
+    shrinker.deadline = Some(Instant::now().unwrap() + Duration::from_secs(300));
     drive_no_yield(shrinker.shrink()).unwrap();
     assert!(!shrinker.timed_out);
     let values: Vec<_> = shrinker
@@ -428,7 +432,9 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
 
 #[test]
 fn past_deadline_latches_and_short_circuits_consider_and_probe() {
-    use std::time::{Duration, Instant};
+    use core::time::Duration;
+
+    use crate::sys::Instant;
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
@@ -437,7 +443,7 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
         vec![int_node(5)],
         Spans::new(),
     );
-    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    shrinker.deadline = Some(Instant::now().unwrap() - Duration::from_secs(1));
     assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
     assert!(shrinker.timed_out);
     assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());

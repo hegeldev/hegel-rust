@@ -20,7 +20,8 @@ use crate::control::InternalError;
 use crate::native::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Instant;
+
+use crate::sys::Instant;
 
 use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
@@ -259,7 +260,7 @@ impl<'a> Shrinker<'a> {
             return true;
         }
         if let Some(deadline) = self.deadline {
-            if Instant::now() >= deadline {
+            if Instant::now().is_some_and(|now| now >= deadline) {
                 self.timed_out = true;
                 return true;
             }

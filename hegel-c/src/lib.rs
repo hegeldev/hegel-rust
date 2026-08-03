@@ -27,6 +27,8 @@ mod panic;
 /// cbindgen:ignore
 mod settings;
 /// cbindgen:ignore
+mod sys;
+/// cbindgen:ignore
 mod unicodedata;
 
 /// cbindgen:ignore

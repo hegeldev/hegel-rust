@@ -64,6 +64,19 @@ fn from_os_draws_without_panicking() {
     let _: u32 = rng.random();
 }
 
+#[test]
+fn urandom_or_fallback_warns_and_uses_a_prng_when_unavailable() {
+    let mut rng = EngineRng::urandom_or_fallback(false);
+    assert!(matches!(rng, EngineRng::Prng(_)));
+    let _: u64 = rng.next_u64();
+}
+
+#[test]
+fn urandom_or_fallback_uses_the_random_device_when_available() {
+    let rng = EngineRng::urandom_or_fallback(true);
+    assert!(matches!(rng, EngineRng::Urandom(_)));
+}
+
 #[cfg(unix)]
 #[test]
 fn urandom_fills_all_widths() {

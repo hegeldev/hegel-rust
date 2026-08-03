@@ -84,7 +84,7 @@ const INVALID_TARGET_CONFIDENCE: f64 = 0.99;
 /// Hegel-Rust deliberately doesn't have a `deadline` setting (tight timing
 /// on tests tends to be more trouble than it's worth in this ecosystem),
 /// so 30s is a generous fixed budget rather than a per-deadline scaling.
-const TOO_SLOW_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(30);
+const TOO_SLOW_THRESHOLD: core::time::Duration = core::time::Duration::from_secs(30);
 
 /// Health checks (TooSlow / FilterTooMuch / TestCasesTooLarge) are evaluated
 /// only while the run has fewer than this many valid examples on record.
@@ -114,7 +114,7 @@ pub(crate) async fn explore(
         database_key,
         exchange,
         TOO_SLOW_THRESHOLD,
-        std::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
+        core::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
     )
     .await
 }
@@ -147,8 +147,8 @@ async fn run_main(
     settings: &Settings,
     database_key: Option<&str>,
     exchange: &CaseExchange,
-    too_slow_threshold: std::time::Duration,
-    shrink_budget: std::time::Duration,
+    too_slow_threshold: core::time::Duration,
+    shrink_budget: core::time::Duration,
 ) -> Result<Vec<Failure>, RunError> {
     Engine::new(settings, database_key, exchange)?
         .run(too_slow_threshold, shrink_budget)
@@ -162,8 +162,8 @@ impl<'a> Engine<'a> {
     /// exploration report of every distinct bug's shrunk counterexample.
     async fn run(
         &mut self,
-        too_slow_threshold: std::time::Duration,
-        shrink_budget: std::time::Duration,
+        too_slow_threshold: core::time::Duration,
+        shrink_budget: core::time::Duration,
     ) -> Result<Vec<Failure>, RunError> {
         let settings = self.settings;
         let database_key = self.database_key;
@@ -491,7 +491,7 @@ impl<'a> Engine<'a> {
                 }
             }
 
-            let shrink_deadline = std::time::Instant::now() + shrink_budget;
+            let shrink_deadline = crate::sys::Instant::now().map(|now| now + shrink_budget);
             let mut shrink_timed_out = false;
             let mut shrunk_origins: crate::native::HashSet<String> =
                 crate::native::HashSet::default();
@@ -531,7 +531,7 @@ impl<'a> Engine<'a> {
                     };
                     let mut shrinker =
                         Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
-                    shrinker.deadline = Some(shrink_deadline);
+                    shrinker.deadline = shrink_deadline;
                     absorb_stop(shrinker.initial_coarse_reduction().await)?;
                     if verbosity == Verbosity::Debug {
                         let output = output.clone();
@@ -640,8 +640,8 @@ const POST_BUG_EXTRA_CALLS: u64 = 1000;
 /// real time.
 pub(crate) fn too_slow_check(
     valid_test_cases: u64,
-    total_test_time: std::time::Duration,
-    threshold: std::time::Duration,
+    total_test_time: core::time::Duration,
+    threshold: core::time::Duration,
     suppressed: bool,
 ) -> Option<String> {
     if valid_test_cases < HEALTH_CHECK_MAX_VALID && total_test_time > threshold && !suppressed {
@@ -787,7 +787,7 @@ fn should_generate_more(
     last_bug_at: Option<u64>,
     shrink_enabled: bool,
     report_multiple: bool,
-    first_bug_elapsed: Option<std::time::Duration>,
+    first_bug_elapsed: Option<core::time::Duration>,
 ) -> bool {
     if no_bug_yet {
         return true;
@@ -795,7 +795,7 @@ fn should_generate_more(
     if !shrink_enabled || !report_multiple {
         return false;
     }
-    if first_bug_elapsed.is_some_and(|d| d > std::time::Duration::from_secs(10)) {
+    if first_bug_elapsed.is_some_and(|d| d > core::time::Duration::from_secs(10)) {
         return false;
     }
     let Some(first) = first_bug_at else {
@@ -922,11 +922,11 @@ pub(crate) struct Engine<'a> {
     pub(crate) valid_test_cases: u64,
     pub(crate) invalid_test_cases: u64,
     pub(crate) overrun_test_cases: u64,
-    pub(crate) total_test_time: std::time::Duration,
+    pub(crate) total_test_time: core::time::Duration,
     pub(crate) test_is_trivial: bool,
     pub(crate) first_bug_at: Option<u64>,
     pub(crate) last_bug_at: Option<u64>,
-    pub(crate) first_bug_time: Option<std::time::Instant>,
+    pub(crate) first_bug_time: Option<crate::sys::Instant>,
 }
 
 impl<'a> Engine<'a> {
@@ -953,7 +953,7 @@ impl<'a> Engine<'a> {
             valid_test_cases: 0,
             invalid_test_cases: 0,
             overrun_test_cases: 0,
-            total_test_time: std::time::Duration::ZERO,
+            total_test_time: core::time::Duration::ZERO,
             test_is_trivial: false,
             first_bug_at: None,
             last_bug_at: None,
@@ -981,9 +981,10 @@ impl<'a> Engine<'a> {
         &mut self,
         ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        let tc_start = std::time::Instant::now();
+        let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
-        let mismatch = self.record_run(&run, tc_start.elapsed());
+        let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
+        let mismatch = self.record_run(&run, elapsed);
         Ok((run, mismatch))
     }
 
@@ -995,7 +996,7 @@ impl<'a> Engine<'a> {
     /// Every execution feeds the tree, so a later replay of the same path is
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
-    fn record_run(&mut self, run: &RunResult, elapsed: std::time::Duration) -> Option<String> {
+    fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
         let mismatch = crate::native::data_tree::record_tree_full(
             &mut self.tree_root,
             &run.nodes,
@@ -1021,7 +1022,7 @@ impl<'a> Engine<'a> {
             Status::Interesting => {
                 if self.first_bug_at.is_none() {
                     self.first_bug_at = Some(self.calls);
-                    self.first_bug_time = Some(std::time::Instant::now());
+                    self.first_bug_time = crate::sys::Instant::now();
                 }
                 self.last_bug_at = Some(self.calls);
                 let origin = run.origin.clone().unwrap_or_default();

@@ -58,7 +58,9 @@ fn reorder_spans_sorts_same_label_siblings() {
 
 #[test]
 fn reorder_spans_stops_when_deadline_passed() {
-    use std::time::{Duration, Instant};
+    use core::time::Duration;
+
+    use crate::sys::Instant;
     let initial = vec![int_node(3), int_node(1)];
     let mut spans = Spans::new();
     spans.push(sib(0, 1, "item", None));
@@ -72,7 +74,7 @@ fn reorder_spans_stops_when_deadline_passed() {
         initial,
         spans,
     );
-    shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
+    shrinker.deadline = Some(Instant::now().unwrap() - Duration::from_secs(1));
     assert!(drive_no_yield(shrinker.reorder_spans()).is_err());
     assert!(shrinker.timed_out);
 }
