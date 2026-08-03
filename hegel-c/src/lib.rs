@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use parking_lot::Mutex;
+use crate::sys::sync::{Mutex, MutexGuard};
 
 /// cbindgen:ignore
 mod antithesis_detect;
@@ -1603,7 +1603,7 @@ unsafe fn tc_guard<'a>(
     ctx: *mut HegelContext,
     fn_name: &str,
     tc: *const HegelTestCase,
-) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
+) -> Result<(&'a HegelTestCase, MutexGuard<'a, LocalState>), hegel_result_t> {
     let Some(tc) = (unsafe { tc.as_ref() }) else {
         set_last_error(ctx, &format!("{fn_name}: test case pointer is null"));
         return Err(HEGEL_E_INVALID_HANDLE);
@@ -1634,7 +1634,7 @@ unsafe fn tc_lock<'a>(
     ctx: *mut HegelContext,
     fn_name: &str,
     tc: *const HegelTestCase,
-) -> Result<(&'a HegelTestCase, parking_lot::MutexGuard<'a, LocalState>), hegel_result_t> {
+) -> Result<(&'a HegelTestCase, MutexGuard<'a, LocalState>), hegel_result_t> {
     let Some(tc) = (unsafe { tc.as_ref() }) else {
         set_last_error(ctx, &format!("{fn_name}: test case pointer is null"));
         return Err(HEGEL_E_INVALID_HANDLE);
@@ -1782,7 +1782,7 @@ fn collection_lock<'a>(
     ctx: *mut HegelContext,
     fn_name: &str,
     collection: &'a HegelCollection,
-) -> Result<parking_lot::MutexGuard<'a, crate::native::core::ManyState>, hegel_result_t> {
+) -> Result<MutexGuard<'a, crate::native::core::ManyState>, hegel_result_t> {
     match collection.state.try_lock() {
         Some(guard) => Ok(guard),
         None => {

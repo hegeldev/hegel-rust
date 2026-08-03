@@ -431,7 +431,7 @@ dependencies = [
  "libloading",
  "libm",
  "miniz_oxide",
- "parking_lot",
+ "once_cell",
  "rand",
  "regex",
  "rustc-hash",

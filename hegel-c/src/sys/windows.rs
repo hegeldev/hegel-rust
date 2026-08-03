@@ -1,6 +1,8 @@
 //! Windows backend for [`crate::sys`], built on `windows-sys` (direct
 //! kernel32 / bcryptprimitives calls, no C runtime state).
 
+use core::sync::atomic::AtomicU32;
+
 use windows_sys::Win32::Foundation::{
     CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
@@ -269,4 +271,25 @@ pub(super) fn env_var(name: &str) -> Option<String> {
 pub(super) fn pid() -> u32 {
     // SAFETY: no preconditions.
     unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() }
+}
+
+/// Block until [`unpark`] is called on `word`, returning immediately (and
+/// possibly spuriously) if `word` no longer holds `expected`.
+pub(super) fn park(word: &AtomicU32, expected: u32) {
+    // SAFETY: both addresses are valid for reads of four bytes for the
+    // duration of the call, which is the size passed.
+    unsafe {
+        windows_sys::Win32::System::Threading::WaitOnAddress(
+            word.as_ptr().cast(),
+            (&raw const expected).cast(),
+            size_of::<u32>(),
+            windows_sys::Win32::System::Threading::INFINITE,
+        );
+    }
+}
+
+/// Wake one thread parked on `word` by [`park`].
+pub(super) fn unpark(word: &AtomicU32) {
+    // SAFETY: `word` is a valid address to signal on.
+    unsafe { windows_sys::Win32::System::Threading::WakeByAddressSingle(word.as_ptr().cast()) };
 }

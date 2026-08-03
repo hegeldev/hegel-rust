@@ -15,8 +15,14 @@
 //! direct `windows-sys` calls on Windows. This is part of making `libhegel`
 //! safe to `dlclose` — nothing here registers TLS destructors or hooks that
 //! could dangle after unload.
+//!
+//! The one capability here that is not I/O is thread parking, which
+//! [`sync`] builds the engine's mutex out of: a platform needs it only to
+//! make a contended lock cheap, and a platform without it (wasm) can spin.
 
 use core::time::Duration;
+
+pub mod sync;
 
 #[cfg(unix)]
 #[path = "unix.rs"]

@@ -2,6 +2,8 @@
 //! Linux, so no libc thread-local state) plus a direct `getenv` declaration
 //! for environment lookups.
 
+use core::sync::atomic::AtomicU32;
+
 use rustix::fs::{Mode, OFlags};
 
 use super::Error;
@@ -180,3 +182,35 @@ pub(super) fn env_var(name: &str) -> Option<String> {
 pub(super) fn pid() -> u32 {
     rustix::process::getpid().as_raw_nonzero().get() as u32
 }
+
+/// Block until [`unpark`] is called on `word`, returning immediately (and
+/// possibly spuriously) if `word` no longer holds `expected`.
+///
+/// Linux has the futex syscall for exactly this. Every other Unix spins:
+/// it yields the CPU and lets the caller re-check, which is correct — the
+/// caller must tolerate spurious returns anyway — but burns time under
+/// contention. The engine's locks are essentially always uncontended, so
+/// this costs nothing in practice.
+#[cfg(target_os = "linux")]
+pub(super) fn park(word: &AtomicU32, expected: u32) {
+    let _ =
+        rustix::thread::futex::wait(word, rustix::thread::futex::Flags::PRIVATE, expected, None);
+}
+
+/// Wake one thread parked on `word` by [`park`].
+#[cfg(target_os = "linux")]
+pub(super) fn unpark(word: &AtomicU32) {
+    let _ = rustix::thread::futex::wake(word, rustix::thread::futex::Flags::PRIVATE, 1);
+}
+
+/// Yield the CPU so a thread waiting on `word` makes progress; see the
+/// Linux [`park`] for the contract.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn park(_word: &AtomicU32, _expected: u32) {
+    rustix::thread::sched_yield();
+}
+
+/// No-op: the non-Linux [`park`] spins rather than sleeping, so there is
+/// nobody to wake.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn unpark(_word: &AtomicU32) {}

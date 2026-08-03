@@ -59,7 +59,7 @@ unsafe fn finish(
 
 /// A single handle held by one thread rejects draw primitives from another.
 /// We stand in for "another thread is mid-draw" by holding the handle's own
-/// `local` lock on this thread: `parking_lot::Mutex` is not reentrant, so
+/// `local` lock on this thread: the engine's mutex is not reentrant, so
 /// `try_lock` observes contention identically to a real second thread — but
 /// deterministically, with no race to lose.
 #[test]

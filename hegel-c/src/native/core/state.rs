@@ -1,7 +1,7 @@
 use crate::native::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
 
 use rand::{Rng, RngExt};
 
@@ -24,6 +24,7 @@ use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
 };
+use crate::sys::sync::{Lazy, Mutex};
 
 /// State for a variable-length collection.
 pub struct ManyState {
@@ -70,7 +71,7 @@ pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64
 /// Interesting integer constants: powers of 2 (2^16..2^65), powers of 10
 /// (10^5..10^19), factorials (9!..20!), primorials — plus their ±1
 /// neighbours and negations.
-static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
+static GLOBAL_CONSTANTS_INTEGERS: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut base: Vec<i128> = Vec::new();
     for n in 16u32..66 {
         base.push(1i128 << n);
@@ -137,9 +138,9 @@ fn many_draw_length(
 /// Statically constructed because the constructor evaluates `Γ` and CDF
 /// integrals at the switchover; recomputing it per draw would dominate
 /// runtime.
-static INTEGERS_DISTRIBUTION: LazyLock<
+static INTEGERS_DISTRIBUTION: Lazy<
     Result<PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>, InternalError>,
-> = LazyLock::new(|| {
+> = Lazy::new(|| {
     PiecewiseDistribution::new(
         UniformDistribution::new(256.0),
         LogStudentTDistribution::new(13.0, 2),
@@ -234,7 +235,7 @@ static INTERESTING_INTEGERS: &[i128] = &[
 /// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
 /// the in-range boundary candidates via two `partition_point` calls instead
 /// of an O(n²) per-call dedup loop.
-static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
+static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut all: Vec<i128> = INTERESTING_INTEGERS
         .iter()
         .copied()
@@ -524,7 +525,7 @@ pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bo
 /// Interesting string constants: logic keywords, numeric edge cases,
 /// common Unicode stress strings. Stored as codepoint vectors so they can
 /// be validated against and inserted into the draw_string nasty pool.
-static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
+static GLOBAL_CONSTANTS_STRINGS: Lazy<Vec<Vec<u32>>> = Lazy::new(|| {
     let strings: &[&str] = &[
         "undefined",
         "null",
@@ -615,13 +616,11 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// identity check, so an address reused after a drop cannot serve a stale
 /// mask — it recomputes and overwrites its slot.
 fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
-    use std::sync::OnceLock;
     type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
+    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
     let key = Arc::as_ptr(intervals) as usize;
     {
-        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = CACHE.lock();
         if let Some((weak, mask)) = guard.get(&key) {
             if weak
                 .upgrade()
@@ -635,9 +634,8 @@ fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
         .iter()
         .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
         .collect();
-    cache
+    CACHE
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
         .insert(key, (Arc::downgrade(intervals), Arc::clone(&mask)));
     mask
 }
@@ -824,15 +822,15 @@ pub struct CoverageTag {
     pub label: u64,
 }
 
-static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    LazyLock::new(|| Mutex::new(HashMap::default()));
+static STRUCTURAL_COVERAGE_CACHE: Lazy<Mutex<HashMap<u64, &'static CoverageTag>>> =
+    Lazy::new(|| Mutex::new(HashMap::default()));
 
 /// Look up (or insert) the [`CoverageTag`] for `label`.
 ///
 /// Repeated calls with the same `label` return the same `&'static`
 /// reference.
 pub fn structural_coverage(label: u64) -> &'static CoverageTag {
-    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock().unwrap();
+    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock();
     cache
         .entry(label)
         .or_insert_with(|| Box::leak(Box::new(CoverageTag { label })))
@@ -1034,7 +1032,7 @@ impl FamilyCore {
     /// Claim the family-wide conclusion. First caller wins; later calls are
     /// no-ops.
     pub fn conclude(&self, status: Status, origin: Option<InterestingOrigin>) {
-        let mut guard = self.conclusion.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.conclusion.lock();
         if guard.is_none() {
             *guard = Some((status, origin));
             self.concluded_status.store(status as u8, Ordering::Release);
@@ -1043,10 +1041,7 @@ impl FamilyCore {
 
     /// The full conclusion (status plus origin), or `None` while running.
     pub fn conclusion(&self) -> Option<(Status, Option<InterestingOrigin>)> {
-        self.conclusion
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.conclusion.lock().clone()
     }
 
     /// Reserve one draw against the family budget. Returns `false` when the
@@ -1324,7 +1319,7 @@ impl NativeTestCase {
             return;
         }
         for (idx, handle) in std::mem::take(&mut self.clone_children) {
-            let mut child = handle.lock().unwrap_or_else(|e| e.into_inner());
+            let mut child = handle.lock();
             child.freeze();
             child.reassemble();
             let stream = RealizedStream::new(

@@ -19,11 +19,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use crate::backend::DataSource;
 use crate::control::{InternalError, hegel_internal_unwrap};
+use crate::sys::sync::Mutex;
 
 /// A data source handed across the exchange, one per test case.
 pub(crate) type BoxedDataSource = Box<dyn DataSource + Send + Sync>;
@@ -55,7 +55,7 @@ impl CaseExchange {
     /// bug in the engine, surfaced by the driver as a run-level error
     /// instead of a panic.
     pub(crate) fn take(&self) -> Result<BoxedDataSource, InternalError> {
-        let taken = self.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let taken = self.slot.lock().take();
         Ok(hegel_internal_unwrap!(
             taken,
             "the engine suspended without offering a test case"
@@ -83,7 +83,7 @@ impl Future for Offer<'_> {
         let this = self.get_mut();
         match this.ds.take() {
             Some(ds) => {
-                *this.exchange.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(ds);
+                *this.exchange.slot.lock() = Some(ds);
                 Poll::Pending
             }
             None => Poll::Ready(()),
