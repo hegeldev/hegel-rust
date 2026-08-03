@@ -20,7 +20,7 @@ use super::choices::{
     StringChoice,
 };
 use super::float_index::index_to_float;
-use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
+use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE, CORE_SPECIAL_MIN_SPAN, CORE_SPECIAL_PROBABILITY};
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
 };
@@ -273,6 +273,31 @@ pub(crate) fn biased_integer_sample(
     })
 }
 
+/// The in-range *core* special values for `[min_value, max_value]`: the two
+/// endpoints, their inner neighbours (`min + 1`, `max - 1`), zero, ±1, and the
+/// small magnitudes `±2..=±8`. Sorted and deduped; always non-empty because
+/// `min_value` is in range. These are the values a property test most often
+/// needs (off-by-one, overflow, sign), given their own fixed probability mass
+/// so the wide-range constant pool can't dilute them away.
+fn core_special_values_i128(min_value: i128, max_value: i128) -> Vec<i128> {
+    let mut core: Vec<i128> = Vec::with_capacity(21);
+    let mut push = |v: i128| {
+        if v >= min_value && v <= max_value {
+            core.push(v);
+        }
+    };
+    push(min_value);
+    push(max_value);
+    push(min_value.saturating_add(1));
+    push(max_value.saturating_sub(1));
+    for v in -8..=8i128 {
+        push(v);
+    }
+    core.sort_unstable();
+    core.dedup();
+    core
+}
+
 /// The original i128 nasty-pool + distribution sampler, returning a value in
 /// `[min_value, max_value]`.
 fn biased_i128_sample(
@@ -290,8 +315,29 @@ fn biased_i128_sample(
     let need_min = static_slice.first() != Some(&min_value);
     let need_max = static_slice.last() != Some(&max_value);
     let count = static_slice.len() + (need_min as usize) + (need_max as usize);
-    let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
-    if rng.random::<f64>() < threshold {
+    let nasty_threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
+
+    // The core tier ([`CORE_SPECIAL_PROBABILITY`]) applies only to wide ranges;
+    // `checked_sub` returning `None` means the span overflows `i128` and is
+    // unambiguously wide. `u` is the single decision draw shared with the
+    // nasty/distribution split (core, then pool, then distribution), so no extra
+    // entropy is spent and narrow ranges (`core_threshold == 0`) keep their
+    // exact previous path.
+    let is_wide = max_value
+        .checked_sub(min_value)
+        .is_none_or(|span| span as u128 >= CORE_SPECIAL_MIN_SPAN);
+    let core_threshold = if is_wide {
+        CORE_SPECIAL_PROBABILITY
+    } else {
+        0.0
+    };
+
+    let u = rng.random::<f64>();
+    if u < core_threshold {
+        let core = core_special_values_i128(min_value, max_value);
+        return core[rng.random_range(0..core.len())];
+    }
+    if u < core_threshold + nasty_threshold {
         let idx = rng.random_range(0..count);
         Ok(if need_min && idx == 0 {
             min_value
@@ -317,6 +363,25 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> B
     let span: BigUint = (max - min).magnitude();
     let bits = span.bits();
 
+    // Core special-value tier (see [`biased_i128_sample`]); a range this wide
+    // (beyond `i128`) is always wide, so it always applies. `min` is in range,
+    // so the core list is never empty.
+    let mut core: Vec<BigInt> = Vec::with_capacity(21);
+    let mut push_core = |v: BigInt| {
+        if &v >= min && &v <= max {
+            core.push(v);
+        }
+    };
+    push_core(min.clone());
+    push_core(max.clone());
+    push_core(min + BigInt::from(1));
+    push_core(max - BigInt::from(1));
+    for v in -8..=8i32 {
+        push_core(BigInt::from(v));
+    }
+    core.sort();
+    core.dedup();
+
     let mut nasty: Vec<BigInt> = vec![min.clone(), max.clone()];
     let push_in_range = |v: BigInt, nasty: &mut Vec<BigInt>| {
         if &v >= min && &v <= max {
@@ -334,8 +399,14 @@ fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> B
     nasty.sort();
     nasty.dedup();
 
-    let threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
-    if rng.random::<f64>() < threshold {
+    // One shared draw `u`: core, then the power-of-two pool, then the fallback.
+    let nasty_threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
+    let u = rng.random::<f64>();
+    if u < CORE_SPECIAL_PROBABILITY {
+        let idx = rng.random_range(0..core.len());
+        return core[idx].clone();
+    }
+    if u < CORE_SPECIAL_PROBABILITY + nasty_threshold {
         let idx = rng.random_range(0..nasty.len());
         return nasty[idx].clone();
     }
