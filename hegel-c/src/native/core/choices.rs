@@ -1287,13 +1287,18 @@ impl ChoiceKind {
     /// Random value sampled from this kind's domain (with kind-appropriate
     /// bias), or `None` for a clone kind (clone values arise from executing
     /// a stream, never from sampling).
+    ///
+    /// `params` are the per-test-case swarm parameters; only the integer arm
+    /// consults them (they reweight the boundary distribution). The other kinds
+    /// ignore them.
     pub fn random_value(
         &self,
         rng: &mut crate::native::rng::EngineRng,
+        params: crate::native::core::GenerationParameters,
     ) -> Result<Option<ChoiceValue>, InternalError> {
         Ok(match self {
             ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
-                crate::native::core::state::biased_integer_sample(ic, rng)?,
+                crate::native::core::state::biased_integer_sample(ic, rng, params)?,
             )),
             ChoiceKind::Boolean(bc) => Some(ChoiceValue::Boolean(if bc.p <= 0.0 {
                 false

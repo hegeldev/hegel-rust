@@ -9,7 +9,8 @@ pub use choices::{
 };
 pub use float_index::{float_to_index, index_to_float};
 pub use state::{
-    ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Spans,
+    GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Span,
+    SpanEvent, Spans,
 };
 pub use state_machine::NativeStateMachine;
 
@@ -22,33 +23,50 @@ pub const BUFFER_SIZE: usize = 8 * 1024;
 /// corrupt storage can't drive unbounded recursion.
 pub const MAX_CLONE_DEPTH: usize = 100;
 
-/// Probability of drawing a boundary/special value per special candidate.
+/// Probability of drawing a boundary/special value per special candidate. Used
+/// by the narrow-range, float, string and bytes samplers (the wide-range integer
+/// sampler uses the per-category Dirichlet weights below instead).
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 
-/// Probability that an integer draw from a wide range returns one of the
-/// *core* special values: the range endpoints, their inner neighbours
-/// (`min + 1`, `max - 1`), zero, ±1, and the small magnitudes.
+/// How a wide-range integer draw is split between four *categories* of value is
+/// not fixed: a mixture weight for each category is drawn afresh for every test
+/// case (as that case's [`GenerationParameters`]) from a Dirichlet distribution,
+/// a lumpy form of *swarm testing*. The categories are:
 ///
-/// This is deliberately separate from — and applied ahead of —
-/// [`BOUNDARY_PROBABILITY`], which governs the large diffuse constant pool
-/// (hundreds of powers of two, factorials, primorials). That pool grows with
-/// the range width, so a per-candidate weight of `BOUNDARY_PROBABILITY`
-/// dilutes the handful of values a property test actually needs (endpoints,
-/// zero, small magnitudes) down to well under 1% each. Giving the small core
-/// set its own fixed mass keeps those values common while still leaving the
-/// bulk of the probability for the middle of the range. Mirrors Hypothesis's
-/// boundary/`nasty` value injection (see hypothesis#4722, hegel-rust#350).
-pub const CORE_SPECIAL_PROBABILITY: f64 = 0.20;
+///   * **endpoints** — the range edges `{min, max, min + 1, max - 1}`;
+///   * **interesting** — the curated `INTERESTING_INTEGERS` in range (zero, ±1,
+///     the small magnitudes, powers of two and their neighbours, type limits);
+///   * **diffuse** — the large `GLOBAL_CONSTANTS_INTEGERS` pool in range;
+///   * **middle** — the ordinary piecewise distribution.
+///
+/// Splitting the range edges into their own category is what makes `x + y`
+/// overflow (and other endpoint interactions) reachable: an endpoint-heavy case
+/// draws both operands from `{min, max, …}`, so their sum overflows about half
+/// the time. Drawing the weights per case, rather than fixing them, keeps most
+/// cases middle-dominated ("normal") while a thin lumpy tail concentrates on one
+/// special category — the correlation a fixed per-value probability can't
+/// produce. Mirrors Hypothesis's boundary/`nasty` value injection (hypothesis#4722,
+/// hegel-rust#350) crossed with swarm testing (Groce et al., ISSTA 2012).
+///
+/// These are pure reweightings: every category keeps positive probability under
+/// every draw (the Dirichlet never assigns exactly zero), so which values are
+/// reachable is unchanged — only how often.
+///
+/// The Dirichlet concentration parameters. Each is well below the middle's, so
+/// the special categories are usually near zero and occasionally spike (the
+/// lumpiness); their ratios set the mean weight of each category.
+pub const DIRICHLET_ALPHA_ENDPOINT: f64 = 0.08;
+pub const DIRICHLET_ALPHA_INTERESTING: f64 = 0.8;
+pub const DIRICHLET_ALPHA_DIFFUSE: f64 = 0.12;
+pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 
-/// Minimum span (`max_value - min_value`) at which the
-/// [`CORE_SPECIAL_PROBABILITY`] tier is applied. Below this the range is
-/// narrow enough that the ordinary piecewise distribution (uniform on
-/// `[-256, 256]` at its core) already surfaces endpoints, zero, and small
-/// magnitudes frequently, so no special-casing is needed — and leaving narrow
-/// draws on their existing path keeps their generation/shrink behaviour
-/// exactly as before. This matches the framing of the underlying issue: the
-/// under-sampling only bites for *large or full-width* ranges.
-pub const CORE_SPECIAL_MIN_SPAN: u128 = 256;
+/// Minimum range width (`max_value - min_value`) at which the category mixture
+/// is applied. Below this the ordinary piecewise distribution (uniform on
+/// `[-256, 256]` at its core) already surfaces endpoints, zero and small
+/// magnitudes frequently, so narrow draws keep their previous generation and
+/// shrink behaviour byte-for-byte. The under-sampling only bites for *large or
+/// full-width* ranges.
+pub const CURATED_MIN_WIDTH: u128 = 256;
 
 /// Hard cap on the number of successful shrink improvements per
 /// counterexample. Once the shrinker has accepted this many

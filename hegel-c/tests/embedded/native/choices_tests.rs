@@ -1059,7 +1059,15 @@ fn random_value_boolean_respects_p() {
     let mut rng = EngineRng::seeded(2024);
     let mut trues = 0;
     for _ in 0..1000 {
-        if rare.random_value(&mut rng).unwrap().unwrap() == ChoiceValue::Boolean(true) {
+        if rare
+            .random_value(
+                &mut rng,
+                crate::native::core::GenerationParameters::default(),
+            )
+            .unwrap()
+            .unwrap()
+            == ChoiceValue::Boolean(true)
+        {
             trues += 1;
         }
     }
@@ -1068,7 +1076,15 @@ fn random_value_boolean_respects_p() {
     let common = ChoiceKind::Boolean(BooleanChoice { p: 0.99 });
     let mut trues = 0;
     for _ in 0..1000 {
-        if common.random_value(&mut rng).unwrap().unwrap() == ChoiceValue::Boolean(true) {
+        if common
+            .random_value(
+                &mut rng,
+                crate::native::core::GenerationParameters::default(),
+            )
+            .unwrap()
+            .unwrap()
+            == ChoiceValue::Boolean(true)
+        {
             trues += 1;
         }
     }
@@ -1086,11 +1102,23 @@ fn random_value_boolean_degenerate_p_is_deterministic() {
     let always = ChoiceKind::Boolean(BooleanChoice { p: 1.0 });
     for _ in 0..20 {
         assert_eq!(
-            never.random_value(&mut rng).unwrap().unwrap(),
+            never
+                .random_value(
+                    &mut rng,
+                    crate::native::core::GenerationParameters::default()
+                )
+                .unwrap()
+                .unwrap(),
             ChoiceValue::Boolean(false)
         );
         assert_eq!(
-            always.random_value(&mut rng).unwrap().unwrap(),
+            always
+                .random_value(
+                    &mut rng,
+                    crate::native::core::GenerationParameters::default()
+                )
+                .unwrap()
+                .unwrap(),
             ChoiceValue::Boolean(true)
         );
     }
@@ -1415,7 +1443,15 @@ fn clone_values_is_empty_matches_child_count() {
 #[test]
 fn clone_kind_random_value_is_none() {
     let mut rng = crate::native::rng::EngineRng::seeded(0);
-    assert!(ChoiceKind::Clone.random_value(&mut rng).unwrap().is_none());
+    assert!(
+        ChoiceKind::Clone
+            .random_value(
+                &mut rng,
+                crate::native::core::GenerationParameters::default()
+            )
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
