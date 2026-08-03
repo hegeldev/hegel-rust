@@ -21,8 +21,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 rand = { version = "0.10" }
-dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
-miniz_oxide = { version = "0.8" }
+dashu-int = { version = "0.4.1", default-features = false }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 rustc-hash = { version = "2", default-features = false }
 hashbrown = { version = "0.16", default-features = false, features = ["inline-more"] }
 libm = "0.2"
