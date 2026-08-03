@@ -108,7 +108,7 @@ pub fn index_to_float(i: u64) -> f64 {
 pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
     hegel_internal_debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
-    let c = lo.ceil();
+    let c = libm::ceil(lo);
     if c <= hi && c < (1u64 << 56) as f64 {
         return c;
     }

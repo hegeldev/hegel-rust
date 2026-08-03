@@ -199,7 +199,7 @@ impl<'a> Engine<'a> {
                     1.0
                 };
                 let desired_size =
-                    (((max_test_cases as f64) * desired_factor).ceil() as usize).max(2);
+                    ((libm::ceil((max_test_cases as f64) * desired_factor)) as usize).max(2);
                 if values.len() < desired_size {
                     let mut extra = self
                         .db()
@@ -754,8 +754,8 @@ pub(crate) fn slow_shrink_warning() -> String {
 /// per_valid = ceil(1 / r)
 /// ```
 fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
-    let base = ((1.0 - c).ln() / (1.0 - r).ln()).ceil() - 1.0;
-    let per_valid = (1.0 / r).ceil();
+    let base = libm::ceil(libm::log(1.0 - c) / libm::log(1.0 - r)) - 1.0;
+    let per_valid = libm::ceil(1.0 / r);
     (base as u64, per_valid as u64)
 }
 

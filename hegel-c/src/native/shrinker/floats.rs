@@ -184,9 +184,9 @@ impl<'a> Shrinker<'a> {
                     if cur.is_finite() {
                         let base_after = cur.abs() as i128;
                         let lo: i128 = if is_neg {
-                            (-fc.max_value).max(0.0).ceil() as i128
+                            libm::ceil((-fc.max_value).max(0.0)) as i128
                         } else {
-                            fc.min_value.max(0.0).ceil() as i128
+                            libm::ceil(fc.min_value.max(0.0)) as i128
                         };
                         for step in [2i128, 1] {
                             let i_capture = i;
@@ -215,9 +215,9 @@ impl<'a> Shrinker<'a> {
                 } else if v_abs.is_finite() && v_abs > 0.0 {
                     let cur_abs = self.float_at(i).abs();
                     for p in (0..=10).rev() {
-                        let scale = (2_f64).powi(p);
+                        let scale = libm::exp2(f64::from(p));
                         let scaled = cur_abs * scale;
-                        for rounded in [scaled.floor(), scaled.ceil()] {
+                        for rounded in [libm::floor(scaled), libm::ceil(scaled)] {
                             let candidate_mag = rounded / scale;
                             if !candidate_mag.is_finite()
                                 || float_to_index(candidate_mag) >= float_to_index(cur_abs)

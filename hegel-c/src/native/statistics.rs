@@ -13,8 +13,8 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
     let abs_t = t.abs();
     let z = 1.0 + abs_t * abs_t / df as f64;
     let p = if df % 2 == 1 {
-        let u = abs_t / (df as f64).sqrt();
-        let mut p = u.atan();
+        let u = abs_t / libm::sqrt(df as f64);
+        let mut p = libm::atan(u);
         if df > 1 {
             let mut f = 1.0_f64;
             let mut tz = 1.0_f64;
@@ -36,7 +36,7 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
             f += tz;
             j += 2;
         }
-        f * abs_t / (z * df as f64).sqrt()
+        f * abs_t / libm::sqrt(z * df as f64)
     };
     if t < 0.0 {
         0.5 - 0.5 * p
@@ -59,13 +59,13 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
     hegel_internal_assert!(p > 0.0 && p < 1.0, "stdtrit requires 0 < p < 1, got {p}");
     if df == 1 {
         return if p > 0.5 {
-            (PI * (1.0 - p)).cos() / (PI * (1.0 - p)).sin()
+            libm::cos(PI * (1.0 - p)) / libm::sin(PI * (1.0 - p))
         } else {
-            -(PI * p).cos() / (PI * p).sin()
+            -libm::cos(PI * p) / libm::sin(PI * p)
         };
     }
     if df == 2 {
-        return (2.0 * p - 1.0) / (2.0 * p * (1.0 - p)).sqrt();
+        return (2.0 * p - 1.0) / libm::sqrt(2.0 * p * (1.0 - p));
     }
 
     let sign = if p > 0.5 { 1.0 } else { -1.0 };
@@ -77,8 +77,9 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
         hi *= 2.0;
     }
 
-    let log_norm =
-        ln_gamma(0.5 * (df as f64 + 1.0)) - 0.5 * (df as f64 * PI).ln() - ln_gamma(0.5 * df as f64);
+    let log_norm = ln_gamma(0.5 * (df as f64 + 1.0))
+        - 0.5 * libm::log(df as f64 * PI)
+        - ln_gamma(0.5 * df as f64);
     let mut t = 0.5 * (lo + hi);
     let eps = 1e-10;
     for _ in 0..50 {
@@ -88,8 +89,8 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
         } else {
             hi = t;
         }
-        let log_f = log_norm - 0.5 * (df as f64 + 1.0) * (t * t / df as f64).ln_1p();
-        let f = log_f.exp();
+        let log_f = log_norm - 0.5 * (df as f64 + 1.0) * libm::log1p(t * t / df as f64);
+        let f = libm::exp(log_f);
         let t_newton = t - (f_val - q) / f;
         t = if lo <= t_newton && t_newton <= hi {
             t_newton
@@ -129,14 +130,14 @@ fn ln_gamma(x: f64) -> f64 {
         sum += c / (z + i as f64);
     }
     let t = z + 7.5;
-    0.5 * (2.0 * PI).ln() + (z + 0.5) * t.ln() - t + sum.ln()
+    0.5 * libm::log(2.0 * PI) + (z + 0.5) * libm::log(t) - t + libm::log(sum)
 }
 
 /// `Γ(x)`. Same Lanczos series as [`ln_gamma`], exponentiated. Kept
 /// separate so the [`LogStudentTDistribution`] coefficient cache reads
 /// naturally as `Γ((df+1)/2) / (√(df π) · Γ(df/2))`.
 fn gamma(x: f64) -> f64 {
-    ln_gamma(x).exp()
+    libm::exp(ln_gamma(x))
 }
 
 /// Common interface for the primitive distributions composed by
@@ -200,7 +201,7 @@ pub struct LogStudentTDistribution {
 impl LogStudentTDistribution {
     pub fn new(scale_bits: f64, df: i32) -> Self {
         let t_coef =
-            gamma((df as f64 + 1.0) / 2.0) / ((df as f64 * PI).sqrt() * gamma(df as f64 / 2.0));
+            gamma((df as f64 + 1.0) / 2.0) / (libm::sqrt(df as f64 * PI) * gamma(df as f64 / 2.0));
         Self {
             scale_bits,
             df,
@@ -213,20 +214,23 @@ const LN_2: f64 = std::f64::consts::LN_2;
 
 impl Distribution for LogStudentTDistribution {
     fn cdf(&self, x: f64) -> f64 {
-        let y = (1.0 + x.abs()).log2().copysign(x) / self.scale_bits;
+        let y = libm::copysign(libm::log2(1.0 + x.abs()), x) / self.scale_bits;
         stdtr(self.df, y)
     }
 
     fn inverse_cdf(&self, u: f64) -> f64 {
         let mut y = self.scale_bits * stdtrit(self.df, u);
         y = y.clamp(-1023.0, 1023.0);
-        (y.abs() * LN_2).exp_m1().copysign(y)
+        libm::copysign(libm::expm1(y.abs() * LN_2), y)
     }
 
     fn pdf(&self, x: f64) -> f64 {
-        let y = (1.0 + x.abs()).log2().copysign(x) / self.scale_bits;
-        let f_t =
-            self.t_coef * (1.0 + y * y / self.df as f64).powf(-((self.df as f64 + 1.0) / 2.0));
+        let y = libm::copysign(libm::log2(1.0 + x.abs()), x) / self.scale_bits;
+        let f_t = self.t_coef
+            * libm::pow(
+                1.0 + y * y / self.df as f64,
+                -((self.df as f64 + 1.0) / 2.0),
+            );
         f_t / (self.scale_bits * (1.0 + x.abs()) * LN_2)
     }
 }
