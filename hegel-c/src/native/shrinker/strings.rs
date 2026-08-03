@@ -1,6 +1,6 @@
 use crate::native::HashMap;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
+use crate::native::core::{ChoiceValue, StringChoice};
 use crate::unicodedata;
 
 use super::search::{BinSearchDown, FindInteger};
@@ -11,15 +11,16 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_strings(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (kind, current) = match (
-                self.current_nodes[i].kind.as_ref(),
-                self.current_nodes[i].value.clone(),
-            ) {
-                (ChoiceKind::String(sc), ChoiceValue::String(s)) => (sc.clone(), s),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            self.shrink_string_node(i).await?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    async fn shrink_string_node(&mut self, i: usize) -> ShrinkResult<()> {
+        {
+            let Some((kind, current)) = self.string_at(i) else {
+                return Ok(());
             };
 
             let simplest = kind.simplest();
@@ -28,9 +29,11 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let cur_len = self.current_string(i).len();
+            let Some(captured) = self.current_string(i) else {
+                return Ok(());
+            };
+            let cur_len = captured.len();
             if cur_len > kind.min_size {
-                let captured = self.current_string(i);
                 let mut search = BinSearchDown::new(kind.min_size as i128, cur_len as i128);
                 while let Some(sz) = search.probe() {
                     let cand: Vec<u32> = captured[..sz as usize].to_vec();
@@ -41,10 +44,14 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            let cur_len = self.current_string(i).len();
-            let scan_end = (kind.min_size + 8).min(cur_len);
+            let Some(cur) = self.current_string(i) else {
+                return Ok(());
+            };
+            let scan_end = (kind.min_size + 8).min(cur.len());
             for target_len in kind.min_size..scan_end {
-                let cur = self.current_string(i);
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
                 if target_len > cur.len() {
                     break;
                 }
@@ -53,10 +60,15 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let mut j = self.current_string(i).len();
+            let Some(cur) = self.current_string(i) else {
+                return Ok(());
+            };
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let cur = self.current_string(i);
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
                 if cur.len() <= kind.min_size {
                     continue;
                 }
@@ -66,8 +78,10 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
+            let Some(cur) = self.current_string(i) else {
+                return Ok(());
+            };
             let dup_codepoints: Vec<u32> = {
-                let cur = self.current_string(i);
                 let mut counts: HashMap<u32, usize> = HashMap::default();
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
@@ -86,7 +100,9 @@ impl<'a> Shrinker<'a> {
                 val: u32,
                 cand_cp: u32,
             ) -> ShrinkResult<bool> {
-                let mut new_str = sh.current_string(i);
+                let Some(mut new_str) = sh.current_string(i) else {
+                    return Ok(false);
+                };
                 let mut changed = false;
                 for c in new_str.iter_mut() {
                     if *c == val {
@@ -108,12 +124,18 @@ impl<'a> Shrinker<'a> {
 
                 for cand_cp in semantic_candidates(val, &kind) {
                     try_replace_all(self, i, val, cand_cp).await?;
-                    if !self.current_string(i).contains(&val) {
+                    let Some(cur) = self.current_string(i) else {
+                        return Ok(());
+                    };
+                    if !cur.contains(&val) {
                         break;
                     }
                 }
 
-                if self.current_string(i).contains(&val) {
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
+                if cur.contains(&val) {
                     let cur_key = kind.codepoint_key(val);
                     if cur_key > 0 {
                         let mut search = BinSearchDown::new(0, cur_key as i128);
@@ -128,33 +150,46 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            let mut j = self.current_string(i).len();
+            let Some(cur) = self.current_string(i) else {
+                return Ok(());
+            };
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                if kind.codepoint_key(self.current_string(i)[j]) == 0 {
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
+                if kind.codepoint_key(cur[j]) == 0 {
                     continue;
                 }
-                let original_cp = self.current_string(i)[j];
+                let original_cp = cur[j];
 
                 for cand_cp in semantic_candidates(original_cp, &kind) {
-                    let cur_key = kind.codepoint_key(self.current_string(i)[j]);
+                    let Some(mut cand) = self.current_string(i) else {
+                        return Ok(());
+                    };
+                    let cur_key = kind.codepoint_key(cand[j]);
                     if kind.codepoint_key(cand_cp) >= cur_key {
                         continue;
                     }
-                    let mut cand = self.current_string(i);
                     cand[j] = cand_cp;
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                         .await?;
                 }
 
-                let cur_key = kind.codepoint_key(self.current_string(i)[j]);
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
+                let cur_key = kind.codepoint_key(cur[j]);
                 if cur_key > 0 {
                     let mut search = BinSearchDown::new(0, cur_key as i128);
                     while let Some(k) = search.probe() {
                         let cp = kind
                             .key_to_codepoint(k as u32)
                             .expect("bin_search probe stays within alpha_size");
-                        let mut cand = self.current_string(i);
+                        let Some(mut cand) = self.current_string(i) else {
+                            return Ok(());
+                        };
                         cand[j] = cp;
                         let ok = self
                             .replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
@@ -166,13 +201,17 @@ impl<'a> Shrinker<'a> {
 
             let mut pos = 1;
             loop {
-                let cur_len = self.current_string(i).len();
-                if pos >= cur_len {
+                let Some(cur) = self.current_string(i) else {
+                    return Ok(());
+                };
+                if pos >= cur.len() {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let cur = self.current_string(i);
+                    let Some(cur) = self.current_string(i) else {
+                        return Ok(());
+                    };
                     let prev_key = kind.codepoint_key(cur[j - 1]);
                     let cur_key = kind.codepoint_key(cur[j]);
                     if prev_key <= cur_key {
@@ -191,17 +230,22 @@ impl<'a> Shrinker<'a> {
                 }
                 pos += 1;
             }
-
-            i += 1;
         }
         Ok(())
     }
 
-    fn current_string(&self, i: usize) -> Vec<u32> {
-        match &self.current_nodes[i].value {
-            ChoiceValue::String(s) => s.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
-        }
+    /// The string constraint and value at node `i`, or `None` when the node
+    /// is not (or no longer) a string — a concurrent shrink can pun the kind
+    /// at any position between probes.
+    fn string_at(&self, i: usize) -> Option<(StringChoice, Vec<u32>)> {
+        let (sc, v) = self.current_nodes.get(i)?.data.as_string()?;
+        Some((sc.clone(), v.to_vec()))
+    }
+
+    /// The current string value at node `i`; `None` under the same
+    /// conditions as [`Shrinker::string_at`].
+    fn current_string(&self, i: usize) -> Option<Vec<u32>> {
+        self.string_at(i).map(|(_, v)| v)
     }
 
     /// Try redistributing length between pairs of string values. For
@@ -231,19 +275,16 @@ impl<'a> Shrinker<'a> {
         self.current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| match n.kind.as_ref() {
-                ChoiceKind::String(_) => Some(i),
-                _ => None,
-            })
+            .filter_map(|(i, n)| n.data.as_string().map(|_| i))
             .collect()
     }
 
     async fn redistribute_string_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
-        let s = self.current_string(i);
-        let t = self.current_string(j);
-        let kind_j = match self.current_nodes[j].kind.as_ref() {
-            ChoiceKind::String(kj) => kj.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
+        let Some(s) = self.current_string(i) else {
+            return Ok(());
+        };
+        let Some((kind_j, t)) = self.string_at(j) else {
+            return Ok(());
         };
 
         if s.is_empty() {
@@ -315,19 +356,11 @@ impl<'a> Shrinker<'a> {
         let len = self.current_nodes.len();
         for i in 0..len {
             for j in (i + 1)..(i + 1 + 4).min(len) {
-                let (kind_i, val_i) = match (
-                    self.current_nodes[i].kind.as_ref(),
-                    &self.current_nodes[i].value,
-                ) {
-                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                    _ => continue,
+                let Some((kind_i, val_i)) = self.string_at(i) else {
+                    continue;
                 };
-                let (kind_j, val_j) = match (
-                    self.current_nodes[j].kind.as_ref(),
-                    &self.current_nodes[j].value,
-                ) {
-                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                    _ => continue,
+                let Some((kind_j, val_j)) = self.string_at(j) else {
+                    continue;
                 };
                 let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
                 let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
@@ -377,22 +410,15 @@ impl<'a> Shrinker<'a> {
     pub(crate) async fn normalize_unicode_chars(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (kind, value) = match (
-                self.current_nodes[i].kind.as_ref(),
-                &self.current_nodes[i].value,
-            ) {
-                (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            let Some((kind, value)) = self.string_at(i) else {
+                i += 1;
+                continue;
             };
             for pos in 0..value.len() {
                 let cp = value[pos];
                 let candidates = natural_simpler_chars(cp, &kind);
-                let cur = match &self.current_nodes[i].value {
-                    ChoiceValue::String(v) => v.clone(),
-                    _ => unreachable!("kind invariant violated mid-pass"),
+                let Some(cur) = self.current_string(i) else {
+                    break;
                 };
                 if pos >= cur.len() || cur[pos] != cp {
                     continue;

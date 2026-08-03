@@ -10,29 +10,25 @@ use crate::native::HashMap;
 use crate::native::bignum::BigInt;
 
 use crate::exchange::drive_no_yield;
-use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::choices::IntegerChoice;
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::search::FindInteger;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN + 1),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 #[test]
@@ -67,11 +63,14 @@ fn replace_rejects_value_that_fails_kind_validate() {
 
 #[test]
 fn find_integer_bails_when_exponential_probe_overflows() {
+    use crate::native::shrinker::search::SearchStep;
     let mut search = FindInteger::new();
     while search.probe().is_some() {
         search.record(true);
     }
-    let result = search.result();
+    let SearchStep::Done(result) = search.step() else {
+        panic!("search should have converged");
+    };
     assert!(
         result >= 1 << 60,
         "result {result} should be very large; expected >= 2^60"

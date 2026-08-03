@@ -31,18 +31,20 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            let kind = node.kind.clone();
             if matches!(
-                *kind.as_ref(),
-                crate::native::core::ChoiceKind::Bytes(_)
-                    | crate::native::core::ChoiceKind::String(_)
-                    | crate::native::core::ChoiceKind::Clone
+                node.data,
+                crate::native::core::ChoiceData::Bytes(..)
+                    | crate::native::core::ChoiceData::String(..)
             ) {
                 i += 1;
                 continue;
             }
-            let current_idx = kind.to_index(&node.value);
+            let Some(current_idx) = node.data.to_index() else {
+                i += 1;
+                continue;
+            };
 
+            let node_value = node.value();
             let mut candidates: Vec<ChoiceValue> = Vec::new();
             for delta in 1u32..=5 {
                 for &sign in &[1i32, -1] {
@@ -50,8 +52,8 @@ impl<'a> Shrinker<'a> {
                     let Some(new_idx) = new_idx_opt else {
                         continue;
                     };
-                    if let Some(v) = kind.from_index(new_idx) {
-                        if v != node.value && !candidates.contains(&v) {
+                    if let Some(v) = node.data.from_index(new_idx) {
+                        if v != node_value && !candidates.contains(&v) {
                             candidates.push(v);
                         }
                     }
@@ -61,7 +63,7 @@ impl<'a> Shrinker<'a> {
             for new_val in &candidates {
                 let prefix: Vec<ChoiceValue> = self.current_nodes[..i]
                     .iter()
-                    .map(|n| n.value.clone())
+                    .map(|n| n.value())
                     .chain(std::iter::once(new_val.clone()))
                     .collect();
                 let max_size = crate::native::core::flattened_len(&self.current_nodes);
@@ -75,11 +77,8 @@ impl<'a> Shrinker<'a> {
                     let j = i + j_offset;
                     j_offset += 1;
 
-                    let kind_j = self.current_nodes[j].kind.clone();
-                    if matches!(*kind_j.as_ref(), crate::native::core::ChoiceKind::Clone) {
-                        continue;
-                    }
-                    let Some(unit_val) = kind_j.from_index(BigUint::from(1u32)) else {
+                    let data_j = self.current_nodes[j].data.clone();
+                    let Some(unit_val) = data_j.from_index(BigUint::from(1u32)) else {
                         continue;
                     };
                     let mut two_prefix = prefix.clone();
@@ -87,7 +86,7 @@ impl<'a> Shrinker<'a> {
                         if k == j {
                             two_prefix.push(unit_val.clone());
                         } else {
-                            two_prefix.push(self.current_nodes[k].kind.simplest());
+                            two_prefix.push(self.current_nodes[k].data.simplest_value());
                         }
                     }
                     for _ in 0..RANDOM_ATTEMPTS {

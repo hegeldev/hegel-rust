@@ -92,14 +92,13 @@ fn integer_choice_unit_single_value_range() {
 }
 
 #[test]
-#[should_panic(expected = "ChoiceKind::to_index: kind/value mismatch")]
-fn choice_kind_to_index_panics_on_kind_value_mismatch() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
+fn choice_kind_resolve_rejects_kind_value_mismatch() {
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(0),
         max_value: BigInt::from(100),
         shrink_towards: BigInt::from(0),
-    });
-    let _ = kind.to_index(&ChoiceValue::Boolean(true));
+    }));
+    assert_eq!(kind.resolve(&ChoiceValue::Boolean(true)), None);
 }
 
 fn bu(n: u64) -> crate::native::bignum::BigUint {
@@ -108,33 +107,33 @@ fn bu(n: u64) -> crate::native::bignum::BigUint {
 
 #[test]
 fn integer_bounded_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(0),
         max_value: BigInt::from(200),
         shrink_towards: BigInt::from(0),
-    });
-    assert_eq!(kind.max_children(), bu(201));
+    }));
+    assert_eq!(kind.max_children(), Some(bu(201)));
 }
 
 #[test]
 fn integer_negative_range_gives_exact_count() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(-10),
         max_value: BigInt::from(10),
         shrink_towards: BigInt::from(0),
-    });
-    assert_eq!(kind.max_children(), bu(21));
+    }));
+    assert_eq!(kind.max_children(), Some(bu(21)));
 }
 
 #[test]
 fn integer_full_i128_range_is_two_pow_128() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(i128::MIN),
         max_value: BigInt::from(i128::MAX),
         shrink_towards: BigInt::from(0),
-    });
+    }));
     let expected = crate::native::bignum::BigUint::from(u128::MAX) + bu(1);
-    assert_eq!(kind.max_children(), expected);
+    assert_eq!(kind.max_children(), Some(expected));
 }
 
 #[test]
@@ -146,11 +145,11 @@ fn max_children_saturating_boolean() {
 
 #[test]
 fn max_children_saturating_integer_native() {
-    let kind = ChoiceKind::Integer(IntegerChoice {
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(0),
         max_value: BigInt::from(200),
         shrink_towards: BigInt::from(0),
-    });
+    }));
     assert_eq!(kind.max_children_saturating(1000), 201);
     assert_eq!(kind.max_children_saturating(50), 50);
 }
@@ -163,7 +162,7 @@ fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
         max_value: BigInt::from(BigUint::from(2u32).pow(200)),
         shrink_towards: BigInt::from(0),
     };
-    let kind = ChoiceKind::Integer(ic);
+    let kind = ChoiceKind::Integer(std::sync::Arc::new(ic));
     assert_eq!(kind.max_children_saturating(100), 100);
 }
 
@@ -171,7 +170,7 @@ fn max_children_saturating_integer_beyond_u128_saturates_to_cap() {
 fn max_children_saturating_float_matches_capped_exact() {
     use crate::native::bignum::ToPrimitive;
     let kind = ChoiceKind::Float(fc(0.0, 1.0, false, false));
-    let exact = kind.max_children().to_u128().unwrap();
+    let exact = kind.max_children().unwrap().to_u128().unwrap();
     assert_eq!(kind.max_children_saturating(u128::MAX), exact);
     assert_eq!(kind.max_children_saturating(5), 5);
 }
@@ -343,7 +342,10 @@ fn integer_choice_index_round_trip_shrink_towards_clamped_outside_range() {
 
 #[test]
 fn boolean_is_always_two() {
-    assert_eq!((ChoiceKind::Boolean(BooleanChoice)).max_children(), bu(2));
+    assert_eq!(
+        ChoiceKind::Boolean(BooleanChoice).max_children(),
+        Some(bu(2))
+    );
 }
 
 fn fc(min: f64, max: f64, allow_nan: bool, allow_infinity: bool) -> FloatChoice {
@@ -449,7 +451,8 @@ fn float_choice_enumerate_returns_none() {
 fn float_choice_to_from_index_round_trip() {
     let kind = ChoiceKind::Float(fc(-10.0, 10.0, false, false));
     for v in [0.0_f64, 1.0, 2.0, -1.0, -2.0, 0.5, -0.5, 4.25] {
-        let idx = kind.to_index(&ChoiceValue::Float(v));
+        let data = kind.resolve(&ChoiceValue::Float(v)).unwrap();
+        let idx = data.to_index().unwrap();
         let back = kind.from_index(idx).unwrap();
         assert_eq!(back, ChoiceValue::Float(v));
     }
@@ -783,34 +786,30 @@ fn string_choice_from_index_past_max_returns_none() {
 }
 
 fn integer_node(min: i128, max: i128, value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(min),
             max_value: BigInt::from(max),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn bytes_node(min: usize, max: usize, value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::bytes(
+        BytesChoice {
             min_size: min,
             max_size: max,
-        }),
-        ChoiceValue::Bytes(value),
+        },
+        value,
         false,
     )
 }
 
 fn string_node(intervals: Vec<(u32, u32)>, min: usize, max: usize, value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::String(string_choice(intervals, min, max)),
-        ChoiceValue::String(value),
-        false,
-    )
+    ChoiceNode::string(string_choice(intervals, min, max), value, false)
 }
 
 #[test]
@@ -898,7 +897,7 @@ fn choice_kind_unit_dispatches_to_each_sub_kind() {
         shrink_towards: BigInt::from(0),
     };
     assert_eq!(
-        ChoiceKind::Integer(ic.clone()).unit(),
+        ChoiceKind::Integer(std::sync::Arc::new(ic.clone())).unit(),
         ChoiceValue::Integer(ic.unit())
     );
 
@@ -942,13 +941,13 @@ fn engine_error_display_covers_all_variants() {
 
 fn big_integer_node(distance_beyond_u128: u32) -> ChoiceNode {
     let huge = BigInt::from(u128::MAX) * BigInt::from(4) + BigInt::from(distance_beyond_u128);
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: huge.clone(),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(huge),
+        },
+        huge,
         false,
     )
 }
@@ -962,12 +961,12 @@ fn node_sort_key_big_integer_orders_correctly() {
     let big_small = vec![big_integer_node(0)];
     let big_large = vec![big_integer_node(7)];
     assert!(sort_key(&big_small) < sort_key(&big_large));
-    let bytes = vec![ChoiceNode::new(
-        ChoiceKind::Bytes(BytesChoice {
+    let bytes = vec![ChoiceNode::bytes(
+        BytesChoice {
             min_size: 0,
             max_size: 4,
-        }),
-        ChoiceValue::Bytes(vec![1, 2, 3]),
+        },
+        vec![1, 2, 3],
         false,
     )];
     assert!(sort_key(&big) < sort_key(&bytes));
@@ -988,8 +987,8 @@ fn bytes_max_index_and_max_children() {
         min_size: 0,
         max_size: 2,
     });
-    assert_eq!(kind.max_index(), bu(65792));
-    assert_eq!(kind.max_children(), bu(65793));
+    assert_eq!(kind.max_index(), Some(bu(65792)));
+    assert_eq!(kind.max_children(), Some(bu(65793)));
 }
 
 #[test]
@@ -1000,8 +999,8 @@ fn string_max_index_and_max_children() {
         min_size: 0,
         max_size: 2,
     });
-    assert_eq!(kind.max_index(), bu(12));
-    assert_eq!(kind.max_children(), bu(13));
+    assert_eq!(kind.max_index(), Some(bu(12)));
+    assert_eq!(kind.max_children(), Some(bu(13)));
 }
 
 #[test]
@@ -1010,8 +1009,9 @@ fn bytes_to_index_via_dispatch() {
         min_size: 0,
         max_size: 4,
     });
-    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![])), bu(0));
-    assert_eq!(kind.to_index(&ChoiceValue::Bytes(vec![0])), bu(1));
+    let data = |v: Vec<u8>| kind.resolve(&ChoiceValue::Bytes(v)).unwrap();
+    assert_eq!(data(vec![]).to_index(), Some(bu(0)));
+    assert_eq!(data(vec![0]).to_index(), Some(bu(1)));
 }
 
 #[test]
@@ -1022,7 +1022,8 @@ fn string_to_index_via_dispatch() {
         min_size: 0,
         max_size: 4,
     });
-    assert_eq!(kind.to_index(&ChoiceValue::String(vec![])), bu(0));
+    let data = kind.resolve(&ChoiceValue::String(vec![])).unwrap();
+    assert_eq!(data.to_index(), Some(bu(0)));
 }
 
 /// An unbiased boolean drawn via `random_value` must spend exactly one byte of
@@ -1038,7 +1039,7 @@ fn random_value_boolean_consumes_exactly_one_byte() {
     let mut a = EngineRng::seeded(2024);
     let mut b = EngineRng::seeded(2024);
 
-    let value = kind.random_value(&mut a);
+    let value = kind.random_value(&mut a).unwrap();
     let ChoiceValue::Boolean(got) = value else {
         panic!("expected a boolean choice value");
     };
@@ -1099,21 +1100,12 @@ fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
 }
 
 fn boolean_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
-            children,
-            Vec::new(),
-            Vec::new(),
-        ))),
+    ChoiceNode::clone_stream(
+        std::sync::Arc::new(RealizedStream::new(children, Vec::new(), Vec::new())),
         false,
     )
 }
@@ -1132,18 +1124,18 @@ fn value_hash(v: &ChoiceValue) -> u64 {
 #[test]
 fn clone_kind_validate_accepts_only_clone_values() {
     let kind = ChoiceKind::Clone;
-    assert!(kind.validate(&clone_node(Vec::new()).value));
+    assert!(kind.validate(&clone_node(Vec::new()).value()));
     assert!(kind.validate(&values_clone_value(Vec::new())));
     assert!(!kind.validate(&ChoiceValue::Integer(BigInt::from(0))));
     assert!(!kind.validate(&ChoiceValue::Boolean(false)));
-    assert!(!ChoiceKind::Boolean(BooleanChoice).validate(&clone_node(Vec::new()).value));
+    assert!(!ChoiceKind::Boolean(BooleanChoice).validate(&clone_node(Vec::new()).value()));
     assert!(
-        !ChoiceKind::Integer(IntegerChoice {
+        !ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(10),
             shrink_towards: BigInt::from(0),
-        })
-        .validate(&clone_node(Vec::new()).value)
+        }))
+        .validate(&clone_node(Vec::new()).value())
     );
 }
 
@@ -1156,8 +1148,8 @@ fn clone_kind_simplest_and_unit_are_the_empty_clone() {
 
 #[test]
 fn simplest_clone_value_sort_key_compares_equal_to_an_executed_empty_stream() {
-    let punned = ChoiceNode::new(ChoiceKind::Clone, ChoiceKind::Clone.simplest(), false);
     let executed = clone_node(Vec::new());
+    let punned = executed.with_value(&ChoiceKind::Clone.simplest()).unwrap();
     assert!(punned.sort_key_ref() == executed.sort_key_ref());
     assert!(executed.sort_key_ref() == punned.sort_key_ref());
 }
@@ -1191,7 +1183,7 @@ fn clone_value_equality_ignores_realized_info() {
         }],
         vec![(0, SpanEvent::Open { label: 17 })],
     )));
-    let values_only = values_clone_value(children.iter().map(|n| n.value.clone()).collect());
+    let values_only = values_clone_value(children.iter().map(|n| n.value().clone()).collect());
     assert_eq!(realized, values_only);
     assert_eq!(value_hash(&realized), value_hash(&values_only));
 }
@@ -1202,18 +1194,18 @@ fn clone_value_equality_compares_child_values_recursively() {
         boolean_node(true),
         clone_node(vec![integer_node(0, 10, 3)]),
     ])
-    .value;
+    .value();
     let same = clone_node(vec![
         boolean_node(true),
         clone_node(vec![integer_node(0, 10, 3)]),
     ])
-    .value;
+    .value();
     let different = clone_node(vec![
         boolean_node(true),
         clone_node(vec![integer_node(0, 10, 4)]),
     ])
-    .value;
-    let shorter = clone_node(vec![boolean_node(true)]).value;
+    .value();
+    let shorter = clone_node(vec![boolean_node(true)]).value();
     assert_eq!(a, same);
     assert_eq!(value_hash(&a), value_hash(&same));
     assert_ne!(a, different);
@@ -1239,7 +1231,8 @@ fn flattened_len_counts_clone_children_recursively() {
 #[test]
 fn clone_record_flat_len_agrees_across_representations() {
     let children = vec![boolean_node(true), clone_node(vec![boolean_node(false)])];
-    let from_values = CloneRecord::from_values(children.iter().map(|n| n.value.clone()).collect());
+    let from_values =
+        CloneRecord::from_values(children.iter().map(|n| n.value().clone()).collect());
     let from_run = CloneRecord::from_run(children, Vec::new(), Vec::new());
     assert_eq!(from_values.flat_len(), 3);
     assert_eq!(from_run.flat_len(), 3);
@@ -1304,25 +1297,19 @@ fn clone_record_accessors_expose_children_and_realized_info() {
     );
     assert_eq!(record.len(), 1);
     assert!(!record.is_empty());
-    assert_eq!(record.value_at(0), &ChoiceValue::Boolean(true));
-    assert_eq!(
-        record.values().cloned().collect::<Vec<_>>(),
-        vec![ChoiceValue::Boolean(true)]
-    );
+    assert!(record.value_at(0) == ChoiceValue::Boolean(true));
+    assert_eq!(record.owned_values(), vec![ChoiceValue::Boolean(true)]);
     assert_eq!(record.realized_nodes().unwrap().len(), 1);
-    assert_eq!(record.spans(), &[span]);
-    assert_eq!(record.span_events(), &[(0, SpanEvent::Open { label: 42 })]);
+    let stream = record.realized().unwrap();
+    assert_eq!(stream.spans(), &[span]);
+    assert_eq!(stream.span_events(), &[(0, SpanEvent::Open { label: 42 })]);
 
     let values_only = CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]);
     assert_eq!(values_only.len(), 1);
-    assert_eq!(values_only.value_at(0), &ChoiceValue::Boolean(true));
-    assert_eq!(
-        values_only.values().cloned().collect::<Vec<_>>(),
-        vec![ChoiceValue::Boolean(true)]
-    );
+    assert!(values_only.value_at(0) == ChoiceValue::Boolean(true));
+    assert_eq!(values_only.owned_values(), vec![ChoiceValue::Boolean(true)]);
     assert!(values_only.realized_nodes().is_none());
-    assert!(values_only.spans().is_empty());
-    assert!(values_only.span_events().is_empty());
+    assert!(values_only.realized().is_none());
 
     let empty = CloneRecord::empty();
     assert!(empty.is_empty());

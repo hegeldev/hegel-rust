@@ -401,14 +401,9 @@ fn serialize_roundtrips_clone_values() {
 
 #[test]
 fn serialize_clone_drops_realized_info_but_preserves_equality() {
-    use crate::native::core::choices::BooleanChoice;
-    use crate::native::core::{ChoiceKind, ChoiceNode, CloneRecord, Span, SpanEvent};
+    use crate::native::core::{ChoiceNode, CloneRecord, Span, SpanEvent};
     let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
-        vec![ChoiceNode::new(
-            ChoiceKind::Boolean(BooleanChoice),
-            ChoiceValue::Boolean(true),
-            false,
-        )],
+        vec![ChoiceNode::boolean(true, false)],
         vec![Span {
             start: 0,
             end: 1,
@@ -427,7 +422,7 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
         panic!("expected a clone value");
     };
     assert!(record.realized_nodes().is_none());
-    assert!(record.spans().is_empty());
+    assert!(record.realized().is_none());
 }
 
 #[test]

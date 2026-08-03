@@ -1,6 +1,6 @@
 use crate::native::HashMap;
 
-use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
+use crate::native::core::{BytesChoice, ChoiceValue};
 
 use super::search::{BinSearchDown, FindInteger};
 use super::{ShrinkResult, Shrinker};
@@ -9,16 +9,18 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_bytes(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (min_size, current) = match (
-                self.current_nodes[i].kind.as_ref(),
-                self.current_nodes[i].value.clone(),
-            ) {
-                (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => (bc.min_size, v),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            self.shrink_bytes_node(i).await?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    async fn shrink_bytes_node(&mut self, i: usize) -> ShrinkResult<()> {
+        {
+            let Some((bc, current)) = self.bytes_at(i) else {
+                return Ok(());
             };
+            let min_size = bc.min_size;
 
             let simplest = vec![0u8; min_size];
             if simplest != current {
@@ -26,9 +28,11 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let cur_len = self.current_byte_value(i).len();
+            let Some(captured) = self.current_byte_value(i) else {
+                return Ok(());
+            };
+            let cur_len = captured.len();
             if cur_len > min_size {
-                let captured = self.current_byte_value(i);
                 let mut search = BinSearchDown::new(min_size as i128, cur_len as i128);
                 while let Some(sz) = search.probe() {
                     let sz = sz as usize;
@@ -40,10 +44,14 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            let cur_len = self.current_byte_value(i).len();
-            let scan_end = (min_size + 8).min(cur_len);
+            let Some(cur) = self.current_byte_value(i) else {
+                return Ok(());
+            };
+            let scan_end = (min_size + 8).min(cur.len());
             for sz in min_size..scan_end {
-                let cur = self.current_byte_value(i);
+                let Some(cur) = self.current_byte_value(i) else {
+                    return Ok(());
+                };
                 if sz > cur.len() {
                     break;
                 }
@@ -52,10 +60,15 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let mut j = self.current_byte_value(i).len();
+            let Some(cur) = self.current_byte_value(i) else {
+                return Ok(());
+            };
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let cur = self.current_byte_value(i);
+                let Some(cur) = self.current_byte_value(i) else {
+                    return Ok(());
+                };
                 if cur.len() <= min_size {
                     continue;
                 }
@@ -65,17 +78,24 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let mut j = self.current_byte_value(i).len();
+            let Some(cur) = self.current_byte_value(i) else {
+                return Ok(());
+            };
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let cur = self.current_byte_value(i);
+                let Some(cur) = self.current_byte_value(i) else {
+                    return Ok(());
+                };
                 if cur[j] == 0 {
                     continue;
                 }
                 let hi = cur[j] as i128;
                 let mut search = BinSearchDown::new(0, hi);
                 while let Some(e) = search.probe() {
-                    let mut cand = self.current_byte_value(i);
+                    let Some(mut cand) = self.current_byte_value(i) else {
+                        return Ok(());
+                    };
                     cand[j] = e as u8;
                     let ok = self
                         .replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
@@ -86,13 +106,17 @@ impl<'a> Shrinker<'a> {
 
             let mut pos = 1;
             loop {
-                let cur_len = self.current_byte_value(i).len();
-                if pos >= cur_len {
+                let Some(cur) = self.current_byte_value(i) else {
+                    return Ok(());
+                };
+                if pos >= cur.len() {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let cur = self.current_byte_value(i);
+                    let Some(cur) = self.current_byte_value(i) else {
+                        return Ok(());
+                    };
                     if cur[j - 1] <= cur[j] {
                         break;
                     }
@@ -109,17 +133,22 @@ impl<'a> Shrinker<'a> {
                 }
                 pos += 1;
             }
-
-            i += 1;
         }
         Ok(())
     }
 
-    fn current_byte_value(&self, i: usize) -> Vec<u8> {
-        match &self.current_nodes[i].value {
-            ChoiceValue::Bytes(v) => v.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
-        }
+    /// The bytes constraint and value at node `i`, or `None` when the node
+    /// is not (or no longer) a bytes node — a concurrent shrink can pun the
+    /// kind at any position between probes.
+    fn bytes_at(&self, i: usize) -> Option<(BytesChoice, Vec<u8>)> {
+        let (bc, v) = self.current_nodes.get(i)?.data.as_bytes()?;
+        Some((bc.clone(), v.to_vec()))
+    }
+
+    /// The current bytes value at node `i`; `None` under the same
+    /// conditions as [`Shrinker::bytes_at`].
+    fn current_byte_value(&self, i: usize) -> Option<Vec<u8>> {
+        self.bytes_at(i).map(|(_, v)| v)
     }
 
     /// Try redistributing length between pairs of bytes values.
@@ -150,19 +179,16 @@ impl<'a> Shrinker<'a> {
         self.current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| match n.kind.as_ref() {
-                ChoiceKind::Bytes(_) => Some(i),
-                _ => None,
-            })
+            .filter_map(|(i, n)| n.data.as_bytes().map(|_| i))
             .collect()
     }
 
     async fn redistribute_bytes_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
-        let s = self.current_byte_value(i);
-        let t = self.current_byte_value(j);
-        let kind_j = match self.current_nodes[j].kind.as_ref() {
-            ChoiceKind::Bytes(kj) => kj.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
+        let Some(s) = self.current_byte_value(i) else {
+            return Ok(());
+        };
+        let Some((kind_j, t)) = self.bytes_at(j) else {
+            return Ok(());
         };
 
         if s.is_empty() {

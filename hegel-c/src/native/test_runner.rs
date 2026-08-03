@@ -243,7 +243,7 @@ impl<'a> Engine<'a> {
                                     .nodes
                                     .iter()
                                     .zip(&stored_choices)
-                                    .any(|(node, stored)| node.value != *stored)
+                                    .any(|(node, stored)| node.data.value_ref() != *stored)
                             {
                                 replay_aligned = false;
                             }
@@ -469,8 +469,7 @@ impl<'a> Engine<'a> {
                     .interesting
                     .values()
                     .map(|nodes| {
-                        let choices: Vec<ChoiceValue> =
-                            nodes.iter().map(|n| n.value.clone()).collect();
+                        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                         serialize_choices(&choices)
                     })
                     .max_by(|a, b| shortlex(a, b));
@@ -509,7 +508,7 @@ impl<'a> Engine<'a> {
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
 
-                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
+                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
                 let (verify, mismatch) = self.test_function(verify_ntc).await;
                 if let Some(msg) = mismatch {
@@ -569,7 +568,7 @@ impl<'a> Engine<'a> {
                 .interesting
                 .values()
                 .map(|nodes| {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     serialize_choices(&choices)
                 })
                 .collect();
@@ -605,7 +604,7 @@ impl<'a> Engine<'a> {
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
-                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                 Failure {
                     origin,
                     reproduce_blob: Some(crate::native::blob::encode_failure(&choices)),
@@ -863,7 +862,7 @@ impl<'a> Persister<'a> {
         let Some(db) = self.db.as_deref() else { return };
         let Some(key) = self.database_key else { return };
         let key_bytes = key.as_bytes();
-        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
         let new_bytes = serialize_choices(&new_choices);
 
         let needs_save = match self.last_saved.get(origin) {
@@ -875,7 +874,7 @@ impl<'a> Persister<'a> {
         }
 
         if let Some(prev) = self.last_saved.get(origin) {
-            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value.clone()).collect();
+            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value()).collect();
             let prev_bytes = serialize_choices(&prev_choices);
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             db.move_value(key_bytes, &secondary_key, &prev_bytes);
@@ -1010,7 +1009,7 @@ impl<'a> Engine<'a> {
             self.test_is_trivial = true;
         }
         if run.status >= Status::Valid && !run.target_observations.is_empty() {
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             self.targeting.record(&choices, &run.target_observations);
         }
         match run.status {
@@ -1139,7 +1138,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             }
             let run = match req {
                 ShrinkRun::Full(nodes) => {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     self.engine
                         .cached_test_function(&choices, Some(nodes), 0)
                         .await
@@ -1194,7 +1193,7 @@ impl<'a> Engine<'a> {
             return;
         }
 
-        let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
 
         for _ in 0..SPAN_MUTATION_ATTEMPTS {
             if self.valid_test_cases >= self.settings.test_cases {

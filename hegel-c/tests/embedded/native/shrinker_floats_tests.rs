@@ -6,27 +6,27 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::shrinker::Shrinker;
 
 fn float_node(value: f64, min: f64, max: f64) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    ChoiceNode::float(
+        FloatChoice {
             min_value: min,
             max_value: max,
             allow_nan: false,
             allow_infinity: false,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(value),
+        },
+        value,
         false,
     )
 }
 
 fn int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(min),
             max_value: BigInt::from(max),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -47,8 +47,8 @@ fn redistribute_pair_below_shrink_target_uses_raise_left_direction() {
     );
     drive_no_yield(shrinker.redistribute_numeric_pairs()).unwrap();
     let (a, b) = match (
-        &shrinker.current_nodes[0].value,
-        &shrinker.current_nodes[1].value,
+        &shrinker.current_nodes[0].value(),
+        &shrinker.current_nodes[1].value(),
     ) {
         (ChoiceValue::Float(a), ChoiceValue::Float(b)) => (*a, *b),
         _ => unreachable!(),
@@ -70,8 +70,8 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
     );
     drive_no_yield(shrinker.redistribute_numeric_pairs()).unwrap();
     match (
-        &shrinker.current_nodes[0].value,
-        &shrinker.current_nodes[1].value,
+        &shrinker.current_nodes[0].value(),
+        &shrinker.current_nodes[1].value(),
     ) {
         (ChoiceValue::Float(_), ChoiceValue::Integer(n)) => {
             assert!((1..=10).contains(&i128::try_from(n).unwrap()));
@@ -82,21 +82,21 @@ fn redistribute_pair_bails_when_int_candidate_leaves_validate_range() {
 
 #[test]
 fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
-    let initial = vec![ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    let initial = vec![ChoiceNode::float(
+        FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: true,
             allow_infinity: true,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(f64::NAN),
+        },
+        f64::NAN,
         false,
     )];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: crate::native::shrinker::ShrinkRun<'_>| match run {
             crate::native::shrinker::ShrinkRun::Full(nodes) => {
-                let interesting = nodes.iter().all(|n| match &n.value {
+                let interesting = nodes.iter().all(|n| match &n.value() {
                     ChoiceValue::Float(f) => f.is_nan() || f.is_infinite() || *f == f64::MAX,
                     _ => false,
                 });
@@ -108,7 +108,7 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
         Spans::new(),
     );
     drive_no_yield(shrinker.shrink_floats()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Float(f) => assert_eq!(f, f64::MAX),
         _ => unreachable!(),
     }
@@ -147,7 +147,7 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting =
-                    matches!(nodes[0].value, ChoiceValue::Float(v) if v < -1.0 && v.is_finite());
+                    matches!(nodes[0].value(), ChoiceValue::Float(v) if v < -1.0 && v.is_finite());
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -156,7 +156,7 @@ fn shrink_floats_negative_large_magnitude_uses_is_neg_branch() {
         Spans::new(),
     );
     drive_no_yield(shrinker.shrink_floats()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Float(v) => assert!(v < -1.0 && v.is_finite()),
         _ => unreachable!(),
     }
@@ -180,7 +180,7 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let interesting = matches!(
-                    nodes[0].value,
+                    nodes[0].value(),
                     ChoiceValue::Float(v) if v <= -3.0 && v.is_finite()
                 );
                 (interesting, nodes.to_vec(), Spans::new())
@@ -191,7 +191,7 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         Spans::new(),
     );
     drive_no_yield(shrinker.shrink_floats()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Float(v) => assert_eq!(v, -3.0),
         _ => unreachable!(),
     }

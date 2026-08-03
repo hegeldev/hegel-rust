@@ -110,9 +110,8 @@ impl<'a> Shrinker<'a> {
                 if node.was_forced {
                     continue;
                 }
-                let simplest = node.kind.simplest();
-                if node.value != simplest {
-                    *node = node.with_value(simplest);
+                if !node.data.is_simplest() {
+                    *node = node.with_simplest();
                 }
             }
 

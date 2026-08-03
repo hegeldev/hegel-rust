@@ -3,17 +3,17 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkPass, ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -37,7 +37,7 @@ fn fixate_shrink_passes_runs_passes_to_fixed_point() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
@@ -82,7 +82,7 @@ fn consider_short_circuits_when_stalled() {
         Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 counter_clone.fetch_add(1, Ordering::Relaxed);
-                let interesting = matches!(&nodes[0].value,
+                let interesting = matches!(&nodes[0].value(),
                     ChoiceValue::Integer(v) if i128::try_from(v).unwrap() < 5);
                 (interesting, nodes.to_vec(), Spans::new())
             }
@@ -110,7 +110,7 @@ fn max_stall_grows_after_shrink() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let v = match &nodes[0].value {
+                let v = match &nodes[0].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
@@ -174,7 +174,7 @@ fn fixate_passes_does_full_run_even_when_stalled() {
                 let interesting = nodes
                     .iter()
                     .enumerate()
-                    .all(|(i, n)| matches!(&n.value, ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == i as i128));
+                    .all(|(i, n)| matches!(&n.value(), ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == i as i128));
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -266,7 +266,7 @@ fn fixate_emits_no_debug_when_no_callback_set() {
         Box::new(|sh| Box::pin(sh.zero_choices())),
     )];
     drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
-    let v = match &shrinker.current_nodes[0].value {
+    let v = match &shrinker.current_nodes[0].value() {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     };
@@ -398,7 +398,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })

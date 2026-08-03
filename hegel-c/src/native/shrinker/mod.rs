@@ -20,7 +20,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
 
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
+use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -241,7 +241,7 @@ impl<'a> Shrinker<'a> {
         }
         if nodes.len() == self.current_nodes.len() {
             for (candidate, current) in nodes.iter().zip(&self.current_nodes) {
-                if current.was_forced && candidate.value != current.value {
+                if current.was_forced && candidate.data.value_ref() != current.data.value_ref() {
                     return Ok(false);
                 }
             }
@@ -314,7 +314,7 @@ impl<'a> Shrinker<'a> {
     /// record the displaced sequence, bump `improvements`, fold the diff
     /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
     fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
-        let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+        let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
         let span = self.calls.saturating_sub(self.calls_at_last_shrink);
@@ -344,15 +344,16 @@ impl<'a> Shrinker<'a> {
         changed: &mut HashSet<usize>,
     ) {
         let shape_preserved = prev.len() == new.len()
-            && prev.iter().zip(new.iter()).all(|(a, b)| {
-                std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref())
-            });
+            && prev
+                .iter()
+                .zip(new.iter())
+                .all(|(a, b)| std::mem::discriminant(&a.data) == std::mem::discriminant(&b.data));
         if !shape_preserved {
             changed.clear();
             return;
         }
         for (i, (a, b)) in prev.iter().zip(new.iter()).enumerate() {
-            if a.value != b.value {
+            if a.data.value_ref() != b.data.value_ref() {
                 changed.insert(i);
             }
         }
@@ -392,17 +393,10 @@ impl<'a> Shrinker<'a> {
             if attempt[i].was_forced {
                 return Ok(false);
             }
-            if !attempt[i].kind.validate(v) {
+            let Some(replaced) = attempt[i].with_value(v) else {
                 return Ok(false);
-            }
-            let coerced = match (attempt[i].kind.as_ref(), v) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
-                    ic.value_from_bigint(av)
-                        .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),
-                ),
-                _ => v.clone(),
             };
-            attempt[i] = attempt[i].with_value(coerced);
+            attempt[i] = replaced;
         }
         self.consider(&attempt).await
     }

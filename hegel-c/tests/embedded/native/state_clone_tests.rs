@@ -15,7 +15,10 @@ fn clone_stream_records_a_clone_node_and_hands_out_a_child() {
     draw(&mut child.lock().unwrap());
 
     assert_eq!(parent.nodes.len(), 3);
-    assert_eq!(*parent.nodes[1].kind, ChoiceKind::Clone);
+    assert_eq!(
+        parent.nodes[1].kind(),
+        crate::native::core::ChoiceKind::Clone
+    );
     assert!(!parent.nodes[1].was_forced);
     assert_eq!(child.lock().unwrap().nodes.len(), 1);
 }
@@ -78,21 +81,24 @@ fn reassemble_embeds_child_records_recursively() {
     parent.conclude(Status::Valid, None);
     parent.reassemble();
 
-    let ChoiceValue::Clone(record) = &parent.nodes[1].value else {
+    let Some(stream) = parent.nodes[1].data.as_clone() else {
         panic!("clone node was not realized");
     };
-    let child_nodes = record.realized_nodes().unwrap();
+    let child_nodes = stream.nodes();
     assert_eq!(child_nodes.len(), 2);
-    assert_eq!(*child_nodes[1].kind, ChoiceKind::Clone);
-    let ChoiceValue::Clone(inner) = &child_nodes[1].value else {
+    assert_eq!(
+        child_nodes[1].kind(),
+        crate::native::core::ChoiceKind::Clone
+    );
+    let Some(inner) = child_nodes[1].data.as_clone() else {
         panic!("nested clone node was not realized");
     };
-    assert_eq!(inner.realized_nodes().unwrap().len(), 1);
-    assert_eq!(record.spans().len(), 1);
-    assert_eq!(record.spans()[0].label, "42");
-    assert_eq!(record.spans()[0].start, 0);
-    assert_eq!(record.spans()[0].end, 2);
-    assert_eq!(record.span_events().len(), 2);
+    assert_eq!(inner.nodes().len(), 1);
+    assert_eq!(stream.spans().len(), 1);
+    assert_eq!(stream.spans()[0].label, "42");
+    assert_eq!(stream.spans()[0].start, 0);
+    assert_eq!(stream.spans()[0].end, 2);
+    assert_eq!(stream.span_events().len(), 2);
 }
 
 #[test]
@@ -107,7 +113,7 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
     let p1 = draw(&mut parent);
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(draw(&mut replay), p0);
@@ -120,7 +126,7 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
     assert_eq!(draw(&mut replay), p1);
     replay.conclude(Status::Valid, None);
     replay.reassemble();
-    let replayed: Vec<ChoiceValue> = replay.nodes.iter().map(|n| n.value.clone()).collect();
+    let replayed: Vec<ChoiceValue> = replay.nodes.iter().map(|n| n.value().clone()).collect();
     assert_eq!(replayed, choices);
 }
 
@@ -131,7 +137,7 @@ fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
     draw(&mut child.lock().unwrap());
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut replay = NativeTestCase::for_choices(&choices, None, None);
     let replay_child = replay.clone_stream().unwrap();
@@ -257,7 +263,7 @@ fn reassembled_values_flow_through_probe_prefixes() {
     let c0 = draw(&mut child.lock().unwrap());
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut probe = NativeTestCase::for_probe(&choices, EngineRng::seeded(2), BUFFER_SIZE);
     assert_eq!(draw(&mut probe), p0);

@@ -1,7 +1,7 @@
 use crate::native::{HashMap, HashSet};
 
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
+    BUFFER_SIZE, ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status,
 };
 use crate::native::shrinker::search::FindInteger;
 use crate::native::test_runner::{Engine, RunResult};
@@ -167,8 +167,7 @@ impl Optimiser<'_, '_> {
         if trial.status < Status::Valid {
             return 0;
         }
-        let mut current_choices: Vec<ChoiceValue> =
-            trial.nodes.iter().map(|n| n.value.clone()).collect();
+        let mut current_choices: Vec<ChoiceValue> = trial.nodes.iter().map(|n| n.value()).collect();
         let mut current_nodes = trial.nodes;
         let mut current_score = *trial
             .target_observations
@@ -191,7 +190,7 @@ impl Optimiser<'_, '_> {
                 continue;
             }
             let node = &current_nodes[idx];
-            if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
+            if !node.was_forced && is_climbable(&node.data) {
                 let len_before = current_nodes.len();
                 let mut search = FindInteger::new();
                 while let Some(k) = search.probe() {
@@ -277,7 +276,7 @@ impl Optimiser<'_, '_> {
             return false;
         }
         *current_score = new_score;
-        *current_choices = trial.nodes.iter().map(|n| n.value.clone()).collect();
+        *current_choices = trial.nodes.iter().map(|n| n.value()).collect();
         *current_nodes = trial.nodes;
         if strict {
             *improvements += 1;
@@ -286,16 +285,16 @@ impl Optimiser<'_, '_> {
     }
 }
 
-/// Returns `true` iff `(value, kind)` is a node kind the hill-climber can
-/// step. Mirrors `optimiser.py:109`, which admits integer / float / bytes /
+/// Returns `true` iff `data` is a node kind the hill-climber can step.
+/// Mirrors `optimiser.py:109`, which admits integer / float / bytes /
 /// boolean and skips strings (no sensible "larger" step).
-pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
+pub(crate) fn is_climbable(data: &ChoiceData) -> bool {
     matches!(
-        (value, kind),
-        (ChoiceValue::Integer(_), ChoiceKind::Integer(_))
-            | (ChoiceValue::Float(_), ChoiceKind::Float(_))
-            | (ChoiceValue::Boolean(_), ChoiceKind::Boolean(_))
-            | (ChoiceValue::Bytes(_), ChoiceKind::Bytes(_))
+        data,
+        ChoiceData::Integer(..)
+            | ChoiceData::Float(..)
+            | ChoiceData::Boolean(_)
+            | ChoiceData::Bytes(..)
     )
 }
 
@@ -305,19 +304,19 @@ pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
 /// `optimiser.py::Optimiser.attempt_replace` (lines 130-156) plus the
 /// `choice_permitted(new_choice, node.constraints)` post-check.
 pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
-    match (&node.value, node.kind.as_ref()) {
-        (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
+    match &node.data {
+        ChoiceData::Integer(kind, v) => {
             let new = v + crate::native::bignum::BigInt::from(delta);
             Some(ChoiceValue::Integer(kind.value_from_bigint(&new)?))
         }
-        (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
+        ChoiceData::Float(kind, v) => {
             let new = v + delta as f64;
             if !kind.validate(new) {
                 return None;
             }
             Some(ChoiceValue::Float(new))
         }
-        (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
+        ChoiceData::Boolean(b) => {
             if delta.saturating_abs() > 1 {
                 return None;
             }
@@ -330,7 +329,7 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
             };
             Some(ChoiceValue::Boolean(new))
         }
-        (ChoiceValue::Bytes(b), ChoiceKind::Bytes(kind)) => {
+        ChoiceData::Bytes(kind, b) => {
             use crate::native::bignum::{BigInt, Sign};
             let v = BigInt::from_bytes_be(Sign::Plus, b);
             let new_v = v + BigInt::from(delta);

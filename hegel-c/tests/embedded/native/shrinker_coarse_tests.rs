@@ -3,35 +3,35 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn small_int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(10),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn big_range_int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(1_000_000),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match &node.value {
+    match &node.value() {
         ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
         _ => unreachable!(),
     }
@@ -63,7 +63,7 @@ fn initial_coarse_reduction_lowers_when_shape_depends_on_value() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let n = match nodes.first().map(|n| &n.value) {
+                let n = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
@@ -97,8 +97,8 @@ fn initial_coarse_reduction_skips_large_values() {
 #[test]
 fn initial_coarse_reduction_skips_non_zero_min_value() {
     let mut node = small_int_node(3);
-    if let ChoiceKind::Integer(ic) = std::sync::Arc::make_mut(&mut node.kind) {
-        ic.min_value = BigInt::from(1);
+    if let crate::native::core::ChoiceData::Integer(ic, _) = &mut node.data {
+        std::sync::Arc::make_mut(ic).min_value = BigInt::from(1);
     }
     let initial = vec![node];
     let mut shrinker = Shrinker::with_probe(
@@ -140,7 +140,7 @@ fn initial_coarse_reduction_keeps_same_shape_one_of() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let interesting = nodes[0].value == ChoiceValue::Integer(BigInt::from(1));
+                let interesting = nodes[0].value() == ChoiceValue::Integer(BigInt::from(1));
                 (interesting, nodes.to_vec(), Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -174,7 +174,7 @@ fn initial_coarse_reduction_accepts_probe_when_direct_replace_fails() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let head = match &nodes[0].value {
+                let head = match &nodes[0].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };

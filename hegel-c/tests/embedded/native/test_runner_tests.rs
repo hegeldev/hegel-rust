@@ -92,8 +92,6 @@ fn invalid_thresholds_match_hypothesis() {
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::native::core::ChoiceKind;
-use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 
 /// Build an [`Engine`] whose driver runs `body` (returning the test
@@ -153,11 +151,7 @@ fn run_main_sync(
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 #[test]
@@ -273,7 +267,7 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
-            assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
+            assert_eq!(run.nodes[0].value(), ChoiceValue::Boolean(true));
         },
     );
 }
@@ -649,7 +643,7 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
 
             let mut tree = DataTreeNode::default();
             record_tree(&mut tree, &run.nodes, run.status, &[]);
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value().clone()).collect();
             assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
         },
     );
@@ -1150,7 +1144,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
     };
     assert_eq!(
-        record.values().cloned().collect::<Vec<_>>(),
+        record.owned_values(),
         vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(
             100
         ))]

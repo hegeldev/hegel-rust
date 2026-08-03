@@ -280,7 +280,7 @@ fn clone_stream_draws_independently_and_reassembles() {
 
     let nodes = NativeDataSource::take_nodes(&handle);
     assert_eq!(nodes.len(), 3);
-    let ChoiceValue::Clone(record) = &nodes[1].value else {
+    let ChoiceValue::Clone(record) = &nodes[1].value() else {
         panic!("expected the clone node to carry its stream");
     };
     assert_eq!(record.realized_nodes().unwrap().len(), 1);

@@ -2,52 +2,43 @@ use std::sync::Arc;
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Spans};
+use crate::native::core::choices::IntegerChoice;
+use crate::native::core::{ChoiceNode, ChoiceValue, RealizedStream, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(CloneRecord::from_run(
-            children,
-            Vec::new(),
-            Vec::new(),
-        ))),
+    ChoiceNode::clone_stream(
+        Arc::new(RealizedStream::new(children, Vec::new(), Vec::new())),
         false,
     )
 }
 
 fn child_nodes_of(node: &ChoiceNode) -> &[ChoiceNode] {
-    let ChoiceValue::Clone(record) = &node.value else {
-        panic!("expected a clone node, got {node:?}");
-    };
-    record.realized_nodes().unwrap()
+    match node.data.as_clone() {
+        Some(stream) => stream.nodes(),
+        None => panic!("expected a clone node, got {node:?}"),
+    }
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match &node.value {
-        ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
+    match node.value() {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => panic!("expected an integer node, got {node:?}"),
     }
 }
@@ -61,16 +52,13 @@ fn int_at_path_at_least(nodes: &[ChoiceNode], path: &[usize], min: i128) -> bool
         let Some(node) = current.get(d) else {
             return false;
         };
-        let ChoiceValue::Clone(record) = &node.value else {
+        let Some(stream) = node.data.as_clone() else {
             return false;
         };
-        let Some(children) = record.realized_nodes() else {
-            return false;
-        };
-        current = children;
+        current = stream.nodes();
     }
-    match current.get(last).map(|n| &n.value) {
-        Some(ChoiceValue::Integer(v)) => *v >= BigInt::from(min),
+    match current.get(last).map(|n| n.value()) {
+        Some(ChoiceValue::Integer(v)) => v >= BigInt::from(min),
         _ => false,
     }
 }
@@ -171,12 +159,9 @@ fn nested_shrink_tolerates_runs_that_drop_the_clone_node() {
 }
 
 #[test]
-fn values_only_clone_records_are_left_alone() {
-    let initial = vec![ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
-            ChoiceValue::Boolean(true),
-        ]))),
+fn empty_clone_streams_are_left_alone() {
+    let initial = vec![ChoiceNode::clone_stream(
+        Arc::new(RealizedStream::empty()),
         false,
     )];
     let mut shrinker = Shrinker::with_probe(

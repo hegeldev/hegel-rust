@@ -25,11 +25,10 @@ fn spans_get_mut_returns_none_out_of_bounds() {
 
 #[test]
 fn spans_trivial_handles_simplest_forced_and_oob() {
-    use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
-    let kind = ChoiceKind::Boolean(BooleanChoice);
-    let simplest = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(false), false);
-    let interesting = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(true), false);
-    let forced_interesting = ChoiceNode::new(kind, ChoiceValue::Boolean(true), true);
+    use crate::native::core::choices::ChoiceNode;
+    let simplest = ChoiceNode::boolean(false, false);
+    let interesting = ChoiceNode::boolean(true, false);
+    let forced_interesting = ChoiceNode::boolean(true, true);
 
     let mut spans = Spans::new();
     spans.push(Span {
@@ -148,7 +147,7 @@ fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
         .unwrap();
     assert_eq!(tc.nodes.len(), 1);
     assert!(tc.nodes[0].was_forced);
-    assert_eq!(tc.nodes[0].value, ChoiceValue::Integer(BigInt::from(7)));
+    assert_eq!(tc.nodes[0].value(), ChoiceValue::Integer(BigInt::from(7)));
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
@@ -613,11 +612,7 @@ fn template_concrete_prefix_then_template() {
 #[test]
 fn template_concrete_prefix_with_punning_then_template() {
     let prefix = vec![ChoiceValue::Boolean(true)];
-    let prefix_nodes = vec![ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    )];
+    let prefix_nodes = vec![ChoiceNode::boolean(true, false)];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         Some(&prefix_nodes),

@@ -16,10 +16,21 @@
 //! while let Some(k) = search.probe() {
 //!     search.record(predicate(k).await?);
 //! }
-//! let n = search.result();
 //! ```
+//!
+//! Callers that need the converged answer drive the search through
+//! [`step`](FindInteger::step) instead, which returns the answer in its
+//! [`SearchStep::Done`] arm — obtainable only once the search has actually
+//! converged, so there is no "result read too early" state to misuse.
 
 use crate::native::bignum::BigInt;
+
+/// One step of a search: either the next value to evaluate the predicate
+/// at, or the converged answer.
+pub(crate) enum SearchStep<T> {
+    Probe(T),
+    Done(T),
+}
 
 /// Finds a (hopefully large) integer `n >= 0` such that `f(n)` is true and
 /// `f(n+1)` is false, where `f` is the predicate the caller evaluates for
@@ -57,14 +68,25 @@ impl FindInteger {
         }
     }
 
-    /// The next value to evaluate the predicate at, or `None` once the
-    /// search has converged.
-    pub(crate) fn probe(&self) -> Option<usize> {
+    /// The next value to evaluate the predicate at, or the converged
+    /// answer — the largest probed value for which the predicate held
+    /// (`0` if the very first probe failed).
+    pub(crate) fn step(&self) -> SearchStep<usize> {
         match self.state {
-            FindIntegerState::Linear(i) => Some(i),
-            FindIntegerState::Grow { hi, .. } => Some(hi),
-            FindIntegerState::Narrow { lo, hi } => Some(lo + (hi - lo) / 2),
-            FindIntegerState::Done(_) => None,
+            FindIntegerState::Linear(i) => SearchStep::Probe(i),
+            FindIntegerState::Grow { hi, .. } => SearchStep::Probe(hi),
+            FindIntegerState::Narrow { lo, hi } => SearchStep::Probe(lo + (hi - lo) / 2),
+            FindIntegerState::Done(v) => SearchStep::Done(v),
+        }
+    }
+
+    /// The next value to evaluate the predicate at, or `None` once the
+    /// search has converged. For callers that only need the search's side
+    /// effects; use [`Self::step`] to also obtain the converged answer.
+    pub(crate) fn probe(&self) -> Option<usize> {
+        match self.step() {
+            SearchStep::Probe(v) => Some(v),
+            SearchStep::Done(_) => None,
         }
     }
 
@@ -99,16 +121,6 @@ impl FindInteger {
             FindIntegerState::Done(lo)
         }
     }
-
-    /// The largest probed value for which the predicate held (`0` if the
-    /// very first probe failed). Only meaningful once [`Self::probe`] has
-    /// returned `None`.
-    pub(crate) fn result(&self) -> usize {
-        match self.state {
-            FindIntegerState::Done(v) => v,
-            _ => unreachable!("result read before the search converged"),
-        }
-    }
 }
 
 /// Binary search for the smallest value in `[lo, hi]` where the caller's
@@ -128,6 +140,19 @@ impl BinSearchDown {
     pub(super) fn new(lo: i128, hi: i128) -> Self {
         BinSearchDown {
             state: BinSearchState::CheckLo { lo, hi },
+        }
+    }
+
+    /// The next value to evaluate the predicate at, or the converged
+    /// answer — the smallest locally-true value found. Test-only: every
+    /// current pass consumes the search through the side effects of its
+    /// probes.
+    #[cfg(test)]
+    pub(super) fn step(&self) -> SearchStep<i128> {
+        match self.state {
+            BinSearchState::CheckLo { lo, .. } => SearchStep::Probe(lo),
+            BinSearchState::Narrow { lo, hi } => SearchStep::Probe(lo + (hi - lo) / 2),
+            BinSearchState::Done(v) => SearchStep::Done(v),
         }
     }
 
@@ -166,17 +191,6 @@ impl BinSearchDown {
             BinSearchState::Done(hi)
         }
     }
-
-    /// The smallest locally-true value found. Only meaningful once
-    /// [`Self::probe`] has returned `None`. Test-only: every current pass
-    /// consumes the search through the side effects of its probes.
-    #[cfg(test)]
-    pub(super) fn result(&self) -> i128 {
-        match self.state {
-            BinSearchState::Done(v) => v,
-            _ => unreachable!("result read before the search converged"),
-        }
-    }
 }
 
 /// [`BigInt`] counterpart of [`BinSearchDown`], used by the integer shrink
@@ -191,6 +205,19 @@ impl BinSearchDownBig {
     pub(super) fn new(lo: BigInt, hi: BigInt) -> Self {
         BinSearchDownBig {
             state: BinSearchState::CheckLo { lo, hi },
+        }
+    }
+
+    /// The next value to evaluate the predicate at, or the converged
+    /// answer — the smallest locally-true value found. Test-only: every
+    /// current pass consumes the search through the side effects of its
+    /// probes.
+    #[cfg(test)]
+    pub(super) fn step(&self) -> SearchStep<BigInt> {
+        match &self.state {
+            BinSearchState::CheckLo { lo, .. } => SearchStep::Probe(lo.clone()),
+            BinSearchState::Narrow { lo, hi } => SearchStep::Probe(lo + (hi - lo) / 2),
+            BinSearchState::Done(v) => SearchStep::Done(v.clone()),
         }
     }
 
@@ -228,17 +255,6 @@ impl BinSearchDownBig {
             BinSearchState::Narrow { lo, hi }
         } else {
             BinSearchState::Done(hi)
-        }
-    }
-
-    /// The smallest locally-true value found. Only meaningful once
-    /// [`Self::probe`] has returned `None`. Test-only: every current pass
-    /// consumes the search through the side effects of its probes.
-    #[cfg(test)]
-    pub(super) fn result(self) -> BigInt {
-        match self.state {
-            BinSearchState::Done(v) => v,
-            _ => unreachable!("result read before the search converged"),
         }
     }
 }

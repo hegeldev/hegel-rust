@@ -5,35 +5,28 @@ use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Stat
 use crate::native::rng::EngineRng;
 
 fn int_kind(min: i128, max: i128) -> ChoiceKind {
-    ChoiceKind::Integer(IntegerChoice {
+    ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(min),
         max_value: BigInt::from(max),
         shrink_towards: BigInt::from(0),
-    })
+    }))
 }
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
     ChoiceNode::new(
-        int_kind(min, max),
-        ChoiceValue::Integer(BigInt::from(value)),
+        int_kind(min, max)
+            .resolve(&ChoiceValue::Integer(BigInt::from(value)))
+            .unwrap(),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 fn forced_bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        true,
-    )
+    ChoiceNode::boolean(value, true)
 }
 
 #[test]
@@ -204,11 +197,7 @@ fn simulate_returns_interesting_conclusion() {
 
 #[test]
 fn simulate_follows_forced_value_ignoring_prefix() {
-    let forced_true = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        true,
-    );
+    let forced_true = ChoiceNode::boolean(true, true);
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[forced_true], Status::Valid, &[]);
 
@@ -261,7 +250,8 @@ fn simulate_full_puns_original_simplest_to_new_simplest_with_prefix_nodes() {
 fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     use crate::native::core::choices::{BytesChoice, FloatChoice, StringChoice};
     use crate::native::intervalsets::IntervalSet;
-    let forced = |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind, value, true);
+    let forced =
+        |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind.resolve(&value).unwrap(), true);
     let nodes = vec![
         forced(int_kind(0, 100), ChoiceValue::Integer(BigInt::from(42))),
         forced(
@@ -307,13 +297,8 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
 }
 
 fn realized_clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(CloneRecord::from_run(
-            children,
-            Vec::new(),
-            Vec::new(),
-        ))),
+    ChoiceNode::clone_stream(
+        Arc::new(RealizedStream::new(children, Vec::new(), Vec::new())),
         false,
     )
 }
@@ -332,17 +317,17 @@ fn record_and_simulate_roundtrip_with_clone_nodes() {
     let mut root = DataTreeNode::default();
     assert!(record_tree(&mut root, &nodes, Status::Interesting, &[]).is_none());
 
-    let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+    let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value().clone()).collect();
     let outcome = simulate_full(&root, &values, None).unwrap();
     assert_eq!(outcome.status, Status::Interesting);
     assert_eq!(outcome.nodes.len(), 3);
-    let ChoiceValue::Clone(record) = &outcome.nodes[1].value else {
+    let ChoiceValue::Clone(record) = &outcome.nodes[1].value() else {
         panic!("simulated clone node lost its record");
     };
     let realized = record.realized_nodes().unwrap();
     assert_eq!(realized.len(), 2);
-    assert_eq!(*realized[0].kind, ChoiceKind::Boolean(BooleanChoice));
-    assert_eq!(realized[1].value, ChoiceValue::Integer(BigInt::from(2)));
+    assert_eq!(realized[0].kind(), ChoiceKind::Boolean(BooleanChoice));
+    assert_eq!(realized[1].value(), ChoiceValue::Integer(BigInt::from(2)));
 
     let values_only: Vec<ChoiceValue> = vec![
         ChoiceValue::Integer(BigInt::from(3)),
@@ -385,7 +370,7 @@ fn simulate_ignores_trailing_unread_child_values() {
     ])];
     let outcome = simulate_full(&root, &longer, None).unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let ChoiceValue::Clone(record) = &outcome.nodes[0].value() else {
         panic!("expected a clone node");
     };
     assert_eq!(record.len(), 1);
@@ -440,7 +425,7 @@ fn clone_streams_with_context_dependent_children_disable_prediction_quietly() {
     assert!(record_tree(&mut root, &run1, Status::Valid, &[]).is_none());
     assert!(record_tree(&mut root, &run2, Status::Valid, &[]).is_none());
 
-    let exact: Vec<ChoiceValue> = run1.iter().map(|n| n.value.clone()).collect();
+    let exact: Vec<ChoiceValue> = run1.iter().map(|n| n.value().clone()).collect();
     assert_eq!(simulate(&root, &exact), Some(Status::Valid));
 
     let punnable = vec![
@@ -579,33 +564,6 @@ fn a_stream_that_previously_ended_but_now_continues_disables_prediction() {
 }
 
 #[test]
-fn values_only_clone_records_disable_prediction_quietly() {
-    let node = ChoiceNode::new(
-        ChoiceKind::Clone,
-        clone_prefix_value(vec![ChoiceValue::Boolean(true)]),
-        false,
-    );
-    let mut root = DataTreeNode::default();
-    assert!(record_tree(&mut root, &[node], Status::Valid, &[]).is_none());
-    assert_eq!(
-        simulate(
-            &root,
-            &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
-        ),
-        Some(Status::Valid)
-    );
-    assert_eq!(
-        simulate(
-            &root,
-            &[clone_prefix_value(vec![ChoiceValue::Integer(
-                BigInt::from(999)
-            )])]
-        ),
-        None
-    );
-}
-
-#[test]
 fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
     let mut root = DataTreeNode::default();
     record_tree(
@@ -621,10 +579,10 @@ fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
     )
     .unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    assert_eq!(record.value_at(0), &ChoiceValue::Boolean(true));
+    assert!(stream.nodes()[0].value() == ChoiceValue::Boolean(true));
 }
 
 #[test]
@@ -644,10 +602,10 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
     ])]);
     let outcome = simulate_full(&root, &[candidate], None).unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    let ChoiceValue::Clone(inner) = record.value_at(0) else {
+    let Some(inner) = stream.nodes()[0].data.as_clone() else {
         panic!("expected a nested clone value");
     };
     assert_eq!(inner.len(), 1);
@@ -656,7 +614,7 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
 #[test]
 fn span_events_inside_clone_streams_are_reconstructed() {
     use crate::native::core::{Span, SpanEvent};
-    let child_record = CloneRecord::from_run(
+    let child_stream = RealizedStream::new(
         vec![bool_node(true)],
         vec![Span {
             start: 0,
@@ -671,11 +629,7 @@ fn span_events_inside_clone_streams_are_reconstructed() {
             (1, SpanEvent::Close { discarded: false }),
         ],
     );
-    let node = ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(child_record)),
-        false,
-    );
+    let node = ChoiceNode::clone_stream(Arc::new(child_stream), false);
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[node], Status::Valid, &[]);
     let outcome = simulate_full(
@@ -684,12 +638,12 @@ fn span_events_inside_clone_streams_are_reconstructed() {
         None,
     )
     .unwrap();
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    assert_eq!(record.spans().len(), 1);
-    assert_eq!(record.spans()[0].label, "9");
-    assert_eq!(record.spans()[0].start, 0);
-    assert_eq!(record.spans()[0].end, 1);
-    assert_eq!(record.span_events().len(), 2);
+    assert_eq!(stream.spans().len(), 1);
+    assert_eq!(stream.spans()[0].label, "9");
+    assert_eq!(stream.spans()[0].start, 0);
+    assert_eq!(stream.spans()[0].end, 1);
+    assert_eq!(stream.span_events().len(), 2);
 }

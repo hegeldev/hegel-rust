@@ -27,8 +27,8 @@ fn cap() -> ChoiceValue {
 fn assert_forced_index_node(ntc: &NativeTestCase, pos: usize, n: i64, index: i64) {
     let node = &ntc.nodes[pos];
     assert!(node.was_forced);
-    assert_eq!(node.value, ChoiceValue::Integer(BigInt::from(index)));
-    assert!(matches!(&*node.kind, ChoiceKind::Integer(k) if k.max_value == BigInt::from(n - 1)));
+    assert_eq!(node.value(), ChoiceValue::Integer(BigInt::from(index)));
+    assert!(matches!(&node.kind(), ChoiceKind::Integer(k) if k.max_value == BigInt::from(n - 1)));
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn zero_p_disabled_enables_every_rule() {
     assert_eq!(rule, Some(2));
     assert_eq!(ntc.nodes.len(), 4);
     assert!(ntc.nodes[3].was_forced);
-    assert_eq!(ntc.nodes[3].value, ChoiceValue::Boolean(false));
+    assert_eq!(ntc.nodes[3].value(), ChoiceValue::Boolean(false));
     assert_eq!(ntc.spans.len(), 2);
     assert_eq!(
         ntc.spans[0usize].label,
@@ -97,7 +97,7 @@ fn unbounded_families_draw_no_step_cap_and_never_halt() {
         .nodes
         .iter()
         .filter(
-            |n| matches!(&*n.kind, ChoiceKind::Integer(k) if k.max_value == BigInt::from(i64::MAX)),
+            |n| matches!(&n.kind(), ChoiceKind::Integer(k) if k.max_value == BigInt::from(i64::MAX)),
         )
         .count();
     assert_eq!(cap_draws, 0);
@@ -112,7 +112,7 @@ fn p_disabled_is_drawn_on_first_next_rule_only() {
     let p_disabled_draws = ntc
         .nodes
         .iter()
-        .filter(|n| matches!(&*n.kind, ChoiceKind::Integer(k) if k.max_value == BigInt::from(254)))
+        .filter(|n| matches!(&n.kind(), ChoiceKind::Integer(k) if k.max_value == BigInt::from(254)))
         .count();
     assert_eq!(p_disabled_draws, 1);
 }
@@ -125,7 +125,7 @@ fn last_undecided_rule_is_forced_enabled() {
     assert_eq!(rule, 1);
     assert_eq!(ntc.nodes.len(), 6);
     assert!(ntc.nodes[5].was_forced);
-    assert_eq!(ntc.nodes[5].value, ChoiceValue::Boolean(false));
+    assert_eq!(ntc.nodes[5].value(), ChoiceValue::Boolean(false));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn decided_flag_is_rewritten_as_forced_draw_on_later_queries() {
     assert_eq!(sm.next_rule(&mut ntc).unwrap().unwrap(), 0);
     assert_eq!(ntc.nodes.len(), 6);
     assert!(ntc.nodes[5].was_forced);
-    assert_eq!(ntc.nodes[5].value, ChoiceValue::Boolean(false));
+    assert_eq!(ntc.nodes[5].value(), ChoiceValue::Boolean(false));
 }
 
 #[test]

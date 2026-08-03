@@ -6,17 +6,17 @@ use crate::native::bignum::BigInt;
 
 use crate::exchange::drive_no_yield;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN + 1),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -49,7 +49,7 @@ fn try_replace_with_deletion_returns_true_on_early_success() {
     ))
     .unwrap();
     assert!(ok);
-    match &shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value() {
         ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v.clone()).unwrap(), 0),
         _ => unreachable!(),
     }
@@ -116,17 +116,12 @@ fn lower_integers_together_break_when_indices_outrun_current_nodes() {
 
 #[test]
 fn lower_integers_together_skips_kind_punning() {
-    use crate::native::core::choices::BooleanChoice;
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
                 if out.len() >= 2 {
-                    out[1] = ChoiceNode::new(
-                        ChoiceKind::Boolean(BooleanChoice),
-                        ChoiceValue::Boolean(true),
-                        false,
-                    );
+                    out[1] = ChoiceNode::boolean(true, false);
                 }
                 (true, out, Spans::new())
             }
@@ -140,16 +135,11 @@ fn lower_integers_together_skips_kind_punning() {
 
 #[test]
 fn lower_integers_together_survives_accepted_same_length_kind_pun() {
-    use crate::native::core::choices::BooleanChoice;
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
-                out[0] = ChoiceNode::new(
-                    ChoiceKind::Boolean(BooleanChoice),
-                    ChoiceValue::Boolean(false),
-                    false,
-                );
+                out[0] = ChoiceNode::boolean(false, false);
                 (true, out, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -159,7 +149,7 @@ fn lower_integers_together_survives_accepted_same_length_kind_pun() {
     );
     drive_no_yield(shrinker.lower_integers_together()).unwrap();
     assert!(matches!(
-        shrinker.current_nodes[0].value,
+        shrinker.current_nodes[0].value(),
         ChoiceValue::Boolean(false)
     ));
 }

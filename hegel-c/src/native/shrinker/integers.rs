@@ -2,7 +2,7 @@ use crate::native::HashMap;
 
 use crate::native::bignum::{BigInt, Sign, Signed};
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceData, ChoiceValue};
 
 use super::search::{BinSearchDownBig, FindInteger};
 use super::{ShrinkResult, Shrinker};
@@ -14,31 +14,17 @@ fn low_bits(v: &BigInt, keep: usize) -> BigInt {
 }
 
 impl<'a> Shrinker<'a> {
-    /// Current integer value at node `i` as a [`BigInt`].
-    pub(super) fn int_value_bigint(&self, i: usize) -> BigInt {
-        match &self.current_nodes[i].value {
-            ChoiceValue::Integer(v) => v.clone(),
-            _ => unreachable!("int_value_bigint on non-integer node"),
-        }
-    }
-
-    /// Build a width-correct integer replacement value for node `i`. Callers
-    /// (`bind_deletion`, `minimize_individual_choices`) only invoke this for an
-    /// in-range integer node with a candidate inside `[min, max] ⊆ width`, so
-    /// neither the kind nor the width conversion can fail.
-    pub(super) fn int_replacement(&self, i: usize, candidate: &BigInt) -> ChoiceValue {
-        let ChoiceKind::Integer(ic) = self.current_nodes[i].kind.as_ref() else {
-            unreachable!("int_replacement on non-integer node")
-        };
-        ChoiceValue::Integer(
-            ic.value_from_bigint(candidate)
-                .unwrap_or_else(|| unreachable!("candidate fits the node's width")),
-        )
+    /// Current integer value at node `i`, or `None` when the node is not
+    /// (or no longer) an integer — a concurrent shrink can pun the kind at
+    /// any position between probes.
+    pub(super) fn int_value_bigint(&self, i: usize) -> Option<BigInt> {
+        let (_, v) = self.current_nodes.get(i)?.data.as_integer()?;
+        Some(v.clone())
     }
 
     /// Attempt to replace node `i` with `candidate`. The candidate is handed to
-    /// [`Shrinker::replace`], which range-checks it and coerces it to the
-    /// node's width (rejecting out-of-range candidates), so this stays correct
+    /// [`Shrinker::replace`], which range-checks it against the node's
+    /// constraint (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
     pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
         self.replace(&HashMap::from_iter([(
@@ -49,7 +35,7 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
-    /// range-checks and width-coerces each candidate.
+    /// range-checks each candidate.
     pub(super) async fn replace_two(
         &mut self,
         i: usize,
@@ -70,12 +56,11 @@ impl<'a> Shrinker<'a> {
         while k > 0 {
             let mut i = 0;
             while i + k <= self.current_nodes.len() {
-                let nodes = &self.current_nodes;
-                if nodes[i].value == nodes[i].kind.simplest() {
+                if self.current_nodes[i].data.is_simplest() {
                     i += 1;
                 } else {
                     let replacements: HashMap<usize, ChoiceValue> = (i..i + k)
-                        .map(|j| (j, self.current_nodes[j].kind.simplest()))
+                        .map(|j| (j, self.current_nodes[j].data.simplest_value()))
                         .collect();
                     self.replace(&replacements).await?;
                     i += k;
@@ -90,22 +75,16 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn swap_integer_sign(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            if let (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) = (
-                self.current_nodes[i].kind.as_ref(),
-                &self.current_nodes[i].value,
-            ) {
+            if let ChoiceData::Integer(ic, v) = &self.current_nodes[i].data {
                 let v = v.clone();
                 let simplest = ic.simplest();
-                if v != ic.simplest() {
+                if v != simplest {
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::Integer(simplest))]))
                         .await?;
                 }
-                if i < self.current_nodes.len() {
-                    if let ChoiceValue::Integer(v) = &self.current_nodes[i].value {
-                        let v = v.clone();
-                        if v.sign() == Sign::Minus {
-                            self.replace_int(i, &(-&v)).await?;
-                        }
+                if let Some(v) = self.int_value_bigint(i) {
+                    if v.sign() == Sign::Minus {
+                        self.replace_int(i, &(-&v)).await?;
                     }
                 }
             }
@@ -128,81 +107,92 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let ic = match self.current_nodes[i].kind.as_ref() {
-                ChoiceKind::Integer(ic) => ic.clone(),
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            let target = ic.clamped_shrink_towards();
-
-            self.try_at_distance(i, &ic, &target, &BigInt::from(0))
-                .await?;
-            self.try_at_distance(i, &ic, &target, &BigInt::from(1))
-                .await?;
-
-            let base = self.distance_from(i, &target);
-            let n_bits = base.bits();
-            let mut search = FindInteger::new();
-            while let Some(k) = search.probe() {
-                let ok = if k as u64 >= n_bits {
-                    false
-                } else {
-                    let keep = (n_bits - k as u64) as usize;
-                    let masked = low_bits(&base, keep);
-                    self.try_at_distance(i, &ic, &target, &masked).await?
-                };
-                search.record(ok);
-            }
-
-            let base = self.distance_from(i, &target);
-            if base.bits() > 8 {
-                let top = &base >> (base.bits() as usize - 8);
-                self.try_at_distance(i, &ic, &target, &top).await?;
-                let bottom = low_bits(&base, 8);
-                self.try_at_distance(i, &ic, &target, &bottom).await?;
-            }
-
-            loop {
-                let before = self.distance_from(i, &target);
-                if before == BigInt::from(0) {
-                    break;
-                }
-                let max_shift = before.bits() as usize + 1;
-                let mut search = FindInteger::new();
-                while let Some(k) = search.probe() {
-                    let candidate = &before >> k.min(max_shift);
-                    let ok = self.try_at_distance(i, &ic, &target, &candidate).await?;
-                    search.record(ok);
-                }
-                for step in [2u64, 1] {
-                    let base = self.distance_from(i, &target);
-                    let mut search = FindInteger::new();
-                    while let Some(n) = search.probe() {
-                        let sub = BigInt::from(step) * BigInt::from(n as u64);
-                        let ok = if sub > base {
-                            false
-                        } else {
-                            self.try_at_distance(i, &ic, &target, &(&base - &sub))
-                                .await?
-                        };
-                        search.record(ok);
-                    }
-                }
-                if self.distance_from(i, &target) == before {
-                    break;
-                }
-            }
+            self.binary_search_node_towards_zero(i).await?;
             i += 1;
         }
         Ok(())
     }
 
-    /// `|value(i) - target|` as a non-negative `BigInt`.
-    fn distance_from(&self, i: usize, target: &BigInt) -> BigInt {
-        let v = self.int_value_bigint(i);
-        BigInt::from((&v - target).magnitude())
+    async fn binary_search_node_towards_zero(&mut self, i: usize) -> ShrinkResult<()> {
+        let Some((ic, _)) = self.current_nodes[i].data.as_integer() else {
+            return Ok(());
+        };
+        let ic = ic.clone();
+        let target = ic.clamped_shrink_towards();
+
+        self.try_at_distance(i, &ic, &target, &BigInt::from(0))
+            .await?;
+        self.try_at_distance(i, &ic, &target, &BigInt::from(1))
+            .await?;
+
+        let Some(base) = self.distance_from(i, &target) else {
+            return Ok(());
+        };
+        let n_bits = base.bits();
+        let mut search = FindInteger::new();
+        while let Some(k) = search.probe() {
+            let ok = if k as u64 >= n_bits {
+                false
+            } else {
+                let keep = (n_bits - k as u64) as usize;
+                let masked = low_bits(&base, keep);
+                self.try_at_distance(i, &ic, &target, &masked).await?
+            };
+            search.record(ok);
+        }
+
+        let Some(base) = self.distance_from(i, &target) else {
+            return Ok(());
+        };
+        if base.bits() > 8 {
+            let top = &base >> (base.bits() as usize - 8);
+            self.try_at_distance(i, &ic, &target, &top).await?;
+            let bottom = low_bits(&base, 8);
+            self.try_at_distance(i, &ic, &target, &bottom).await?;
+        }
+
+        loop {
+            let Some(before) = self.distance_from(i, &target) else {
+                return Ok(());
+            };
+            if before == BigInt::from(0) {
+                break;
+            }
+            let max_shift = before.bits() as usize + 1;
+            let mut search = FindInteger::new();
+            while let Some(k) = search.probe() {
+                let candidate = &before >> k.min(max_shift);
+                let ok = self.try_at_distance(i, &ic, &target, &candidate).await?;
+                search.record(ok);
+            }
+            for step in [2u64, 1] {
+                let Some(base) = self.distance_from(i, &target) else {
+                    return Ok(());
+                };
+                let mut search = FindInteger::new();
+                while let Some(n) = search.probe() {
+                    let sub = BigInt::from(step) * BigInt::from(n as u64);
+                    let ok = if sub > base {
+                        false
+                    } else {
+                        self.try_at_distance(i, &ic, &target, &(&base - &sub))
+                            .await?
+                    };
+                    search.record(ok);
+                }
+            }
+            if self.distance_from(i, &target) == Some(before) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// `|value(i) - target|` as a non-negative `BigInt`, or `None` when
+    /// node `i` is no longer an integer.
+    fn distance_from(&self, i: usize, target: &BigInt) -> Option<BigInt> {
+        let v = self.int_value_bigint(i)?;
+        Some(BigInt::from((&v - target).magnitude()))
     }
 
     /// Probe node `i` at `target + d`, then — when that is rejected — at
@@ -229,6 +219,20 @@ impl<'a> Shrinker<'a> {
         Ok(accepted)
     }
 
+    /// The integer nodes of the current shrink target: index, constraint,
+    /// and value, snapshotted together so pair passes work from a proven
+    /// view instead of re-matching each node.
+    fn integer_entries(&self) -> Vec<(usize, std::sync::Arc<IntegerChoice>, BigInt)> {
+        self.current_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match &n.data {
+                ChoiceData::Integer(ic, v) => Some((i, std::sync::Arc::clone(ic), v.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Try redistributing value between pairs of integer choices.
     ///
     /// For each pair of integer nodes at various distances, tries moving
@@ -236,36 +240,13 @@ impl<'a> Shrinker<'a> {
     /// constant. Useful for sum-type constraints where the minimal
     /// counterexample has one small and one large value.
     pub(super) async fn redistribute_integers(&mut self) -> ShrinkResult<()> {
-        let int_indices: Vec<usize> = self
-            .current_nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let n = self.integer_entries().len();
 
-        let max_gap = 8.min(int_indices.len());
+        let max_gap = 8.min(n);
         for gap in 1..max_gap {
-            let n = int_indices.len();
             let mut pair_idx = n.saturating_sub(gap + 1);
             loop {
-                let current_ints: Vec<usize> = self
-                    .current_nodes
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, node)| {
-                        if matches!(node.kind.as_ref(), ChoiceKind::Integer(_)) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let current_ints = self.integer_entries();
 
                 if pair_idx + gap >= current_ints.len() {
                     if pair_idx == 0 {
@@ -275,17 +256,9 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                let i = current_ints[pair_idx];
-                let j = current_ints[pair_idx + gap];
-
-                let prev_i = self.int_value_bigint(i);
-                let prev_j = self.int_value_bigint(j);
-                let target_i = match self.current_nodes[i].kind.as_ref() {
-                    ChoiceKind::Integer(ic) => ic.clamped_shrink_towards(),
-                    _ => unreachable!(
-                        "kind/value invariant violated: outer match guaranteed this variant"
-                    ),
-                };
+                let (i, ic_i, prev_i) = current_ints[pair_idx].clone();
+                let (j, _, prev_j) = current_ints[pair_idx + gap].clone();
+                let target_i = ic_i.clamped_shrink_towards();
 
                 let prev_dist = BigInt::from((&prev_i - &target_i).magnitude());
                 if prev_dist.sign() == Sign::Plus {
@@ -324,40 +297,15 @@ impl<'a> Shrinker<'a> {
         let mut pair_idx = 0;
         loop {
             for gap in 1..=3 {
-                let int_indices: Vec<usize> = self
-                    .current_nodes
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, n)| {
-                        if matches!(n.kind.as_ref(), ChoiceKind::Integer(_)) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if pair_idx >= int_indices.len() {
+                let int_entries = self.integer_entries();
+                if pair_idx >= int_entries.len() {
                     return Ok(());
                 }
-                if pair_idx + gap >= int_indices.len() {
+                if pair_idx + gap >= int_entries.len() {
                     break;
                 }
-                let i = int_indices[pair_idx];
-                let j = int_indices[pair_idx + gap];
-
-                let (ic_i, v_i) = match (
-                    self.current_nodes[i].kind.as_ref(),
-                    &self.current_nodes[i].value,
-                ) {
-                    (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
-                    _ => unreachable!(
-                        "int_indices was rebuilt from current_nodes this iteration, so i is an Integer node"
-                    ),
-                };
-                let v_j = match &self.current_nodes[j].value {
-                    ChoiceValue::Integer(v) => v.clone(),
-                    _ => unreachable!("kind/value mismatch: Integer kind with non-Integer value"),
-                };
+                let (i, ic_i, v_i) = int_entries[pair_idx].clone();
+                let (j, _, v_j) = int_entries[pair_idx + gap].clone();
 
                 let st_i = ic_i.clamped_shrink_towards();
 
@@ -399,7 +347,7 @@ impl<'a> Shrinker<'a> {
 
     /// Try shrinking duplicate integer values simultaneously.
     ///
-    /// For each group of nodes sharing `(ChoiceKind discriminant,
+    /// For each group of nodes sharing `(ChoiceData discriminant,
     /// ChoiceValue)`, tries simultaneous shrinking — handling cases
     /// where two duplicates must remain equal (e.g. a list element and a
     /// separate value that must appear in the list).
@@ -428,13 +376,10 @@ impl<'a> Shrinker<'a> {
             sh.replace(&replacements).await
         }
 
-        let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
+        let mut groups: HashMap<(std::mem::Discriminant<ChoiceData>, ChoiceValue), Vec<usize>> =
             HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            let key = (
-                std::mem::discriminant(node.kind.as_ref()),
-                node.value.clone(),
-            );
+            let key = (std::mem::discriminant(&node.data), node.value());
             groups.entry(key).or_default().push(i);
         }
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
@@ -448,14 +393,14 @@ impl<'a> Shrinker<'a> {
                 .copied()
                 .filter(|&i| {
                     i < self.current_nodes.len()
-                        && self.current_nodes[i].value == *group_value
-                        && std::mem::discriminant(self.current_nodes[i].kind.as_ref()) == *kind_disc
+                        && self.current_nodes[i].data.value_ref() == *group_value
+                        && std::mem::discriminant(&self.current_nodes[i].data) == *kind_disc
                 })
                 .collect();
             if valid.len() < 2 {
                 continue;
             }
-            let simplest = self.current_nodes[valid[0]].kind.simplest();
+            let simplest = self.current_nodes[valid[0]].data.simplest_value();
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();
@@ -464,9 +409,7 @@ impl<'a> Shrinker<'a> {
         }
         let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) =
-                (node.kind.as_ref(), &node.value)
-            {
+            if let Some((_, v)) = node.data.as_integer() {
                 groups.entry(v.clone()).or_default().push(i);
             }
         }
@@ -478,25 +421,21 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let valid: Vec<usize> = indices
+            let members: Vec<(usize, std::sync::Arc<IntegerChoice>)> = indices
                 .iter()
-                .copied()
-                .filter(|&i| {
-                    i < self.current_nodes.len()
-                        && matches!(&self.current_nodes[i].value, ChoiceValue::Integer(v) if v.clone() == value)
+                .filter_map(|&i| match self.current_nodes.get(i).map(|n| &n.data) {
+                    Some(ChoiceData::Integer(ic, v)) if *v == value => {
+                        Some((i, std::sync::Arc::clone(ic)))
+                    }
+                    _ => None,
                 })
                 .collect();
 
-            if valid.len() < 2 {
+            if members.len() < 2 {
                 continue;
             }
-
-            let ic = match self.current_nodes[valid[0]].kind.as_ref() {
-                ChoiceKind::Integer(ic) => ic.clone(),
-                _ => unreachable!(
-                    "kind/value invariant violated: outer match guaranteed this variant"
-                ),
-            };
+            let valid: Vec<usize> = members.iter().map(|&(i, _)| i).collect();
+            let ic = std::sync::Arc::clone(&members[0].1);
 
             let simplest = ic.simplest();
             if simplest != value {
@@ -507,13 +446,9 @@ impl<'a> Shrinker<'a> {
                 self.replace(&replacements).await?;
             }
 
-            let cur_value = self.int_value_bigint(valid[0]);
-
-            let live_base = |sh: &Shrinker<'_>| -> BigInt {
-                match &sh.current_nodes[valid[0]].value {
-                    ChoiceValue::Integer(v) => v.clone(),
-                    _ => unreachable!("group filter only retains Integer-kind members"),
-                }
+            let live_base = |sh: &Shrinker<'_>| -> Option<BigInt> { sh.int_value_bigint(valid[0]) };
+            let Some(cur_value) = live_base(self) else {
+                continue;
             };
             if cur_value.sign() == Sign::Plus {
                 let lo = ic.simplest().max(BigInt::from(0));
@@ -527,18 +462,20 @@ impl<'a> Shrinker<'a> {
                         search.record(ok);
                     }
                 }
-                if live_base(self) > lo {
+                if live_base(self).is_some_and(|b| b > lo) {
                     let mut search = FindInteger::new();
                     while let Some(n) = search.probe() {
-                        let attempt = live_base(self) - BigInt::from(2u128 * n as u128);
+                        let Some(base) = live_base(self) else { break };
+                        let attempt = base - BigInt::from(2u128 * n as u128);
                         let ok = group_replace(self, &valid, &attempt).await?;
                         search.record(ok);
                     }
                 }
-                if live_base(self) > lo {
+                if live_base(self).is_some_and(|b| b > lo) {
                     let mut search = FindInteger::new();
                     while let Some(n) = search.probe() {
-                        let attempt = live_base(self) - BigInt::from(n as u64);
+                        let Some(base) = live_base(self) else { break };
+                        let attempt = base - BigInt::from(n as u64);
                         let ok = group_replace(self, &valid, &attempt).await?;
                         search.record(ok);
                     }
@@ -556,18 +493,20 @@ impl<'a> Shrinker<'a> {
                     }
                 }
                 let neg_hi = -&lo;
-                if live_base(self) < neg_hi {
+                if live_base(self).is_some_and(|b| b < neg_hi) {
                     let mut search = FindInteger::new();
                     while let Some(n) = search.probe() {
-                        let attempt = live_base(self) + BigInt::from(2u128 * n as u128);
+                        let Some(base) = live_base(self) else { break };
+                        let attempt = base + BigInt::from(2u128 * n as u128);
                         let ok = group_replace(self, &valid, &attempt).await?;
                         search.record(ok);
                     }
                 }
-                if live_base(self) < neg_hi {
+                if live_base(self).is_some_and(|b| b < neg_hi) {
                     let mut search = FindInteger::new();
                     while let Some(n) = search.probe() {
-                        let attempt = live_base(self) + BigInt::from(n as u64);
+                        let Some(base) = live_base(self) else { break };
+                        let attempt = base + BigInt::from(n as u64);
                         let ok = group_replace(self, &valid, &attempt).await?;
                         search.record(ok);
                     }
@@ -598,21 +537,19 @@ impl<'a> Shrinker<'a> {
         let mut indices: Vec<usize> = Vec::new();
         let mut ic_targets: Vec<BigInt> = Vec::new();
         let mut distances: Vec<BigInt> = Vec::new();
+        let mut signs: Vec<i128> = Vec::new();
         for &i in &changed {
             hegel_internal_debug_assert!(i < self.current_nodes.len());
-            let (target, v) = match (
-                self.current_nodes[i].kind.as_ref(),
-                &self.current_nodes[i].value,
-            ) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
-                    (ic.clamped_shrink_towards(), v.clone())
-                }
-                _ => continue,
+            let Some((ic, v)) = self.current_nodes[i].data.as_integer() else {
+                continue;
             };
+            let target = ic.clamped_shrink_towards();
+            let v = v.clone();
             if v == target {
                 continue;
             }
             distances.push((&v - &target).abs());
+            signs.push(if v >= target { 1 } else { -1 });
             indices.push(i);
             ic_targets.push(target);
         }
@@ -626,21 +563,6 @@ impl<'a> Shrinker<'a> {
             .clone();
         hegel_internal_debug_assert!(offset.sign() == Sign::Plus);
         let residual: Vec<BigInt> = distances.iter().map(|d| d - &offset).collect();
-
-        let signs: Vec<i128> = indices
-            .iter()
-            .zip(ic_targets.iter())
-            .map(|(&i, target)| {
-                let v = match &self.current_nodes[i].value {
-                    ChoiceValue::Integer(v) => v.clone(),
-                    _ => unreachable!(
-                        "indices/ic_targets came from the integer-node filter above; \
-                         ChoiceNode invariant pairs Integer kind with Integer value"
-                    ),
-                };
-                if &v >= target { 1 } else { -1 }
-            })
-            .collect();
 
         for sign_multiplier in [1i128, -1] {
             let mut search = FindInteger::new();

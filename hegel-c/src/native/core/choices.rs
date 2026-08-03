@@ -655,9 +655,14 @@ fn max_finite_global_rank() -> crate::native::bignum::BigUint {
 }
 
 /// The kind of choice made at a particular point.
+///
+/// The `IntegerChoice` payload is shared via `Arc`: the shrinker and data
+/// tree clone kinds constantly, and the integer constraint holds three
+/// `BigInt`s, so sharing turns those deep clones into a pointer bump. The
+/// other constraints are a few machine words and are carried by value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceKind {
-    Integer(IntegerChoice),
+    Integer(Arc<IntegerChoice>),
     Boolean(BooleanChoice),
     Float(FloatChoice),
     Bytes(BytesChoice),
@@ -687,35 +692,100 @@ pub enum ChoiceValue {
     Clone(Arc<CloneRecord>),
 }
 
-/// The children of a [`CloneRecord`]: either bare choice values (a record
-/// deserialized from storage, where kinds and spans were never persisted) or
-/// the realized nodes of an executed stream together with its span structure.
-#[derive(Clone, Debug)]
-enum CloneChildren {
-    Values(Vec<ChoiceValue>),
-    Realized {
+/// The realized execution of one cloned stream: its child [`ChoiceNode`]s
+/// plus the span structure recorded alongside them. This is what the
+/// shrinker and data tree interrogate, and what a [`ChoiceData::Clone`]
+/// node carries — a node's clone payload is realized *by construction*, so
+/// consumers never have to re-prove it.
+#[derive(Debug)]
+pub struct RealizedStream {
+    nodes: Vec<ChoiceNode>,
+    spans: Vec<Span>,
+    span_events: Vec<(usize, SpanEvent)>,
+    /// Cached [`flattened_len`] of the children, so sort-key comparison of
+    /// deep trees costs one integer read per stream instead of a walk.
+    flat_len: usize,
+}
+
+impl RealizedStream {
+    /// A realized stream from an execution: its nodes plus the span
+    /// structure recorded alongside them.
+    pub fn new(
         nodes: Vec<ChoiceNode>,
         spans: Vec<Span>,
         span_events: Vec<(usize, SpanEvent)>,
+    ) -> Self {
+        let flat_len = flattened_len(&nodes);
+        RealizedStream {
+            nodes,
+            spans,
+            span_events,
+            flat_len,
+        }
+    }
+
+    /// The empty stream: a clone that drew nothing.
+    pub fn empty() -> Self {
+        Self::new(Vec::new(), Vec::new(), Vec::new())
+    }
+
+    /// The realized child nodes, in order.
+    pub fn nodes(&self) -> &[ChoiceNode] {
+        &self.nodes
+    }
+
+    /// The cloned stream's recorded spans.
+    pub fn spans(&self) -> &[Span] {
+        &self.spans
+    }
+
+    /// The cloned stream's span open/close events, tagged with the child
+    /// draw position at which each fired.
+    pub fn span_events(&self) -> &[(usize, SpanEvent)] {
+        &self.span_events
+    }
+
+    /// Number of direct children (top-level choices in the cloned stream).
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Total number of choices in the cloned stream, counting nested clones'
+    /// children recursively. Cached at construction.
+    pub fn flat_len(&self) -> usize {
+        self.flat_len
+    }
+}
+
+/// The children of a [`CloneRecord`]: either bare choice values (a record
+/// deserialized from storage, where kinds and spans were never persisted) or
+/// the realized stream of an execution.
+#[derive(Clone, Debug)]
+enum CloneChildren {
+    Values {
+        values: Vec<ChoiceValue>,
+        flat_len: usize,
     },
+    Realized(Arc<RealizedStream>),
 }
 
 /// The choice sequence of one cloned stream, carried as the value of a
-/// [`ChoiceKind::Clone`] node in its parent stream.
+/// clone position in its parent stream ([`ChoiceValue::Clone`]).
 ///
 /// A record's *identity* — equality, hashing, and its contribution to sort
 /// keys — is the sequence of child choice values, recursively. The realized
 /// info (child kinds, forced flags, spans, span events) is carried when the
-/// record was produced by executing the stream, and is what the shrinker and
-/// data tree interrogate; it is never serialized and never part of equality,
+/// record was produced by executing the stream (as a shared
+/// [`RealizedStream`]); it is never serialized and never part of equality,
 /// so a record round-tripped through storage compares equal to the realized
 /// record it came from.
 #[derive(Clone, Debug)]
 pub struct CloneRecord {
     children: CloneChildren,
-    /// Cached [`flattened_len`] of the children, so sort-key comparison of
-    /// deep trees costs one integer read per record instead of a walk.
-    flat_len: usize,
 }
 
 impl CloneRecord {
@@ -724,8 +794,15 @@ impl CloneRecord {
     pub fn from_values(values: Vec<ChoiceValue>) -> Self {
         let flat_len = flattened_len_of_values(values.iter());
         CloneRecord {
-            children: CloneChildren::Values(values),
-            flat_len,
+            children: CloneChildren::Values { values, flat_len },
+        }
+    }
+
+    /// A record wrapping an already-realized stream, sharing it rather than
+    /// copying its nodes.
+    pub fn from_stream(stream: Arc<RealizedStream>) -> Self {
+        CloneRecord {
+            children: CloneChildren::Realized(stream),
         }
     }
 
@@ -736,15 +813,7 @@ impl CloneRecord {
         spans: Vec<Span>,
         span_events: Vec<(usize, SpanEvent)>,
     ) -> Self {
-        let flat_len = flattened_len(&nodes);
-        CloneRecord {
-            children: CloneChildren::Realized {
-                nodes,
-                spans,
-                span_events,
-            },
-            flat_len,
-        }
+        Self::from_stream(Arc::new(RealizedStream::new(nodes, spans, span_events)))
     }
 
     /// The empty record: a clone that drew nothing.
@@ -755,8 +824,8 @@ impl CloneRecord {
     /// Number of direct children (top-level choices in the cloned stream).
     pub fn len(&self) -> usize {
         match &self.children {
-            CloneChildren::Values(v) => v.len(),
-            CloneChildren::Realized { nodes, .. } => nodes.len(),
+            CloneChildren::Values { values, .. } => values.len(),
+            CloneChildren::Realized(stream) => stream.len(),
         }
     }
 
@@ -764,63 +833,57 @@ impl CloneRecord {
         self.len() == 0
     }
 
-    /// The `i`-th child choice value.
-    pub fn value_at(&self, i: usize) -> &ChoiceValue {
+    /// The `i`-th child choice value, as a borrowed view.
+    pub fn value_at(&self, i: usize) -> ChoiceValueRef<'_> {
         match &self.children {
-            CloneChildren::Values(v) => &v[i],
-            CloneChildren::Realized { nodes, .. } => &nodes[i].value,
+            CloneChildren::Values { values, .. } => ChoiceValueRef::from(&values[i]),
+            CloneChildren::Realized(stream) => stream.nodes[i].data.value_ref(),
         }
     }
 
-    /// The child choice values, in order.
-    pub fn values(&self) -> impl Iterator<Item = &ChoiceValue> + '_ {
-        let (values, nodes) = match &self.children {
-            CloneChildren::Values(v) => (Some(v.iter()), None),
-            CloneChildren::Realized { nodes, .. } => (None, Some(nodes.iter())),
-        };
-        values
-            .into_iter()
-            .flatten()
-            .chain(nodes.into_iter().flatten().map(|n| &n.value))
+    /// The child choice values, in order, as borrowed views.
+    pub fn values(&self) -> impl Iterator<Item = ChoiceValueRef<'_>> + '_ {
+        (0..self.len()).map(move |i| self.value_at(i))
+    }
+
+    /// The child choice values, in order, as owned values. Children stored
+    /// as bare values are cloned; realized children are rebuilt from their
+    /// nodes (nested realized streams stay shared).
+    pub fn owned_values(&self) -> Vec<ChoiceValue> {
+        match &self.children {
+            CloneChildren::Values { values, .. } => values.clone(),
+            CloneChildren::Realized(stream) => {
+                stream.nodes.iter().map(|n| n.data.value()).collect()
+            }
+        }
+    }
+
+    /// The realized stream, when this record came from an execution.
+    pub fn realized(&self) -> Option<&Arc<RealizedStream>> {
+        match &self.children {
+            CloneChildren::Values { .. } => None,
+            CloneChildren::Realized(stream) => Some(stream),
+        }
     }
 
     /// The realized child nodes, when this record came from an execution.
     pub fn realized_nodes(&self) -> Option<&[ChoiceNode]> {
-        match &self.children {
-            CloneChildren::Values(_) => None,
-            CloneChildren::Realized { nodes, .. } => Some(nodes),
-        }
-    }
-
-    /// The cloned stream's recorded spans (empty for a values-only record).
-    pub fn spans(&self) -> &[Span] {
-        match &self.children {
-            CloneChildren::Values(_) => &[],
-            CloneChildren::Realized { spans, .. } => spans,
-        }
-    }
-
-    /// The cloned stream's span open/close events, tagged with the child
-    /// draw position at which each fired (empty for a values-only record).
-    pub fn span_events(&self) -> &[(usize, SpanEvent)] {
-        match &self.children {
-            CloneChildren::Values(_) => &[],
-            CloneChildren::Realized { span_events, .. } => span_events,
-        }
+        self.realized().map(|stream| stream.nodes())
     }
 
     /// Total number of choices in the cloned stream, counting nested clones'
     /// children recursively. Cached at construction.
     pub fn flat_len(&self) -> usize {
-        self.flat_len
+        match &self.children {
+            CloneChildren::Values { flat_len, .. } => *flat_len,
+            CloneChildren::Realized(stream) => stream.flat_len(),
+        }
     }
 }
 
 impl PartialEq for CloneRecord {
     fn eq(&self, other: &Self) -> bool {
-        self.flat_len == other.flat_len
-            && self.len() == other.len()
-            && self.values().zip(other.values()).all(|(a, b)| a == b)
+        CloneValues::Record(self) == CloneValues::Record(other)
     }
 }
 
@@ -828,10 +891,7 @@ impl Eq for CloneRecord {}
 
 impl std::hash::Hash for CloneRecord {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.len().hash(state);
-        for v in self.values() {
-            v.hash(state);
-        }
+        CloneValues::Record(self).hash(state);
     }
 }
 
@@ -839,7 +899,13 @@ impl std::hash::Hash for CloneRecord {
 /// choice plus its children, recursively. Equal to `nodes.len()` for a
 /// sequence with no clone nodes.
 pub fn flattened_len(nodes: &[ChoiceNode]) -> usize {
-    flattened_len_of_values(nodes.iter().map(|n| &n.value))
+    nodes
+        .iter()
+        .map(|n| match &n.data {
+            ChoiceData::Clone(rs) => 1 + rs.flat_len(),
+            _ => 1,
+        })
+        .sum()
 }
 
 /// [`flattened_len`] over bare choice values (e.g. a replay prefix).
@@ -876,14 +942,142 @@ impl Eq for ChoiceValue {}
 
 impl std::hash::Hash for ChoiceValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        ChoiceValueRef::from(self).hash(state);
+    }
+}
+
+/// Borrowed view of a choice value, unifying values stored bare
+/// ([`ChoiceValue`]) with values stored paired with their constraint
+/// ([`ChoiceData`]). Equality and hashing match [`ChoiceValue`]'s
+/// semantics: floats compare bit-exactly and clones compare by their child
+/// value sequences, recursively.
+#[derive(Clone, Copy, Debug)]
+pub enum ChoiceValueRef<'a> {
+    Integer(&'a BigInt),
+    Boolean(bool),
+    Float(f64),
+    Bytes(&'a [u8]),
+    String(&'a [u32]),
+    Clone(CloneValues<'a>),
+}
+
+impl<'a> From<&'a ChoiceValue> for ChoiceValueRef<'a> {
+    fn from(v: &'a ChoiceValue) -> Self {
+        match v {
+            ChoiceValue::Integer(n) => ChoiceValueRef::Integer(n),
+            ChoiceValue::Boolean(b) => ChoiceValueRef::Boolean(*b),
+            ChoiceValue::Float(f) => ChoiceValueRef::Float(*f),
+            ChoiceValue::Bytes(v) => ChoiceValueRef::Bytes(v),
+            ChoiceValue::String(v) => ChoiceValueRef::String(v),
+            ChoiceValue::Clone(r) => ChoiceValueRef::Clone(CloneValues::Record(r)),
+        }
+    }
+}
+
+impl PartialEq for ChoiceValueRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ChoiceValueRef::Integer(a), ChoiceValueRef::Integer(b)) => a == b,
+            (ChoiceValueRef::Boolean(a), ChoiceValueRef::Boolean(b)) => a == b,
+            (ChoiceValueRef::Float(a), ChoiceValueRef::Float(b)) => a.to_bits() == b.to_bits(),
+            (ChoiceValueRef::Bytes(a), ChoiceValueRef::Bytes(b)) => a == b,
+            (ChoiceValueRef::String(a), ChoiceValueRef::String(b)) => a == b,
+            (ChoiceValueRef::Clone(a), ChoiceValueRef::Clone(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ChoiceValueRef<'_> {}
+
+impl PartialEq<ChoiceValue> for ChoiceValueRef<'_> {
+    fn eq(&self, other: &ChoiceValue) -> bool {
+        *self == ChoiceValueRef::from(other)
+    }
+}
+
+impl std::hash::Hash for ChoiceValueRef<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            ChoiceValue::Integer(n) => n.hash(state),
-            ChoiceValue::Boolean(b) => b.hash(state),
-            ChoiceValue::Float(f) => f.to_bits().hash(state),
-            ChoiceValue::Bytes(v) => v.hash(state),
-            ChoiceValue::String(v) => v.hash(state),
-            ChoiceValue::Clone(r) => r.hash(state),
+            ChoiceValueRef::Integer(n) => n.hash(state),
+            ChoiceValueRef::Boolean(b) => b.hash(state),
+            ChoiceValueRef::Float(f) => f.to_bits().hash(state),
+            ChoiceValueRef::Bytes(v) => v.hash(state),
+            ChoiceValueRef::String(v) => v.hash(state),
+            ChoiceValueRef::Clone(c) => c.hash(state),
+        }
+    }
+}
+
+/// Borrowed view of a cloned stream's child values: either a
+/// [`CloneRecord`] (bare values or realized) or a bare [`RealizedStream`].
+/// Equality and hashing are by child values, recursively, so the two
+/// storage shapes compare interchangeably.
+#[derive(Clone, Copy, Debug)]
+pub enum CloneValues<'a> {
+    Record(&'a CloneRecord),
+    Stream(&'a RealizedStream),
+}
+
+impl<'a> CloneValues<'a> {
+    /// Number of direct children.
+    pub fn len(&self) -> usize {
+        match self {
+            CloneValues::Record(r) => r.len(),
+            CloneValues::Stream(s) => s.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Total number of choices, counting nested clones' children
+    /// recursively.
+    pub fn flat_len(&self) -> usize {
+        match self {
+            CloneValues::Record(r) => r.flat_len(),
+            CloneValues::Stream(s) => s.flat_len(),
+        }
+    }
+
+    /// The `i`-th child choice value.
+    pub fn value_at(&self, i: usize) -> ChoiceValueRef<'a> {
+        match self {
+            CloneValues::Record(r) => r.value_at(i),
+            CloneValues::Stream(s) => s.nodes[i].data.value_ref(),
+        }
+    }
+
+    /// The child choice values, in order.
+    pub fn values(&self) -> impl Iterator<Item = ChoiceValueRef<'a>> + 'a {
+        let this = *self;
+        (0..this.len()).map(move |i| this.value_at(i))
+    }
+}
+
+impl PartialEq for CloneValues<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        let identical = match (self, other) {
+            (CloneValues::Record(a), CloneValues::Record(b)) => std::ptr::eq(*a, *b),
+            (CloneValues::Stream(a), CloneValues::Stream(b)) => std::ptr::eq(*a, *b),
+            _ => false,
+        };
+        identical
+            || (self.flat_len() == other.flat_len()
+                && self.len() == other.len()
+                && self.values().zip(other.values()).all(|(a, b)| a == b))
+    }
+}
+
+impl Eq for CloneValues<'_> {}
+
+impl std::hash::Hash for CloneValues<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.len().hash(state);
+        for v in self.values() {
+            v.hash(state);
         }
     }
 }
@@ -968,32 +1162,22 @@ impl ChoiceKind {
         }
     }
 
-    /// Largest valid index for [`from_index`].
-    pub fn max_index(&self) -> crate::native::bignum::BigUint {
+    /// Largest valid index for [`from_index`](Self::from_index), or `None`
+    /// for a clone kind (clone choices have no dense index).
+    pub fn max_index(&self) -> Option<crate::native::bignum::BigUint> {
         match self {
-            ChoiceKind::Integer(ic) => ic.max_index(),
-            ChoiceKind::Boolean(bc) => bc.max_index(),
-            ChoiceKind::Float(fc) => fc.max_index(),
-            ChoiceKind::Bytes(bc) => bc.max_index(),
-            ChoiceKind::String(sc) => sc.max_index(),
-            ChoiceKind::Clone => unreachable!("clone choices have no dense index"),
+            ChoiceKind::Integer(ic) => Some(ic.max_index()),
+            ChoiceKind::Boolean(bc) => Some(bc.max_index()),
+            ChoiceKind::Float(fc) => Some(fc.max_index()),
+            ChoiceKind::Bytes(bc) => Some(bc.max_index()),
+            ChoiceKind::String(sc) => Some(sc.max_index()),
+            ChoiceKind::Clone => None,
         }
     }
 
-    /// Convert a value to its dense index under this kind's sort order.
-    pub fn to_index(&self, value: &ChoiceValue) -> crate::native::bignum::BigUint {
-        match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.to_index(v),
-            (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => bc.to_index(*v),
-            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.to_index(*v),
-            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.to_index(v),
-            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.to_index(v),
-            (ChoiceKind::Clone, _) => unreachable!("clone choices have no dense index"),
-            _ => panic!("ChoiceKind::to_index: kind/value mismatch"),
-        }
-    }
-
-    /// Inverse of [`to_index`]. Returns `None` when the index is out of range.
+    /// The value at `index` under this kind's sort order. Returns `None`
+    /// when the index is out of range; a clone kind has no dense index, so
+    /// every index is out of range for it.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
         match self {
@@ -1002,7 +1186,7 @@ impl ChoiceKind {
             ChoiceKind::Float(fc) => fc.from_index(index).map(ChoiceValue::Float),
             ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
             ChoiceKind::String(sc) => sc.from_index(index).map(ChoiceValue::String),
-            ChoiceKind::Clone => unreachable!("clone choices have no dense index"),
+            ChoiceKind::Clone => None,
         }
     }
 
@@ -1019,17 +1203,35 @@ impl ChoiceKind {
         }
     }
 
-    /// Cardinality of this kind's choice space.
-    pub fn max_children(&self) -> crate::native::bignum::BigUint {
-        use crate::native::bignum::BigUint;
-        match self {
-            ChoiceKind::Integer(ic) => ic.max_children(),
-            ChoiceKind::Boolean(_) => BigUint::from(2u32),
-            ChoiceKind::Float(fc) => fc.max_index() + BigUint::from(1u32),
-            ChoiceKind::Bytes(bc) => bc.max_index() + BigUint::from(1u32),
-            ChoiceKind::String(sc) => sc.max_index() + BigUint::from(1u32),
-            ChoiceKind::Clone => unreachable!("clone choices have no dense index"),
+    /// Pair `value` with this kind, proving at the type level that the two
+    /// agree: `Some` exactly when the value's variant matches the kind *and*
+    /// passes its validation. Clone kinds resolve nothing — their values
+    /// are handled structurally by the callers that walk clone positions —
+    /// so they fall through to `None` with every other mismatch.
+    pub fn resolve(&self, value: &ChoiceValue) -> Option<ChoiceData> {
+        match (self, value) {
+            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) if ic.validate(v) => {
+                Some(ChoiceData::Integer(Arc::clone(ic), v.clone()))
+            }
+            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => Some(ChoiceData::Boolean(*v)),
+            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) if fc.validate(*v) => {
+                Some(ChoiceData::Float(fc.clone(), *v))
+            }
+            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) if bc.validate(v) => {
+                Some(ChoiceData::Bytes(bc.clone(), v.clone()))
+            }
+            (ChoiceKind::String(sc), ChoiceValue::String(v)) if sc.validate(v) => {
+                Some(ChoiceData::String(sc.clone(), v.clone()))
+            }
+            _ => None,
         }
+    }
+
+    /// Cardinality of this kind's choice space, or `None` for a clone kind
+    /// (a clone's child space is unbounded).
+    pub fn max_children(&self) -> Option<crate::native::bignum::BigUint> {
+        use crate::native::bignum::BigUint;
+        self.max_index().map(|mi| mi + BigUint::from(1u32))
     }
 
     /// `min(max_children(), cap)`, computed *without* materialising the exact
@@ -1068,35 +1270,41 @@ impl ChoiceKind {
         }
     }
 
-    /// Random value sampled from this kind's domain (with kind-appropriate bias).
-    pub fn random_value(&self, rng: &mut crate::native::rng::EngineRng) -> ChoiceValue {
+    /// Random value sampled from this kind's domain (with kind-appropriate
+    /// bias), or `None` for a clone kind (clone values arise from executing
+    /// a stream, never from sampling).
+    pub fn random_value(&self, rng: &mut crate::native::rng::EngineRng) -> Option<ChoiceValue> {
         match self {
-            ChoiceKind::Integer(ic) => {
-                ChoiceValue::Integer(crate::native::core::state::biased_integer_sample(ic, rng))
-            }
-            ChoiceKind::Boolean(_) => ChoiceValue::Boolean(
+            ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
+                crate::native::core::state::biased_integer_sample(ic, rng),
+            )),
+            ChoiceKind::Boolean(_) => Some(ChoiceValue::Boolean(
                 crate::native::core::state::weighted_boolean_sample(0.5, rng),
-            ),
-            ChoiceKind::Float(fc) => {
-                ChoiceValue::Float(crate::native::core::state::biased_float_sample(fc, rng))
-            }
-            ChoiceKind::Bytes(bc) => {
-                ChoiceValue::Bytes(crate::native::core::state::biased_bytes_sample(bc, rng))
-            }
-            ChoiceKind::String(sc) => {
-                ChoiceValue::String(crate::native::core::state::biased_string_sample(sc, rng))
-            }
-            ChoiceKind::Clone => unreachable!("clone values are never randomly sampled"),
+            )),
+            ChoiceKind::Float(fc) => Some(ChoiceValue::Float(
+                crate::native::core::state::biased_float_sample(fc, rng),
+            )),
+            ChoiceKind::Bytes(bc) => Some(ChoiceValue::Bytes(
+                crate::native::core::state::biased_bytes_sample(bc, rng),
+            )),
+            ChoiceKind::String(sc) => Some(ChoiceValue::String(
+                crate::native::core::state::biased_string_sample(sc, rng),
+            )),
+            ChoiceKind::Clone => None,
         }
     }
 
-    /// Every possible value of this kind, if the total count fits under `cap`.
+    /// Every possible value of this kind, if the total count fits under
+    /// `cap`. `None` for the kinds whose domains never fit — floats (every
+    /// bit pattern is distinct), non-empty sequences, and clones (unbounded
+    /// child space).
     pub fn enumerate(&self, cap: u64) -> Option<Vec<ChoiceValue>> {
-        if self.max_children_saturating(cap as u128 + 1) > cap as u128 {
-            return None;
-        }
+        let fits = |kind: &ChoiceKind| kind.max_children_saturating(cap as u128 + 1) <= cap as u128;
         match self {
             ChoiceKind::Integer(ic) => {
+                if !fits(self) {
+                    return None;
+                }
                 let mut v = Vec::new();
                 let mut n = ic.min_value.clone();
                 loop {
@@ -1108,44 +1316,224 @@ impl ChoiceKind {
                 }
                 Some(v)
             }
-            ChoiceKind::Boolean(_) => Some(vec![
-                ChoiceValue::Boolean(false),
-                ChoiceValue::Boolean(true),
-            ]),
-            ChoiceKind::Float(_) => {
-                unreachable!("FloatChoice max_children always exceeds u64::MAX cap")
+            ChoiceKind::Boolean(_) => {
+                fits(self).then(|| vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)])
             }
+            ChoiceKind::Float(_) => None,
             ChoiceKind::Bytes(bc) => {
-                if bc.max_size == 0 {
-                    Some(vec![ChoiceValue::Bytes(Vec::new())])
-                } else {
-                    None
-                }
+                (bc.max_size == 0 && fits(self)).then(|| vec![ChoiceValue::Bytes(Vec::new())])
             }
             ChoiceKind::String(sc) => {
-                if sc.max_size == 0 {
-                    Some(vec![ChoiceValue::String(Vec::new())])
-                } else {
-                    None
-                }
+                (sc.max_size == 0 && fits(self)).then(|| vec![ChoiceValue::String(Vec::new())])
             }
-            ChoiceKind::Clone => {
-                unreachable!("Clone max_children always exceeds the enumeration cap")
-            }
+            ChoiceKind::Clone => None,
         }
     }
 }
 
-/// A single recorded choice in a test case.
+/// A choice's constraint paired with the value drawn under it — the payload
+/// of a [`ChoiceNode`]. Carrying the two in one enum makes a kind/value
+/// mismatch unrepresentable: a consumer that needs both matches a single
+/// variant and gets a proven-consistent pair.
 ///
-/// The `kind` is wrapped in `Arc` because the shrinker clones entire
-/// `Vec<ChoiceNode>` vectors thousands of times per shrink run, while the
-/// kind almost never changes. This turns three `BigInt` deep-clones per
-/// integer node into a single pointer bump.
+/// The `IntegerChoice` constraint is shared via `Arc` because the shrinker
+/// clones entire `Vec<ChoiceNode>` vectors thousands of times per shrink
+/// run, while the constraint almost never changes; this turns three
+/// `BigInt` deep-clones per integer node into a pointer bump. A clone
+/// node's payload is the realized stream of its execution — realized by
+/// construction, so consumers never re-prove it.
+///
+/// Equality mirrors the value semantics of [`ChoiceValue`] plus constraint
+/// equality: floats (both bounds and value) compare bit-exactly, and clone
+/// payloads compare by child values recursively.
+#[derive(Clone, Debug)]
+pub enum ChoiceData {
+    Integer(Arc<IntegerChoice>, BigInt),
+    Boolean(bool),
+    Float(FloatChoice, f64),
+    Bytes(BytesChoice, Vec<u8>),
+    String(StringChoice, Vec<u32>),
+    Clone(Arc<RealizedStream>),
+}
+
+impl PartialEq for ChoiceData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ChoiceData::Integer(ac, av), ChoiceData::Integer(bc, bv)) => ac == bc && av == bv,
+            (ChoiceData::Boolean(a), ChoiceData::Boolean(b)) => a == b,
+            (ChoiceData::Float(ac, av), ChoiceData::Float(bc, bv)) => {
+                ac == bc && av.to_bits() == bv.to_bits()
+            }
+            (ChoiceData::Bytes(ac, av), ChoiceData::Bytes(bc, bv)) => ac == bc && av == bv,
+            (ChoiceData::String(ac, av), ChoiceData::String(bc, bv)) => ac == bc && av == bv,
+            (ChoiceData::Clone(a), ChoiceData::Clone(b)) => {
+                CloneValues::Stream(a) == CloneValues::Stream(b)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ChoiceData {}
+
+impl ChoiceData {
+    /// The constraint half of the pair, as a standalone [`ChoiceKind`].
+    /// Cheap: the integer constraint shares its `Arc` and the others are a
+    /// few machine words.
+    pub fn kind(&self) -> ChoiceKind {
+        match self {
+            ChoiceData::Integer(ic, _) => ChoiceKind::Integer(Arc::clone(ic)),
+            ChoiceData::Boolean(_) => ChoiceKind::Boolean(BooleanChoice),
+            ChoiceData::Float(fc, _) => ChoiceKind::Float(fc.clone()),
+            ChoiceData::Bytes(bc, _) => ChoiceKind::Bytes(bc.clone()),
+            ChoiceData::String(sc, _) => ChoiceKind::String(sc.clone()),
+            ChoiceData::Clone(_) => ChoiceKind::Clone,
+        }
+    }
+
+    /// The value half of the pair, as an owned [`ChoiceValue`]. Scalar and
+    /// sequence payloads are cloned; a clone payload is wrapped in a
+    /// [`CloneRecord`] sharing the realized stream.
+    pub fn value(&self) -> ChoiceValue {
+        match self {
+            ChoiceData::Integer(_, v) => ChoiceValue::Integer(v.clone()),
+            ChoiceData::Boolean(v) => ChoiceValue::Boolean(*v),
+            ChoiceData::Float(_, v) => ChoiceValue::Float(*v),
+            ChoiceData::Bytes(_, v) => ChoiceValue::Bytes(v.clone()),
+            ChoiceData::String(_, v) => ChoiceValue::String(v.clone()),
+            ChoiceData::Clone(rs) => {
+                ChoiceValue::Clone(Arc::new(CloneRecord::from_stream(Arc::clone(rs))))
+            }
+        }
+    }
+
+    /// The value half of the pair, as a borrowed [`ChoiceValueRef`].
+    pub fn value_ref(&self) -> ChoiceValueRef<'_> {
+        match self {
+            ChoiceData::Integer(_, v) => ChoiceValueRef::Integer(v),
+            ChoiceData::Boolean(v) => ChoiceValueRef::Boolean(*v),
+            ChoiceData::Float(_, v) => ChoiceValueRef::Float(*v),
+            ChoiceData::Bytes(_, v) => ChoiceValueRef::Bytes(v),
+            ChoiceData::String(_, v) => ChoiceValueRef::String(v),
+            ChoiceData::Clone(rs) => ChoiceValueRef::Clone(CloneValues::Stream(rs)),
+        }
+    }
+
+    /// The simplest value of this pair's constraint (the value the shrinker
+    /// aims at), as a [`ChoiceValue`].
+    pub fn simplest_value(&self) -> ChoiceValue {
+        self.kind().simplest()
+    }
+
+    /// Whether the value *is* the constraint's simplest value. Equivalent
+    /// to `self.value() == self.simplest_value()` without the allocation
+    /// for the scalar kinds.
+    pub fn is_simplest(&self) -> bool {
+        match self {
+            ChoiceData::Integer(ic, v) => *v == ic.simplest(),
+            ChoiceData::Boolean(v) => !v,
+            ChoiceData::Float(fc, v) => v.to_bits() == fc.simplest().to_bits(),
+            ChoiceData::Bytes(bc, v) => *v == bc.simplest(),
+            ChoiceData::String(sc, v) => *v == sc.simplest(),
+            ChoiceData::Clone(rs) => rs.is_empty(),
+        }
+    }
+
+    /// The same constraint paired with its simplest value.
+    pub fn with_simplest(&self) -> ChoiceData {
+        match self {
+            ChoiceData::Integer(ic, _) => ChoiceData::Integer(Arc::clone(ic), ic.simplest()),
+            ChoiceData::Boolean(_) => ChoiceData::Boolean(false),
+            ChoiceData::Float(fc, _) => ChoiceData::Float(fc.clone(), fc.simplest()),
+            ChoiceData::Bytes(bc, _) => ChoiceData::Bytes(bc.clone(), bc.simplest()),
+            ChoiceData::String(sc, _) => ChoiceData::String(sc.clone(), sc.simplest()),
+            ChoiceData::Clone(_) => ChoiceData::Clone(Arc::new(RealizedStream::empty())),
+        }
+    }
+
+    /// The same constraint paired with `value`: `Some` exactly when the
+    /// value fits the constraint (matching variant and passing validation;
+    /// for a clone, a realized record). This is the single place a bare
+    /// [`ChoiceValue`] gets proven against an existing node's constraint.
+    pub fn with_value(&self, value: &ChoiceValue) -> Option<ChoiceData> {
+        match (self, value) {
+            (ChoiceData::Clone(_), ChoiceValue::Clone(r)) => {
+                r.realized().map(|rs| ChoiceData::Clone(Arc::clone(rs)))
+            }
+            _ => self.kind().resolve(value),
+        }
+    }
+
+    /// The value's dense index under its constraint's sort order, or `None`
+    /// for a clone (no dense index).
+    pub fn to_index(&self) -> Option<crate::native::bignum::BigUint> {
+        match self {
+            ChoiceData::Integer(ic, v) => Some(ic.to_index(v)),
+            ChoiceData::Boolean(v) => Some(BooleanChoice.to_index(*v)),
+            ChoiceData::Float(fc, v) => Some(fc.to_index(*v)),
+            ChoiceData::Bytes(bc, v) => Some(bc.to_index(v)),
+            ChoiceData::String(sc, v) => Some(sc.to_index(v)),
+            ChoiceData::Clone(_) => None,
+        }
+    }
+
+    /// The constraint's value at `index`; see [`ChoiceKind::from_index`].
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
+        self.kind().from_index(index)
+    }
+
+    /// The constraint's largest valid index; see [`ChoiceKind::max_index`].
+    pub fn max_index(&self) -> Option<crate::native::bignum::BigUint> {
+        self.kind().max_index()
+    }
+
+    /// The integer constraint and value, when this is an integer pair.
+    pub fn as_integer(&self) -> Option<(&IntegerChoice, &BigInt)> {
+        match self {
+            ChoiceData::Integer(ic, v) => Some((ic, v)),
+            _ => None,
+        }
+    }
+
+    /// The float constraint and value, when this is a float pair.
+    pub fn as_float(&self) -> Option<(&FloatChoice, f64)> {
+        match self {
+            ChoiceData::Float(fc, v) => Some((fc, *v)),
+            _ => None,
+        }
+    }
+
+    /// The bytes constraint and value, when this is a bytes pair.
+    pub fn as_bytes(&self) -> Option<(&BytesChoice, &[u8])> {
+        match self {
+            ChoiceData::Bytes(bc, v) => Some((bc, v)),
+            _ => None,
+        }
+    }
+
+    /// The string constraint and value, when this is a string pair.
+    pub fn as_string(&self) -> Option<(&StringChoice, &[u32])> {
+        match self {
+            ChoiceData::String(sc, v) => Some((sc, v)),
+            _ => None,
+        }
+    }
+
+    /// The realized stream, when this is a clone position.
+    pub fn as_clone(&self) -> Option<&Arc<RealizedStream>> {
+        match self {
+            ChoiceData::Clone(rs) => Some(rs),
+            _ => None,
+        }
+    }
+}
+
+/// A single recorded choice in a test case: the constraint/value pair plus
+/// whether the draw was forced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceNode {
-    pub kind: Arc<ChoiceKind>,
-    pub value: ChoiceValue,
+    pub data: ChoiceData,
     pub was_forced: bool,
 }
 
@@ -1187,18 +1575,63 @@ impl ChoiceTemplate {
 }
 
 impl ChoiceNode {
-    pub fn new(kind: ChoiceKind, value: ChoiceValue, was_forced: bool) -> Self {
-        Self {
-            kind: Arc::new(kind),
-            value,
-            was_forced,
-        }
+    pub fn new(data: ChoiceData, was_forced: bool) -> Self {
+        Self { data, was_forced }
     }
 
-    pub fn with_value(&self, value: ChoiceValue) -> ChoiceNode {
+    /// An integer node.
+    pub fn integer(constraint: IntegerChoice, value: BigInt, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Integer(Arc::new(constraint), value), was_forced)
+    }
+
+    /// A boolean node.
+    pub fn boolean(value: bool, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Boolean(value), was_forced)
+    }
+
+    /// A float node.
+    pub fn float(constraint: FloatChoice, value: f64, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Float(constraint, value), was_forced)
+    }
+
+    /// A bytes node.
+    pub fn bytes(constraint: BytesChoice, value: Vec<u8>, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Bytes(constraint, value), was_forced)
+    }
+
+    /// A string node.
+    pub fn string(constraint: StringChoice, value: Vec<u32>, was_forced: bool) -> Self {
+        Self::new(ChoiceData::String(constraint, value), was_forced)
+    }
+
+    /// A clone node carrying the realized stream of its execution.
+    pub fn clone_stream(stream: Arc<RealizedStream>, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Clone(stream), was_forced)
+    }
+
+    /// The node's constraint, as a standalone [`ChoiceKind`].
+    pub fn kind(&self) -> ChoiceKind {
+        self.data.kind()
+    }
+
+    /// The node's value, as an owned [`ChoiceValue`].
+    pub fn value(&self) -> ChoiceValue {
+        self.data.value()
+    }
+
+    /// This node with `value` in place of its current value, when the value
+    /// fits the node's constraint; see [`ChoiceData::with_value`].
+    pub fn with_value(&self, value: &ChoiceValue) -> Option<ChoiceNode> {
+        self.data.with_value(value).map(|data| ChoiceNode {
+            data,
+            was_forced: self.was_forced,
+        })
+    }
+
+    /// This node with its constraint's simplest value.
+    pub fn with_simplest(&self) -> ChoiceNode {
         ChoiceNode {
-            kind: Arc::clone(&self.kind),
-            value,
+            data: self.data.with_simplest(),
             was_forced: self.was_forced,
         }
     }
@@ -1207,51 +1640,47 @@ impl ChoiceNode {
 /// Borrowed view of a [`ChoiceNode`]'s sort key, used to order nodes during
 /// shrinking (via [`NodesSortKey`]).
 ///
-/// Cross-variant order is `Scalar < Sequence < Clone`; scalars compare by
+/// Cross-variant order is `Scalar < Seq < Clone`; scalars compare by
 /// `(magnitude, sign)`, sequence variants shortlex on length then per-element
 /// keys, and clones recursively by their child sequences' [`NodesSortKey`].
-/// The per-element keys for `Bytes` and `String` are resolved lazily
-/// during comparison — `String` defers `codepoint_key` to the moment of
-/// compare — so no `Vec<u32>` ever gets allocated.
+/// The per-element keys for [`SeqKeys`] are resolved lazily during
+/// comparison — `String` defers `codepoint_key` to the moment of compare —
+/// so no `Vec<u32>` ever gets allocated.
 pub enum NodeSortKeyRef<'a> {
     Scalar(crate::native::bignum::BigUint, bool),
+    Seq(SeqKeys<'a>),
+    Clone(&'a RealizedStream),
+}
+
+/// The per-element key sequence of a sequence-kind node: bytes key as
+/// themselves, string codepoints key by their alphabet's shrink-order rank.
+pub enum SeqKeys<'a> {
     Bytes(&'a [u8]),
     String(&'a StringChoice, &'a [u32]),
-    Clone(&'a CloneRecord),
+}
+
+impl SeqKeys<'_> {
+    fn len(&self) -> usize {
+        match self {
+            SeqKeys::Bytes(b) => b.len(),
+            SeqKeys::String(_, cps) => cps.len(),
+        }
+    }
+
+    fn key_at(&self, i: usize) -> u32 {
+        match self {
+            SeqKeys::Bytes(b) => b[i] as u32,
+            SeqKeys::String(sc, cps) => sc.codepoint_key(cps[i]),
+        }
+    }
 }
 
 impl<'a> NodeSortKeyRef<'a> {
     fn category(&self) -> u8 {
         match self {
             NodeSortKeyRef::Scalar(..) => 0,
-            NodeSortKeyRef::Bytes(..) | NodeSortKeyRef::String(..) => 1,
+            NodeSortKeyRef::Seq(..) => 1,
             NodeSortKeyRef::Clone(..) => 2,
-        }
-    }
-
-    /// Length of the underlying element sequence. Only meaningful for
-    /// sequence variants; the only call site (the sequence-vs-sequence
-    /// arm of `cmp`) gates on category() before invoking.
-    fn seq_len(&self) -> usize {
-        match self {
-            NodeSortKeyRef::Bytes(b) => b.len(),
-            NodeSortKeyRef::String(_, cps) => cps.len(),
-            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::Clone(..) => {
-                unreachable!("seq_len on non-sequence")
-            }
-        }
-    }
-
-    /// `i`-th per-element key in the sort-order alphabet. `i` must be in
-    /// `0..self.seq_len()`. Calling on `Scalar` or `Clone` is unreachable in
-    /// the only call sites (sequence-element comparison).
-    fn seq_key_at(&self, i: usize) -> u32 {
-        match self {
-            NodeSortKeyRef::Bytes(b) => b[i] as u32,
-            NodeSortKeyRef::String(sc, cps) => sc.codepoint_key(cps[i]),
-            NodeSortKeyRef::Scalar(..) | NodeSortKeyRef::Clone(..) => {
-                unreachable!("seq_key_at on non-sequence")
-            }
         }
     }
 }
@@ -1277,33 +1706,28 @@ impl<'a> Ord for NodeSortKeyRef<'a> {
             (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
                 (am, an).cmp(&(bm, bn))
             }
-            (NodeSortKeyRef::Clone(a), NodeSortKeyRef::Clone(b)) => clone_records_cmp(a, b),
-            _ if self.category() != other.category() => self.category().cmp(&other.category()),
-            _ => {
-                let la = self.seq_len();
-                let lb = other.seq_len();
-                match la.cmp(&lb) {
+            (NodeSortKeyRef::Clone(a), NodeSortKeyRef::Clone(b)) => realized_streams_cmp(a, b),
+            (NodeSortKeyRef::Seq(a), NodeSortKeyRef::Seq(b)) => {
+                match a.len().cmp(&b.len()) {
                     Ordering::Equal => {}
                     ord => return ord,
                 }
-                for i in 0..la {
-                    match self.seq_key_at(i).cmp(&other.seq_key_at(i)) {
+                for i in 0..a.len() {
+                    match a.key_at(i).cmp(&b.key_at(i)) {
                         Ordering::Equal => continue,
                         ord => return ord,
                     }
                 }
                 Ordering::Equal
             }
+            _ => self.category().cmp(&other.category()),
         }
     }
 }
 
-/// Ordering between two clone records: flattened choice count first, then
-/// child count, then per-child node keys. The elementwise step needs the
-/// children's kinds and so requires realized records; sort keys are only ever
-/// computed over realized choice sequences (a values-only record exists only
-/// inside replay prefixes, which are never sort-key-compared).
-fn clone_records_cmp(a: &CloneRecord, b: &CloneRecord) -> std::cmp::Ordering {
+/// Ordering between two realized clone streams: flattened choice count
+/// first, then child count, then per-child node keys.
+fn realized_streams_cmp(a: &RealizedStream, b: &RealizedStream) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match a.flat_len().cmp(&b.flat_len()) {
         Ordering::Equal => {}
@@ -1313,13 +1737,7 @@ fn clone_records_cmp(a: &CloneRecord, b: &CloneRecord) -> std::cmp::Ordering {
         Ordering::Equal => {}
         ord => return ord,
     }
-    let a_nodes = a
-        .realized_nodes()
-        .unwrap_or_else(|| unreachable!("sort keys are only computed over realized sequences"));
-    let b_nodes = b
-        .realized_nodes()
-        .unwrap_or_else(|| unreachable!("sort keys are only computed over realized sequences"));
-    elementwise_nodes_cmp(a_nodes, b_nodes)
+    elementwise_nodes_cmp(a.nodes(), b.nodes())
 }
 
 /// Per-node key comparison of two equal-length node slices.
@@ -1334,26 +1752,23 @@ fn elementwise_nodes_cmp(a: &[ChoiceNode], b: &[ChoiceNode]) -> std::cmp::Orderi
 }
 
 impl ChoiceNode {
-    /// Borrowed counterpart of [`Self::sort_key`]. Returns a
-    /// [`NodeSortKeyRef`] that borrows the node's value (and, for
-    /// `String`, its choice config). Same ordering, no allocation.
+    /// Borrowed view of the node's sort key: a [`NodeSortKeyRef`] that
+    /// borrows the node's value (and, for `String`, its choice config).
+    /// Comparison is allocation-free.
     pub fn sort_key_ref(&self) -> NodeSortKeyRef<'_> {
-        match (self.kind.as_ref(), &self.value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => {
+        match &self.data {
+            ChoiceData::Integer(ic, v) => {
                 let (mag, neg) = ic.sort_key(v);
                 NodeSortKeyRef::Scalar(mag, neg)
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => {
-                NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false)
-            }
-            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => {
+            ChoiceData::Boolean(v) => NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false),
+            ChoiceData::Float(fc, v) => {
                 let (mag, neg) = fc.sort_key(*v);
                 NodeSortKeyRef::Scalar(BigUint::from(mag), neg)
             }
-            (ChoiceKind::Bytes(_), ChoiceValue::Bytes(v)) => NodeSortKeyRef::Bytes(v),
-            (ChoiceKind::String(sc), ChoiceValue::String(v)) => NodeSortKeyRef::String(sc, v),
-            (ChoiceKind::Clone, ChoiceValue::Clone(r)) => NodeSortKeyRef::Clone(r),
-            _ => unreachable!("mismatched choice kind and value"),
+            ChoiceData::Bytes(_, v) => NodeSortKeyRef::Seq(SeqKeys::Bytes(v)),
+            ChoiceData::String(sc, v) => NodeSortKeyRef::Seq(SeqKeys::String(sc, v)),
+            ChoiceData::Clone(rs) => NodeSortKeyRef::Clone(rs),
         }
     }
 }

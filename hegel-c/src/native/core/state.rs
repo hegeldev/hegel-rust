@@ -9,8 +9,8 @@ use crate::native::rng::EngineRng;
 
 use super::MAX_CLONE_DEPTH;
 use super::choices::{
-    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
-    ChoiceValue, CloneRecord, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status,
+    BooleanChoice, BytesChoice, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind, ChoiceValue,
+    EngineError, FloatChoice, IntegerChoice, InterestingOrigin, RealizedStream, Status,
     StringChoice,
 };
 use super::float_index::index_to_float;
@@ -870,7 +870,7 @@ impl Spans {
         }
         nodes[span.start..end]
             .iter()
-            .all(|n| n.was_forced || n.value == n.kind.simplest())
+            .all(|n| n.was_forced || n.data.is_simplest())
     }
 
     /// View as a slice, for code that wants raw indexing.
@@ -1245,7 +1245,7 @@ impl NativeTestCase {
         let idx = self.nodes.len();
         let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
             Some(ChoiceValue::Clone(record)) => (
-                record.values().cloned().collect::<Vec<_>>(),
+                record.owned_values(),
                 record.realized_nodes().map(<[ChoiceNode]>::to_vec),
             ),
             _ => (Vec::new(), None),
@@ -1275,9 +1275,8 @@ impl NativeTestCase {
             child_id,
         );
         let handle = Arc::new(Mutex::new(child));
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Clone,
-            ChoiceValue::Clone(Arc::new(CloneRecord::empty())),
+        self.nodes.push(ChoiceNode::clone_stream(
+            Arc::new(RealizedStream::empty()),
             false,
         ));
         self.clone_children.push((idx, Arc::clone(&handle)));
@@ -1300,12 +1299,13 @@ impl NativeTestCase {
             let mut child = handle.lock().unwrap_or_else(|e| e.into_inner());
             child.freeze();
             child.reassemble();
-            let record = CloneRecord::from_run(
+            let stream = RealizedStream::new(
                 child.nodes.clone(),
                 child.spans.clone().into_vec(),
                 child.span_events.clone(),
             );
-            self.nodes[idx].value = ChoiceValue::Clone(Arc::new(record));
+            let was_forced = self.nodes[idx].was_forced;
+            self.nodes[idx] = ChoiceNode::clone_stream(Arc::new(stream), was_forced);
         }
     }
 
@@ -1442,26 +1442,22 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Integer(kind.simplest()),
-            || ChoiceValue::Integer(kind.unit()),
-            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
-            |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
+                _ => None,
+            },
+            |rng| biased_integer_sample(&kind, rng),
         )?;
-
-        let ChoiceValue::Integer(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_integer(&v, was_forced);
         }
 
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Integer(kind),
-            ChoiceValue::Integer(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::integer(kind, v.clone(), was_forced));
 
         Ok(T::try_from(v)
             .ok()
@@ -1498,11 +1494,7 @@ impl NativeTestCase {
             obs.draw_integer(&v, true);
         }
 
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Integer(kind),
-            ChoiceValue::Integer(v),
-            true,
-        ));
+        self.nodes.push(ChoiceNode::integer(kind, v, true));
 
         Ok(())
     }
@@ -1528,22 +1520,17 @@ impl NativeTestCase {
             smallest_nonzero_magnitude,
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Float(kind.simplest()),
-            || ChoiceValue::Float(kind.unit()),
-            |v| matches!(v, ChoiceValue::Float(f) if kind.validate(*f)),
-            |rng| ChoiceValue::Float(biased_float_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::Float(f) if kind.validate(*f) => Some(*f),
+                _ => None,
+            },
+            |rng| biased_float_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::Float(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Float(kind),
-            ChoiceValue::Float(v),
-            was_forced,
-        ));
+        self.nodes.push(ChoiceNode::float(kind, v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
@@ -1560,22 +1547,18 @@ impl NativeTestCase {
         );
         let kind = BytesChoice { min_size, max_size };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Bytes(kind.simplest()),
-            || ChoiceValue::Bytes(kind.unit()),
-            |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
-            |rng| ChoiceValue::Bytes(biased_bytes_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::Bytes(b) if kind.validate(b) => Some(b.clone()),
+                _ => None,
+            },
+            |rng| biased_bytes_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::Bytes(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Bytes(kind),
-            ChoiceValue::Bytes(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::bytes(kind, v.clone(), was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_bytes(&v, was_forced);
@@ -1604,22 +1587,18 @@ impl NativeTestCase {
             max_size,
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::String(kind.simplest()),
-            || ChoiceValue::String(kind.unit()),
-            |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
-            |rng| ChoiceValue::String(biased_string_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::String(s) if kind.validate(s) => Some(s.clone()),
+                _ => None,
+            },
+            |rng| biased_string_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::String(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::String(kind),
-            ChoiceValue::String(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::string(kind, v.clone(), was_forced));
 
         let s = codepoints_to_string(&v);
         if let Some(ref mut obs) = self.observer {
@@ -1660,27 +1639,22 @@ impl NativeTestCase {
             None
         });
 
-        let (value, was_forced) = if let Some(f) = forced_value {
+        let (v, was_forced) = if let Some(f) = forced_value {
             self.pre_choice()?;
-            (ChoiceValue::Boolean(f), true)
+            (f, true)
         } else {
             self.resolve_choice(
-                || ChoiceValue::Boolean(kind.simplest()),
-                || ChoiceValue::Boolean(kind.unit()),
-                |v| matches!(v, ChoiceValue::Boolean(_)),
-                |rng| ChoiceValue::Boolean(sample(p, rng)),
+                || kind.simplest(),
+                || kind.unit(),
+                |v| match v {
+                    ChoiceValue::Boolean(b) => Some(*b),
+                    _ => None,
+                },
+                |rng| sample(p, rng),
             )?
         };
 
-        let ChoiceValue::Boolean(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Boolean(kind),
-            ChoiceValue::Boolean(v),
-            was_forced,
-        ));
+        self.nodes.push(ChoiceNode::boolean(v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);
@@ -1702,31 +1676,35 @@ impl NativeTestCase {
         Ok(())
     }
 
-    /// Resolve a choice value from forced, prefix, or random.
+    /// Resolve a typed choice value from forced, prefix, or random.
     ///
-    /// Implements punning logic for replaying choice sequences whose
-    /// choice kinds have shifted across runs.
-    fn resolve_choice(
+    /// `from_prefix` both validates a replayed prefix value against the
+    /// draw's constraint and extracts the typed payload, so a successful
+    /// replay hands back a value proven to fit the draw. A prefix value
+    /// that doesn't fit puns exactly as before: to the draw's `simplest()`
+    /// when the stale value was its original kind's simplest, and to
+    /// `unit()` otherwise.
+    fn resolve_choice<V>(
         &mut self,
-        simplest: impl FnOnce() -> ChoiceValue,
-        unit: impl FnOnce() -> ChoiceValue,
-        validate: impl FnOnce(&ChoiceValue) -> bool,
-        random: impl FnOnce(&mut EngineRng) -> ChoiceValue,
-    ) -> Result<(ChoiceValue, bool), EngineError> {
+        simplest: impl FnOnce() -> V,
+        unit: impl FnOnce() -> V,
+        from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
+        random: impl FnOnce(&mut EngineRng) -> V,
+    ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
 
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
-            if validate(prefix_value) {
-                return Ok((prefix_value.clone(), false));
+            if let Some(v) = from_prefix(prefix_value) {
+                return Ok((v, false));
             }
             let is_simplest = self
                 .prefix_nodes
                 .as_ref()
                 .and_then(|pn| pn.get(idx))
-                .is_some_and(|pn| *prefix_value == pn.kind.simplest());
+                .is_some_and(|pn| *prefix_value == pn.data.simplest_value());
             return Ok((if is_simplest { simplest() } else { unit() }, false));
         }
 

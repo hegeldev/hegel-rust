@@ -3,17 +3,17 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -25,7 +25,7 @@ fn forced_int_node(value: i128) -> ChoiceNode {
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match &node.value {
+    match &node.value() {
         ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
         _ => unreachable!(),
     }
@@ -67,7 +67,7 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let count = match nodes.first().map(|n| &n.value) {
+                let count = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
@@ -105,30 +105,30 @@ fn minimize_individual_choices_truncates_misaligned_string() {
 
     let initial = vec![
         int_node(3),
-        ChoiceNode::new(
-            ChoiceKind::String(StringChoice {
+        ChoiceNode::string(
+            StringChoice {
                 intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]).into(),
                 min_size: 0,
                 max_size: 16,
-            }),
-            ChoiceValue::String(vec![b'a' as u32, b'a' as u32, b'a' as u32]),
+            },
+            vec![b'a' as u32, b'a' as u32, b'a' as u32],
             false,
         ),
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let n = match nodes.first().map(|n| &n.value) {
+                let n = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
-                let candidate_str_len = match nodes.get(1).map(|n| &n.value) {
+                let candidate_str_len = match nodes.get(1).map(|n| n.value()) {
                     Some(ChoiceValue::String(s)) => s.len(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let mut actual: Vec<ChoiceNode> = nodes.to_vec();
                 if let Some(node) = actual.get_mut(1) {
-                    if let ChoiceValue::String(s) = &mut node.value {
+                    if let crate::native::core::ChoiceData::String(_, s) = &mut node.data {
                         s.truncate(n);
                     }
                 }
@@ -142,7 +142,7 @@ fn minimize_individual_choices_truncates_misaligned_string() {
     );
     drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
-    match &shrinker.current_nodes[1].value {
+    match &shrinker.current_nodes[1].value() {
         ChoiceValue::String(s) => {
             assert_eq!(
                 s.len() as i128,
@@ -160,7 +160,7 @@ fn minimize_individual_choices_size_dep_single_node_delete_succeeds() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let int_v = match nodes.first().map(|n| &n.value) {
+                let int_v = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
@@ -187,7 +187,7 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let int_v = match nodes.first().map(|n| &n.value) {
+                let int_v = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
@@ -224,29 +224,29 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
 
     let initial = vec![
         int_node(3),
-        ChoiceNode::new(
-            ChoiceKind::Bytes(BytesChoice {
+        ChoiceNode::bytes(
+            BytesChoice {
                 min_size: 0,
                 max_size: 16,
-            }),
-            ChoiceValue::Bytes(vec![1, 2, 3]),
+            },
+            vec![1, 2, 3],
             false,
         ),
     ];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let n = match nodes.first().map(|n| &n.value) {
+                let n = match nodes.first().map(|n| n.value()) {
                     Some(ChoiceValue::Integer(v)) => i128::try_from(v.clone()).unwrap() as usize,
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
-                let candidate_len = match nodes.get(1).map(|n| &n.value) {
+                let candidate_len = match nodes.get(1).map(|n| n.value()) {
                     Some(ChoiceValue::Bytes(b)) => b.len(),
                     _ => return (false, nodes.to_vec(), Spans::new()),
                 };
                 let mut actual: Vec<ChoiceNode> = nodes.to_vec();
                 if let Some(node) = actual.get_mut(1) {
-                    if let ChoiceValue::Bytes(b) = &mut node.value {
+                    if let crate::native::core::ChoiceData::Bytes(_, b) = &mut node.data {
                         b.truncate(n);
                     }
                 }
@@ -260,7 +260,7 @@ fn minimize_individual_choices_truncates_misaligned_bytes() {
     );
     drive_no_yield(shrinker.minimize_individual_choices()).unwrap();
     assert!(int_value(&shrinker.current_nodes[0]) < 3);
-    match &shrinker.current_nodes[1].value {
+    match &shrinker.current_nodes[1].value() {
         ChoiceValue::Bytes(b) => {
             assert_eq!(b.len() as i128, int_value(&shrinker.current_nodes[0]));
         }

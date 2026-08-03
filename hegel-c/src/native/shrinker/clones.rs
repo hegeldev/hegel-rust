@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use crate::native::core::{ChoiceNode, ChoiceValue, CloneRecord, Spans, flattened_values_len};
+use crate::native::core::{
+    ChoiceData, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Spans, flattened_values_len,
+};
 
 use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker};
 
@@ -20,11 +22,8 @@ use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker};
 /// carries the candidate's nodes so replay puns against the child kinds.
 fn splice_child(template: &[ChoiceNode], i: usize, child: &[ChoiceNode]) -> Vec<ChoiceNode> {
     let mut candidate = template.to_vec();
-    candidate[i] = candidate[i].with_value(ChoiceValue::Clone(Arc::new(CloneRecord::from_run(
-        child.to_vec(),
-        Vec::new(),
-        Vec::new(),
-    ))));
+    let stream = Arc::new(RealizedStream::new(child.to_vec(), Vec::new(), Vec::new()));
+    candidate[i] = ChoiceNode::clone_stream(stream, candidate[i].was_forced);
     candidate
 }
 
@@ -60,13 +59,10 @@ impl ShrinkProbe for NestedCloneProbe<'_, '_> {
                     (matched, actual)
                 }
             };
-            match actual.get(i).map(|n| &n.value) {
-                Some(ChoiceValue::Clone(record)) if record.realized_nodes().is_some() => {
-                    let nodes = record
-                        .realized_nodes()
-                        .unwrap_or_else(|| unreachable!("guarded by the match arm"))
-                        .to_vec();
-                    let spans = Spans::from(record.spans().to_vec());
+            match actual.get(i).map(|n| &n.data) {
+                Some(ChoiceData::Clone(stream)) => {
+                    let nodes = stream.nodes().to_vec();
+                    let spans = Spans::from(stream.spans().to_vec());
                     (matched, nodes, spans)
                 }
                 _ => (false, Vec::new(), Spans::new()),
@@ -91,19 +87,16 @@ impl<'a> Shrinker<'a> {
     /// non-empty realized stream); a no-op otherwise.
     async fn shrink_clone_stream_at(&mut self, i: usize) -> ShrinkResult<()> {
         let (child_nodes, child_spans) = {
-            let ChoiceValue::Clone(record) = &self.current_nodes[i].value else {
+            let Some(stream) = self.current_nodes[i].data.as_clone() else {
                 return Ok(());
             };
-            let Some(nodes) = record.realized_nodes() else {
-                return Ok(());
-            };
-            if nodes.is_empty() {
+            if stream.is_empty() {
                 return Ok(());
             }
-            (nodes.to_vec(), record.spans().to_vec())
+            (stream.nodes().to_vec(), stream.spans().to_vec())
         };
         let template = self.current_nodes.clone();
-        let outer_values: Vec<ChoiceValue> = template.iter().map(|n| n.value.clone()).collect();
+        let outer_values: Vec<ChoiceValue> = template.iter().map(|n| n.value()).collect();
         let deadline = self.deadline;
 
         let (final_child, nested_timed_out) = {
