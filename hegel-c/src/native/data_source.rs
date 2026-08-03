@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
-    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeTestCase, NativeTestCaseHandle,
-    Span, SpanEvent, Status,
+    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
+    NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Status,
 };
 use crate::native::draws;
 
@@ -163,25 +163,6 @@ impl NativeDataSource {
     }
 }
 
-/// Build the `InvalidArgument` error for a caller-supplied opaque id (a
-/// collection / pool / state-machine handle) that libhegel never issued.
-/// Returned rather than panicked so the C ABI stays panic-free on bad input
-/// (libhegel must remain correct under `panic = "abort"`; an invalid argument
-/// is not a bug).
-fn unknown_id_error(kind: &str, id: i64) -> EngineError {
-    EngineError::InvalidArgument(format!("unknown {kind} id: {id}"))
-}
-
-/// Validate a caller-supplied opaque id against the length of the `Vec` it
-/// indexes, returning its `usize` index or [`unknown_id_error`]. Rejects both
-/// negative ids and ids past the end.
-fn checked_id(kind: &str, id: i64, len: usize) -> Result<usize, EngineError> {
-    usize::try_from(id)
-        .ok()
-        .filter(|&idx| idx < len)
-        .ok_or_else(|| unknown_id_error(kind, id))
-}
-
 impl DataSource for NativeDataSource {
     fn generate_integer(
         &self,
@@ -265,122 +246,69 @@ impl DataSource for NativeDataSource {
         })
     }
 
-    fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError> {
-        self.with_ntc(|ntc| {
+    fn new_collection(
+        &self,
+        min_size: u64,
+        max_size: Option<u64>,
+    ) -> Result<ManyState, DataSourceError> {
+        self.with_ntc(|_ntc| {
             let min_size = usize::try_from(min_size).unwrap_or(usize::MAX);
             let max_size = max_size.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-            let state = ManyState::new(min_size, max_size);
-            Ok(ntc.new_collection(state))
+            Ok(ManyState::new(min_size, max_size))
         })
     }
 
-    fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError> {
-        self.with_ntc(|ntc| {
-            let family = Arc::clone(ntc.family());
-            let mut collections = family.collections.lock().unwrap_or_else(|e| e.into_inner());
-            let state = collections
-                .get_mut(&collection_id)
-                .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            draws::many_more(ntc, state)
-        })
+    fn collection_more(&self, state: &mut ManyState) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::many_more(ntc, state))
     }
 
     fn collection_reject(
         &self,
-        collection_id: i64,
+        state: &mut ManyState,
         _why: Option<&str>,
     ) -> Result<(), DataSourceError> {
-        self.with_ntc(|ntc| {
-            let family = Arc::clone(ntc.family());
-            let mut collections = family.collections.lock().unwrap_or_else(|e| e.into_inner());
-            let state = collections
-                .get_mut(&collection_id)
-                .ok_or_else(|| unknown_id_error("collection", collection_id))?;
-            draws::many_reject(ntc, state)
-        })
+        self.with_ntc(|ntc| draws::many_reject(ntc, state))
     }
 
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
         invariant_names: Vec<String>,
-    ) -> Result<i64, DataSourceError> {
+    ) -> Result<NativeStateMachine, DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        self.with_ntc(|ntc| {
-            let mut machines = ntc
-                .family()
-                .state_machines
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let id = machines.len() as i64;
-            machines.push(Arc::new(std::sync::Mutex::new(
-                crate::native::core::NativeStateMachine::new(rule_names, invariant_names),
-            )));
-            Ok(id)
-        })
+        self.with_ntc(|_ntc| Ok(NativeStateMachine::new(rule_names, invariant_names)))
     }
 
     fn state_machine_next_rule(
         &self,
-        state_machine_id: i64,
+        machine: &mut NativeStateMachine,
     ) -> Result<Option<i64>, DataSourceError> {
-        self.with_ntc(|ntc| {
-            let machine = {
-                let machines = ntc
-                    .family()
-                    .state_machines
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let idx = checked_id("state machine", state_machine_id, machines.len())?;
-                Arc::clone(&machines[idx])
-            };
-            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
-            machine.next_rule(ntc)
-        })
+        self.with_ntc(|ntc| machine.next_rule(ntc))
     }
 
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }
 
-    fn new_pool(&self) -> Result<i64, DataSourceError> {
-        self.with_ntc(|ntc| {
-            let mut pools = ntc
-                .family()
-                .variable_pools
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let pool_id = pools.len() as i64;
-            pools.push(crate::native::core::NativeVariables::new());
-            Ok(pool_id)
-        })
+    fn new_pool(&self) -> Result<NativeVariables, DataSourceError> {
+        self.with_ntc(|_ntc| Ok(NativeVariables::new()))
     }
 
-    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError> {
-        self.with_ntc(|ntc| {
-            let mut pools = ntc
-                .family()
-                .variable_pools
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let idx = checked_id("variable pool", pool_id, pools.len())?;
-            Ok(pools[idx].next())
-        })
+    fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError> {
+        self.with_ntc(|_ntc| Ok(pool.next()))
     }
 
-    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError> {
+    fn pool_generate(
+        &self,
+        pool: &mut NativeVariables,
+        consume: bool,
+    ) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let family = Arc::clone(ntc.family());
-            let mut pools = family
-                .variable_pools
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let pool_idx = checked_id("variable pool", pool_id, pools.len())?;
-            let active = pools[pool_idx].active();
+            let active = pool.active();
             if active.is_empty() {
                 return Err(EngineError::AssumeViolation);
             }
@@ -391,7 +319,7 @@ impl DataSource for NativeDataSource {
                 .unwrap() as usize;
             let variable_id = active[n - 1 - k];
             if consume {
-                pools[pool_idx].consume(variable_id);
+                pool.consume(variable_id);
             }
             Ok(variable_id)
         })

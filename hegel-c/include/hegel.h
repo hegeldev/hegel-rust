@@ -34,6 +34,9 @@
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
  *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_new_collection       ->  hegel_collection_free
+ *     hegel_new_pool             ->  hegel_pool_free
+ *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
  *
@@ -465,6 +468,24 @@ typedef enum {
 } hegel_status_t;
 
 /*
+ Opaque handle to an engine-managed variable-length collection.
+
+ Created by `hegel_new_collection` on a test case; driven by
+ `hegel_collection_more` / `hegel_collection_reject` through any handle of
+ the *same* test-case family (the root or any clone) — the continue/stop
+ decisions are drawn from whichever handle makes the call. A collection
+ must not be used from two threads at once: the operations take an
+ internal non-blocking lock and return `HEGEL_E_CONCURRENT_USE` on
+ contention.
+
+ The handle is independent of the test case and run it was created under:
+ free it with `hegel_collection_free` exactly once, at any point — before
+ or after the test case or run is freed, in any order relative to other
+ frees.
+ */
+typedef struct hegel_collection_t hegel_collection_t;
+
+/*
  Opaque error-reporting context.
 
  libhegel records the diagnostic for a failed call on a context the caller
@@ -502,6 +523,25 @@ typedef struct hegel_context_t hegel_context_t;
  the diagnostic and re-raise the test's own failure.
  */
 typedef struct hegel_failure_t hegel_failure_t;
+
+/*
+ Opaque handle to an engine-managed *variable pool* for stateful testing.
+
+ Created by `hegel_new_pool` on a test case; driven by `hegel_pool_add` /
+ `hegel_pool_generate` through any handle of the *same* test-case family
+ (the root or any clone) — the draw comes from whichever handle makes the
+ call. Unlike a collection, a pool may legitimately be shared between
+ clone handles driven from parallel threads: it holds an internal lock,
+ so concurrent operations serialize instead of erroring. (Which variable
+ a concurrent draw picks then depends on scheduling order, with the usual
+ replay caveat for racy tests.)
+
+ The handle is independent of the test case and run it was created under:
+ free it with `hegel_pool_free` exactly once, at any point — before or
+ after the test case or run is freed, in any order relative to other
+ frees.
+ */
+typedef struct hegel_pool_t hegel_pool_t;
 
 /*
  In-flight property-test run.
@@ -551,6 +591,25 @@ typedef struct hegel_run_result_t hegel_run_result_t;
  with any other use of the same handle.
  */
 typedef struct hegel_settings_t hegel_settings_t;
+
+/*
+ Opaque handle to an engine-owned *state machine* for stateful
+ (rule-based) testing.
+
+ Created by `hegel_new_state_machine` on a test case; driven by
+ `hegel_state_machine_next_rule` through any handle of the *same*
+ test-case family (the root or any clone) — each rule choice is drawn
+ from whichever handle makes the call. The machine holds an internal
+ lock, so concurrent use from two clone handles serializes instead of
+ erroring. (Which rule a concurrent draw picks then depends on scheduling
+ order, with the usual replay caveat for racy tests.)
+
+ The handle is independent of the test case and run it was created under:
+ free it with `hegel_state_machine_free` exactly once, at any point —
+ before or after the test case or run is freed, in any order relative to
+ other frees.
+ */
+typedef struct hegel_state_machine_t hegel_state_machine_t;
 
 /*
  Opaque specification of a string draw — the alphabet-and-shape half of
@@ -991,9 +1050,11 @@ hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc)
  produces are deterministic under replay and shrink correctly. (Whereas
  using a *single* handle from two threads returns
  `HEGEL_E_CONCURRENT_USE`.) Collections, variable pools, and state
- machines remain shared across the family — ids from one handle work on
- any other — but *concurrent* use of one such object from two streams
- makes the affected values scheduling-dependent.
+ machines remain usable across the family — a handle created through one
+ test-case handle works with any other — but *concurrent* use of one such
+ object from two streams makes the affected values scheduling-dependent
+ (and a *collection* used from two threads at once reports
+ `HEGEL_E_CONCURRENT_USE`; see `hegel_collection_t`).
 
  Cloning is a stream operation: it occupies one choice position on the
  source handle's stream, takes the source handle's lock like a draw
@@ -1038,25 +1099,34 @@ hegel_result_t hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool
  a time by calling `hegel_collection_more` in a loop. Pass
  `max_size = UINT64_MAX` for no upper bound.
 
- On success writes the new collection's id into `*out_collection_id`
- and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
- `hegel_collection_more` / `hegel_collection_reject` calls.
+ On success writes a caller-owned handle into `*out_collection` (release
+ with `hegel_collection_free`) and returns `HEGEL_OK`. Pass the handle to
+ subsequent `hegel_collection_more` / `hegel_collection_reject` calls with
+ any handle of the same test-case family. Returns `HEGEL_E_STOP_TEST` when
+ the engine's choice budget is already exhausted for this test case, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_collection` or
+ `min_size > max_size`.
  */
 hegel_result_t hegel_new_collection(hegel_context_t *ctx,
                                     hegel_test_case_t *tc,
                                     uint64_t min_size,
                                     uint64_t max_size,
-                                    int64_t *out_collection_id);
+                                    hegel_collection_t **out_collection);
 
 /*
- Ask whether the engine wants another element in this collection.
- On success writes `true` or `false` into `*out_more` and returns
- `HEGEL_OK`. Call in a loop until `*out_more` is `false`, drawing
- the next element each time.
+ Ask whether the engine wants another element in this collection,
+ drawing the decision from `tc`'s stream. On success writes `true` or
+ `false` into `*out_more` and returns `HEGEL_OK`. Call in a loop until
+ `*out_more` is `false`, drawing the next element each time.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `collection`,
+ `HEGEL_E_INVALID_ARG` for a NULL `out_more`, and
+ `HEGEL_E_CONCURRENT_USE` when another thread is mid-operation on either
+ the test-case handle or the collection.
  */
 hegel_result_t hegel_collection_more(hegel_context_t *ctx,
                                      hegel_test_case_t *tc,
-                                     int64_t collection_id,
+                                     hegel_collection_t *collection,
                                      bool *out_more);
 
 /*
@@ -1065,11 +1135,23 @@ hegel_result_t hegel_collection_more(hegel_context_t *ctx,
  should try a different one. `why` is an optional human-readable
  rejection reason (NULL is allowed); it is validated but currently
  unused, reserved for future rejection diagnostics.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `collection`, and
+ `HEGEL_E_CONCURRENT_USE` when another thread is mid-operation on either
+ the test-case handle or the collection.
  */
 hegel_result_t hegel_collection_reject(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
-                                       int64_t collection_id,
+                                       hegel_collection_t *collection,
                                        const char *why);
+
+/*
+ Release a collection handle from `hegel_new_collection`. Safe to call
+ with NULL (a no-op that returns `HEGEL_OK`), and safe at any point in any
+ order relative to freeing the test case or the run. Each handle must be
+ freed exactly once; freeing the same handle twice is undefined behaviour.
+ */
+hegel_result_t hegel_collection_free(hegel_context_t *ctx, hegel_collection_t *collection);
 
 /*
  Create a new engine-managed *variable pool* for stateful testing.
@@ -1080,23 +1162,28 @@ hegel_result_t hegel_collection_reject(hegel_context_t *ctx,
  its own mapping from variable id to the actual value it generated
  (mirroring how `Pool<T>` holds a `HashMap<i64, T>`).
 
- On success writes the new pool's id into `*out_pool_id` and returns
- `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
- / `hegel_pool_generate` calls on the *same* test case.
+ On success writes a caller-owned handle into `*out_pool` (release with
+ `hegel_pool_free`) and returns `HEGEL_OK`. Pass the handle to subsequent
+ `hegel_pool_add` / `hegel_pool_generate` calls with any handle of the
+ same test-case family. Returns `HEGEL_E_STOP_TEST` when the engine's
+ choice budget is already exhausted for this test case, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_pool`.
  */
-hegel_result_t hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, int64_t *out_pool_id);
+hegel_result_t hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_pool_t **out_pool);
 
 /*
  Register a new variable in the pool. The engine assigns it a fresh
  id, which the caller associates with the value it just generated.
 
  On success writes the new variable's id into `*out_variable_id` and
- returns `HEGEL_OK`. `pool_id` must be an id returned by
- `hegel_new_pool` on this test case.
+ returns `HEGEL_OK`. `pool` must be a handle from `hegel_new_pool` on a
+ handle of this test case's family. Returns `HEGEL_E_INVALID_HANDLE` for
+ a NULL `tc` or `pool`, and `HEGEL_E_INVALID_ARG` for a NULL
+ `out_variable_id`.
  */
 hegel_result_t hegel_pool_add(hegel_context_t *ctx,
                               hegel_test_case_t *tc,
-                              int64_t pool_id,
+                              hegel_pool_t *pool,
                               int64_t *out_variable_id);
 
 /*
@@ -1104,20 +1191,30 @@ hegel_result_t hegel_pool_add(hegel_context_t *ctx,
  shrink) which previously-added variable to reuse. When
  `consume = true` the drawn variable is removed from the pool (model a
  destructive action); when `false` it stays available for future
- draws.
+ draws. The choice is drawn from `tc`'s stream.
 
  On success writes the chosen variable id into `*out_variable_id` and
  returns `HEGEL_OK`. Returns `HEGEL_E_ASSUME` if the pool currently
  has no active variables — the caller should treat that like any other
  failed assumption: it may recover and continue the test case (as
  stateful testing does when a rule's assumption fails, by skipping the
- action), or give up on the case and mark it INVALID.
+ action), or give up on the case and mark it INVALID. Returns
+ `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_variable_id`.
  */
 hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
                                    hegel_test_case_t *tc,
-                                   int64_t pool_id,
+                                   hegel_pool_t *pool,
                                    bool consume,
                                    int64_t *out_variable_id);
+
+/*
+ Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a
+ no-op that returns `HEGEL_OK`), and safe at any point in any order
+ relative to freeing the test case or the run. Each handle must be freed
+ exactly once; freeing the same handle twice is undefined behaviour.
+ */
+hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
 
 /*
  Register a *state machine* for engine-owned stateful (rule-based)
@@ -1130,11 +1227,13 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  applies it, until that call signals that no more steps should
  follow.
 
- On success writes the new machine's id into `*out_state_machine_id`
- and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
- `hegel_state_machine_next_rule` calls on the *same* test case.
- Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
- non-UTF-8 names.
+ On success writes a caller-owned handle into `*out_state_machine`
+ (release with `hegel_state_machine_free`) and returns `HEGEL_OK`. Pass
+ the handle to subsequent `hegel_state_machine_next_rule` calls with any
+ handle of the same test-case family. Returns `HEGEL_E_STOP_TEST` when
+ the engine's choice budget is already exhausted for this test case, and
+ `HEGEL_E_INVALID_ARG` if `num_rules` is zero, on null / non-UTF-8 names,
+ or for a NULL `out_state_machine`.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1142,7 +1241,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        size_t num_rules,
                                        const char *const *invariant_names,
                                        size_t num_invariants,
-                                       int64_t *out_state_machine_id);
+                                       hegel_state_machine_t **out_state_machine);
 
 /*
  Draw the index of the next rule to run, in `[0, num_rules)`, letting
@@ -1152,16 +1251,25 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  of the test case, with restrictions that shrink away in minimal
  counterexamples.
 
- `state_machine_id` must be an id returned by
- `hegel_new_state_machine` on this test case. Returns
- `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
- (the caller should abort the body and call `hegel_mark_complete`
- with `HEGEL_STATUS_OVERRUN`).
+ `state_machine` must be a handle from `hegel_new_state_machine` on a
+ handle of this test case's family. Returns `HEGEL_E_STOP_TEST` when the
+ engine's choice budget is exhausted (the caller should abort the body
+ and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+ `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `state_machine`.
  */
 hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
                                              hegel_test_case_t *tc,
-                                             int64_t state_machine_id,
+                                             hegel_state_machine_t *state_machine,
                                              int64_t *out_rule_index);
+
+/*
+ Release a state-machine handle from `hegel_new_state_machine`. Safe to
+ call with NULL (a no-op that returns `HEGEL_OK`), and safe at any point
+ in any order relative to freeing the test case or the run. Each handle
+ must be freed exactly once; freeing the same handle twice is undefined
+ behaviour.
+ */
+hegel_result_t hegel_state_machine_free(hegel_context_t *ctx, hegel_state_machine_t *state_machine);
 
 /*
  Draw a single boolean that is `true` with probability `p`. `p`
