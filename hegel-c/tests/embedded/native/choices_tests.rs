@@ -1122,20 +1122,21 @@ fn value_hash(v: &ChoiceValue) -> u64 {
 }
 
 #[test]
-fn clone_kind_validate_accepts_only_clone_values() {
-    let kind = ChoiceKind::Clone;
-    assert!(kind.validate(&clone_node(Vec::new()).value()));
-    assert!(kind.validate(&values_clone_value(Vec::new())));
-    assert!(!kind.validate(&ChoiceValue::Integer(BigInt::from(0))));
-    assert!(!kind.validate(&ChoiceValue::Boolean(false)));
-    assert!(!ChoiceKind::Boolean(BooleanChoice).validate(&clone_node(Vec::new()).value()));
+fn clone_data_with_value_accepts_only_realized_clone_values() {
+    let data = clone_node(Vec::new()).data;
+    assert!(data.with_value(&clone_node(Vec::new()).value()).is_some());
+    assert!(data.with_value(&values_clone_value(Vec::new())).is_none());
+    assert!(data.with_value(&ChoiceValue::Integer(BigInt::from(0))).is_none());
+    assert!(data.with_value(&ChoiceValue::Boolean(false)).is_none());
     assert!(
-        !ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
-            min_value: BigInt::from(0),
-            max_value: BigInt::from(10),
-            shrink_towards: BigInt::from(0),
-        }))
-        .validate(&clone_node(Vec::new()).value())
+        boolean_node(false)
+            .with_value(&clone_node(Vec::new()).value())
+            .is_none()
+    );
+    assert!(
+        integer_node(0, 10, 0)
+            .with_value(&clone_node(Vec::new()).value())
+            .is_none()
     );
 }
 
