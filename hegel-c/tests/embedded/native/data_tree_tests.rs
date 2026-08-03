@@ -647,3 +647,15 @@ fn span_events_inside_clone_streams_are_reconstructed() {
     assert_eq!(stream.spans()[0].end, 1);
     assert_eq!(stream.span_events().len(), 2);
 }
+
+#[test]
+fn choice_value_key_wraps_a_clone_value_and_exposes_its_record() {
+    let record = Arc::new(CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]));
+    let key = ChoiceValueKey::from(&ChoiceValue::Clone(Arc::clone(&record)));
+    assert!(Arc::ptr_eq(key.as_clone().unwrap(), &record));
+    assert!(
+        ChoiceValueKey::from(&ChoiceValue::Boolean(false))
+            .as_clone()
+            .is_none()
+    );
+}

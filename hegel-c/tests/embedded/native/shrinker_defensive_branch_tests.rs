@@ -195,3 +195,46 @@ fn replace_short_circuits_on_index_past_end_of_attempt() {
     values.insert(10, ChoiceValue::Integer(BigInt::from(0)));
     assert!(!drive_no_yield(shrinker.replace(&values)).unwrap());
 }
+
+#[test]
+fn try_replace_with_deletion_returns_false_when_the_value_does_not_fit() {
+    let node = ChoiceNode::integer(
+        IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(10),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(5),
+        false,
+    );
+    let mut shrinker = accepting_shrinker(vec![node]);
+    let ok = drive_no_yield(shrinker.try_replace_with_deletion(
+        0,
+        ChoiceValue::Integer(BigInt::from(100)),
+        1,
+    ))
+    .unwrap();
+    assert!(!ok);
+}
+
+#[test]
+fn try_shortening_via_increment_skips_a_node_punned_mid_candidates() {
+    use crate::native::core::choices::ChoiceData;
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let mut out: Vec<ChoiceNode> = nodes.to_vec();
+                out[0] = ChoiceNode::boolean(false, false);
+                (true, out, Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5), int_node(10)],
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.try_shortening_via_increment()).unwrap();
+    assert!(matches!(
+        shrinker.current_nodes[0].data,
+        ChoiceData::Boolean(false)
+    ));
+}

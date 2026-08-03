@@ -1351,3 +1351,84 @@ fn string_choice_from_index_on_empty_alphabet_with_nonzero_max_is_an_internal_er
     let msg = payload.downcast_ref::<String>().unwrap();
     assert!(msg.contains("empty alphabet"), "{msg}");
 }
+
+#[test]
+fn choice_value_ref_equality_is_false_across_variants() {
+    let int_v = ChoiceValue::Integer(BigInt::from(0));
+    let bool_v = ChoiceValue::Boolean(false);
+    assert_ne!(ChoiceValueRef::from(&int_v), ChoiceValueRef::from(&bool_v));
+    assert_eq!(ChoiceValueRef::from(&int_v), ChoiceValueRef::from(&int_v));
+}
+
+#[test]
+fn clone_values_is_empty_matches_child_count() {
+    let empty = CloneRecord::from_values(Vec::new());
+    assert!(CloneValues::Record(&empty).is_empty());
+    let stream = RealizedStream::new(vec![boolean_node(false)], Vec::new(), Vec::new());
+    assert!(!CloneValues::Stream(&stream).is_empty());
+}
+
+#[test]
+fn clone_kind_random_value_is_none() {
+    let mut rng = crate::native::rng::EngineRng::seeded(0);
+    assert!(ChoiceKind::Clone.random_value(&mut rng).is_none());
+}
+
+#[test]
+fn choice_data_equality_compares_constraint_and_value() {
+    let pairs = [
+        (integer_node(0, 10, 3).data, integer_node(0, 10, 4).data),
+        (ChoiceData::Boolean(false), ChoiceData::Boolean(true)),
+        (
+            ChoiceNode::float(fc(0.0, 1.0, false, false), 0.25, false).data,
+            ChoiceNode::float(fc(0.0, 1.0, false, false), 0.5, false).data,
+        ),
+        (
+            bytes_node(0, 4, vec![1]).data,
+            bytes_node(0, 4, vec![2]).data,
+        ),
+        (
+            string_node(vec![(b'a' as u32, b'z' as u32)], 0, 4, vec![b'a' as u32]).data,
+            string_node(vec![(b'a' as u32, b'z' as u32)], 0, 4, vec![b'b' as u32]).data,
+        ),
+    ];
+    for (a, b) in &pairs {
+        assert_eq!(a, a);
+        assert_ne!(a, b);
+    }
+    for (i, (a, _)) in pairs.iter().enumerate() {
+        for (j, (b, _)) in pairs.iter().enumerate() {
+            if i != j {
+                assert_ne!(a, b);
+            }
+        }
+    }
+}
+
+#[test]
+fn choice_data_equality_differs_on_constraint_with_equal_values() {
+    assert_ne!(integer_node(0, 10, 3).data, integer_node(0, 20, 3).data);
+    assert_ne!(
+        ChoiceNode::float(fc(0.0, 1.0, false, false), 0.5, false).data,
+        ChoiceNode::float(fc(0.0, 2.0, false, false), 0.5, false).data
+    );
+    assert_ne!(
+        bytes_node(0, 4, vec![1]).data,
+        bytes_node(0, 5, vec![1]).data
+    );
+    assert_ne!(
+        string_node(vec![(b'a' as u32, b'z' as u32)], 0, 4, vec![b'a' as u32]).data,
+        string_node(vec![(b'a' as u32, b'z' as u32)], 0, 5, vec![b'a' as u32]).data
+    );
+}
+
+#[test]
+fn choice_data_as_float_is_none_for_other_kinds() {
+    assert!(integer_node(0, 10, 3).data.as_float().is_none());
+    assert!(
+        ChoiceNode::float(fc(0.0, 1.0, false, false), 0.5, false)
+            .data
+            .as_float()
+            .is_some()
+    );
+}
