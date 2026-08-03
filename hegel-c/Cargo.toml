@@ -25,7 +25,7 @@ dashu-int = { version = "0.4.1", default-features = false }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 rustc-hash = { version = "2", default-features = false }
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
-libm = "0.2"
+libm = { version = "0.2", default-features = false }
 parking_lot = "0.12"
 tempfile = "3"
 
