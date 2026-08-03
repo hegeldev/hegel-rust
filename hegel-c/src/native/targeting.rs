@@ -129,7 +129,7 @@ impl Optimiser<'_, '_> {
         if self.budget_exhausted() {
             return Ok(None);
         }
-        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE);
+        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE)?;
         let (run, _mismatch) = self.engine.test_function(ntc).await?;
         Ok(Some(run))
     }
