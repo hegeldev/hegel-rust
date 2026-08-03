@@ -1316,6 +1316,83 @@ fn run_free_after_early_exit_does_not_hang() {
     }
 }
 
+/// Focused regression test for the `-z nodelete` fix in `build.rs`.
+///
+/// Persisting to the database calls `DirectoryTestCaseDatabase::save`, which
+/// writes atomically via `tempfile`/`fastrand`. Initialising `fastrand`'s
+/// thread-local RNG runs `std::thread::current::init_current`, registering a
+/// `std` thread-local *destructor* pthread key on the calling thread — with the
+/// destructor code living inside libhegel. glibc records that destructor in the
+/// process-global `__pthread_keys` and calls it when the thread exits.
+///
+/// If `dlclose` (dropping `lib` at the end of this function) unmaps libhegel
+/// before the thread exits, that destructor pointer dangles and the process
+/// segfaults during thread teardown — *after* this test returns, when the
+/// libtest worker thread winds down. `-z nodelete` keeps libhegel resident so
+/// the destructor stays valid.
+///
+/// The assertion is therefore implicit: with the fix the process exits cleanly;
+/// without it, this test's thread aborts the whole process with SIGSEGV. The
+/// `assert!` below only confirms the trigger path (a persisting `save`) actually
+/// ran.
+#[test]
+fn dlclose_after_database_save_is_safe_at_thread_exit() {
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
+    let key = CString::new("nodelete-regression").unwrap();
+
+    let mut persisted = false;
+    {
+        let lib = unsafe { load() };
+        let a = unsafe { bind(&lib) };
+        unsafe {
+            let ctx = (a.context_new)();
+            let s = a.settings_new(ctx);
+            a.settings_test_cases(ctx, s, 50);
+            (a.settings_database)(ctx, s, db_path.as_ptr());
+            (a.settings_database_key)(ctx, s, key.as_ptr());
+            a.settings_derandomize(ctx, s, true);
+            a.settings_seed(ctx, s, 1, true);
+
+            let run = a.run_start(ctx, s);
+            loop {
+                let tc = a.next_test_case(ctx, run);
+                if tc.is_null() {
+                    break;
+                }
+                let mut n: i64 = 0;
+                let rc = (a.generate_integer)(ctx, tc, 0, 2_000_000, &mut n);
+                if rc == HEGEL_E_STOP_TEST {
+                    a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
+                    continue;
+                }
+                assert_eq!(rc, HEGEL_OK);
+                // Report the first test case as interesting so `save` runs at
+                // least once (the path that registers the thread-local
+                // destructor). The rest are valid.
+                if !persisted {
+                    persisted = true;
+                    let origin = CString::new("nodelete-regression").unwrap();
+                    a.complete_and_free(ctx, tc, CStatus::Interesting, origin.as_ptr());
+                } else {
+                    a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
+                }
+            }
+            a.run_free(ctx, run);
+            a.settings_free(ctx, s);
+            (a.context_free)(ctx);
+        }
+        // `lib` drops here -> dlclose. Under `-z nodelete` the library stays
+        // mapped, so the thread-local destructor registered by `save` above is
+        // still valid when this test's worker thread exits.
+    }
+
+    assert!(
+        persisted,
+        "expected at least one interesting case so a persisting save() ran"
+    );
+}
+
 /// Reproduces hegel-go report #2 via the C API: persist a failing example
 /// on run 1, then run 2 with the same database + key and confirm the
 /// first test case is a replay of the persisted (shrunk) failing value.
