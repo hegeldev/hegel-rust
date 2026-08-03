@@ -1,0 +1,5 @@
+RELEASE_TYPE: patch
+
+This patch improves the value distribution of bounded integer generation for large and full-width ranges. Drawing an integer from a wide range now lands on the values a property test most needs — the range's endpoints and their inner neighbours (`min`, `max`, `min + 1`, `max - 1`), zero, ±1, and small magnitudes — with a meaningfully elevated probability, instead of having them diluted by the large pool of "interesting" constants (powers of two, factorials, primorials) that grows with the range width.
+
+Measured over 20,000 full-width `i64` draws, a boundary value (an endpoint or one of its neighbours, or `0`/`±1`) previously appeared about 0.3% of the time and a small value (magnitude at most 8) about 0.6% of the time; these are now roughly 5% and 12%. The middle of the range is still well covered, and the special values still shrink toward zero and the simplest endpoints. Narrow ranges are unaffected. This mirrors the boundary-value injection Hypothesis performs (see [#350](https://github.com/hegeldev/hegel-rust/issues/350) and hypothesis#4722).

@@ -806,6 +806,78 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     );
 }
 
+/// A wide integer draw must land on the *core* special values — the range
+/// endpoints, their inner neighbours, zero, ±1, and the small magnitudes —
+/// with a meaningful (not vanishing) frequency. Regression test for the
+/// boundary under-sampling: the diffuse constant pool (hundreds of powers of
+/// two, factorials, primorials) previously diluted these to well under 1%.
+#[test]
+fn biased_integer_sample_hits_core_special_values_often() {
+    let mut rng = EngineRng::seeded(4242);
+    let total = 200_000;
+
+    // Full-width i64.
+    let (mut boundary, mut small) = (0u64, 0u64);
+    for _ in 0..total {
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        if v == i64::MIN as i128
+            || v == i64::MAX as i128
+            || v == i64::MIN as i128 + 1
+            || v == i64::MAX as i128 - 1
+            || v == 0
+            || v == 1
+            || v == -1
+        {
+            boundary += 1;
+        }
+        if v.unsigned_abs() <= 8 {
+            small += 1;
+        }
+    }
+    let boundary_frac = boundary as f64 / total as f64;
+    let small_frac = small as f64 / total as f64;
+    assert!(
+        boundary_frac > 0.03,
+        "full-width boundary values only {boundary_frac:.4}; expected > 3%"
+    );
+    assert!(
+        small_frac > 0.05,
+        "full-width small values only {small_frac:.4}; expected > 5%"
+    );
+
+    // Large but bounded: the endpoints themselves must appear often, not
+    // just get lost among the interior constants.
+    let (lo, hi) = (-(1i128 << 40), 1i128 << 40);
+    let (mut min_hits, mut max_hits, mut small_b) = (0u64, 0u64, 0u64);
+    for _ in 0..total {
+        let v = biased_i128_sample(lo, hi, &mut rng);
+        if v == lo {
+            min_hits += 1;
+        }
+        if v == hi {
+            max_hits += 1;
+        }
+        if v.unsigned_abs() <= 8 {
+            small_b += 1;
+        }
+    }
+    let min_frac = min_hits as f64 / total as f64;
+    let max_frac = max_hits as f64 / total as f64;
+    let small_b_frac = small_b as f64 / total as f64;
+    assert!(
+        min_frac > 0.004,
+        "bounded min endpoint only {min_frac:.4}; expected > 0.4%"
+    );
+    assert!(
+        max_frac > 0.004,
+        "bounded max endpoint only {max_frac:.4}; expected > 0.4%"
+    );
+    assert!(
+        small_b_frac > 0.05,
+        "bounded small values only {small_b_frac:.4}; expected > 5%"
+    );
+}
+
 #[test]
 fn biased_string_sample_caps_constant_pool_probability() {
     let sc = StringChoice {
