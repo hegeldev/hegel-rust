@@ -1126,7 +1126,10 @@ fn clone_data_with_value_accepts_only_realized_clone_values() {
     let data = clone_node(Vec::new()).data;
     assert!(data.with_value(&clone_node(Vec::new()).value()).is_some());
     assert!(data.with_value(&values_clone_value(Vec::new())).is_none());
-    assert!(data.with_value(&ChoiceValue::Integer(BigInt::from(0))).is_none());
+    assert!(
+        data.with_value(&ChoiceValue::Integer(BigInt::from(0)))
+            .is_none()
+    );
     assert!(data.with_value(&ChoiceValue::Boolean(false)).is_none());
     assert!(
         boolean_node(false)
