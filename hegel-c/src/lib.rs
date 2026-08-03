@@ -51,7 +51,12 @@ pub mod __bench {
     pub use crate::native::rng::EngineRng;
 
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
-        crate::native::core::state::biased_integer_sample(ic, rng).unwrap()
+        crate::native::core::state::biased_integer_sample(
+            ic,
+            rng,
+            crate::native::core::GenerationParameters::default(),
+        )
+        .unwrap()
     }
 
     pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {

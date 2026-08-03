@@ -136,7 +136,7 @@ pub(crate) async fn run_single_case(
     exchange: &CaseExchange,
 ) -> Result<Option<Failure>, RunError> {
     let mut rng = create_rng(settings, database_key)?;
-    let ntc = NativeTestCase::new_random(rng.spawn());
+    let ntc = NativeTestCase::new_random(rng.spawn())?;
     ntc.family().set_state_machine_steps_unbounded();
     let (data_source, handle) = NativeDataSource::new(ntc);
     exchange.offer(Box::new(data_source)).await;
@@ -236,7 +236,7 @@ impl<'a> Engine<'a> {
                         continue;
                     };
                     let ntc =
-                        NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE);
+                        NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE)?;
                     let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
@@ -339,13 +339,17 @@ impl<'a> Engine<'a> {
                     break;
                 }
 
-                let case_rng = self.rng.spawn();
+                let mut case_rng = self.rng.spawn();
+                // Draw this test case's swarm parameters once, then use them for
+                // both the novel-prefix walk and the test case itself so the
+                // whole case generates from one consistent distribution.
+                let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
                 let tree_root = &self.tree_root;
-                let prefix = generate_novel_prefix(tree_root, &mut self.rng)?;
+                let prefix = generate_novel_prefix(tree_root, &mut self.rng, params)?;
                 let ntc = if prefix.is_empty() {
-                    NativeTestCase::new_random(case_rng)
+                    NativeTestCase::new_random_with_params(case_rng, params)
                 } else {
-                    NativeTestCase::for_probe(&prefix, case_rng, BUFFER_SIZE)
+                    NativeTestCase::for_probe_with_params(&prefix, case_rng, BUFFER_SIZE, params)
                 };
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");
@@ -1128,7 +1132,7 @@ impl<'a> Engine<'a> {
             NativeTestCase::for_choices(choices, nodes, None)
         } else {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
-            NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
+            NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
         };
         let (run, _mismatch) = self.test_function(ntc).await?;
         Ok(run)
