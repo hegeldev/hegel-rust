@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use core::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use crate::control::hegel_internal_assert;

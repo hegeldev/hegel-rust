@@ -233,11 +233,11 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| crate::native::draws::special::generate_uuid(ntc, version))
     }
 
-    fn generate_ipv4(&self) -> Result<std::net::Ipv4Addr, DataSourceError> {
+    fn generate_ipv4(&self) -> Result<core::net::Ipv4Addr, DataSourceError> {
         self.with_ntc(crate::native::draws::special::generate_ipv4)
     }
 
-    fn generate_ipv6(&self) -> Result<std::net::Ipv6Addr, DataSourceError> {
+    fn generate_ipv6(&self) -> Result<core::net::Ipv6Addr, DataSourceError> {
         self.with_ntc(crate::native::draws::special::generate_ipv6)
     }
 

@@ -137,7 +137,7 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-impl std::error::Error for ParseError {}
+impl core::error::Error for ParseError {}
 
 type ParseResult<T> = Result<T, ParseError>;
 
