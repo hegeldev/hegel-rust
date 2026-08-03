@@ -645,7 +645,7 @@ fn match_seq_min_repeat_zero_width_item_after_min() {
 #[test]
 fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal(0xFF)];
-    let out = build_in_set(&items, SRE_FLAG_ASCII, &None);
+    let out = build_in_set(&items, SRE_FLAG_ASCII, &None).unwrap();
     assert_eq!(out, vec!['a']);
 }
 
@@ -653,7 +653,7 @@ fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
 fn build_in_set_alphabet_drops_disallowed_positive_literal() {
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal('b' as u32)];
     let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]).unwrap();
-    let out = build_in_set(&items, 0, &Some(alphabet));
+    let out = build_in_set(&items, 0, &Some(alphabet)).unwrap();
     assert_eq!(out, vec!['a']);
 }
 
@@ -661,7 +661,7 @@ fn build_in_set_alphabet_drops_disallowed_positive_literal() {
 fn build_in_set_negated_ascii_only_excludes_nonascii() {
     let items = vec![SetItem::Negate, SetItem::Literal('a' as u32)];
     let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]).unwrap();
-    let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet));
+    let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet)).unwrap();
     assert!(out.iter().all(|c| (*c as u32) < 128 && *c != 'a'));
 }
 
@@ -980,4 +980,10 @@ fn match_seq_possessive_repeat_counts_zero_width_iterations_toward_min() {
     }];
     assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
     assert_eq!(match_seq(&pattern, 0, &chars("aa"), 0, &groups), Some(2));
+}
+
+#[test]
+fn codepoint_to_char_reports_surrogates_as_internal_errors() {
+    assert_eq!(codepoint_to_char('a' as u32).unwrap(), 'a');
+    assert!(codepoint_to_char(0xD800).is_err());
 }

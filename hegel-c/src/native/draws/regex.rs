@@ -1,4 +1,4 @@
-use crate::control::hegel_internal_unwrap;
+use crate::control::{InternalError, hegel_internal_error, hegel_internal_unwrap};
 use crate::native::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -80,7 +80,7 @@ pub(crate) fn generate_regex(
         }
     }
     mark_invalid(ntc)?;
-    unreachable!("mark_invalid returns Err — control flow does not reach here")
+    hegel_internal_error!("mark_invalid returned Ok")
 }
 
 /// One generation attempt. Returns `Ok(None)` when the candidate was
@@ -368,7 +368,7 @@ fn generate_op(
 ) -> Result<(), EngineError> {
     match op {
         OpCode::Literal(cp) => {
-            let c = codepoint_to_char(*cp);
+            let c = codepoint_to_char(*cp)?;
             if state.flags & SRE_FLAG_IGNORECASE != 0 {
                 if let Some(sw) = char_swapcase(c) {
                     let which = ntc
@@ -389,15 +389,15 @@ fn generate_op(
             out.push(c);
         }
         OpCode::NotLiteral(cp) => {
+            let c = codepoint_to_char(*cp)?;
             if alphabet.is_none() {
-                let chars = cached_default_not_literal(*cp, state.flags);
+                let chars = cached_default_not_literal(c, state.flags);
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let chars = cached_chars(
                     state.char_cache,
                     (*cp, state.flags & SRE_FLAG_IGNORECASE),
                     || {
-                        let c = codepoint_to_char(*cp);
                         let blacklist = swapcase_blacklist(c, state.flags);
                         gather_chars(alphabet, |c| !blacklist.contains(&c))
                     },
@@ -442,7 +442,7 @@ fn generate_op(
         },
         OpCode::In(items) => {
             if alphabet.is_none() {
-                let chars = cached_default_in_set(items, state.flags);
+                let chars = cached_default_in_set(items, state.flags)?;
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let key = (items.as_ptr() as usize, items.len(), state.flags);
@@ -451,7 +451,7 @@ fn generate_op(
                     Some(cached) => cached,
                     None => {
                         let computed: Arc<[char]> =
-                            build_in_set(items, state.flags, alphabet).into();
+                            build_in_set(items, state.flags, alphabet)?.into();
                         state
                             .in_cache
                             .lock()
@@ -575,7 +575,7 @@ fn generate_op(
 /// cost ~35ms per draw in debug; 10 draws trips the 1s TooSlow health
 /// check on slower CI runners. Since the default alphabet is fixed, we
 /// can memoise across draws (and across patterns).
-fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
+fn cached_default_in_set(items: &[SetItem], flags: u32) -> Result<Arc<[char]>, InternalError> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache_key = (
@@ -586,15 +586,15 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
     {
         let guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&cache_key) {
-            return Arc::clone(cached);
+            return Ok(Arc::clone(cached));
         }
     }
-    let computed: Arc<[char]> = build_in_set(items, flags, &None).into();
+    let computed: Arc<[char]> = build_in_set(items, flags, &None)?.into();
     cache
         .lock()
         .unwrap()
         .insert(cache_key, Arc::clone(&computed));
-    computed
+    Ok(computed)
 }
 
 /// Cached character set for `Any` nodes with the default alphabet: the whole
@@ -633,10 +633,10 @@ fn cached_chars<F: FnOnce() -> Vec<char>>(
 /// Cached character set for `NotLiteral` nodes with the default alphabet.
 /// Same rationale as `cached_default_in_set`: `gather_chars` scans the
 /// entire BMP (~64K codepoints) and is too expensive to repeat per draw.
-fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
+fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache_key = (cp, flags & SRE_FLAG_IGNORECASE);
+    let cache_key = (c as u32, flags & SRE_FLAG_IGNORECASE);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
         let guard = cache.lock().unwrap();
@@ -644,7 +644,6 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
             return Arc::clone(cached);
         }
     }
-    let c = codepoint_to_char(cp);
     let blacklist = swapcase_blacklist(c, flags);
     let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
     cache
@@ -657,7 +656,11 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
 /// Build the set of characters that a `(IN, items)` node can emit, after
 /// applying the current flags (IGNORECASE swaps, ASCII restriction) and
 /// intersecting with the user-supplied alphabet.
-fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -> Vec<char> {
+fn build_in_set(
+    items: &[SetItem],
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+) -> Result<Vec<char>, InternalError> {
     let negate = matches!(items.first(), Some(SetItem::Negate));
 
     let mut positive: Vec<char> = Vec::new();
@@ -667,7 +670,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
         match item {
             SetItem::Negate => {}
             SetItem::Literal(cp) => {
-                let c = codepoint_to_char(*cp);
+                let c = codepoint_to_char(*cp)?;
                 add_with_swapcase(&mut positive, c, flags);
             }
             SetItem::Range(lo, hi) => {
@@ -712,14 +715,14 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
                 }
             }
         }
-        out
+        Ok(out)
     } else {
         let cat_blocks: Vec<ChCode> = categories;
         let mut positive_set: HashSet<char> = HashSet::default();
         for c in positive {
             positive_set.extend(swapcase_blacklist(c, flags));
         }
-        gather_chars(alphabet, |c| {
+        Ok(gather_chars(alphabet, |c| {
             if ascii_only && (c as u32) >= 128 {
                 return false;
             }
@@ -730,7 +733,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
                 return false;
             }
             true
-        })
+        }))
     }
 }
 fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
@@ -826,7 +829,7 @@ fn draw_any_char(
             let n = intervals.len();
             if n == 0 {
                 mark_invalid(ntc)?;
-                unreachable!("mark_invalid returns Err — control flow does not reach here")
+                hegel_internal_error!("mark_invalid returned Ok")
             }
             let idx = ntc
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
@@ -874,8 +877,11 @@ fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
     Err(EngineError::InvalidTestCase)
 }
 
-fn codepoint_to_char(cp: u32) -> char {
-    char::from_u32(cp).unwrap_or_else(|| panic!("invalid codepoint in regex AST: {:#x}", cp))
+fn codepoint_to_char(cp: u32) -> Result<char, InternalError> {
+    Ok(hegel_internal_unwrap!(
+        char::from_u32(cp),
+        "invalid codepoint in regex AST: {cp:#x}"
+    ))
 }
 
 /// Python's `str.swapcase()` on a single char.  Python's definition differs

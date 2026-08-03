@@ -16,7 +16,8 @@ use super::choices::{
 use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::control::{
-    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
+    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_error,
+    hegel_internal_unwrap,
 };
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
@@ -411,7 +412,7 @@ pub(crate) fn biased_float_sample(
                 skip -= 1;
             }
         }
-        unreachable!("valid_count agrees with the second validate pass");
+        hegel_internal_error!("the second validate pass found fewer candidates than valid_count");
     }
     let mag = index_to_float(rng.random::<u64>());
     let raw = if rng.random::<u64>() & 1 == 1 {
@@ -697,7 +698,9 @@ pub(crate) fn biased_string_sample(
                 skip -= 1;
             }
         }
-        unreachable!("valid_global_count agrees with the second validate pass");
+        hegel_internal_error!(
+            "the second validate pass found fewer candidates than valid_global_count"
+        );
     }
 
     let alpha = sc.intervals.len();
