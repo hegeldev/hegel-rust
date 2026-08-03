@@ -599,3 +599,107 @@ mod nocover_boundary_exploration {
         .run();
     }
 }
+
+/// End-to-end distribution checks: drawing from a wide integer range through
+/// the public `integers()` generator must surface boundary and small-magnitude
+/// values with a meaningful frequency, mirroring Hypothesis's special-value
+/// injection. Regression test for the boundary under-sampling that made
+/// off-by-one / overflow / sign bugs hard to find.
+mod special_value_distribution {
+    use hegel::generators as gs;
+    use hegel::{HealthCheck, Hegel, Settings};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn is_boundary(a: i64) -> bool {
+        a == i64::MIN
+            || a == i64::MAX
+            || a == i64::MIN + 1
+            || a == i64::MAX - 1
+            || a == 0
+            || a == 1
+            || a == -1
+    }
+
+    // A second, independent integer is drawn each case so the data tree does
+    // not collapse repeated single-value leaves (which would mask the draw
+    // distribution behind tree-exhaustion rather than the sampler).
+    #[test]
+    fn full_width_hits_boundary_and_small_values() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static BOUNDARY: AtomicU64 = AtomicU64::new(0);
+        static SMALL: AtomicU64 = AtomicU64::new(0);
+
+        Hegel::new(|tc| {
+            let a: i64 = tc.draw(gs::integers::<i64>());
+            let _b: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if is_boundary(a) {
+                BOUNDARY.fetch_add(1, Ordering::Relaxed);
+            }
+            if (-8..=8).contains(&a) {
+                SMALL.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB0)) // deterministic: not a flaky statistical test
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let boundary = BOUNDARY.load(Ordering::Relaxed) as f64 / n;
+        let small = SMALL.load(Ordering::Relaxed) as f64 / n;
+        assert!(
+            boundary > 0.015,
+            "boundary values only {boundary:.4} of draws; expected > 1.5%"
+        );
+        assert!(
+            small > 0.03,
+            "small values only {small:.4} of draws; expected > 3%"
+        );
+    }
+
+    #[test]
+    fn large_bounded_hits_endpoints_and_small_values() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static MINMAX: AtomicU64 = AtomicU64::new(0);
+        static SMALL: AtomicU64 = AtomicU64::new(0);
+
+        let lo = -(1i64 << 40);
+        let hi = 1i64 << 40;
+        Hegel::new(move |tc| {
+            let a: i64 = tc.draw(gs::integers::<i64>().min_value(lo).max_value(hi));
+            let _b: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if a == lo || a == hi {
+                MINMAX.fetch_add(1, Ordering::Relaxed);
+            }
+            if (-8..=8).contains(&a) {
+                SMALL.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB1))
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let minmax = MINMAX.load(Ordering::Relaxed) as f64 / n;
+        let small = SMALL.load(Ordering::Relaxed) as f64 / n;
+        assert!(
+            minmax > 0.004,
+            "min/max endpoints only {minmax:.4} of draws; expected > 0.4%"
+        );
+        assert!(
+            small > 0.03,
+            "small values only {small:.4} of draws; expected > 3%"
+        );
+    }
+}
