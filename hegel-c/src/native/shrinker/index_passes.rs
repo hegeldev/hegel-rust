@@ -149,13 +149,11 @@ impl<'a> Shrinker<'a> {
                     }
                 }
             }
-            let max_candidate = match node.data.max_index() {
-                Some(mi) => node.data.from_index(mi)?,
-                None => None,
-            };
-            if let Some(v) = max_candidate {
-                if v != node_value && !candidates.contains(&v) {
-                    candidates.push(v);
+            if let Some(mi) = node.data.max_index() {
+                if let Some(v) = node.data.from_index(mi)? {
+                    if v != node_value && !candidates.contains(&v) {
+                        candidates.push(v);
+                    }
                 }
             }
 

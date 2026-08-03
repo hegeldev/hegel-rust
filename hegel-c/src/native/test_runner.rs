@@ -32,6 +32,7 @@ use crate::native::core::{
     Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
+use crate::native::data_tree::generate_novel_prefix;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
@@ -335,10 +336,8 @@ impl<'a> Engine<'a> {
                 }
 
                 let case_rng = self.rng.spawn();
-                let prefix = crate::native::data_tree::generate_novel_prefix(
-                    &self.tree_root,
-                    &mut self.rng,
-                )?;
+                let tree_root = &self.tree_root;
+                let prefix = generate_novel_prefix(tree_root, &mut self.rng)?;
                 let ntc = if prefix.is_empty() {
                     NativeTestCase::new_random(case_rng)
                 } else {

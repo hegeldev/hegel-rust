@@ -35,7 +35,7 @@ static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 /// here as merged codepoint intervals in ascending order.
 static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
     LazyLock::new(|| {
-        Ok(Arc::new(IntervalSet::new(vec![
+        let ranges = vec![
             (b'!' as u32, b'!' as u32),
             (b'#' as u32, b'\'' as u32),
             (b'*' as u32, b'+' as u32),
@@ -46,7 +46,8 @@ static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalErr
             (b'^' as u32, b'`' as u32),
             (b'a' as u32, b'z' as u32),
             (b'{' as u32, b'~' as u32),
-        ])?))
+        ];
+        Ok(Arc::new(IntervalSet::new(ranges)?))
     });
 
 /// `string.printable` from Python: ASCII 32..=126 plus the whitespace
@@ -240,11 +241,8 @@ fn draw_ascii_alnum_or_hyphen(ntc: &mut NativeTestCase) -> Result<char, EngineEr
 ///     marking the test case invalid when the filter fails — the engine
 ///     then retries with a different choice prefix.
 pub(crate) fn generate_email(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
-    let local = ntc.draw_string(
-        Arc::clone(EMAIL_LOCAL_PART_INTERVALS.as_ref().map_err(Clone::clone)?),
-        1,
-        64,
-    )?;
+    let alphabet = Arc::clone(EMAIL_LOCAL_PART_INTERVALS.as_ref().map_err(Clone::clone)?);
+    let local = ntc.draw_string(alphabet, 1, 64)?;
     let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
     let address = format!("{local}@{domain}");
     if address.len() > 254 {
@@ -289,21 +287,15 @@ pub(crate) fn generate_url(ntc: &mut NativeTestCase) -> Result<String, EngineErr
         if !many_more(ntc, &mut state)? {
             break;
         }
-        let raw = ntc.draw_string(
-            Arc::clone(PRINTABLE_ASCII_INTERVALS.as_ref().map_err(Clone::clone)?),
-            0,
-            100,
-        )?;
+        let alphabet = Arc::clone(PRINTABLE_ASCII_INTERVALS.as_ref().map_err(Clone::clone)?);
+        let raw = ntc.draw_string(alphabet, 0, 100)?;
         components.push(url_encode_path(&raw)?);
     }
     let path = components.join("/");
 
     let fragment = if ntc.weighted(0.5, None)? {
-        let raw = ntc.draw_string(
-            Arc::clone(FRAGMENT_BYTE_INTERVALS.as_ref().map_err(Clone::clone)?),
-            1,
-            100,
-        )?;
+        let alphabet = Arc::clone(FRAGMENT_BYTE_INTERVALS.as_ref().map_err(Clone::clone)?);
+        let raw = ntc.draw_string(alphabet, 1, 100)?;
         format!("#{}", url_encode_fragment(ntc, &raw)?)
     } else {
         String::new()

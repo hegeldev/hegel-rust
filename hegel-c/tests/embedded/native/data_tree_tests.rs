@@ -665,3 +665,23 @@ fn choice_value_key_wraps_a_clone_value_and_exposes_its_record() {
             .is_none()
     );
 }
+
+#[test]
+fn pick_non_exhausted_value_returns_none_for_a_clone_kind() {
+    let mut rng = EngineRng::seeded(0);
+    let children = HashMap::default();
+    assert_eq!(
+        pick_non_exhausted_value(&ChoiceKind::Clone, &children, &mut rng).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn simulate_clone_stream_leaves_recorded_territory_at_an_unexplored_position() {
+    let root = DataTreeNode::default();
+    assert!(
+        simulate_clone_stream(&root, &[ChoiceValue::Boolean(true)])
+            .unwrap()
+            .is_none()
+    );
+}

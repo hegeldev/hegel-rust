@@ -126,13 +126,12 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
         if excl_cats.iter().all(|c| c == "Cs") {
             base
         } else {
-            let cat_union = categories_union(
-                &excl_cats
-                    .iter()
-                    .filter(|c| c.as_str() != "Cs")
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )?;
+            let non_cs: Vec<String> = excl_cats
+                .iter()
+                .filter(|c| c.as_str() != "Cs")
+                .cloned()
+                .collect();
+            let cat_union = categories_union(&non_cs)?;
             base.difference(&cat_union)?
         }
     } else {
