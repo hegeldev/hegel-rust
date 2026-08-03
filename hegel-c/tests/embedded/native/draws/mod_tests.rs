@@ -17,7 +17,7 @@ fn float_spec(width: u32, min_value: f64, max_value: f64) -> FloatSpec {
 
 #[test]
 fn width_32_float_bounds_must_be_f32_representable() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
 
     for (min_value, max_value, bad) in [
         (1.0f64.next_up(), 2.0, "min_value"),
@@ -64,7 +64,7 @@ fn narrow_to_f32_keeps_overflowing_finite_draws_finite() {
 
 #[test]
 fn many_reject_marks_invalid_when_cannot_reach_min_size() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(1));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(1)).unwrap();
     let mut state = ManyState::new(6, Some(10));
     state.count = 5;
     state.rejections = 9;
@@ -79,7 +79,7 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
 
 #[test]
 fn many_more_respects_fixed_and_bounded_sizes() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(2));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(2)).unwrap();
     let mut fixed = ManyState::new(3, Some(3));
     let mut count = 0;
     while many_more(&mut ntc, &mut fixed).unwrap() {

@@ -9,6 +9,8 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 
+use once_cell::race::OnceBox;
+
 use rand::{Rng, RngExt};
 
 use crate::native::rng::EngineRng;
@@ -20,7 +22,10 @@ use super::choices::{
     StringChoice,
 };
 use super::float_index::index_to_float;
-use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE, CORE_SPECIAL_MIN_SPAN, CORE_SPECIAL_PROBABILITY};
+use super::{
+    BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
+    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+};
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
 };
@@ -176,15 +181,29 @@ fn integer_sample_from_distribution(
     Ok((libm::round(dist.inverse_cdf(p)?) as i128).clamp(min_value, max_value))
 }
 
-/// Hand-picked "interesting" boundary values: powers of two and their
-/// neighbours, plus the `i{16,32,64}::{MIN,MAX}` boundaries. Merged into
-/// [`SORTED_NASTY_POOL`] at startup.
+/// Hand-picked "interesting" boundary values: the small magnitudes `0..=±8`,
+/// the powers of two and their neighbours, plus the `i{16,32,64}::{MIN,MAX}`
+/// boundaries. Merged into [`SORTED_NASTY_POOL`] at startup.
+///
+/// The small magnitudes are deliberately *contiguous* through ±8 (including
+/// ±3..=±6, which are neither `2^k` nor `2^k−1`): off-by-small-`n` bugs are as
+/// common as power-of-two boundary bugs, so every small magnitude earns a place
+/// in the curated set even though it breaks the `2^k`/`2^k−1` pattern of the
+/// larger entries.
 static INTERESTING_INTEGERS: &[i128] = &[
     0,
     1,
     -1,
     2,
     -2,
+    3,
+    -3,
+    4,
+    -4,
+    5,
+    -5,
+    6,
+    -6,
     7,
     -7,
     8,
@@ -241,6 +260,15 @@ static INTERESTING_INTEGERS: &[i128] = &[
 /// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
 /// the in-range boundary candidates via two `partition_point` calls instead
 /// of an O(n²) per-call dedup loop.
+/// [`INTERESTING_INTEGERS`] sorted and deduped, so the curated tier can find
+/// its in-range slice with `partition_point`.
+static SORTED_INTERESTING: Lazy<Vec<i128>> = Lazy::new(|| {
+    let mut v = INTERESTING_INTEGERS.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v
+});
+
 static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut all: Vec<i128> = INTERESTING_INTEGERS
         .iter()
@@ -251,6 +279,136 @@ static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
     all.dedup();
     all
 });
+
+/// Draw a standard normal (mean 0, variance 1) via the Box–Muller transform.
+fn standard_normal(rng: &mut EngineRng) -> f64 {
+    // `1.0 - random` lands in `(0, 1]`, keeping `ln` finite.
+    let u1 = 1.0 - rng.random::<f64>();
+    let u2 = rng.random::<f64>();
+    libm::sqrt(-2.0 * libm::log(u1)) * libm::cos(core::f64::consts::TAU * u2)
+}
+
+/// Draw a Gamma(`shape`, scale 1) variate. Marsaglia–Tsang's method for
+/// `shape >= 1`, with Ahrens–Dieter's boost `Gamma(a) = Gamma(a+1) · U^(1/a)`
+/// for `shape < 1` (the regime the small Dirichlet concentrations use). Always
+/// returns a strictly non-negative, finite value.
+fn sample_gamma(shape: f64, rng: &mut EngineRng) -> Result<f64, InternalError> {
+    hegel_internal_debug_assert!(shape > 0.0, "gamma shape must be positive");
+    if shape < 1.0 {
+        let g = sample_gamma(shape + 1.0, rng)?;
+        // `random` may be 0; clamp so `pow` stays finite.
+        let u = rng.random::<f64>().max(f64::MIN_POSITIVE);
+        return Ok(g * libm::pow(u, 1.0 / shape));
+    }
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / libm::sqrt(9.0 * d);
+    loop {
+        let x = standard_normal(rng);
+        let v = libm::pow(1.0 + c * x, 3.0);
+        if v <= 0.0 {
+            continue;
+        }
+        let u = rng.random::<f64>();
+        let x2 = x * x;
+        if u < 1.0 - 0.033_1 * x2 * x2 {
+            return Ok(d * v);
+        }
+        if libm::log(u) < 0.5 * x2 + d * (1.0 - v + libm::log(v)) {
+            return Ok(d * v);
+        }
+    }
+}
+
+/// Draw a point on the 4-simplex from a Dirichlet with the given concentrations
+/// (via normalised independent Gamma variates). Returns weights that sum to 1.
+fn sample_dirichlet4(alphas: [f64; 4], rng: &mut EngineRng) -> Result<[f64; 4], InternalError> {
+    let mut g = [0.0f64; 4];
+    for (slot, &alpha) in g.iter_mut().zip(alphas.iter()) {
+        *slot = sample_gamma(alpha, rng)?;
+    }
+    Ok(normalize_to_simplex(g))
+}
+
+/// Normalise non-negative weights so they sum to 1. If every weight is zero
+/// (all Gammas underflowed — only possible when every concentration is below 1,
+/// which the caller's do not do), falls back to an even split rather than
+/// dividing by zero.
+fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
+    let sum: f64 = g.iter().sum();
+    if sum <= 0.0 {
+        return [0.25; 4];
+    }
+    for slot in &mut g {
+        *slot /= sum;
+    }
+    g
+}
+
+/// Per-test-case *swarm* parameters: the mixture weights of the four value
+/// categories a wide-range integer draw chooses between — endpoints, curated
+/// interesting values, the diffuse large-constant pool, and the ordinary middle
+/// distribution. Drawn once at the start of each generated test case (see
+/// [`Self::draw`]) and held constant across every draw and every clone-stream of
+/// that case. The middle weight is implicit: `1 - endpoint - interesting -
+/// diffuse`.
+///
+/// They only ever change *how likely* each category is, never *which* values are
+/// reachable. Because hegel records typed choice *values* and the samplers are
+/// consulted only for fresh draws (replay and shrinking read the recorded values
+/// directly), these parameters are a pure generation-time reweighting: they are
+/// never written into the choice sequence and never affect shrinking.
+///
+/// The weights come from a Dirichlet (see the `DIRICHLET_ALPHA_*` constants), so
+/// most cases are middle-dominated ("normal") while a thin lumpy tail
+/// concentrates on one special category. An endpoint-heavy case draws both
+/// operands of `x + y` from `{min, max, …}`, so their sum overflows about half
+/// the time — the correlation a fixed per-value probability can't produce.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GenerationParameters {
+    /// Probability a wide-range draw returns a range endpoint (`min`, `max`,
+    /// `min + 1`, `max - 1`).
+    pub endpoint_probability: f64,
+    /// Probability a wide-range draw returns a curated `INTERESTING_INTEGERS`
+    /// value in range (zero, ±1, small magnitudes, powers of two, type limits).
+    pub interesting_probability: f64,
+    /// Probability a wide-range draw returns a diffuse large constant.
+    pub diffuse_probability: f64,
+}
+
+impl GenerationParameters {
+    /// Draw a fresh set of parameters for one test case from the Dirichlet over
+    /// the four value categories.
+    pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
+        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet4(
+            [
+                DIRICHLET_ALPHA_ENDPOINT,
+                DIRICHLET_ALPHA_INTERESTING,
+                DIRICHLET_ALPHA_DIFFUSE,
+                DIRICHLET_ALPHA_MIDDLE,
+            ],
+            rng,
+        )?;
+        Ok(GenerationParameters {
+            endpoint_probability: endpoint,
+            interesting_probability: interesting,
+            diffuse_probability: diffuse,
+        })
+    }
+}
+
+impl Default for GenerationParameters {
+    /// A fixed fallback used only when no test-case parameters have been drawn
+    /// (a replay-only test case never samples, so it never consults these). The
+    /// values are the approximate mean of [`Self::draw`], so any accidental use
+    /// still produces a reasonable distribution rather than a degenerate one.
+    fn default() -> Self {
+        GenerationParameters {
+            endpoint_probability: 0.02,
+            interesting_probability: 0.12,
+            diffuse_probability: 0.03,
+        }
+    }
+}
 
 /// Boundary-biased sample for a type-erased integer choice.
 ///
@@ -266,48 +424,22 @@ static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
 pub(crate) fn biased_integer_sample(
     ic: &IntegerChoice,
     rng: &mut EngineRng,
+    params: GenerationParameters,
 ) -> Result<BigInt, InternalError> {
     Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
-        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)?),
-        _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
+        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng, params)?),
+        _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng, params),
     })
 }
 
-/// The in-range *core* special values for `[min_value, max_value]`: the two
-/// endpoints, their inner neighbours (`min + 1`, `max - 1`), zero, ±1, and the
-/// small magnitudes `±2..=±8`. Sorted and deduped; always non-empty because
-/// `min_value` is in range. These are the values a property test most often
-/// needs (off-by-one, overflow, sign), given their own fixed probability mass
-/// so the wide-range constant pool can't dilute them away.
-fn core_special_values_i128(min_value: i128, max_value: i128) -> Vec<i128> {
-    let mut core: Vec<i128> = Vec::with_capacity(21);
-    let mut push = |v: i128| {
-        if v >= min_value && v <= max_value {
-            core.push(v);
-        }
-    };
-    push(min_value);
-    push(max_value);
-    push(min_value.saturating_add(1));
-    push(max_value.saturating_sub(1));
-    for v in -8..=8i128 {
-        push(v);
-    }
-    core.sort_unstable();
-    core.dedup();
-    core
-}
-
-/// The original i128 nasty-pool + distribution sampler, returning a value in
-/// `[min_value, max_value]`.
-fn biased_i128_sample(
+/// Narrow-range sampler: the original nasty-pool + distribution behaviour,
+/// unchanged, so ranges below [`CURATED_MIN_WIDTH`] keep their exact previous
+/// generation and shrink behaviour.
+fn narrow_nasty_sample(
     min_value: i128,
     max_value: i128,
     rng: &mut EngineRng,
 ) -> Result<i128, InternalError> {
-    if min_value == max_value {
-        return Ok(min_value);
-    }
     let pool = &*SORTED_NASTY_POOL;
     let lo = pool.partition_point(|&v| v < min_value);
     let hi = pool.partition_point(|&v| v <= max_value);
@@ -315,29 +447,8 @@ fn biased_i128_sample(
     let need_min = static_slice.first() != Some(&min_value);
     let need_max = static_slice.last() != Some(&max_value);
     let count = static_slice.len() + (need_min as usize) + (need_max as usize);
-    let nasty_threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
-
-    // The core tier ([`CORE_SPECIAL_PROBABILITY`]) applies only to wide ranges;
-    // `checked_sub` returning `None` means the span overflows `i128` and is
-    // unambiguously wide. `u` is the single decision draw shared with the
-    // nasty/distribution split (core, then pool, then distribution), so no extra
-    // entropy is spent and narrow ranges (`core_threshold == 0`) keep their
-    // exact previous path.
-    let is_wide = max_value
-        .checked_sub(min_value)
-        .is_none_or(|span| span as u128 >= CORE_SPECIAL_MIN_SPAN);
-    let core_threshold = if is_wide {
-        CORE_SPECIAL_PROBABILITY
-    } else {
-        0.0
-    };
-
-    let u = rng.random::<f64>();
-    if u < core_threshold {
-        let core = core_special_values_i128(min_value, max_value);
-        return Ok(core[rng.random_range(0..core.len())]);
-    }
-    if u < core_threshold + nasty_threshold {
+    let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
+    if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         Ok(if need_min && idx == 0 {
             min_value
@@ -351,64 +462,160 @@ fn biased_i128_sample(
     }
 }
 
+/// Boundary-biased sample in `[min_value, max_value]`.
+///
+/// Narrow ranges use [`narrow_nasty_sample`]. Wide ranges (width at least
+/// [`CURATED_MIN_WIDTH`], or wider than `i128`) choose one of four value
+/// categories from a single decision draw `u`, weighted by this case's
+/// [`GenerationParameters`]:
+///
+///   * *endpoints* — `{min, max, min + 1, max - 1}`;
+///   * *interesting* — `INTERESTING_INTEGERS` in range;
+///   * *diffuse* — the large `GLOBAL_CONSTANTS_INTEGERS` pool in range;
+///   * *middle* — the ordinary distribution (the remaining mass).
+///
+/// An empty special category's mass falls through to the next, and finally to
+/// the middle.
+fn biased_i128_sample(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut EngineRng,
+    params: GenerationParameters,
+) -> Result<i128, InternalError> {
+    if min_value == max_value {
+        return Ok(min_value);
+    }
+
+    // `checked_sub` returning `None` means the width overflows `i128`, so the
+    // range is unambiguously wide.
+    let is_wide = max_value
+        .checked_sub(min_value)
+        .is_none_or(|w| w as u128 >= CURATED_MIN_WIDTH);
+    if !is_wide {
+        return narrow_nasty_sample(min_value, max_value, rng);
+    }
+
+    // Endpoint category: the range edges and their inner neighbours (up to four
+    // distinct values on the stack, so this hot path allocates nothing).
+    let mut endpoints = [0i128; 4];
+    let mut n_end = 0usize;
+    for v in [
+        min_value,
+        max_value,
+        min_value.saturating_add(1),
+        max_value.saturating_sub(1),
+    ] {
+        if v >= min_value && v <= max_value && !endpoints[..n_end].contains(&v) {
+            endpoints[n_end] = v;
+            n_end += 1;
+        }
+    }
+
+    // Interesting category: the curated interesting-value slice in range. May
+    // overlap the endpoints in value (e.g. `i64::MAX`); the two are still
+    // distinct mixture components.
+    let interesting = &*SORTED_INTERESTING;
+    let lo = interesting.partition_point(|&v| v < min_value);
+    let hi = interesting.partition_point(|&v| v <= max_value);
+    let interesting_slice = &interesting[lo..hi];
+
+    // Diffuse category: the large-constant pool restricted to range.
+    let diffuse = &*GLOBAL_CONSTANTS_INTEGERS;
+    let dlo = diffuse.partition_point(|&v| v < min_value);
+    let dhi = diffuse.partition_point(|&v| v <= max_value);
+    let diffuse_slice = &diffuse[dlo..dhi];
+
+    // One shared draw selects the category by cumulative weight; an empty
+    // category is skipped so its mass flows to the next (finally the middle).
+    let u = rng.random::<f64>();
+    let mut acc = params.endpoint_probability;
+    if u < acc && n_end > 0 {
+        return Ok(endpoints[rng.random_range(0..n_end)]);
+    }
+    acc += params.interesting_probability;
+    if u < acc && !interesting_slice.is_empty() {
+        return Ok(interesting_slice[rng.random_range(0..interesting_slice.len())]);
+    }
+    acc += params.diffuse_probability;
+    if u < acc && !diffuse_slice.is_empty() {
+        return Ok(diffuse_slice[rng.random_range(0..diffuse_slice.len())]);
+    }
+    integer_sample_from_distribution(min_value, max_value, rng)
+}
+
 /// Boundary-biased sample for an integer range too wide for `i128` (a `BigInt`
-/// choice, or a `u128` range past `i128::MAX`). With probability proportional
-/// to the in-range nasty count it returns one of `{min, max, 0, ±1, ±2^k}`;
-/// otherwise it draws a roughly-uniform value in `[min, max]` via rejection
-/// sampling over the span's bit length.
-fn biguint_sample_in_range(min: &BigInt, max: &BigInt, rng: &mut EngineRng) -> BigInt {
+/// choice, or a `u128` range past `i128::MAX`). Uses the same four-category
+/// mixture as [`biased_i128_sample`] (endpoints, interesting, diffuse, middle),
+/// weighted by this case's [`GenerationParameters`]; the middle draws a
+/// roughly-uniform value via rejection sampling over the span's bit length.
+fn biguint_sample_in_range(
+    min: &BigInt,
+    max: &BigInt,
+    rng: &mut EngineRng,
+    params: GenerationParameters,
+) -> BigInt {
     if min == max {
         return min.clone();
     }
     let span: BigUint = (max - min).magnitude();
     let bits = span.bits();
 
-    // Core special-value tier (see [`biased_i128_sample`]); a range this wide
-    // (beyond `i128`) is always wide, so it always applies. `min` is in range,
-    // so the core list is never empty.
-    let mut core: Vec<BigInt> = Vec::with_capacity(21);
-    let mut push_core = |v: BigInt| {
-        if &v >= min && &v <= max {
-            core.push(v);
+    // Endpoint category: the range edges and their inner neighbours.
+    let mut endpoints: Vec<BigInt> = Vec::with_capacity(4);
+    for v in [
+        min.clone(),
+        max.clone(),
+        min + BigInt::from(1),
+        max - BigInt::from(1),
+    ] {
+        if &v >= min && &v <= max && !endpoints.contains(&v) {
+            endpoints.push(v);
         }
-    };
-    push_core(min.clone());
-    push_core(max.clone());
-    push_core(min + BigInt::from(1));
-    push_core(max - BigInt::from(1));
-    for v in -8..=8i32 {
-        push_core(BigInt::from(v));
     }
-    core.sort();
-    core.dedup();
 
-    let mut nasty: Vec<BigInt> = vec![min.clone(), max.clone()];
-    let push_in_range = |v: BigInt, nasty: &mut Vec<BigInt>| {
-        if &v >= min && &v <= max {
-            nasty.push(v);
+    // Diffuse category: powers of two spanning the range magnitude.
+    let mut diffuse: Vec<BigInt> = Vec::new();
+    {
+        let mut push_diffuse = |v: BigInt| {
+            if &v >= min && &v <= max {
+                diffuse.push(v);
+            }
+        };
+        for k in 1..=bits.min(128) {
+            let p2 = BigInt::from(BigUint::from(1u32) << (k as usize));
+            push_diffuse(-p2.clone());
+            push_diffuse(p2);
         }
-    };
-    push_in_range(BigInt::from(0), &mut nasty);
-    push_in_range(BigInt::from(1), &mut nasty);
-    push_in_range(BigInt::from(-1), &mut nasty);
-    for k in 0..=bits.min(128) {
-        let p2 = BigInt::from(BigUint::from(1u32) << (k as usize));
-        push_in_range(-p2.clone(), &mut nasty);
-        push_in_range(p2, &mut nasty);
     }
-    nasty.sort();
-    nasty.dedup();
+    diffuse.sort();
+    diffuse.dedup();
 
-    // One shared draw `u`: core, then the power-of-two pool, then the fallback.
-    let nasty_threshold = (nasty.len() as f64 * BOUNDARY_PROBABILITY).min(0.5);
+    // One shared draw selects the category by cumulative weight; an empty
+    // category is skipped so its mass flows to the next (finally the middle). A
+    // range beyond `i128` always has non-empty endpoints.
     let u = rng.random::<f64>();
-    if u < CORE_SPECIAL_PROBABILITY {
-        let idx = rng.random_range(0..core.len());
-        return core[idx].clone();
+    let mut acc = params.endpoint_probability;
+    if u < acc && !endpoints.is_empty() {
+        return endpoints[rng.random_range(0..endpoints.len())].clone();
     }
-    if u < CORE_SPECIAL_PROBABILITY + nasty_threshold {
-        let idx = rng.random_range(0..nasty.len());
-        return nasty[idx].clone();
+    acc += params.interesting_probability;
+    if u < acc {
+        // Interesting category (built only when selected): the interesting set
+        // restricted to range.
+        let mut interesting: Vec<BigInt> = Vec::new();
+        for &iv in &*SORTED_INTERESTING {
+            let v = BigInt::from(iv);
+            if &v >= min && &v <= max {
+                interesting.push(v);
+            }
+        }
+        if !interesting.is_empty() {
+            return interesting[rng.random_range(0..interesting.len())].clone();
+        }
+    }
+    acc += params.diffuse_probability;
+    if u < acc && !diffuse.is_empty() {
+        return diffuse[rng.random_range(0..diffuse.len())].clone();
     }
 
     min + BigInt::from(sample_biguint_at_most(&span, rng))
@@ -1101,6 +1308,11 @@ pub struct FamilyCore {
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<BTreeSet<i64>>,
+    /// This test case's swarm [`GenerationParameters`], drawn once when the
+    /// root stream's RNG is attached (see [`NativeTestCase::with_random`]) and
+    /// shared by every clone-stream so the whole case has one consistent
+    /// distribution. Unset for replay-only families, which never sample.
+    generation_parameters: OnceBox<GenerationParameters>,
 }
 
 impl FamilyCore {
@@ -1116,6 +1328,7 @@ impl FamilyCore {
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(BTreeSet::new()),
+            generation_parameters: OnceBox::new(),
         }
     }
 
@@ -1143,6 +1356,22 @@ impl FamilyCore {
     /// rejected on this family.
     pub(crate) fn reject_concurrent_machine(&self) -> bool {
         self.reject_concurrent_machine.load(Ordering::Relaxed)
+    }
+
+    /// Record this test case's swarm parameters. Called once when the root
+    /// stream's RNG is attached; later calls (there are none in practice) are
+    /// ignored by the `OnceBox`.
+    fn set_generation_parameters(&self, params: GenerationParameters) {
+        let _ = self.generation_parameters.set(Box::new(params));
+    }
+
+    /// This test case's swarm parameters, or [`GenerationParameters::default`]
+    /// if none were drawn (a replay-only family, which never samples).
+    pub(crate) fn generation_parameters(&self) -> GenerationParameters {
+        self.generation_parameters
+            .get()
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Make every state machine of this family run without a step cap.
@@ -1280,8 +1509,16 @@ pub struct NativeTestCase {
 }
 
 impl NativeTestCase {
-    pub fn new_random(rng: EngineRng) -> Self {
+    pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
         Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
+    }
+
+    /// Like [`Self::new_random`], but generating from the given swarm
+    /// parameters rather than drawing fresh ones — used by the exploration
+    /// loop so the novel-prefix walk and the test case share one distribution.
+    pub fn new_random_with_params(rng: EngineRng, params: GenerationParameters) -> Self {
+        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None)
+            .with_random_and_params(rng, params)
     }
 
     /// Replay `choices` in order, then for every further draw resolve via
@@ -1381,8 +1618,25 @@ impl NativeTestCase {
     /// `max_size` choices.
     ///
     /// Used by `mutate_and_shrink`.
-    pub fn for_probe(prefix: &[ChoiceValue], rng: EngineRng, max_size: usize) -> Self {
+    pub fn for_probe(
+        prefix: &[ChoiceValue],
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
+    }
+
+    /// Like [`Self::for_probe`], but generating from the given swarm parameters
+    /// rather than drawing fresh ones — used by the exploration loop so the
+    /// novel-prefix walk and the test-case tail share one distribution.
+    pub fn for_probe_with_params(
+        prefix: &[ChoiceValue],
+        rng: EngineRng,
+        max_size: usize,
+        params: GenerationParameters,
+    ) -> Self {
+        Self::for_choices_and_template(prefix, None, None, max_size, None)
+            .with_random_and_params(rng, params)
     }
 
     /// Attach an RNG for post-prefix random draws.  Internal builder used by
@@ -1390,7 +1644,22 @@ impl NativeTestCase {
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
     /// `max_size` rather than the bare-replay `usize::MAX`.
-    fn with_random(mut self, rng: EngineRng) -> Self {
+    fn with_random(self, mut rng: EngineRng) -> Result<Self, InternalError> {
+        // Draw this test case's swarm parameters from the RNG up front, before
+        // any value is sampled. Callers that generate a novel prefix separately
+        // (the main exploration loop) draw the parameters themselves and use
+        // [`Self::with_random_and_params`] so the prefix walk and the test case
+        // share one distribution; the simpler callers get a fresh draw here.
+        let params = GenerationParameters::draw(&mut rng)?;
+        Ok(self.with_random_and_params(rng, params))
+    }
+
+    /// Attach an RNG and use the given, already-drawn swarm parameters (rather
+    /// than drawing fresh ones). The parameters are held on the shared family,
+    /// so every draw and every clone-stream of this test case generates from
+    /// one consistent distribution.
+    fn with_random_and_params(mut self, rng: EngineRng, params: GenerationParameters) -> Self {
+        self.family.set_generation_parameters(params);
         self.rng = Some(rng);
         self.family.set_budget(self.max_size);
         self
@@ -1632,6 +1901,7 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
+        let params = self.family.generation_parameters();
         let (v, was_forced) = self.resolve_choice(
             || Ok(kind.simplest()),
             || Ok(kind.unit()),
@@ -1639,7 +1909,7 @@ impl NativeTestCase {
                 ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
             },
-            |rng| biased_integer_sample(&kind, rng),
+            |rng| biased_integer_sample(&kind, rng, params),
         )?;
 
         if let Some(ref mut obs) = self.observer {

@@ -605,6 +605,14 @@ mod nocover_boundary_exploration {
 /// values with a meaningful frequency, mirroring Hypothesis's special-value
 /// injection. Regression test for the boundary under-sampling that made
 /// off-by-one / overflow / sign bugs hard to find.
+///
+/// The rates here are *marginal* over test cases: because each case draws its
+/// own swarm `curated_probability` (most cases low, a boundary-heavy minority
+/// high), boundary values are clustered in the heavy cases rather than spread
+/// evenly, so the aggregate per-draw rate is lower than the in-a-heavy-case
+/// rate. The `x + y` overflow check exercises what that clustering buys: a bug
+/// needing *two* extreme operands at once, which a fixed per-draw probability
+/// would reach only at rate ~p².
 mod special_value_distribution {
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
@@ -652,13 +660,50 @@ mod special_value_distribution {
         let n = N.load(Ordering::Relaxed) as f64;
         let boundary = BOUNDARY.load(Ordering::Relaxed) as f64 / n;
         let small = SMALL.load(Ordering::Relaxed) as f64 / n;
+        // Marginal per-draw rates under swarm: lower than a flat boundary-biased
+        // distribution would give, but concentrated where it matters.
         assert!(
-            boundary > 0.015,
-            "boundary values only {boundary:.4} of draws; expected > 1.5%"
+            boundary > 0.008,
+            "boundary values only {boundary:.4} of draws; expected > 0.8%"
         );
         assert!(
             small > 0.03,
             "small values only {small:.4} of draws; expected > 3%"
+        );
+    }
+
+    // `x` and `y` are drawn in the same test case, so they share that case's
+    // swarm `curated_probability`. In a boundary-heavy case both are pulled
+    // toward the endpoints together, so `x + y` overflows far more often than
+    // the ~p² a fixed per-draw boundary probability `p` would yield — this is
+    // the interaction swarm testing exists to reach.
+    #[test]
+    fn overflow_of_x_plus_y_is_common() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static OVERFLOW: AtomicU64 = AtomicU64::new(0);
+
+        Hegel::new(|tc| {
+            let x: i64 = tc.draw(gs::integers::<i64>());
+            let y: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if x.checked_add(y).is_none() {
+                OVERFLOW.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB2)) // deterministic: not a flaky statistical test
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let overflow = OVERFLOW.load(Ordering::Relaxed) as f64 / n;
+        assert!(
+            overflow > 0.01,
+            "x + y overflowed only {overflow:.4} of cases; expected > 1%"
         );
     }
 
