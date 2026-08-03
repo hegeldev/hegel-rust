@@ -424,7 +424,6 @@ name = "hegeltest-c"
 version = "0.30.3"
 dependencies = [
  "cbindgen",
- "crc32fast",
  "ctor",
  "dashu-int",
  "insta",

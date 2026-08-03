@@ -24,7 +24,6 @@ rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }
 rustc-hash = { version = "2" }
-crc32fast = "1.4"
 parking_lot = "0.12"
 tempfile = "3"
 
