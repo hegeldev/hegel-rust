@@ -5,7 +5,7 @@ use crate::native::rng::EngineRng;
 
 fn machine(num_rules: usize) -> NativeStateMachine {
     let names = (0..num_rules).map(|i| format!("rule_{i}")).collect();
-    NativeStateMachine::new(names, vec!["inv".to_string()])
+    NativeStateMachine::new(names, vec!["inv".to_string()]).unwrap()
 }
 
 fn replay(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
@@ -56,7 +56,7 @@ fn step_cap_truncates_to_max_and_halts_after_that_many_steps() {
     let mut ntc = NativeTestCase::for_choices_and_template(
         &[cap()],
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         4096,
         None,
     );
@@ -75,7 +75,7 @@ fn small_step_cap_halts_after_that_many_steps() {
     let mut ntc = NativeTestCase::for_choices_and_template(
         &[int(2)],
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         64,
         None,
     );
@@ -294,7 +294,7 @@ fn simplest_template_always_selects_rule_zero() {
     let mut ntc = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         64,
         None,
     );

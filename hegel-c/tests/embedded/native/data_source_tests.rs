@@ -119,9 +119,21 @@ fn state_machine_next_rule_returns_in_range_indices() {
 }
 
 #[test]
+fn with_ntc_maps_internal_engine_errors_without_latching_abort() {
+    let (ds, _handle) = random_source();
+    let e = crate::control::InternalError::new(format_args!("engine invariant"));
+    let out: Result<(), DataSourceError> = ds.with_ntc(|_| Err(EngineError::Internal(e.clone())));
+    match out {
+        Err(DataSourceError::Internal(got)) => assert_eq!(got, e),
+        other => panic!("expected DataSourceError::Internal, got {other:?}"),
+    }
+    assert!(!ds.test_aborted());
+}
+
+#[test]
 fn state_machine_next_rule_on_exhausted_source_stops_test() {
     let (ds, _handle) = exhausted_source();
-    let mut machine = NativeStateMachine::new(vec!["a".into(), "b".into()], vec![]);
+    let mut machine = NativeStateMachine::new(vec!["a".into(), "b".into()], vec![]).unwrap();
     assert!(matches!(
         ds.state_machine_next_rule(&mut machine),
         Err(DataSourceError::StopTest)

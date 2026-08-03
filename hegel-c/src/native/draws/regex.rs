@@ -743,10 +743,9 @@ fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
 
 /// Return whether codepoint `c` is in the given CPython character category.
 fn in_category(c: char, cat: ChCode) -> bool {
-    let cp = c as u32;
     match cat {
-        ChCode::Digit => unicodedata::is_in_group(cp, "Nd"),
-        ChCode::NotDigit => !unicodedata::is_in_group(cp, "Nd"),
+        ChCode::Digit => unicodedata::is_in_group_char(c, "Nd"),
+        ChCode::NotDigit => !unicodedata::is_in_group_char(c, "Nd"),
         ChCode::Space => is_uni_space(c),
         ChCode::NotSpace => !is_uni_space(c),
         ChCode::Word => is_uni_word(c),
@@ -757,11 +756,11 @@ fn is_uni_space(c: char) -> bool {
     matches!(
         c,
         ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\x1f' | '\u{85}'
-    ) || unicodedata::is_in_group(c as u32, "Z")
+    ) || unicodedata::is_in_group_char(c, "Z")
 }
 
 fn is_uni_word(c: char) -> bool {
-    c == '_' || unicodedata::is_in_group(c as u32, "L") || unicodedata::is_in_group(c as u32, "N")
+    c == '_' || unicodedata::is_in_group_char(c, "L") || unicodedata::is_in_group_char(c, "N")
 }
 
 /// Gather all characters in `alphabet` (or BMP-minus-surrogates when no

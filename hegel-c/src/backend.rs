@@ -25,6 +25,16 @@ pub enum DataSourceError {
     /// the message exposed via `hegel_context_last_error`. Carries a
     /// human-readable diagnostic.
     InvalidArgument(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected during a draw. libhegel maps it to `HEGEL_E_INTERNAL` with
+    /// the bug-report diagnostic exposed via `hegel_context_last_error`.
+    Internal(crate::control::InternalError),
+}
+
+impl From<crate::control::InternalError> for DataSourceError {
+    fn from(e: crate::control::InternalError) -> Self {
+        DataSourceError::Internal(e)
+    }
 }
 
 impl std::fmt::Display for DataSourceError {
@@ -35,6 +45,7 @@ impl std::fmt::Display for DataSourceError {
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
             DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
+            DataSourceError::Internal(e) => write!(f, "{e}"),
         }
     }
 }
@@ -244,6 +255,16 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected while the engine explored — generation, mutation, or
+    /// shrinking. The diagnostic carries the bug-report framing.
+    Internal(crate::control::InternalError),
+}
+
+impl From<crate::control::InternalError> for RunError {
+    fn from(e: crate::control::InternalError) -> Self {
+        RunError::Internal(e)
+    }
 }
 
 impl std::fmt::Display for RunError {
@@ -252,6 +273,7 @@ impl std::fmt::Display for RunError {
             RunError::HealthCheck(msg) | RunError::Flaky(msg) | RunError::NonDeterministic(msg) => {
                 write!(f, "{}", msg)
             }
+            RunError::Internal(e) => write!(f, "{e}"),
         }
     }
 }

@@ -99,7 +99,7 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let already_trivial = self.current_spans.trivial(i, &self.current_nodes);
+            let already_trivial = self.current_spans.trivial(i, &self.current_nodes)?;
             if already_trivial {
                 i += 1;
                 continue;
@@ -110,8 +110,8 @@ impl<'a> Shrinker<'a> {
                 if node.was_forced {
                     continue;
                 }
-                if !node.data.is_simplest() {
-                    *node = node.with_simplest();
+                if !node.data.is_simplest()? {
+                    *node = node.with_simplest()?;
                 }
             }
 

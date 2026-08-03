@@ -652,7 +652,7 @@ fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
 #[test]
 fn build_in_set_alphabet_drops_disallowed_positive_literal() {
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal('b' as u32)];
-    let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]);
+    let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]).unwrap();
     let out = build_in_set(&items, 0, &Some(alphabet));
     assert_eq!(out, vec!['a']);
 }
@@ -660,7 +660,7 @@ fn build_in_set_alphabet_drops_disallowed_positive_literal() {
 #[test]
 fn build_in_set_negated_ascii_only_excludes_nonascii() {
     let items = vec![SetItem::Negate, SetItem::Literal('a' as u32)];
-    let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]);
+    let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]).unwrap();
     let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet));
     assert!(out.iter().all(|c| (*c as u32) < 128 && *c != 'a'));
 }
@@ -671,7 +671,7 @@ fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let cache = Mutex::new(HashMap::default());
     let char_cache = Mutex::new(HashMap::default());
     let mut state = ignorecase_state(&cache, &char_cache);
-    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
+    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]).unwrap());
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
     assert!(result.is_err());
@@ -736,13 +736,16 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
 #[test]
 fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![
-        ('I' as u32, 'I' as u32),
-        ('i' as u32, 'i' as u32),
-        ('x' as u32, 'x' as u32),
-        (0x130, 0x130),
-        (0x307, 0x307),
-    ]));
+    let alphabet = Some(
+        IntervalSet::new(vec![
+            ('I' as u32, 'I' as u32),
+            ('i' as u32, 'i' as u32),
+            ('x' as u32, 'x' as u32),
+            (0x130, 0x130),
+            (0x307, 0x307),
+        ])
+        .unwrap(),
+    );
     let cache = Mutex::new(HashMap::default());
     let char_cache = Mutex::new(HashMap::default());
     for seed in 0..100 {
@@ -848,14 +851,17 @@ fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string()
 #[test]
 fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![
-        ('I' as u32, 'I' as u32),
-        ('a' as u32, 'a' as u32),
-        ('i' as u32, 'i' as u32),
-        ('x' as u32, 'x' as u32),
-        (0x130, 0x130),
-        (0x307, 0x307),
-    ]));
+    let alphabet = Some(
+        IntervalSet::new(vec![
+            ('I' as u32, 'I' as u32),
+            ('a' as u32, 'a' as u32),
+            ('i' as u32, 'i' as u32),
+            ('x' as u32, 'x' as u32),
+            (0x130, 0x130),
+            (0x307, 0x307),
+        ])
+        .unwrap(),
+    );
     let re = CompiledRegex::compile("(?i)[^\u{130}a]", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..100 {
@@ -932,7 +938,7 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
 #[test]
 fn generate_regex_end_anchor_with_no_newline_in_alphabet_does_not_pad() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]));
+    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]).unwrap());
     let re = CompiledRegex::compile("a$", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..20 {

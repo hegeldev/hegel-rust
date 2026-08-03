@@ -5,7 +5,7 @@ use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 
 use super::many_more;
-use crate::control::hegel_internal_debug_assert;
+use crate::control::{InternalError, hegel_internal_debug_assert};
 
 /// The IANA top-level-domain list, vendored from
 /// `http://data.iana.org/TLD/tlds-alpha-by-domain.txt`. Same file Hypothesis
@@ -33,33 +33,34 @@ static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 /// RFC 5322 atext set used by Hypothesis's `emails()` for the local part:
 /// `string.ascii_letters + string.digits + "!#$%&'*+-/=^_\`{|}~"`. Encoded
 /// here as merged codepoint intervals in ascending order.
-static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Arc<IntervalSet>> = LazyLock::new(|| {
-    Arc::new(IntervalSet::new(vec![
-        (b'!' as u32, b'!' as u32),
-        (b'#' as u32, b'\'' as u32),
-        (b'*' as u32, b'+' as u32),
-        (b'-' as u32, b'-' as u32),
-        (b'/' as u32, b'9' as u32),
-        (b'=' as u32, b'=' as u32),
-        (b'A' as u32, b'Z' as u32),
-        (b'^' as u32, b'`' as u32),
-        (b'a' as u32, b'z' as u32),
-        (b'{' as u32, b'~' as u32),
-    ]))
-});
+static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
+    LazyLock::new(|| {
+        Ok(Arc::new(IntervalSet::new(vec![
+            (b'!' as u32, b'!' as u32),
+            (b'#' as u32, b'\'' as u32),
+            (b'*' as u32, b'+' as u32),
+            (b'-' as u32, b'-' as u32),
+            (b'/' as u32, b'9' as u32),
+            (b'=' as u32, b'=' as u32),
+            (b'A' as u32, b'Z' as u32),
+            (b'^' as u32, b'`' as u32),
+            (b'a' as u32, b'z' as u32),
+            (b'{' as u32, b'~' as u32),
+        ])?))
+    });
 
 /// `string.printable` from Python: ASCII 32..=126 plus the whitespace
 /// codepoints `\t \n \x0b \x0c \r` (9..=13). Used for URL path components
 /// before url-encoding.
-static PRINTABLE_ASCII_INTERVALS: LazyLock<Arc<IntervalSet>> =
-    LazyLock::new(|| Arc::new(IntervalSet::new(vec![(9, 13), (32, 126)])));
+static PRINTABLE_ASCII_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
+    LazyLock::new(|| Ok(Arc::new(IntervalSet::new(vec![(9, 13), (32, 126)])?)));
 
 /// Latin-1 byte range used as the alphabet for URL fragment characters.
 /// Mirrors Hypothesis's `st.characters(min_codepoint=0, max_codepoint=255)`
 /// for `_url_fragments_strategy`. Surrogates `[0xD800, 0xDFFF]` aren't in
 /// range so the single interval is already surrogate-free.
-static FRAGMENT_BYTE_INTERVALS: LazyLock<Arc<IntervalSet>> =
-    LazyLock::new(|| Arc::new(IntervalSet::new(vec![(0, 0xFF)])));
+static FRAGMENT_BYTE_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
+    LazyLock::new(|| Ok(Arc::new(IntervalSet::new(vec![(0, 0xFF)])?)));
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
     ntc.conclude(Status::Invalid, None);
@@ -239,7 +240,11 @@ fn draw_ascii_alnum_or_hyphen(ntc: &mut NativeTestCase) -> Result<char, EngineEr
 ///     marking the test case invalid when the filter fails — the engine
 ///     then retries with a different choice prefix.
 pub(crate) fn generate_email(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
-    let local = ntc.draw_string(Arc::clone(&EMAIL_LOCAL_PART_INTERVALS), 1, 64)?;
+    let local = ntc.draw_string(
+        Arc::clone(EMAIL_LOCAL_PART_INTERVALS.as_ref().map_err(Clone::clone)?),
+        1,
+        64,
+    )?;
     let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
     let address = format!("{local}@{domain}");
     if address.len() > 254 {
@@ -284,13 +289,21 @@ pub(crate) fn generate_url(ntc: &mut NativeTestCase) -> Result<String, EngineErr
         if !many_more(ntc, &mut state)? {
             break;
         }
-        let raw = ntc.draw_string(Arc::clone(&PRINTABLE_ASCII_INTERVALS), 0, 100)?;
-        components.push(url_encode_path(&raw));
+        let raw = ntc.draw_string(
+            Arc::clone(PRINTABLE_ASCII_INTERVALS.as_ref().map_err(Clone::clone)?),
+            0,
+            100,
+        )?;
+        components.push(url_encode_path(&raw)?);
     }
     let path = components.join("/");
 
     let fragment = if ntc.weighted(0.5, None)? {
-        let raw = ntc.draw_string(Arc::clone(&FRAGMENT_BYTE_INTERVALS), 1, 100)?;
+        let raw = ntc.draw_string(
+            Arc::clone(FRAGMENT_BYTE_INTERVALS.as_ref().map_err(Clone::clone)?),
+            1,
+            100,
+        )?;
         format!("#{}", url_encode_fragment(ntc, &raw)?)
     } else {
         String::new()
@@ -317,16 +330,16 @@ fn is_fragment_safe(c: char) -> bool {
 
 /// Apply Hypothesis's `url_encode` to a path component: each char is either
 /// passed through (if URL-safe) or rendered as `%XX`.
-fn url_encode_path(s: &str) -> String {
+fn url_encode_path(s: &str) -> Result<String, InternalError> {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if is_url_safe(c) {
             out.push(c);
         } else {
-            push_percent_encoded(&mut out, c);
+            push_percent_encoded(&mut out, c)?;
         }
     }
-    out
+    Ok(out)
 }
 
 /// Apply Hypothesis's `_url_fragments_strategy` per-char rule: with
@@ -337,7 +350,7 @@ fn url_encode_fragment(ntc: &mut NativeTestCase, s: &str) -> Result<String, Engi
     for c in s.chars() {
         let force_encode = ntc.weighted(0.5, None)?;
         if force_encode || !is_fragment_safe(c) {
-            push_percent_encoded(&mut out, c);
+            push_percent_encoded(&mut out, c)?;
         } else {
             out.push(c);
         }
@@ -348,13 +361,14 @@ fn url_encode_fragment(ntc: &mut NativeTestCase, s: &str) -> Result<String, Engi
 /// Emit `%XX` for a single Latin-1 char. Inputs are bounded to codepoints
 /// 0..=255 by the calling alphabets (`printable_ascii_intervals` and
 /// `fragment_byte_intervals`), so the cast to `u8` is always exact.
-fn push_percent_encoded(out: &mut String, c: char) {
+fn push_percent_encoded(out: &mut String, c: char) -> Result<(), InternalError> {
     let cp = c as u32;
     hegel_internal_debug_assert!(
         cp <= 0xFF,
         "push_percent_encoded called with codepoint > 0xFF: {cp:#x}"
     );
     out.push_str(&format!("%{:02X}", cp & 0xFF));
+    Ok(())
 }
 
 #[cfg(test)]

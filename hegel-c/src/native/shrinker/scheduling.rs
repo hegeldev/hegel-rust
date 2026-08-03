@@ -15,7 +15,7 @@ use std::pin::Pin;
 
 use super::{ShrinkResult, Shrinker};
 
-/// A boxed shrink-pass step. Returns [`ShrinkStop`](super::ShrinkStop) once the
+/// A boxed shrink-pass step. Returns [`ShrinkHalt::Stop`](super::ShrinkHalt::Stop) once the
 /// shrink deadline has passed so the scheduler unwinds promptly. The step
 /// borrows the shrinker for the duration of the returned future, which is
 /// boxed via [`boxed_pass`](super::boxed_pass) so the closure's return type

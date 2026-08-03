@@ -183,7 +183,7 @@ fn normalize_unicode_chars_skips_forced_node() {
     use crate::native::intervalsets::IntervalSet;
     let forced_str = ChoiceNode::string(
         StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).unwrap().into(),
             min_size: 0,
             max_size: 16,
         },
@@ -192,7 +192,7 @@ fn normalize_unicode_chars_skips_forced_node() {
     );
     let other = ChoiceNode::string(
         StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).unwrap().into(),
             min_size: 0,
             max_size: 16,
         },

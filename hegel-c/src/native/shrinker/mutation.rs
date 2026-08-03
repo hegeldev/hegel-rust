@@ -39,7 +39,7 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let Some(current_idx) = node.data.to_index() else {
+            let Some(current_idx) = node.data.to_index()? else {
                 i += 1;
                 continue;
             };
@@ -52,7 +52,7 @@ impl<'a> Shrinker<'a> {
                     let Some(new_idx) = new_idx_opt else {
                         continue;
                     };
-                    if let Some(v) = node.data.from_index(new_idx) {
+                    if let Some(v) = node.data.from_index(new_idx)? {
                         if v != node_value && !candidates.contains(&v) {
                             candidates.push(v);
                         }
@@ -78,7 +78,7 @@ impl<'a> Shrinker<'a> {
                     j_offset += 1;
 
                     let data_j = self.current_nodes[j].data.clone();
-                    let Some(unit_val) = data_j.from_index(BigUint::from(1u32)) else {
+                    let Some(unit_val) = data_j.from_index(BigUint::from(1u32))? else {
                         continue;
                     };
                     let mut two_prefix = prefix.clone();
@@ -86,7 +86,7 @@ impl<'a> Shrinker<'a> {
                         if k == j {
                             two_prefix.push(unit_val.clone());
                         } else {
-                            two_prefix.push(self.current_nodes[k].data.simplest_value());
+                            two_prefix.push(self.current_nodes[k].data.simplest_value()?);
                         }
                     }
                     for _ in 0..RANDOM_ATTEMPTS {

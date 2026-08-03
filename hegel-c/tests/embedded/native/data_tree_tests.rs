@@ -47,7 +47,7 @@ fn generate_novel_prefix_replays_forced_values_and_descends() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
         assert_eq!(
             prefix,
             vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
@@ -91,7 +91,7 @@ fn record_tree_kill_depths_marks_inner_nodes_exhausted() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
         assert!(
             prefix.is_empty()
                 || prefix.first() != Some(&ChoiceValue::Integer(BigInt::from(0)))
@@ -113,7 +113,7 @@ fn generate_novel_prefix_returns_empty_for_exhausted_root() {
     record_tree(&mut root, &[], Status::Valid, &[0]);
     assert!(root.is_exhausted);
     let mut rng = EngineRng::seeded(0);
-    assert!(generate_novel_prefix(&root, &mut rng).is_empty());
+    assert!(generate_novel_prefix(&root, &mut rng).unwrap().is_empty());
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     record_tree(&mut root, &[bool_node(true)], Status::Invalid, &[]);
 
     let mut rng = EngineRng::seeded(0);
-    let prefix = generate_novel_prefix(&root, &mut rng);
+    let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
     assert!(prefix.is_empty());
 }
 
@@ -231,14 +231,16 @@ fn simulate_full_puns_original_simplest_to_new_simplest_with_prefix_nodes() {
     let choices = vec![ChoiceValue::Integer(BigInt::from(100))];
     let prefix_nodes = vec![int_node(100, 200, 100)];
 
-    let with_nodes = simulate_full(&root, &choices, Some(&prefix_nodes)).unwrap();
+    let with_nodes = simulate_full(&root, &choices, Some(&prefix_nodes))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         with_nodes.status,
         Status::Valid,
         "a stale value equal to its original kind's simplest puns to the new kind's simplest"
     );
 
-    let bare = simulate_full(&root, &choices, None).unwrap();
+    let bare = simulate_full(&root, &choices, None).unwrap().unwrap();
     assert_eq!(
         bare.status,
         Status::Interesting,
@@ -273,7 +275,9 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
         ),
         forced(
             ChoiceKind::String(StringChoice {
-                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]).into(),
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)])
+                    .unwrap()
+                    .into(),
                 min_size: 0,
                 max_size: 4,
             }),
@@ -285,7 +289,7 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     record_tree(&mut root, &nodes, Status::Valid, &[]);
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
         assert_eq!(prefix[0], ChoiceValue::Integer(BigInt::from(42)));
         assert_eq!(prefix[1], ChoiceValue::Float(2.5));
         assert_eq!(prefix[2], ChoiceValue::Bytes(vec![7, 8]));
@@ -318,7 +322,7 @@ fn record_and_simulate_roundtrip_with_clone_nodes() {
     assert!(record_tree(&mut root, &nodes, Status::Interesting, &[]).is_none());
 
     let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value().clone()).collect();
-    let outcome = simulate_full(&root, &values, None).unwrap();
+    let outcome = simulate_full(&root, &values, None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Interesting);
     assert_eq!(outcome.nodes.len(), 3);
     let ChoiceValue::Clone(record) = &outcome.nodes[1].value() else {
@@ -368,7 +372,7 @@ fn simulate_ignores_trailing_unread_child_values() {
         ChoiceValue::Boolean(true),
         ChoiceValue::Boolean(true),
     ])];
-    let outcome = simulate_full(&root, &longer, None).unwrap();
+    let outcome = simulate_full(&root, &longer, None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Valid);
     let ChoiceValue::Clone(record) = &outcome.nodes[0].value() else {
         panic!("expected a clone node");
@@ -466,7 +470,7 @@ fn novel_prefix_explores_inside_clone_subtrees() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
         assert_eq!(
             prefix,
             vec![clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
@@ -495,7 +499,7 @@ fn novel_prefix_descends_recorded_continuations_or_recurses() {
     let mut seen_inside = false;
     let mut seen_continuation = false;
     for _ in 0..100 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
         if prefix == inside {
             seen_inside = true;
         } else if prefix == continuation {
@@ -525,7 +529,7 @@ fn novel_prefix_stops_before_a_fully_explored_clone_node() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        assert!(generate_novel_prefix(&root, &mut rng).is_empty());
+        assert!(generate_novel_prefix(&root, &mut rng).unwrap().is_empty());
     }
     assert!(!root.is_exhausted);
 }
@@ -577,6 +581,7 @@ fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
         &[clone_prefix_value(vec![ChoiceValue::Boolean(false)])],
         None,
     )
+    .unwrap()
     .unwrap();
     assert_eq!(outcome.status, Status::Valid);
     let Some(stream) = outcome.nodes[0].data.as_clone() else {
@@ -600,7 +605,7 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(true),
     ])]);
-    let outcome = simulate_full(&root, &[candidate], None).unwrap();
+    let outcome = simulate_full(&root, &[candidate], None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Valid);
     let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
@@ -637,6 +642,7 @@ fn span_events_inside_clone_streams_are_reconstructed() {
         &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])],
         None,
     )
+    .unwrap()
     .unwrap();
     let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");

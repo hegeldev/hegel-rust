@@ -115,7 +115,7 @@ fn is_climbable_rejects_strings() {
     use crate::native::core::StringChoice;
     use crate::native::intervalsets::IntervalSet;
     let sc = StringChoice {
-        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).into(),
+        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).unwrap().into(),
         min_size: 0,
         max_size: 10,
     };
@@ -216,7 +216,7 @@ fn step_choice_rejects_unsteppable_kinds() {
     use crate::native::intervalsets::IntervalSet;
     let node = ChoiceNode::string(
         StringChoice {
-            intervals: IntervalSet::new(vec![(97, 122)]).into(),
+            intervals: IntervalSet::new(vec![(97, 122)]).unwrap().into(),
             min_size: 0,
             max_size: 4,
         },

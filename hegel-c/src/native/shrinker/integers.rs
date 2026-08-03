@@ -56,12 +56,13 @@ impl<'a> Shrinker<'a> {
         while k > 0 {
             let mut i = 0;
             while i + k <= self.current_nodes.len() {
-                if self.current_nodes[i].data.is_simplest() {
+                if self.current_nodes[i].data.is_simplest()? {
                     i += 1;
                 } else {
-                    let replacements: HashMap<usize, ChoiceValue> = (i..i + k)
-                        .map(|j| (j, self.current_nodes[j].data.simplest_value()))
-                        .collect();
+                    let mut replacements: HashMap<usize, ChoiceValue> = HashMap::default();
+                    for j in i..i + k {
+                        replacements.insert(j, self.current_nodes[j].data.simplest_value()?);
+                    }
                     self.replace(&replacements).await?;
                     i += k;
                 }
@@ -373,7 +374,7 @@ impl<'a> Shrinker<'a> {
             if valid.len() < 2 {
                 continue;
             }
-            let simplest = self.current_nodes[valid[0]].data.simplest_value();
+            let simplest = self.current_nodes[valid[0]].data.simplest_value()?;
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();

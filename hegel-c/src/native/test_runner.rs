@@ -25,6 +25,7 @@ use hashbrown::hash_map::Entry;
 use rand::RngExt;
 
 use crate::backend::{Failure, RunError, TestCaseResult};
+use crate::control::InternalError;
 use crate::exchange::CaseExchange;
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
@@ -35,7 +36,7 @@ use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
@@ -282,7 +283,7 @@ impl<'a> Engine<'a> {
             && !found_in_reuse
         {
             let (run, mismatch) = self
-                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE))
+                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
                 .await;
             if let Some(msg) = mismatch {
                 return Err(RunError::NonDeterministic(msg));
@@ -334,8 +335,10 @@ impl<'a> Engine<'a> {
                 }
 
                 let case_rng = self.rng.spawn();
-                let prefix =
-                    crate::native::data_tree::generate_novel_prefix(&self.tree_root, &mut self.rng);
+                let prefix = crate::native::data_tree::generate_novel_prefix(
+                    &self.tree_root,
+                    &mut self.rng,
+                )?;
                 let ntc = if prefix.is_empty() {
                     NativeTestCase::new_random(case_rng)
                 } else {
@@ -416,7 +419,7 @@ impl<'a> Engine<'a> {
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
                 {
-                    self.try_span_mutation(&run.nodes, &run.spans).await;
+                    self.try_span_mutation(&run.nodes, &run.spans).await?;
                 }
             }
         }
@@ -531,12 +534,12 @@ impl<'a> Engine<'a> {
                     let mut shrinker =
                         Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
                     shrinker.deadline = Some(shrink_deadline);
-                    let _ = shrinker.initial_coarse_reduction().await;
+                    absorb_stop(shrinker.initial_coarse_reduction().await)?;
                     if verbosity == Verbosity::Debug {
                         let output = output.clone();
                         shrinker.set_debug(move |msg| output.line(msg));
                     }
-                    shrinker.shrink().await;
+                    shrinker.shrink().await?;
                     shrink_timed_out |= shrinker.timed_out;
                     shrinker.current_nodes
                 };
@@ -1092,19 +1095,19 @@ impl<'a> Engine<'a> {
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
-    ) -> RunResult {
+    ) -> Result<RunResult, InternalError> {
         if extend == 0 {
             if let Some(out) =
-                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)
+                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
             {
-                return RunResult {
+                return Ok(RunResult {
                     status: out.status,
                     nodes: out.nodes,
                     spans: out.spans,
                     origin: out.origin,
                     target_observations: out.target_observations,
                     span_events: Vec::new(),
-                };
+                });
             }
         }
         let ntc = if extend == 0 {
@@ -1114,7 +1117,7 @@ impl<'a> Engine<'a> {
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
         };
         let (run, _mismatch) = self.test_function(ntc).await;
-        run
+        Ok(run)
     }
 }
 
@@ -1141,17 +1144,17 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     self.engine
                         .cached_test_function(&choices, Some(nodes), 0)
-                        .await
+                        .await?
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
                     self.engine
                         .cached_test_function(prefix, None, max_size.saturating_sub(prefix.len()))
-                        .await
+                        .await?
                 }
             };
             let matches = run.status == Status::Interesting
                 && run.origin.as_deref() == Some(self.target_origin.as_str());
-            (matches, run.nodes, Spans::from(run.spans))
+            Ok((matches, run.nodes, Spans::from(run.spans)))
         })
     }
 }
@@ -1171,7 +1174,11 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
 /// later identical proposal is served from the tree; tree-served probes are not
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
-    async fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
+    async fn try_span_mutation(
+        &mut self,
+        nodes: &[ChoiceNode],
+        spans: &[Span],
+    ) -> Result<(), InternalError> {
         let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
@@ -1190,7 +1197,7 @@ impl<'a> Engine<'a> {
             })
             .collect();
         if multi.is_empty() {
-            return;
+            return Ok(());
         }
 
         let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
@@ -1240,11 +1247,12 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let run = self.cached_test_function(&attempt, None, 0).await;
+            let run = self.cached_test_function(&attempt, None, 0).await?;
             if run.status == Status::Interesting {
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 }
 

@@ -170,7 +170,8 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
                     None,
                     0,
                 )
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 0, "tree-known path must not run the body");
             assert_eq!(run.nodes.len(), 1);
@@ -188,11 +189,11 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
         },
@@ -215,12 +216,12 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
@@ -263,7 +264,7 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
         },
         async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await;
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
@@ -296,7 +297,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -331,7 +332,7 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -371,7 +372,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             ctx.valid_test_cases = 100;
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 0);
             assert_eq!(ctx.calls, 0);
@@ -638,7 +639,9 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             TestCaseResult::Valid
         },
         async |ctx, _count| {
-            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1)).await;
+            let (run, _mismatch) = ctx
+                .test_function(NativeTestCase::for_simplest(1).unwrap())
+                .await;
             assert_eq!(run.status, Status::EarlyStop);
 
             let mut tree = DataTreeNode::default();

@@ -7,7 +7,7 @@ fn matches_python_for_every_codepoint() {
     let mut start: u32 = 0;
     for &(end, expected) in PYTHON_RANGES {
         for cp in start..=end {
-            let got = general_category(cp).as_str();
+            let got = general_category(cp).unwrap().as_str();
             assert_eq!(
                 got, expected,
                 "category mismatch at U+{cp:05X}: got {got}, expected {expected}"
@@ -35,63 +35,76 @@ fn category_as_str_is_two_chars() {
 
 #[test]
 fn edge_codepoints() {
-    assert_eq!(general_category(0x0000), Category::Cc);
-    assert_eq!(general_category(0x0020), Category::Zs);
-    assert_eq!(general_category(0x0030), Category::Nd);
-    assert_eq!(general_category(0x005F), Category::Pc);
-    assert_eq!(general_category(0x002D), Category::Pd);
-    assert_eq!(general_category(0x002B), Category::Sm);
-    assert_eq!(general_category(0xD800), Category::Cs);
-    assert_eq!(general_category(0xDFFF), Category::Cs);
-    assert_eq!(general_category(0xE000), Category::Co);
-    assert_eq!(general_category(0xFDD0), Category::Cn);
-    assert_eq!(general_category(0x10FFFF), Category::Cn);
+    assert_eq!(general_category(0x0000).unwrap(), Category::Cc);
+    assert_eq!(general_category(0x0020).unwrap(), Category::Zs);
+    assert_eq!(general_category(0x0030).unwrap(), Category::Nd);
+    assert_eq!(general_category(0x005F).unwrap(), Category::Pc);
+    assert_eq!(general_category(0x002D).unwrap(), Category::Pd);
+    assert_eq!(general_category(0x002B).unwrap(), Category::Sm);
+    assert_eq!(general_category(0xD800).unwrap(), Category::Cs);
+    assert_eq!(general_category(0xDFFF).unwrap(), Category::Cs);
+    assert_eq!(general_category(0xE000).unwrap(), Category::Co);
+    assert_eq!(general_category(0xFDD0).unwrap(), Category::Cn);
+    assert_eq!(general_category(0x10FFFF).unwrap(), Category::Cn);
 }
 
 #[test]
-#[should_panic(expected = "out of range")]
-fn beyond_max_codepoint_panics() {
-    let _ = general_category(0x110000);
+fn beyond_max_codepoint_is_an_internal_error() {
+    let msg = general_category(0x110000).unwrap_err().to_string();
+    assert!(msg.contains("out of range"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn char_variants_agree_with_the_u32_lookups() {
+    assert_eq!(general_category_char('A'), Category::Lu);
+    assert_eq!(
+        general_category_char('\u{10FFFF}'),
+        general_category(0x10FFFF).unwrap()
+    );
+    assert!(is_in_group_char('A', "Lu"));
+    assert!(is_in_group_char('A', "L"));
+    assert!(!is_in_group_char('A', "N"));
 }
 
 #[test]
 fn is_in_group_two_char_matches_exactly() {
-    assert!(is_in_group('A' as u32, "Lu"));
-    assert!(!is_in_group('A' as u32, "Ll"));
-    assert!(is_in_group('a' as u32, "Ll"));
-    assert!(is_in_group('_' as u32, "Pc"));
-    assert!(!is_in_group('_' as u32, "Po"));
+    assert!(is_in_group('A' as u32, "Lu").unwrap());
+    assert!(!is_in_group('A' as u32, "Ll").unwrap());
+    assert!(is_in_group('a' as u32, "Ll").unwrap());
+    assert!(is_in_group('_' as u32, "Pc").unwrap());
+    assert!(!is_in_group('_' as u32, "Po").unwrap());
 }
 
 #[test]
 fn is_in_group_major_class_matches_all_subclasses() {
     for &cp in &['A' as u32, 'a' as u32, 0x01C5, 0x02B0, 0x00AA] {
-        assert!(is_in_group(cp, "L"), "U+{cp:04X} should match L");
+        assert!(is_in_group(cp, "L").unwrap(), "U+{cp:04X} should match L");
     }
-    assert!(!is_in_group(' ' as u32, "L"));
-    assert!(!is_in_group('0' as u32, "L"));
+    assert!(!is_in_group(' ' as u32, "L").unwrap());
+    assert!(!is_in_group('0' as u32, "L").unwrap());
 
-    assert!(is_in_group('0' as u32, "N"));
-    assert!(is_in_group(0x2160, "N"));
-    assert!(!is_in_group('A' as u32, "N"));
+    assert!(is_in_group('0' as u32, "N").unwrap());
+    assert!(is_in_group(0x2160, "N").unwrap());
+    assert!(!is_in_group('A' as u32, "N").unwrap());
 
     for &cp in &[
         '_' as u32, '-' as u32, '(' as u32, ')' as u32, 0x00AB, 0x00BB, '.' as u32,
     ] {
-        assert!(is_in_group(cp, "P"), "U+{cp:04X} should match P");
+        assert!(is_in_group(cp, "P").unwrap(), "U+{cp:04X} should match P");
     }
 
-    assert!(is_in_group(' ' as u32, "Z"));
-    assert!(is_in_group(0x2028, "Z"));
-    assert!(is_in_group(0x2029, "Z"));
+    assert!(is_in_group(' ' as u32, "Z").unwrap());
+    assert!(is_in_group(0x2028, "Z").unwrap());
+    assert!(is_in_group(0x2029, "Z").unwrap());
 }
 
 #[test]
 fn is_in_group_unknown_or_invalid_matches_nothing() {
-    assert!(!is_in_group('A' as u32, "Xx"));
-    assert!(!is_in_group('A' as u32, "X"));
-    assert!(!is_in_group('A' as u32, ""));
-    assert!(!is_in_group('A' as u32, "Lux"));
+    assert!(!is_in_group('A' as u32, "Xx").unwrap());
+    assert!(!is_in_group('A' as u32, "X").unwrap());
+    assert!(!is_in_group('A' as u32, "").unwrap());
+    assert!(!is_in_group('A' as u32, "Lux").unwrap());
 }
 
 #[test]

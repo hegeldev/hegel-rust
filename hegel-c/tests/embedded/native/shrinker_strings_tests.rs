@@ -4,7 +4,7 @@ use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn intervals(min: u32, max: u32) -> IntervalSet {
-    IntervalSet::new(vec![(min, max)])
+    IntervalSet::new(vec![(min, max)]).unwrap()
 }
 
 fn string_node(value: Vec<u32>, min_codepoint: u32, max_codepoint: u32) -> ChoiceNode {

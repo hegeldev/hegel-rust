@@ -41,7 +41,8 @@ impl ShrinkProbe for NestedCloneProbe<'_, '_> {
             let (matched, actual) = match req {
                 ShrinkRun::Full(child) => {
                     let candidate = splice_child(self.template, i, child);
-                    let (matched, actual, _) = self.test_fn.run(ShrinkRun::Full(&candidate)).await;
+                    let (matched, actual, _) =
+                        self.test_fn.run(ShrinkRun::Full(&candidate)).await?;
                     (matched, actual)
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
@@ -55,18 +56,18 @@ impl ShrinkProbe for NestedCloneProbe<'_, '_> {
                             max_size: flattened_values_len(&values) + child_extend,
                             prefix: &values,
                         })
-                        .await;
+                        .await?;
                     (matched, actual)
                 }
             };
-            match actual.get(i).map(|n| &n.data) {
+            Ok(match actual.get(i).map(|n| &n.data) {
                 Some(ChoiceData::Clone(stream)) => {
                     let nodes = stream.nodes().to_vec();
                     let spans = Spans::from(stream.spans().to_vec());
                     (matched, nodes, spans)
                 }
                 _ => (false, Vec::new(), Spans::new()),
-            }
+            })
         })
     }
 }
@@ -112,7 +113,7 @@ impl<'a> Shrinker<'a> {
                 Spans::from(child_spans),
             );
             nested.deadline = deadline;
-            nested.shrink().await;
+            nested.shrink().await?;
             (nested.current_nodes, nested.timed_out)
         };
         self.timed_out |= nested_timed_out;

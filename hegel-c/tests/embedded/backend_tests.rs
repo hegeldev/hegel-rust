@@ -17,3 +17,23 @@ fn data_source_error_display_messages() {
         "bad schema"
     );
 }
+
+#[test]
+fn internal_error_converts_into_data_source_error_and_displays_framed() {
+    let e = crate::control::InternalError::new(format_args!("broken invariant"));
+    let ds = DataSourceError::from(e);
+    assert!(matches!(ds, DataSourceError::Internal(_)));
+    let msg = ds.to_string();
+    assert!(msg.contains("broken invariant"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn internal_error_converts_into_run_error_and_displays_framed() {
+    let e = crate::control::InternalError::new(format_args!("broken invariant"));
+    let run = RunError::from(e);
+    assert!(matches!(run, RunError::Internal(_)));
+    let msg = run.to_string();
+    assert!(msg.contains("broken invariant"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}

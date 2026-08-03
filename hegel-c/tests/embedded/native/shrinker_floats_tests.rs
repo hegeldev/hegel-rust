@@ -116,21 +116,21 @@ fn shrink_floats_canonicalizes_nan_to_finite_when_predicate_admits() {
 
 #[test]
 fn as_integer_ratio_recovers_simple_terminating_decimal() {
-    assert_eq!(as_integer_ratio(0.5), Some((1, 2)));
-    assert_eq!(as_integer_ratio(1.5), Some((3, 2)));
-    assert_eq!(as_integer_ratio(2.0), Some((2, 1)));
-    assert_eq!(as_integer_ratio(1024.0), Some((1024, 1)));
+    assert_eq!(as_integer_ratio(0.5).unwrap(), Some((1, 2)));
+    assert_eq!(as_integer_ratio(1.5).unwrap(), Some((3, 2)));
+    assert_eq!(as_integer_ratio(2.0).unwrap(), Some((2, 1)));
+    assert_eq!(as_integer_ratio(1024.0).unwrap(), Some((1024, 1)));
 }
 
 #[test]
 fn as_integer_ratio_subnormal_decomposes_with_huge_denominator() {
     let smallest_subnormal = f64::from_bits(1);
-    assert_eq!(as_integer_ratio(smallest_subnormal), None);
+    assert_eq!(as_integer_ratio(smallest_subnormal).unwrap(), None);
 }
 
 #[test]
 fn as_integer_ratio_huge_value_overflows_to_none() {
-    assert_eq!(as_integer_ratio(f64::MAX), None);
+    assert_eq!(as_integer_ratio(f64::MAX).unwrap(), None);
 }
 
 /// Cover the negative branch of `is_neg` ternary inside

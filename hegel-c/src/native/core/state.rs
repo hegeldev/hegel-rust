@@ -15,7 +15,7 @@ use super::choices::{
 };
 use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
-use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
+use crate::control::{InternalError, hegel_internal_assert, hegel_internal_debug_assert};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
@@ -109,15 +109,19 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// Drawing length uniformly from `[min_size, max_size]` produces huge
 /// values when `max_size` is large; instead, the size follows a geometric
 /// variate with stop probability derived from [`length_p_continue`].
-fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> usize {
+fn many_draw_length(
+    rng: &mut EngineRng,
+    min_size: usize,
+    max_size: usize,
+) -> Result<usize, InternalError> {
     if min_size == max_size {
-        return min_size;
+        return Ok(min_size);
     }
     let p_continue = length_p_continue(min_size, Some(max_size));
     let u: f64 = rng.random();
     let extra = libm::floor(libm::log(u) / libm::log(p_continue));
     hegel_internal_assert!(extra >= 0.0);
-    min_size.saturating_add(extra as usize).min(max_size)
+    Ok(min_size.saturating_add(extra as usize).min(max_size))
 }
 
 /// The shared integer distribution used by [`biased_integer_sample`] as
@@ -132,7 +136,7 @@ fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> us
 /// integrals at the switchover; recomputing it per draw would dominate
 /// runtime.
 static INTEGERS_DISTRIBUTION: LazyLock<
-    PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>,
+    Result<PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>, InternalError>,
 > = LazyLock::new(|| {
     PiecewiseDistribution::new(
         UniformDistribution::new(256.0),
@@ -148,15 +152,19 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 /// requested range is too narrow for inverse-CDF sampling to be stable.
 /// Callers must ensure `min_value < max_value`; the `min == max` early
 /// return is handled at the [`biased_integer_sample`] call site.
-fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
-    let dist = &*INTEGERS_DISTRIBUTION;
-    let lo = dist.cdf(min_value as f64 - 0.5);
-    let hi = dist.cdf(max_value as f64 + 0.5);
+fn integer_sample_from_distribution(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut EngineRng,
+) -> Result<i128, InternalError> {
+    let dist = INTEGERS_DISTRIBUTION.as_ref().map_err(Clone::clone)?;
+    let lo = dist.cdf(min_value as f64 - 0.5)?;
+    let hi = dist.cdf(max_value as f64 + 0.5)?;
     if hi - lo < 1e-13 {
-        return rng.random_range(min_value..=max_value);
+        return Ok(rng.random_range(min_value..=max_value));
     }
     let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
-    (libm::round(dist.inverse_cdf(p)) as i128).clamp(min_value, max_value)
+    Ok((libm::round(dist.inverse_cdf(p)?) as i128).clamp(min_value, max_value))
 }
 
 /// Hand-picked "interesting" boundary values: powers of two and their
@@ -246,18 +254,25 @@ static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// distribution — and re-widens the result into the choice's concrete type.
 /// Otherwise (a `BigInt` choice, or a `u128` range past `i128::MAX`) it falls
 /// back to [`biguint_sample_in_range`].
-pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
-    match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
-        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)),
+pub(crate) fn biased_integer_sample(
+    ic: &IntegerChoice,
+    rng: &mut EngineRng,
+) -> Result<BigInt, InternalError> {
+    Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
+        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)?),
         _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
-    }
+    })
 }
 
 /// The original i128 nasty-pool + distribution sampler, returning a value in
 /// `[min_value, max_value]`.
-fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
+fn biased_i128_sample(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut EngineRng,
+) -> Result<i128, InternalError> {
     if min_value == max_value {
-        return min_value;
+        return Ok(min_value);
     }
     let pool = &*SORTED_NASTY_POOL;
     let lo = pool.partition_point(|&v| v < min_value);
@@ -269,13 +284,13 @@ fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> 
     let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
-        if need_min && idx == 0 {
+        Ok(if need_min && idx == 0 {
             min_value
         } else if need_max && idx == count - 1 {
             max_value
         } else {
             static_slice[idx - need_min as usize]
-        }
+        })
     } else {
         integer_sample_from_distribution(min_value, max_value, rng)
     }
@@ -352,7 +367,10 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
 /// otherwise. Shared with the data-tree walk so novel-prefix exploration
 /// hits the same boundary distribution as fresh draws.
-pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
+pub(crate) fn biased_float_sample(
+    fc: &FloatChoice,
+    rng: &mut EngineRng,
+) -> Result<f64, InternalError> {
     const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
     let candidates = [
         fc.min_value,
@@ -386,7 +404,7 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
         for &v in candidates.iter() {
             if fc.validate(v) {
                 if skip == 0 {
-                    return v;
+                    return Ok(v);
                 }
                 skip -= 1;
             }
@@ -404,7 +422,7 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
     } else {
         float_clamp(fc, raw)
     };
-    if fc.validate(f) { f } else { fc.simplest() }
+    if fc.validate(f) { Ok(f) } else { fc.simplest() }
 }
 
 /// Port of Hypothesis's `make_float_clamper`: remap an out-of-range draw
@@ -435,7 +453,10 @@ fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
 /// probability proportional to `BOUNDARY_PROBABILITY × |nasty|`, falling
 /// back to a length drawn from [`many_draw_length`] with uniformly random
 /// byte values.
-pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
+pub(crate) fn biased_bytes_sample(
+    bc: &BytesChoice,
+    rng: &mut EngineRng,
+) -> Result<Vec<u8>, InternalError> {
     let want_zero = bc.min_size == 0 && bc.max_size > 0;
     let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
     let count = 1 + want_zero as usize + want_ff as usize;
@@ -443,20 +464,20 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
     if rng.random::<f64>() < nasty_threshold {
         let mut slot = rng.random_range(0..count);
         if slot == 0 {
-            return bc.simplest();
+            return Ok(bc.simplest());
         }
         slot -= 1;
         if want_zero {
             if slot == 0 {
-                return vec![0u8];
+                return Ok(vec![0u8]);
             }
             slot -= 1;
         }
         hegel_internal_debug_assert!(want_ff && slot == 0);
-        return vec![0xffu8];
+        return Ok(vec![0xffu8]);
     }
-    let len = many_draw_length(rng, bc.min_size, bc.max_size);
-    (0..len).map(|_| rng.random::<u8>()).collect()
+    let len = many_draw_length(rng, bc.min_size, bc.max_size)?;
+    Ok((0..len).map(|_| rng.random::<u8>()).collect())
 }
 
 /// Sample a boolean that is `true` with probability `p`, spending exactly one
@@ -620,9 +641,12 @@ fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
     mask
 }
 
-pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+pub(crate) fn biased_string_sample(
+    sc: &StringChoice,
+    rng: &mut EngineRng,
+) -> Result<Vec<u32>, InternalError> {
     if sc.intervals.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let want_empty = sc.min_size == 0 && sc.max_size > 0;
     let want_one = sc.min_size <= 1 && sc.max_size >= 1;
@@ -641,7 +665,7 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if idx < small_count {
-            let simplest_cp = sc.simplest_codepoint();
+            let simplest_cp = sc.simplest_codepoint()?;
             let mut slot = idx;
             if slot == 0 {
                 return sc.simplest();
@@ -649,24 +673,24 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
             slot -= 1;
             if want_empty {
                 if slot == 0 {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 }
                 slot -= 1;
             }
             if want_one {
                 if slot == 0 {
-                    return vec![simplest_cp];
+                    return Ok(vec![simplest_cp]);
                 }
                 slot -= 1;
             }
             hegel_internal_debug_assert!(want_two && slot == 0);
-            return vec![simplest_cp, simplest_cp];
+            return Ok(vec![simplest_cp, simplest_cp]);
         }
         let mut skip = idx - small_count;
         for (cps, &m) in global_pool.iter().zip(contained.iter()) {
             if m && size_ok(cps) {
                 if skip == 0 {
-                    return cps.clone();
+                    return Ok(cps.clone());
                 }
                 skip -= 1;
             }
@@ -694,10 +718,10 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
         sub_alphabet.push(cp);
     }
 
-    let len = many_draw_length(rng, sc.min_size, sc.max_size);
-    (0..len)
+    let len = many_draw_length(rng, sc.min_size, sc.max_size)?;
+    Ok((0..len)
         .map(|_| sub_alphabet[rng.random_range(0..sub_alphabet.len())])
-        .collect()
+        .collect())
 }
 
 /// Convert a codepoint sequence to a Rust `String`, dropping any surrogate
@@ -860,17 +884,20 @@ impl Spans {
     /// its kind's simplest value.  A forced choice can't be lowered further,
     /// so it counts as trivial for this purpose.  Out-of-range `span_idx`
     /// returns `false`.
-    pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> bool {
+    pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> Result<bool, InternalError> {
         let Some(span) = self.inner.get(span_idx) else {
-            return false;
+            return Ok(false);
         };
         let end = span.end.min(nodes.len());
         if span.start > end {
-            return false;
+            return Ok(false);
         }
-        nodes[span.start..end]
-            .iter()
-            .all(|n| n.was_forced || n.data.is_simplest())
+        for n in &nodes[span.start..end] {
+            if !(n.was_forced || n.data.is_simplest()?) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// View as a slice, for code that wants raw indexing.
@@ -1177,14 +1204,14 @@ impl NativeTestCase {
     /// `kind.simplest()` of the requested choice kind. A deterministic
     /// all-simplest probe of the choice tree's "left leaf" before random
     /// sampling begins.
-    pub fn for_simplest(max_size: usize) -> Self {
-        Self::for_choices_and_template(
+    pub fn for_simplest(max_size: usize) -> Result<Self, InternalError> {
+        Ok(Self::for_choices_and_template(
             &[],
             None,
-            Some(ChoiceTemplate::simplest(None)),
+            Some(ChoiceTemplate::simplest(None)?),
             max_size,
             None,
-        )
+        ))
     }
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
@@ -1443,8 +1470,8 @@ impl NativeTestCase {
         };
 
         let (v, was_forced) = self.resolve_choice(
-            || kind.simplest(),
-            || kind.unit(),
+            || Ok(kind.simplest()),
+            || Ok(kind.unit()),
             |v| match v {
                 ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
@@ -1548,8 +1575,8 @@ impl NativeTestCase {
         let kind = BytesChoice { min_size, max_size };
 
         let (v, was_forced) = self.resolve_choice(
-            || kind.simplest(),
-            || kind.unit(),
+            || Ok(kind.simplest()),
+            || Ok(kind.unit()),
             |v| match v {
                 ChoiceValue::Bytes(b) if kind.validate(b) => Some(b.clone()),
                 _ => None,
@@ -1644,13 +1671,13 @@ impl NativeTestCase {
             (f, true)
         } else {
             self.resolve_choice(
-                || kind.simplest(),
-                || kind.unit(),
+                || Ok(kind.simplest()),
+                || Ok(kind.unit()),
                 |v| match v {
                     ChoiceValue::Boolean(b) => Some(*b),
                     _ => None,
                 },
-                |rng| sample(p, rng),
+                |rng| Ok(sample(p, rng)),
             )?
         };
 
@@ -1686,10 +1713,10 @@ impl NativeTestCase {
     /// `unit()` otherwise.
     fn resolve_choice<V>(
         &mut self,
-        simplest: impl FnOnce() -> V,
-        unit: impl FnOnce() -> V,
+        simplest: impl FnOnce() -> Result<V, InternalError>,
+        unit: impl FnOnce() -> Result<V, InternalError>,
         from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
-        random: impl FnOnce(&mut EngineRng) -> V,
+        random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
@@ -1700,12 +1727,11 @@ impl NativeTestCase {
             if let Some(v) = from_prefix(prefix_value) {
                 return Ok((v, false));
             }
-            let is_simplest = self
-                .prefix_nodes
-                .as_ref()
-                .and_then(|pn| pn.get(idx))
-                .is_some_and(|pn| *prefix_value == pn.data.simplest_value());
-            return Ok((if is_simplest { simplest() } else { unit() }, false));
+            let is_simplest = match self.prefix_nodes.as_ref().and_then(|pn| pn.get(idx)) {
+                Some(pn) => *prefix_value == pn.data.simplest_value()?,
+                None => false,
+            };
+            return Ok((if is_simplest { simplest()? } else { unit()? }, false));
         }
 
         if let Some(template) = self.trailing_template.as_mut() {
@@ -1714,7 +1740,7 @@ impl NativeTestCase {
                 return Err(EngineError::Overrun);
             }
             let value = match template.kind {
-                ChoiceTemplateKind::Simplest => simplest(),
+                ChoiceTemplateKind::Simplest => simplest()?,
             };
             if let Some(c) = template.count.as_mut() {
                 *c -= 1;
@@ -1726,7 +1752,7 @@ impl NativeTestCase {
             .rng
             .as_mut()
             .expect("No RNG available for random generation");
-        Ok((random(rng), false))
+        Ok((random(rng)?, false))
     }
 }
 

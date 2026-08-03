@@ -8,7 +8,7 @@ use crate::native::core::{
 
 use super::search::{BinSearchDown, FindInteger};
 use super::{PassExit, ShrinkResult, ShrinkRun, Shrinker, absorb_node_gone};
-use crate::control::hegel_internal_debug_assert;
+use crate::control::{InternalError, hegel_internal_debug_assert};
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
 /// this magnitude consecutive integers stop being individually
@@ -22,7 +22,7 @@ const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
 /// in `u128`: subnormals (denominator `2^1074`) and huge normals
 /// (numerator > `2^127`) both overflow. Callers skip the integer-ratio
 /// shrink step for those.
-pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
+pub(super) fn as_integer_ratio(v: f64) -> Result<Option<(u128, u128)>, InternalError> {
     hegel_internal_debug_assert!(v.is_finite() && v > 0.0);
     let bits = v.to_bits();
     let biased_exp = ((bits >> 52) & 0x7FF) as i32;
@@ -38,13 +38,11 @@ pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
     let trailing = num.trailing_zeros() as i32;
     num >>= trailing;
     exp += trailing;
-    if exp >= 0 {
-        let shifted = num.checked_shl(exp as u32)?;
-        Some((shifted, 1))
+    Ok(if exp >= 0 {
+        num.checked_shl(exp as u32).map(|shifted| (shifted, 1))
     } else {
-        let n = 1u128.checked_shl((-exp) as u32)?;
-        Some((num, n))
-    }
+        1u128.checked_shl((-exp) as u32).map(|n| (num, n))
+    })
 }
 
 impl<'a> Shrinker<'a> {
@@ -79,7 +77,7 @@ impl<'a> Shrinker<'a> {
                 let v = *v;
                 let fc = fc.clone();
 
-                let s = fc.simplest();
+                let s = fc.simplest()?;
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
                         .await?;
@@ -271,7 +269,7 @@ impl<'a> Shrinker<'a> {
                 let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                 if v.is_finite() && v != 0.0 {
                     let is_neg = v.is_sign_negative();
-                    if let Some((m, n)) = as_integer_ratio(v.abs()) {
+                    if let Some((m, n)) = as_integer_ratio(v.abs())? {
                         let k_init = m / n;
                         let r = m % n;
                         if k_init > 0 {
@@ -350,7 +348,7 @@ impl<'a> Shrinker<'a> {
                 if !num_i.can_choose_for_redistribute() || !num_j.can_choose_for_redistribute() {
                     continue;
                 }
-                if num_i.is_trivial() {
+                if num_i.is_trivial()? {
                     continue;
                 }
                 redistribute_pair(self, i, num_i, j, num_j).await?;
@@ -405,11 +403,11 @@ impl Numeric {
         }
     }
 
-    fn is_trivial(&self) -> bool {
-        match self {
+    fn is_trivial(&self) -> Result<bool, InternalError> {
+        Ok(match self {
             Numeric::Integer(ic, v) => *v == ic.simplest(),
-            Numeric::Float(fc, v) => !v.is_finite() || *v == fc.simplest(),
-        }
+            Numeric::Float(fc, v) => !v.is_finite() || *v == fc.simplest()?,
+        })
     }
 
     /// This pair with `k` added to its value; the constraint (and hence the

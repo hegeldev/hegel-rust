@@ -208,7 +208,6 @@ fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
 /// C ABI accepts, so the panicking future is injected directly.
 #[test]
 fn engine_panic_during_poll_becomes_a_run_error() {
-    install_engine_panic_hook();
     let ctx = hegel_context_new();
     let exchange = Arc::new(CaseExchange::new());
     let engine: EngineFuture = Box::pin(async { panic!("engine invariant violated") });
@@ -237,6 +236,92 @@ fn engine_panic_during_poll_becomes_a_run_error() {
         let mut tc: *mut HegelTestCase = ptr::null_mut();
         ok(hegel_next_test_case(ctx, run, &mut tc));
         assert!(tc.is_null(), "a panicked run stays finished");
+
+        ok(hegel_run_result_free(ctx, result));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn translate_ds_error_maps_internal_to_hegel_e_internal_with_diagnostic() {
+    let ctx = hegel_context_new();
+    let e = crate::control::InternalError::new(format_args!("draw invariant violated"));
+    let rc = translate_ds_error(ctx, DataSourceError::Internal(e));
+    assert_eq!(rc, HEGEL_E_INTERNAL);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("draw invariant violated"), "{msg}");
+        assert!(msg.contains("bug in hegel"), "{msg}");
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn translate_construct_error_distinguishes_internal_from_invalid_argument() {
+    let ctx = hegel_context_new();
+    let e = crate::control::InternalError::new(format_args!("constructor invariant"));
+    let rc = translate_construct_error(ctx, crate::native::core::EngineError::Internal(e));
+    assert_eq!(rc, HEGEL_E_INTERNAL);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("constructor invariant"), "{msg}");
+    }
+    let rc = translate_construct_error(
+        ctx,
+        crate::native::core::EngineError::InvalidArgument("bad bound".to_string()),
+    );
+    assert_eq!(rc, HEGEL_E_INVALID_ARG);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("bad bound"), "{msg}");
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// An internal error raised inside the engine's exploration surfaces as a
+/// run-level error through `hegel_run_result_error`, exactly where a caught
+/// panic's message goes.
+#[test]
+fn internal_run_error_surfaces_through_run_result_error() {
+    let ctx = hegel_context_new();
+    let exchange = Arc::new(CaseExchange::new());
+    let engine: EngineFuture = Box::pin(async {
+        Err(crate::backend::RunError::Internal(
+            crate::control::InternalError::new(format_args!("exploration invariant violated")),
+        ))
+    });
+    let run = Box::into_raw(Box::new(HegelRun {
+        engine: Some(engine),
+        exchange,
+        current_family: None,
+        result: None,
+    }));
+
+    unsafe {
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_next_test_case(ctx, run, &mut tc));
+        assert!(tc.is_null(), "an errored run offers no test case");
+
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        ok(hegel_run_result(ctx, run, &mut result));
+        let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
+        ok(hegel_run_result_status(ctx, result, &mut status));
+        assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
+        let mut message: *const c_char = ptr::null();
+        ok(hegel_run_result_error(ctx, result, &mut message));
+        let message = CStr::from_ptr(message).to_str().unwrap();
+        assert!(
+            message.contains("exploration invariant violated"),
+            "{message}"
+        );
+        assert!(message.contains("bug in hegel"), "{message}");
 
         ok(hegel_run_result_free(ctx, result));
         ok(hegel_run_free(ctx, run));

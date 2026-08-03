@@ -11,7 +11,7 @@ use crate::native::shrinker::{ShrinkRun, Shrinker};
 fn string_node_with(min_cp: u32, max_cp: u32, value: Vec<u32>) -> ChoiceNode {
     ChoiceNode::string(
         StringChoice {
-            intervals: IntervalSet::new(vec![(min_cp, max_cp)]).into(),
+            intervals: IntervalSet::new(vec![(min_cp, max_cp)]).unwrap().into(),
             min_size: 0,
             max_size: 32,
         },

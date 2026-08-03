@@ -78,7 +78,7 @@ fn nested_shrink_minimizes_values_inside_clone_nodes() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(child.len(), 1);
@@ -103,7 +103,7 @@ fn nested_shrink_recurses_into_clones_inside_clones() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(child.len(), 2);
@@ -131,7 +131,7 @@ fn unconstrained_clone_nodes_are_deleted_outright() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
 }
@@ -153,7 +153,7 @@ fn nested_shrink_tolerates_runs_that_drop_the_clone_node() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     let child = child_nodes_of(&shrinker.current_nodes[0]);
     assert_eq!(int_value(&child[0]), 10);
 }

@@ -156,7 +156,7 @@ fn shrink_terminates_when_stalled() {
         Spans::new(),
     );
     shrinker.max_stall = 200;
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert!(
         calls.load(Ordering::Relaxed) <= 2 + 4 * shrinker.max_stall,
         "shrinker did not terminate fast enough: {} calls, max_stall {}",
@@ -288,7 +288,7 @@ fn shrink_emits_profile_report_when_debug_set() {
         Spans::new(),
     );
     shrinker.set_debug(move |msg| log_clone.lock().unwrap().push(msg.to_string()));
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     let messages = log.lock().unwrap();
     let combined = messages.join("\n");
     assert!(
@@ -328,7 +328,7 @@ fn shrink_profile_reports_singular_call_unit() {
         Spans::new(),
     );
     shrinker.set_debug(move |msg| log_clone.lock().unwrap().push(msg.to_string()));
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     let combined = log.lock().unwrap().join("\n");
     assert!(
         !combined.contains("1 calls"),
@@ -362,7 +362,7 @@ fn shrink_stops_immediately_when_deadline_already_passed() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now() - Duration::from_secs(1));
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert!(shrinker.timed_out, "expected the shrink to time out");
     assert_eq!(
         shrinker.calls, 0,
@@ -393,7 +393,7 @@ fn shrink_completes_normally_with_a_future_deadline() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now() + Duration::from_secs(300));
-    drive_no_yield(shrinker.shrink());
+    drive_no_yield(shrinker.shrink()).unwrap();
     assert!(!shrinker.timed_out);
     let values: Vec<_> = shrinker
         .current_nodes

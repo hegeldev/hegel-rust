@@ -147,6 +147,7 @@ impl NativeDataSource {
             }
             EngineError::AssumeViolation => DataSourceError::Assume,
             EngineError::InvalidArgument(msg) => DataSourceError::InvalidArgument(msg),
+            EngineError::Internal(e) => DataSourceError::Internal(e),
         })
     }
 
@@ -280,7 +281,7 @@ impl DataSource for NativeDataSource {
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        self.with_ntc(|_| Ok(NativeStateMachine::new(rule_names, invariant_names)))
+        self.with_ntc(|_| Ok(NativeStateMachine::new(rule_names, invariant_names)?))
     }
 
     fn state_machine_next_rule(

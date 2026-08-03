@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::state::{Span, SpanEvent};
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert, hegel_internal_error};
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
@@ -263,48 +263,48 @@ impl StringChoice {
     }
 
     /// The simplest codepoint in the alphabet (shrink-order position 0).
-    /// Panics on an empty alphabet — callers must reject empty alphabets at
-    /// the draws layer before constructing the `StringChoice`.
-    pub(crate) fn simplest_codepoint(&self) -> u32 {
+    /// An empty alphabet is an internal error — callers must reject empty
+    /// alphabets at the draws layer before constructing the `StringChoice`.
+    pub(crate) fn simplest_codepoint(&self) -> Result<u32, InternalError> {
         hegel_internal_assert!(
             !self.intervals.is_empty(),
             "StringChoice::simplest_codepoint: empty alphabet"
         );
-        self.intervals.char_in_shrink_order(0) as u32
+        Ok(self.intervals.char_in_shrink_order(0) as u32)
     }
 
     /// The simplest sequence of codepoints of length `min_size`, built
     /// from repeated [`simplest_codepoint`]. An empty alphabet is legal when
     /// `min_size == 0` (the empty string is then the choice's only value).
-    pub fn simplest(&self) -> Vec<u32> {
+    pub fn simplest(&self) -> Result<Vec<u32>, InternalError> {
         if self.min_size == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        vec![self.simplest_codepoint(); self.min_size]
+        Ok(vec![self.simplest_codepoint()?; self.min_size])
     }
 
     /// Second-simplest codepoint sequence, used for type-punning during replay.
-    pub fn unit(&self) -> Vec<u32> {
+    pub fn unit(&self) -> Result<Vec<u32>, InternalError> {
         if self.intervals.is_empty() {
             return self.simplest();
         }
-        let simplest_cp = self.simplest_codepoint();
+        let simplest_cp = self.simplest_codepoint()?;
         let second_cp = self.key_to_codepoint(1);
         match second_cp {
             Some(cp) if cp != simplest_cp => {
                 if self.min_size > 0 {
-                    let mut v = self.simplest();
+                    let mut v = self.simplest()?;
                     *v.last_mut().unwrap() = cp;
-                    v
+                    Ok(v)
                 } else if self.max_size > 0 {
-                    vec![cp]
+                    Ok(vec![cp])
                 } else {
                     self.simplest()
                 }
             }
             _ => {
                 if self.min_size < self.max_size {
-                    vec![simplest_cp; self.min_size + 1]
+                    Ok(vec![simplest_cp; self.min_size + 1])
                 } else {
                     self.simplest()
                 }
@@ -367,7 +367,10 @@ impl StringChoice {
     /// Codepoint sequence at the given shortlex index, or `None` if `index`
     /// exceeds the total bucket size.
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u32>> {
+    pub fn from_index(
+        &self,
+        index: crate::native::bignum::BigUint,
+    ) -> Result<Option<Vec<u32>>, InternalError> {
         use crate::native::bignum::{BigUint, Zero};
         let alpha = BigUint::from(self.alpha_size());
         hegel_internal_assert!(
@@ -387,11 +390,11 @@ impl StringChoice {
                     remaining /= &alpha;
                 }
                 cps.reverse();
-                return Some(cps);
+                return Ok(Some(cps));
             }
             remaining -= bucket_size;
         }
-        None
+        Ok(None)
     }
 }
 
@@ -430,15 +433,17 @@ impl FloatChoice {
     ///
     /// Exact: [`to_index`](Self::to_index) subtracts this value's global
     /// rank, so anything less than the true minimum makes that subtraction
-    /// underflow (and panic) for the simpler in-range values.
-    pub fn simplest(&self) -> f64 {
+    /// underflow for the simpler in-range values. A choice with no valid
+    /// float at all is an internal error — the draws layer rejects such
+    /// constraints before constructing the `FloatChoice`.
+    pub fn simplest(&self) -> Result<f64, InternalError> {
         use super::float_index::{float_to_index, simplest_in_range};
 
         if self.validate(0.0) {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.validate(-0.0) {
-            return -0.0;
+            return Ok(-0.0);
         }
 
         let mut best: Option<((u64, bool), f64)> = None;
@@ -446,7 +451,7 @@ impl FloatChoice {
             let lo = self.min_value.max(self.smallest_nonzero_magnitude);
             let hi = self.max_value.min(f64::MAX);
             if lo <= hi {
-                let v = simplest_in_range(lo, hi);
+                let v = simplest_in_range(lo, hi)?;
                 best = Some(((float_to_index(v), false), v));
             }
         }
@@ -454,7 +459,7 @@ impl FloatChoice {
             let lo = (-self.max_value).max(self.smallest_nonzero_magnitude);
             let hi = (-self.min_value).min(f64::MAX);
             if lo <= hi {
-                let v = simplest_in_range(lo, hi);
+                let v = simplest_in_range(lo, hi)?;
                 let key = (float_to_index(v), true);
                 if best.is_none_or(|(best_key, _)| key < best_key) {
                     best = Some((key, -v));
@@ -462,43 +467,43 @@ impl FloatChoice {
             }
         }
         if let Some((_, v)) = best {
-            return v;
+            return Ok(v);
         }
         if self.allow_infinity && self.validate(f64::INFINITY) {
-            return f64::INFINITY;
+            return Ok(f64::INFINITY);
         }
         if self.allow_infinity && self.validate(f64::NEG_INFINITY) {
-            return f64::NEG_INFINITY;
+            return Ok(f64::NEG_INFINITY);
         }
         if self.allow_nan {
-            return f64::NAN;
+            return Ok(f64::NAN);
         }
-        panic!("FloatChoice::simplest: no valid float for this choice")
+        hegel_internal_error!("FloatChoice::simplest: no valid float for this choice")
     }
 
     /// Second-simplest valid float (for type punning during replay).
-    pub fn unit(&self) -> f64 {
+    pub fn unit(&self) -> Result<f64, InternalError> {
         use super::float_index::{float_to_index, index_to_float};
 
-        let s = self.simplest();
+        let s = self.simplest()?;
         if s.is_nan() {
-            return s;
+            return Ok(s);
         }
         let base = float_to_index(s.abs());
         for offset in 1u64..4 {
             let v_mag = index_to_float(base + offset);
             for v in [v_mag, -v_mag] {
                 if !v.is_nan() && self.validate(v) {
-                    return v;
+                    return Ok(v);
                 }
             }
         }
         for v in [self.min_value, self.max_value, -s] {
             if !v.is_nan() && v.to_bits() != s.to_bits() && self.validate(v) {
-                return v;
+                return Ok(v);
             }
         }
-        s
+        Ok(s)
     }
 
     pub fn validate(&self, v: f64) -> bool {
@@ -551,19 +556,24 @@ impl FloatChoice {
     /// ordering used by the shrinker is `(float_to_index(|v|), is_neg)`, so
     /// we build the index directly from that and subtract the rank of
     /// `simplest`.
-    pub fn to_index(&self, value: f64) -> crate::native::bignum::BigUint {
-        float_global_rank(value) - float_global_rank(self.simplest())
+    pub fn to_index(&self, value: f64) -> Result<crate::native::bignum::BigUint, InternalError> {
+        Ok(float_global_rank(value) - float_global_rank(self.simplest()?))
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<f64> {
-        let raw = float_global_rank(self.simplest()) + index;
-        let value = float_from_global_rank(raw)?;
-        if self.validate(value) {
+    pub fn from_index(
+        &self,
+        index: crate::native::bignum::BigUint,
+    ) -> Result<Option<f64>, InternalError> {
+        let raw = float_global_rank(self.simplest()?) + index;
+        let Some(value) = float_from_global_rank(raw) else {
+            return Ok(None);
+        };
+        Ok(if self.validate(value) {
             Some(value)
         } else {
             None
-        }
+        })
     }
 }
 
@@ -1125,16 +1135,16 @@ fn sequence_max_children_saturating(
 
 impl ChoiceKind {
     /// The simplest value for this choice kind.
-    pub fn simplest(&self) -> ChoiceValue {
-        match self {
+    pub fn simplest(&self) -> Result<ChoiceValue, InternalError> {
+        Ok(match self {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.simplest()),
 
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.simplest()),
-            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.simplest()?),
             ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.simplest()),
-            ChoiceKind::String(sc) => ChoiceValue::String(sc.simplest()),
+            ChoiceKind::String(sc) => ChoiceValue::String(sc.simplest()?),
             ChoiceKind::Clone => ChoiceValue::Clone(Arc::new(CloneRecord::empty())),
-        }
+        })
     }
 
     /// The "unit" value for this choice kind — the fallback a replayed draw
@@ -1142,15 +1152,15 @@ impl ChoiceKind {
     /// original-kind information is available to pun towards `simplest()`.
     /// Mirrors the `unit()` branch of
     /// [`crate::native::core::state::NativeTestCase::resolve_choice`].
-    pub fn unit(&self) -> ChoiceValue {
-        match self {
+    pub fn unit(&self) -> Result<ChoiceValue, InternalError> {
+        Ok(match self {
             ChoiceKind::Integer(ic) => ChoiceValue::Integer(ic.unit()),
             ChoiceKind::Boolean(bc) => ChoiceValue::Boolean(bc.unit()),
-            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.unit()),
+            ChoiceKind::Float(fc) => ChoiceValue::Float(fc.unit()?),
             ChoiceKind::Bytes(bc) => ChoiceValue::Bytes(bc.unit()),
-            ChoiceKind::String(sc) => ChoiceValue::String(sc.unit()),
+            ChoiceKind::String(sc) => ChoiceValue::String(sc.unit()?),
             ChoiceKind::Clone => ChoiceValue::Clone(Arc::new(CloneRecord::empty())),
-        }
+        })
     }
 
     /// Largest valid index for [`from_index`](Self::from_index), or `None`
@@ -1170,15 +1180,18 @@ impl ChoiceKind {
     /// when the index is out of range; a clone kind has no dense index, so
     /// every index is out of range for it.
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
-        match self {
+    pub fn from_index(
+        &self,
+        index: crate::native::bignum::BigUint,
+    ) -> Result<Option<ChoiceValue>, InternalError> {
+        Ok(match self {
             ChoiceKind::Integer(ic) => ic.from_index(index).map(ChoiceValue::Integer),
             ChoiceKind::Boolean(bc) => bc.from_index(index).map(ChoiceValue::Boolean),
-            ChoiceKind::Float(fc) => fc.from_index(index).map(ChoiceValue::Float),
+            ChoiceKind::Float(fc) => fc.from_index(index)?.map(ChoiceValue::Float),
             ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
-            ChoiceKind::String(sc) => sc.from_index(index).map(ChoiceValue::String),
+            ChoiceKind::String(sc) => sc.from_index(index)?.map(ChoiceValue::String),
             ChoiceKind::Clone => None,
-        }
+        })
     }
 
     /// Pair `value` with this kind, proving at the type level that the two
@@ -1251,25 +1264,28 @@ impl ChoiceKind {
     /// Random value sampled from this kind's domain (with kind-appropriate
     /// bias), or `None` for a clone kind (clone values arise from executing
     /// a stream, never from sampling).
-    pub fn random_value(&self, rng: &mut crate::native::rng::EngineRng) -> Option<ChoiceValue> {
-        match self {
+    pub fn random_value(
+        &self,
+        rng: &mut crate::native::rng::EngineRng,
+    ) -> Result<Option<ChoiceValue>, InternalError> {
+        Ok(match self {
             ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
-                crate::native::core::state::biased_integer_sample(ic, rng),
+                crate::native::core::state::biased_integer_sample(ic, rng)?,
             )),
             ChoiceKind::Boolean(_) => Some(ChoiceValue::Boolean(
                 crate::native::core::state::weighted_boolean_sample(0.5, rng),
             )),
             ChoiceKind::Float(fc) => Some(ChoiceValue::Float(
-                crate::native::core::state::biased_float_sample(fc, rng),
+                crate::native::core::state::biased_float_sample(fc, rng)?,
             )),
             ChoiceKind::Bytes(bc) => Some(ChoiceValue::Bytes(
-                crate::native::core::state::biased_bytes_sample(bc, rng),
+                crate::native::core::state::biased_bytes_sample(bc, rng)?,
             )),
             ChoiceKind::String(sc) => Some(ChoiceValue::String(
-                crate::native::core::state::biased_string_sample(sc, rng),
+                crate::native::core::state::biased_string_sample(sc, rng)?,
             )),
             ChoiceKind::Clone => None,
-        }
+        })
     }
 
     /// Every possible value of this kind, if the total count fits under
@@ -1399,34 +1415,34 @@ impl ChoiceData {
 
     /// The simplest value of this pair's constraint (the value the shrinker
     /// aims at), as a [`ChoiceValue`].
-    pub fn simplest_value(&self) -> ChoiceValue {
+    pub fn simplest_value(&self) -> Result<ChoiceValue, InternalError> {
         self.kind().simplest()
     }
 
     /// Whether the value *is* the constraint's simplest value. Equivalent
     /// to `self.value() == self.simplest_value()` without the allocation
     /// for the scalar kinds.
-    pub fn is_simplest(&self) -> bool {
-        match self {
+    pub fn is_simplest(&self) -> Result<bool, InternalError> {
+        Ok(match self {
             ChoiceData::Integer(ic, v) => *v == ic.simplest(),
             ChoiceData::Boolean(v) => !v,
-            ChoiceData::Float(fc, v) => v.to_bits() == fc.simplest().to_bits(),
+            ChoiceData::Float(fc, v) => v.to_bits() == fc.simplest()?.to_bits(),
             ChoiceData::Bytes(bc, v) => *v == bc.simplest(),
-            ChoiceData::String(sc, v) => *v == sc.simplest(),
+            ChoiceData::String(sc, v) => *v == sc.simplest()?,
             ChoiceData::Clone(rs) => rs.is_empty(),
-        }
+        })
     }
 
     /// The same constraint paired with its simplest value.
-    pub fn with_simplest(&self) -> ChoiceData {
-        match self {
+    pub fn with_simplest(&self) -> Result<ChoiceData, InternalError> {
+        Ok(match self {
             ChoiceData::Integer(ic, _) => ChoiceData::Integer(Arc::clone(ic), ic.simplest()),
             ChoiceData::Boolean(_) => ChoiceData::Boolean(false),
-            ChoiceData::Float(fc, _) => ChoiceData::Float(fc.clone(), fc.simplest()),
+            ChoiceData::Float(fc, _) => ChoiceData::Float(fc.clone(), fc.simplest()?),
             ChoiceData::Bytes(bc, _) => ChoiceData::Bytes(bc.clone(), bc.simplest()),
-            ChoiceData::String(sc, _) => ChoiceData::String(sc.clone(), sc.simplest()),
+            ChoiceData::String(sc, _) => ChoiceData::String(sc.clone(), sc.simplest()?),
             ChoiceData::Clone(_) => ChoiceData::Clone(Arc::new(RealizedStream::empty())),
-        }
+        })
     }
 
     /// The same constraint paired with `value`: `Some` exactly when the
@@ -1444,20 +1460,23 @@ impl ChoiceData {
 
     /// The value's dense index under its constraint's sort order, or `None`
     /// for a clone (no dense index).
-    pub fn to_index(&self) -> Option<crate::native::bignum::BigUint> {
-        match self {
+    pub fn to_index(&self) -> Result<Option<crate::native::bignum::BigUint>, InternalError> {
+        Ok(match self {
             ChoiceData::Integer(ic, v) => Some(ic.to_index(v)),
             ChoiceData::Boolean(v) => Some(BooleanChoice.to_index(*v)),
-            ChoiceData::Float(fc, v) => Some(fc.to_index(*v)),
+            ChoiceData::Float(fc, v) => Some(fc.to_index(*v)?),
             ChoiceData::Bytes(bc, v) => Some(bc.to_index(v)),
             ChoiceData::String(sc, v) => Some(sc.to_index(v)),
             ChoiceData::Clone(_) => None,
-        }
+        })
     }
 
     /// The constraint's value at `index`; see [`ChoiceKind::from_index`].
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<ChoiceValue> {
+    pub fn from_index(
+        &self,
+        index: crate::native::bignum::BigUint,
+    ) -> Result<Option<ChoiceValue>, InternalError> {
         self.kind().from_index(index)
     }
 
@@ -1541,14 +1560,14 @@ pub struct ChoiceTemplate {
 impl ChoiceTemplate {
     /// Build a [`ChoiceTemplateKind::Simplest`] template with the given
     /// remaining-draws count. `Some(0)` is rejected at construction time.
-    pub fn simplest(count: Option<usize>) -> Self {
+    pub fn simplest(count: Option<usize>) -> Result<Self, InternalError> {
         if let Some(n) = count {
             hegel_internal_assert!(n > 0, "ChoiceTemplate count must be positive (got 0)");
         }
-        Self {
+        Ok(Self {
             kind: ChoiceTemplateKind::Simplest,
             count,
-        }
+        })
     }
 }
 
@@ -1607,11 +1626,11 @@ impl ChoiceNode {
     }
 
     /// This node with its constraint's simplest value.
-    pub fn with_simplest(&self) -> ChoiceNode {
-        ChoiceNode {
-            data: self.data.with_simplest(),
+    pub fn with_simplest(&self) -> Result<ChoiceNode, InternalError> {
+        Ok(ChoiceNode {
+            data: self.data.with_simplest()?,
             was_forced: self.was_forced,
-        }
+        })
     }
 }
 
@@ -1840,6 +1859,16 @@ pub enum EngineError {
     /// bounds, empty character set, unparseable regex, etc.). The string is
     /// a human-readable diagnostic.
     InvalidArgument(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected during a draw. Surfaces as `HEGEL_E_INTERNAL` at the C ABI,
+    /// with the bug-report framing as the diagnostic.
+    Internal(InternalError),
+}
+
+impl From<InternalError> for EngineError {
+    fn from(e: InternalError) -> Self {
+        EngineError::Internal(e)
+    }
 }
 
 impl std::fmt::Display for EngineError {
@@ -1849,6 +1878,7 @@ impl std::fmt::Display for EngineError {
             EngineError::InvalidTestCase => write!(f, "engine rejected test case (Invalid)"),
             EngineError::AssumeViolation => write!(f, "draw could not be satisfied (Assume)"),
             EngineError::InvalidArgument(msg) => write!(f, "{msg}"),
+            EngineError::Internal(e) => write!(f, "{e}"),
         }
     }
 }

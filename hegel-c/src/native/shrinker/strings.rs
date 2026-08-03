@@ -21,7 +21,7 @@ impl<'a> Shrinker<'a> {
         {
             let (kind, current) = self.string_at(i).ok_or(PassExit::NodeGone)?;
 
-            let simplest = kind.simplest();
+            let simplest = kind.simplest()?;
             if simplest != current {
                 self.replace(&HashMap::from_iter([(i, ChoiceValue::String(simplest))]))
                     .await?;

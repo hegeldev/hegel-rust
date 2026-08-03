@@ -36,7 +36,7 @@ impl<'a> Shrinker<'a> {
                     idx += 1;
                     continue;
                 }
-                let Some(current_idx) = node_i.data.to_index() else {
+                let Some(current_idx) = node_i.data.to_index()? else {
                     idx += 1;
                     continue;
                 };
@@ -49,11 +49,11 @@ impl<'a> Shrinker<'a> {
                 if current_idx > BigUint::from(1u32) {
                     let v0 = node_i
                         .data
-                        .from_index(BigUint::zero())
+                        .from_index(BigUint::zero())?
                         .expect("from_index(0) is simplest and always valid");
                     decrement_targets.push(v0);
                 }
-                if let Some(v_prev) = node_i.data.from_index(&current_idx - BigUint::from(1u32)) {
+                if let Some(v_prev) = node_i.data.from_index(&current_idx - BigUint::from(1u32))? {
                     if !decrement_targets.contains(&v_prev) {
                         decrement_targets.push(v_prev);
                     }
@@ -74,7 +74,7 @@ impl<'a> Shrinker<'a> {
 
                             let mut zeroed = attempt;
                             for node in &mut zeroed[i + 1..] {
-                                *node = node.with_simplest();
+                                *node = node.with_simplest()?;
                             }
                             self.consider(&zeroed).await?;
                         }
@@ -82,14 +82,14 @@ impl<'a> Shrinker<'a> {
 
                     if j < self.current_nodes.len() && !is_sequence(&self.current_nodes[j].data) {
                         let data_j = self.current_nodes[j].data.clone();
-                        let Some((target_idx, max_j)) = data_j.to_index().zip(data_j.max_index())
+                        let Some((target_idx, max_j)) = data_j.to_index()?.zip(data_j.max_index())
                         else {
                             continue;
                         };
                         let mut bumped_any_relative = false;
                         for bump in [1u32, 2, 4] {
                             let candidate_idx = &target_idx + BigUint::from(bump);
-                            if let Some(bumped) = data_j.from_index(candidate_idx) {
+                            if let Some(bumped) = data_j.from_index(candidate_idx)? {
                                 if try_bump_ij(self, i, new_val, j, &bumped).await? {
                                     bumped_any_relative = true;
                                     break;
@@ -103,10 +103,10 @@ impl<'a> Shrinker<'a> {
                                     break;
                                 }
                                 let p_minus_one = &p - BigUint::from(1u32);
-                                if let Some(v) = data_j.from_index(p_minus_one) {
+                                if let Some(v) = data_j.from_index(p_minus_one)? {
                                     try_bump_ij(self, i, new_val, j, &v).await?;
                                 }
-                                if let Some(v) = data_j.from_index(p.clone()) {
+                                if let Some(v) = data_j.from_index(p.clone())? {
                                     try_bump_ij(self, i, new_val, j, &v).await?;
                                 }
                                 p *= BigUint::from(2u32);
@@ -134,7 +134,7 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let Some(current_idx) = node.data.to_index() else {
+            let Some(current_idx) = node.data.to_index()? else {
                 i += 1;
                 continue;
             };
@@ -143,17 +143,17 @@ impl<'a> Shrinker<'a> {
             let node_value = node.value();
             for d in [1u32, 2, 4, 8, 16] {
                 let t = &current_idx + BigUint::from(d);
-                if let Some(v) = node.data.from_index(t) {
+                if let Some(v) = node.data.from_index(t)? {
                     if v != node_value && !candidates.contains(&v) {
                         candidates.push(v);
                     }
                 }
             }
-            if let Some(v) = node
-                .data
-                .max_index()
-                .and_then(|mi| node.data.from_index(mi))
-            {
+            let max_candidate = match node.data.max_index() {
+                Some(mi) => node.data.from_index(mi)?,
+                None => None,
+            };
+            if let Some(v) = max_candidate {
                 if v != node_value && !candidates.contains(&v) {
                     candidates.push(v);
                 }
@@ -190,7 +190,7 @@ impl<'a> Shrinker<'a> {
                 attempt[i] = bumped;
                 let mut zeroed = attempt.clone();
                 for node in &mut zeroed[i + 1..] {
-                    *node = node.with_simplest();
+                    *node = node.with_simplest()?;
                 }
                 self.consider(&zeroed).await?;
             }

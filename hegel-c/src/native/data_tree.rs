@@ -14,7 +14,7 @@ use std::sync::Arc;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 
-use crate::control::hegel_internal_debug_assert;
+use crate::control::{InternalError, hegel_internal_debug_assert};
 use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceData, ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Span, SpanEvent,
@@ -427,16 +427,20 @@ fn pick_non_exhausted_value(
     kind: &ChoiceKind,
     children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     rng: &mut EngineRng,
-) -> Option<ChoiceValue> {
+) -> Result<Option<ChoiceValue>, InternalError> {
     for _ in 0..10 {
-        let value = kind.random_value(rng)?;
+        let Some(value) = kind.random_value(rng)? else {
+            return Ok(None);
+        };
         let key = ChoiceValueKey::from(&value);
         match children.get(&key) {
             Some(child) if child.is_exhausted => continue,
-            _ => return Some(value),
+            _ => return Ok(Some(value)),
         }
     }
-    let candidates = kind.enumerate(ENUMERATION_CAP)?;
+    let Some(candidates) = kind.enumerate(ENUMERATION_CAP) else {
+        return Ok(None);
+    };
     let mut untried: Vec<ChoiceValue> = candidates
         .into_iter()
         .filter(|v| {
@@ -445,10 +449,10 @@ fn pick_non_exhausted_value(
         })
         .collect();
     if untried.is_empty() {
-        return None; // nocov
+        return Ok(None); // nocov
     }
     untried.shuffle(rng);
-    untried.into_iter().next()
+    Ok(untried.into_iter().next())
 }
 
 /// Walk the data tree and return a prefix of choice values that stops
@@ -467,9 +471,9 @@ fn pick_non_exhausted_value(
 pub(crate) fn generate_novel_prefix(
     tree_root: &DataTreeNode,
     rng: &mut EngineRng,
-) -> Vec<ChoiceValue> {
+) -> Result<Vec<ChoiceValue>, InternalError> {
     if tree_root.is_exhausted {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut prefix = Vec::new();
     let mut current = tree_root;
@@ -502,7 +506,7 @@ pub(crate) fn generate_novel_prefix(
                 .collect();
             if let Some(subtree) = inside {
                 if continuations.is_empty() || rng.random::<f64>() < 0.5 {
-                    let sub_prefix = generate_novel_prefix(subtree, rng);
+                    let sub_prefix = generate_novel_prefix(subtree, rng)?;
                     prefix.push(ChoiceValue::Clone(Arc::new(CloneRecord::from_values(
                         sub_prefix,
                     ))));
@@ -517,7 +521,7 @@ pub(crate) fn generate_novel_prefix(
             current = child;
             continue;
         }
-        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng) else {
+        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng)? else {
             break;
         };
         let key = ChoiceValueKey::from(&value);
@@ -528,7 +532,7 @@ pub(crate) fn generate_novel_prefix(
             _ => break,
         }
     }
-    prefix
+    Ok(prefix)
 }
 
 /// Predict the outcome of replaying `choices` through
@@ -562,7 +566,9 @@ pub(crate) fn generate_novel_prefix(
 /// [`record_tree`]), so `EarlyStop` is never returned.
 #[cfg(test)]
 pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
-    simulate_full(tree_root, choices, None).map(|o| o.status)
+    simulate_full(tree_root, choices, None)
+        .unwrap()
+        .map(|o| o.status)
 }
 
 /// As [`simulate`], but returns the *entire* recorded outcome — realised nodes,
@@ -579,7 +585,7 @@ pub(crate) fn simulate_full(
     tree_root: &DataTreeNode,
     choices: &[ChoiceValue],
     prefix_nodes: Option<&[ChoiceNode]>,
-) -> Option<SimulatedOutcome> {
+) -> Result<Option<SimulatedOutcome>, InternalError> {
     let mut current = tree_root;
     let mut nodes: Vec<ChoiceNode> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
@@ -590,38 +596,53 @@ pub(crate) fn simulate_full(
         replay_span_events(&current.span_events, pos, &mut spans, &mut span_stack);
         if let Some(concl) = &current.conclusion {
             close_open_spans(pos, &mut spans, &mut span_stack);
-            return Some(SimulatedOutcome {
+            return Ok(Some(SimulatedOutcome {
                 status: concl.status,
                 nodes,
                 spans,
                 origin: concl.origin.clone(),
                 target_observations: concl.target_observations.clone(),
-            });
+            }));
         }
-        let kind = current.kind.as_ref()?;
+        let Some(kind) = current.kind.as_ref() else {
+            return Ok(None);
+        };
         if i >= choices.len() {
-            return None;
+            return Ok(None);
         }
-        let (realised, next) = if current.forced {
-            let (key, next) = current.children.iter().next()?;
-            (kind.resolve(&key.to_value())?, next.as_ref())
+        let step = if current.forced {
+            current.children.iter().next().and_then(|(key, next)| {
+                kind.resolve(&key.to_value())
+                    .map(|realised| (realised, next.as_ref()))
+            })
         } else if matches!(*kind, ChoiceKind::Clone) {
-            let (stream, next) = resolve_clone_position(current, &choices[i])?;
-            (ChoiceData::Clone(stream), next)
+            resolve_clone_position(current, &choices[i])?
+                .map(|(stream, next)| (ChoiceData::Clone(stream), next))
         } else {
-            let realised = kind.resolve(&choices[i]).or_else(|| {
-                let is_simplest = prefix_nodes
-                    .and_then(|pn| pn.get(i))
-                    .is_some_and(|pn| choices[i] == pn.data.simplest_value());
-                let punned = if is_simplest {
-                    kind.simplest()
-                } else {
-                    kind.unit()
-                };
-                kind.resolve(&punned)
-            })?;
-            let next = current.children.get(&ChoiceValueKey::from(&realised))?;
-            (realised, next.as_ref())
+            let realised = match kind.resolve(&choices[i]) {
+                Some(r) => Some(r),
+                None => {
+                    let is_simplest = match prefix_nodes.and_then(|pn| pn.get(i)) {
+                        Some(pn) => choices[i] == pn.data.simplest_value()?,
+                        None => false,
+                    };
+                    let punned = if is_simplest {
+                        kind.simplest()?
+                    } else {
+                        kind.unit()?
+                    };
+                    kind.resolve(&punned)
+                }
+            };
+            realised.and_then(|realised| {
+                current
+                    .children
+                    .get(&ChoiceValueKey::from(&realised))
+                    .map(|next| (realised, next.as_ref()))
+            })
+        };
+        let Some((realised, next)) = step else {
+            return Ok(None);
         };
         nodes.push(ChoiceNode::new(realised, current.forced));
         i += 1;
@@ -686,20 +707,30 @@ fn close_open_spans(pos: usize, spans: &mut [Span], span_stack: &mut Vec<usize>)
 fn resolve_clone_position<'t>(
     node: &'t DataTreeNode,
     candidate: &ChoiceValue,
-) -> Option<(Arc<RealizedStream>, &'t DataTreeNode)> {
+) -> Result<Option<(Arc<RealizedStream>, &'t DataTreeNode)>, InternalError> {
     let candidate_values: Vec<ChoiceValue> = match candidate {
         ChoiceValue::Clone(r) => r.owned_values(),
         _ => Vec::new(),
     };
     let key = match &node.clone_subtree {
-        Some(subtree) if !node.clone_subtree_disabled => ChoiceValueKey::Clone(Arc::new(
-            CloneRecord::from_stream(Arc::new(simulate_clone_stream(subtree, &candidate_values)?)),
-        )),
+        Some(subtree) if !node.clone_subtree_disabled => {
+            let Some(stream) = simulate_clone_stream(subtree, &candidate_values)? else {
+                return Ok(None);
+            };
+            ChoiceValueKey::Clone(Arc::new(CloneRecord::from_stream(Arc::new(stream))))
+        }
         _ => ChoiceValueKey::Clone(Arc::new(CloneRecord::from_values(candidate_values))),
     };
-    let (stored_key, next) = node.children.get_key_value(&key)?;
-    let stored = stored_key.as_clone()?;
-    Some((Arc::clone(stored.realized()?), next.as_ref()))
+    Ok(node
+        .children
+        .get_key_value(&key)
+        .and_then(|(stored_key, next)| {
+            stored_key.as_clone().and_then(|stored| {
+                stored
+                    .realized()
+                    .map(|realized| (Arc::clone(realized), next.as_ref()))
+            })
+        }))
 }
 
 /// Walk candidate child `values` through a clone subtree trie, reproducing
@@ -714,7 +745,10 @@ fn resolve_clone_position<'t>(
 /// a divergent value, an unexplored position, or candidate values running
 /// out while the recorded stream kept drawing (a real child would overrun
 /// or extend randomly; either way the outcome must be executed to learn).
-fn simulate_clone_stream(root: &DataTreeNode, values: &[ChoiceValue]) -> Option<RealizedStream> {
+fn simulate_clone_stream(
+    root: &DataTreeNode,
+    values: &[ChoiceValue],
+) -> Result<Option<RealizedStream>, InternalError> {
     let mut current = root;
     let mut nodes: Vec<ChoiceNode> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
@@ -729,24 +763,36 @@ fn simulate_clone_stream(root: &DataTreeNode, values: &[ChoiceValue]) -> Option<
         replay_span_events(&current.span_events, pos, &mut spans, &mut span_stack);
         if current.stream_ended {
             close_open_spans(pos, &mut spans, &mut span_stack);
-            return Some(RealizedStream::new(nodes, spans, events_out));
+            return Ok(Some(RealizedStream::new(nodes, spans, events_out)));
         }
-        let kind = current.kind.as_ref()?;
+        let Some(kind) = current.kind.as_ref() else {
+            return Ok(None);
+        };
         if i >= values.len() {
-            return None;
+            return Ok(None);
         }
-        let (realised, next) = if current.forced {
-            let (key, next) = current.children.iter().next()?;
-            (kind.resolve(&key.to_value())?, next.as_ref())
+        let step = if current.forced {
+            current.children.iter().next().and_then(|(key, next)| {
+                kind.resolve(&key.to_value())
+                    .map(|realised| (realised, next.as_ref()))
+            })
         } else if matches!(*kind, ChoiceKind::Clone) {
-            let (stream, next) = resolve_clone_position(current, &values[i])?;
-            (ChoiceData::Clone(stream), next)
+            resolve_clone_position(current, &values[i])?
+                .map(|(stream, next)| (ChoiceData::Clone(stream), next))
         } else {
-            let realised = kind
-                .resolve(&values[i])
-                .or_else(|| kind.resolve(&kind.unit()))?;
-            let next = current.children.get(&ChoiceValueKey::from(&realised))?;
-            (realised, next.as_ref())
+            let realised = match kind.resolve(&values[i]) {
+                Some(r) => Some(r),
+                None => kind.resolve(&kind.unit()?),
+            };
+            realised.and_then(|realised| {
+                current
+                    .children
+                    .get(&ChoiceValueKey::from(&realised))
+                    .map(|next| (realised, next.as_ref()))
+            })
+        };
+        let Some((realised, next)) = step else {
+            return Ok(None);
         };
         nodes.push(ChoiceNode::new(realised, current.forced));
         i += 1;

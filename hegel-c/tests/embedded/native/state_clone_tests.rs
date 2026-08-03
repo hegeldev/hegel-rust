@@ -248,7 +248,7 @@ fn clone_node_consumes_a_slot_in_the_stream_budget() {
 
 #[test]
 fn simplest_template_children_resolve_to_simplest_values() {
-    let mut parent = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut parent = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     assert_eq!(draw(&mut parent), 0);
     let child = parent.clone_stream().unwrap();
     assert_eq!(draw(&mut child.lock().unwrap()), 0);
