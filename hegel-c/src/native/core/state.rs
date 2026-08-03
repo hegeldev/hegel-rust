@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::native::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -597,7 +597,7 @@ fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
     use std::sync::OnceLock;
     type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     let key = Arc::as_ptr(intervals) as usize;
     {
         let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -713,7 +713,7 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
 pub struct NativeVariables {
     last_id: i64,
     variables: Vec<i64>,
-    removed: std::collections::HashSet<i64>,
+    removed: crate::native::HashSet<i64>,
 }
 
 impl NativeVariables {
@@ -721,7 +721,7 @@ impl NativeVariables {
         NativeVariables {
             last_id: 0,
             variables: Vec::new(),
-            removed: std::collections::HashSet::new(),
+            removed: crate::native::HashSet::default(),
         }
     }
 
@@ -801,7 +801,7 @@ pub struct CoverageTag {
 }
 
 static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+    LazyLock::new(|| Mutex::new(HashMap::default()));
 
 /// Look up (or insert) the [`CoverageTag`] for `label`.
 ///
@@ -984,8 +984,8 @@ impl FamilyCore {
             concluded_status: AtomicU8::new(STATUS_UNSET),
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
-            target_observations: Mutex::new(HashMap::new()),
-            collections: Mutex::new(HashMap::new()),
+            target_observations: Mutex::new(HashMap::default()),
+            collections: Mutex::new(HashMap::default()),
             next_collection_id: AtomicI64::new(0),
             variable_pools: Mutex::new(Vec::new()),
             state_machines: Mutex::new(Vec::new()),
@@ -1186,7 +1186,7 @@ impl NativeTestCase {
             span_stack: Vec::new(),
             span_events: Vec::new(),
             has_discards: false,
-            tags: HashSet::new(),
+            tags: HashSet::default(),
             labels_for_structure_stack: Vec::new(),
             observer,
             trailing_template,
@@ -1354,7 +1354,7 @@ impl NativeTestCase {
         });
         self.span_stack.push(idx);
         self.span_events.push((start, SpanEvent::Open { label }));
-        let mut frame = HashSet::new();
+        let mut frame = HashSet::default();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH {

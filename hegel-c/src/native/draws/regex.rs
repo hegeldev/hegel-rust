@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::native::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::native::bignum::{BigInt, ToPrimitive};
@@ -52,8 +52,8 @@ impl CompiledRegex {
         Ok(CompiledRegex {
             parsed,
             alphabet,
-            in_cache: Mutex::new(HashMap::new()),
-            char_cache: Mutex::new(HashMap::new()),
+            in_cache: Mutex::new(HashMap::default()),
+            char_cache: Mutex::new(HashMap::default()),
         })
     }
 }
@@ -93,7 +93,7 @@ fn generate_regex_attempt(
     let alphabet = &re.alphabet;
 
     let mut state = GenState {
-        groups: HashMap::new(),
+        groups: HashMap::default(),
         flags: parsed.flags,
         fullmatch,
         pending_anchors: Vec::new(),
@@ -581,7 +581,7 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
         items.to_vec(),
         flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII),
     );
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
         let guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&cache_key) {
@@ -636,7 +636,7 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache_key = (cp, flags & SRE_FLAG_IGNORECASE);
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
         let guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&cache_key) {
@@ -686,7 +686,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
 
     if !negate {
         let mut out: Vec<char> = Vec::new();
-        let mut seen: HashSet<char> = HashSet::new();
+        let mut seen: HashSet<char> = HashSet::default();
         for c in positive {
             if ascii_only && (c as u32) >= 128 {
                 continue;
@@ -714,7 +714,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
         out
     } else {
         let cat_blocks: Vec<ChCode> = categories;
-        let mut positive_set: HashSet<char> = HashSet::new();
+        let mut positive_set: HashSet<char> = HashSet::default();
         for c in positive {
             positive_set.extend(swapcase_blacklist(c, flags));
         }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::bignum::{BigInt, Sign, Signed};
 use crate::native::core::choices::IntegerChoice;
@@ -41,7 +41,7 @@ impl<'a> Shrinker<'a> {
     /// node's width (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
     pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
-        self.replace(&HashMap::from([(
+        self.replace(&HashMap::from_iter([(
             i,
             ChoiceValue::Integer(candidate.clone()),
         )]))
@@ -57,7 +57,7 @@ impl<'a> Shrinker<'a> {
         j: usize,
         vj: &BigInt,
     ) -> ShrinkResult<bool> {
-        self.replace(&HashMap::from([
+        self.replace(&HashMap::from_iter([
             (i, ChoiceValue::Integer(vi.clone())),
             (j, ChoiceValue::Integer(vj.clone())),
         ]))
@@ -97,7 +97,7 @@ impl<'a> Shrinker<'a> {
                 let v = v.clone();
                 let simplest = ic.simplest();
                 if v != ic.simplest() {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Integer(simplest))]))
+                    self.replace(&HashMap::from_iter([(i, ChoiceValue::Integer(simplest))]))
                         .await?;
                 }
                 if i < self.current_nodes.len() {
@@ -429,7 +429,7 @@ impl<'a> Shrinker<'a> {
         }
 
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceKind>, ChoiceValue), Vec<usize>> =
-            HashMap::new();
+            HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
             let key = (
                 std::mem::discriminant(node.kind.as_ref()),
@@ -462,7 +462,7 @@ impl<'a> Shrinker<'a> {
                 self.replace(&replacements).await?;
             }
         }
-        let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::new();
+        let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
             if let (ChoiceKind::Integer(_), ChoiceValue::Integer(v)) =
                 (node.kind.as_ref(), &node.value)
@@ -650,7 +650,7 @@ impl<'a> Shrinker<'a> {
                     false
                 } else {
                     let new_offset = &offset - &n_big;
-                    let mut replacements: HashMap<usize, ChoiceValue> = HashMap::new();
+                    let mut replacements: HashMap<usize, ChoiceValue> = HashMap::default();
                     for k in 0..indices.len() {
                         let new_distance = &new_offset + &residual[k];
                         let effective_sign = signs[k] * sign_multiplier;

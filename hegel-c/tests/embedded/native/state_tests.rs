@@ -734,7 +734,7 @@ fn biased_integer_sample_collapses_when_min_equals_max() {
 #[test]
 fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
     let mut rng = EngineRng::seeded(5);
-    let mut magnitudes: HashSet<i32> = HashSet::new();
+    let mut magnitudes: HashSet<i32> = HashSet::default();
     for _ in 0..2000 {
         let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         let mag = if v == 0 {

@@ -1,8 +1,8 @@
 //! Tests covering defensive branches in deletion.rs and sequence.rs
 //! that were previously masked by `// nocov` annotations.
 
+use crate::native::HashMap;
 use crate::native::bignum::BigInt;
-use std::collections::HashMap;
 
 use crate::exchange::drive_no_yield;
 use crate::native::core::choices::IntegerChoice;
@@ -200,7 +200,7 @@ fn try_shortening_via_increment_break_on_concurrent_shrink() {
 #[test]
 fn replace_short_circuits_on_index_past_end_of_attempt() {
     let mut shrinker = accepting_shrinker(vec![int_node(5)]);
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     values.insert(0, ChoiceValue::Integer(BigInt::from(0)));
     values.insert(10, ChoiceValue::Integer(BigInt::from(0)));
     assert!(!drive_no_yield(shrinker.replace(&values)).unwrap());

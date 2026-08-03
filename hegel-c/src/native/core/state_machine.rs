@@ -1,5 +1,5 @@
+use crate::native::HashSet;
 use std::cmp::min;
-use std::collections::HashSet;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
@@ -142,7 +142,7 @@ impl NativeStateMachine {
         }
         let flags = self.flags.as_mut().unwrap();
 
-        let mut known_bad: HashSet<usize> = HashSet::new();
+        let mut known_bad: HashSet<usize> = HashSet::default();
         for _ in 0..3 {
             let i = draw_index(ntc, n)?;
             if !known_bad.contains(&i) {

@@ -48,7 +48,7 @@ fn targeting_state_starts_empty() {
 fn targeting_state_records_first_observation() {
     let mut state = TargetingState::new();
     let choices = vec![ChoiceValue::Integer(BigInt::from(7))];
-    let obs = std::collections::HashMap::from([("score".to_string(), 1.5)]);
+    let obs = HashMap::from_iter([("score".to_string(), 1.5)]);
     state.record(&choices, &obs);
     assert!(!state.is_empty());
     assert_eq!(state.best_score("score"), Some(1.5));
@@ -59,24 +59,12 @@ fn targeting_state_overwrites_only_on_strict_improvement() {
     let mut state = TargetingState::new();
     let choices_a = vec![ChoiceValue::Integer(BigInt::from(1))];
     let choices_b = vec![ChoiceValue::Integer(BigInt::from(2))];
-    state.record(
-        &choices_a,
-        &std::collections::HashMap::from([("s".to_string(), 1.0)]),
-    );
-    state.record(
-        &choices_b,
-        &std::collections::HashMap::from([("s".to_string(), 1.0)]),
-    );
+    state.record(&choices_a, &HashMap::from_iter([("s".to_string(), 1.0)]));
+    state.record(&choices_b, &HashMap::from_iter([("s".to_string(), 1.0)]));
     assert_eq!(state.best_score("s"), Some(1.0));
-    state.record(
-        &choices_b,
-        &std::collections::HashMap::from([("s".to_string(), 0.5)]),
-    );
+    state.record(&choices_b, &HashMap::from_iter([("s".to_string(), 0.5)]));
     assert_eq!(state.best_score("s"), Some(1.0));
-    state.record(
-        &choices_b,
-        &std::collections::HashMap::from([("s".to_string(), 2.0)]),
-    );
+    state.record(&choices_b, &HashMap::from_iter([("s".to_string(), 2.0)]));
     assert_eq!(state.best_score("s"), Some(2.0));
 }
 
@@ -86,7 +74,7 @@ fn targeting_state_tracks_multiple_labels_independently() {
     let choices = vec![ChoiceValue::Integer(BigInt::from(0))];
     state.record(
         &choices,
-        &std::collections::HashMap::from([("a".to_string(), 1.0), ("b".to_string(), 2.0)]),
+        &HashMap::from_iter([("a".to_string(), 1.0), ("b".to_string(), 2.0)]),
     );
     assert_eq!(state.best_score("a"), Some(1.0));
     assert_eq!(state.best_score("b"), Some(2.0));
@@ -263,7 +251,6 @@ fn step_choice_rejects_mismatched_value_and_kind() {
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::test_runner::Engine;
-use std::collections::HashMap as StdHashMap;
 
 /// A drawn boolean, or `Err(())` if the case overran / was aborted.
 fn draw_bool(ds: &dyn DataSource) -> Result<bool, ()> {
@@ -295,7 +282,7 @@ where
         let mut engine = Engine::new(&settings, None, &exchange);
         engine
             .targeting
-            .record(&start, &StdHashMap::from([("".to_string(), start_score)]));
+            .record(&start, &HashMap::from_iter([("".to_string(), start_score)]));
 
         let mut optimiser = Optimiser {
             engine: &mut engine,

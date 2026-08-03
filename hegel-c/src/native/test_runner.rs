@@ -19,7 +19,8 @@
 //! `run_probe_with_origin` so the surrounding shrinker
 //! and span-mutation passes can drive replays.
 
-use std::collections::{HashMap, hash_map::Entry};
+use crate::native::HashMap;
+use hashbrown::hash_map::Entry;
 
 use rand::RngExt;
 
@@ -492,8 +493,8 @@ impl<'a> Engine<'a> {
 
             let shrink_deadline = std::time::Instant::now() + shrink_budget;
             let mut shrink_timed_out = false;
-            let mut shrunk_origins: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut shrunk_origins: crate::native::HashSet<String> =
+                crate::native::HashSet::default();
             loop {
                 let mut pending: Vec<String> = self
                     .interesting
@@ -564,7 +565,7 @@ impl<'a> Engine<'a> {
         if let (Some(db), Some(key)) = (self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-            let new_entries: std::collections::HashSet<Vec<u8>> = self
+            let new_entries: crate::native::HashSet<Vec<u8>> = self
                 .interesting
                 .values()
                 .map(|nodes| {
@@ -850,7 +851,7 @@ impl<'a> Persister<'a> {
         Persister {
             db,
             database_key,
-            last_saved: HashMap::new(),
+            last_saved: HashMap::default(),
         }
     }
 
@@ -946,7 +947,7 @@ impl<'a> Engine<'a> {
             rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
-            interesting: HashMap::new(),
+            interesting: HashMap::default(),
             targeting: crate::native::targeting::TargetingState::new(),
             calls: 0,
             valid_test_cases: 0,
@@ -1172,8 +1173,8 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
     async fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
-        let mut by_label: rustc_hash::FxHashMap<&str, rustc_hash::FxHashSet<(usize, usize)>> =
-            rustc_hash::FxHashMap::default();
+        let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
+            crate::native::HashMap::default();
         for span in spans.iter() {
             by_label
                 .entry(span.label.as_str())

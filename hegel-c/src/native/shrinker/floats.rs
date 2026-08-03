@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
@@ -76,7 +76,7 @@ impl<'a> Shrinker<'a> {
 
                 let s = fc.simplest();
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
-                    self.replace(&HashMap::from([(i, ChoiceValue::Float(s))]))
+                    self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
                         .await?;
                 }
 
@@ -84,14 +84,17 @@ impl<'a> Shrinker<'a> {
 
                 if v.is_infinite() {
                     if v < 0.0 && fc.validate(f64::INFINITY) {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Float(f64::INFINITY))]))
-                            .await?;
+                        self.replace(&HashMap::from_iter([(
+                            i,
+                            ChoiceValue::Float(f64::INFINITY),
+                        )]))
+                        .await?;
                     }
                     let v = self.float_at(i);
                     if v.is_infinite() {
                         let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
                         if fc.validate(cand) {
-                            self.replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))
+                            self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(cand))]))
                                 .await?;
                         }
                     }
@@ -104,7 +107,7 @@ impl<'a> Shrinker<'a> {
                     for cand in [f64::MAX, f64::INFINITY] {
                         if fc.validate(cand)
                             && self
-                                .replace(&HashMap::from([(i, ChoiceValue::Float(cand))]))
+                                .replace(&HashMap::from_iter([(i, ChoiceValue::Float(cand))]))
                                 .await?
                         {
                             stepped = true;
@@ -136,7 +139,7 @@ impl<'a> Shrinker<'a> {
                 if v.is_sign_negative() {
                     let neg = -v;
                     if fc.validate(neg) {
-                        self.replace(&HashMap::from([(i, ChoiceValue::Float(neg))]))
+                        self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(neg))]))
                             .await?;
                     }
                 }
@@ -168,7 +171,7 @@ impl<'a> Shrinker<'a> {
                             if !fc_capture.validate(candidate) {
                                 false
                             } else {
-                                self.replace(&HashMap::from([(
+                                self.replace(&HashMap::from_iter([(
                                     i_capture,
                                     ChoiceValue::Float(candidate),
                                 )]))
@@ -199,7 +202,7 @@ impl<'a> Shrinker<'a> {
                                     } else {
                                         candidate_mag
                                     };
-                                    self.replace(&HashMap::from([(
+                                    self.replace(&HashMap::from_iter([(
                                         i_capture,
                                         ChoiceValue::Float(candidate),
                                     )]))
@@ -227,8 +230,11 @@ impl<'a> Shrinker<'a> {
                                 candidate_mag
                             };
                             if fc.validate(candidate) {
-                                self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
-                                    .await?;
+                                self.replace(&HashMap::from_iter([(
+                                    i,
+                                    ChoiceValue::Float(candidate),
+                                )]))
+                                .await?;
                             }
                         }
                     }
@@ -248,7 +254,7 @@ impl<'a> Shrinker<'a> {
                             candidate_mag
                         };
                         let ok = if fc.validate(candidate) {
-                            self.replace(&HashMap::from([(i, ChoiceValue::Float(candidate))]))
+                            self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(candidate))]))
                                 .await?
                         } else {
                             false
@@ -277,7 +283,7 @@ impl<'a> Shrinker<'a> {
                                     false
                                 } else {
                                     let epoch = self.improvements;
-                                    self.replace(&HashMap::from([(
+                                    self.replace(&HashMap::from_iter([(
                                         i,
                                         ChoiceValue::Float(candidate),
                                     )]))
@@ -440,7 +446,7 @@ async fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> S
                 None => false,
                 Some(val_j) => {
                     shrinker
-                        .replace(&HashMap::from([(i, val_i), (j, val_j)]))
+                        .replace(&HashMap::from_iter([(i, val_i), (j, val_j)]))
                         .await?
                 }
             },

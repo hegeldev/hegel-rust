@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

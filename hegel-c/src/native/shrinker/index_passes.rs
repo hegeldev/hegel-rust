@@ -3,7 +3,7 @@
 //! Both passes use the `to_index`/`from_index` API on `ChoiceKind` for
 //! type-generic shrinking.
 
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::core::{ChoiceKind, ChoiceValue};

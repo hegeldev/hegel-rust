@@ -15,7 +15,7 @@ mod strings;
 
 pub use scheduling::ShrinkPass;
 
-use std::collections::{HashMap, HashSet};
+use crate::native::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
@@ -172,7 +172,7 @@ impl<'a> Shrinker<'a> {
             calls: 0,
             calls_at_last_shrink: 0,
             max_stall: MAX_SHRINKS,
-            all_changed_nodes: HashSet::new(),
+            all_changed_nodes: HashSet::default(),
             debug: None,
             deadline: None,
             timed_out: false,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::core::{BytesChoice, ChoiceKind, ChoiceValue};
 
@@ -22,7 +22,7 @@ impl<'a> Shrinker<'a> {
 
             let simplest = vec![0u8; min_size];
             if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(simplest))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(simplest))]))
                     .await?;
             }
 
@@ -34,7 +34,7 @@ impl<'a> Shrinker<'a> {
                     let sz = sz as usize;
                     let cand = captured[..sz].to_vec();
                     let ok = self
-                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
                         .await?;
                     search.record(ok);
                 }
@@ -48,7 +48,7 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let cand = cur[..sz].to_vec();
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
                     .await?;
             }
 
@@ -61,7 +61,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut cand = cur.clone();
                 cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
                     .await?;
             }
 
@@ -78,7 +78,7 @@ impl<'a> Shrinker<'a> {
                     let mut cand = self.current_byte_value(i);
                     cand[j] = e as u8;
                     let ok = self
-                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(cand))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
                         .await?;
                     search.record(ok);
                 }
@@ -99,7 +99,7 @@ impl<'a> Shrinker<'a> {
                     let mut swapped = cur.clone();
                     swapped.swap(j - 1, j);
                     if self
-                        .replace(&HashMap::from([(i, ChoiceValue::Bytes(swapped))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(swapped))]))
                         .await?
                     {
                         j -= 1;
@@ -217,7 +217,7 @@ impl<'a> Shrinker<'a> {
         if !kind_j.validate(&new_t) {
             return Ok(false);
         }
-        self.replace(&HashMap::from([
+        self.replace(&HashMap::from_iter([
             (i, ChoiceValue::Bytes(new_s)),
             (j, ChoiceValue::Bytes(new_t)),
         ]))
