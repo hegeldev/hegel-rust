@@ -14,6 +14,10 @@
 use crate::native::HashMap;
 
 use super::constants::*;
+use crate::control::{
+    InternalError, hegel_internal_debug_assert, hegel_internal_debug_assert_eq,
+    hegel_internal_error,
+};
 
 /// A single parsed operation. Each variant corresponds to an entry in
 /// CPython's `OPCODES` list, with the argument shape matching the
@@ -137,6 +141,18 @@ impl std::fmt::Display for ParseError {
 }
 
 impl core::error::Error for ParseError {}
+
+/// A violated invariant of the parser itself surfaces through the parser's
+/// one error channel, keeping the [`InternalError`] bug-report framing in
+/// the message.
+impl From<InternalError> for ParseError {
+    fn from(e: InternalError) -> Self {
+        ParseError {
+            msg: e.to_string(),
+            pos: 0,
+        }
+    }
+}
 
 type ParseResult<T> = Result<T, ParseError>;
 
@@ -970,7 +986,7 @@ fn parse(
                     }
                 }
             } else {
-                unreachable!("REPEAT_CHARS dispatch");
+                hegel_internal_error!("token {this:?} passed the REPEAT_CHARS gate unhandled");
             }
             let item_opt = if subpattern.is_empty() {
                 None
@@ -1250,6 +1266,7 @@ fn parse(
                 state.closegroup(g);
             }
             if atomic {
+                hegel_internal_debug_assert!(group.is_none());
                 subpattern.push(OpCode::AtomicGroup(p));
             } else {
                 subpattern.push(OpCode::Subpattern {
@@ -1271,7 +1288,7 @@ fn parse(
             continue;
         }
 
-        unreachable!("unhandled special character {:?}", this);
+        hegel_internal_error!("unhandled special character {this:?}");
     }
 
     let mut i = subpattern.data.len();
@@ -1288,9 +1305,9 @@ fn parse(
         );
         if take_inner {
             let OpCode::Subpattern { p, .. } = subpattern.data.remove(i) else {
-                unreachable!(
-                    "opcode at index i was matched as Subpattern by the surrounding take_inner check"
-                )
+                hegel_internal_error!(
+                    "opcode at index {i} was matched as Subpattern by the take_inner check"
+                );
             };
             let expanded = p.data;
             let expanded_len = expanded.len();
@@ -1330,7 +1347,7 @@ fn parse_flags(
     if ch != "-" {
         loop {
             let Some(flag) = flag_for_char(ch.chars().next().unwrap()) else {
-                unreachable!("parse_flags called with non-flag char");
+                hegel_internal_error!("parse_flags called with non-flag char {ch:?}");
             };
             if ch == "L" {
                 return Err(source.error(
@@ -1408,6 +1425,7 @@ fn parse_flags(
             }
         }
     }
+    hegel_internal_debug_assert_eq!(ch, ":");
     if add_flags & del_flags != 0 {
         return Err(source.error("bad inline flags: flag turned on and off", 1));
     }
@@ -1446,6 +1464,7 @@ pub fn parse_pattern(pattern: &str, flags: u32) -> ParseResult<ParsedPattern> {
     state.flags = fix_flags(state.flags)?;
 
     if source.next.is_some() {
+        hegel_internal_debug_assert_eq!(source.next.as_deref(), Some(")"));
         return Err(source.error("unbalanced parenthesis", 0));
     }
 
