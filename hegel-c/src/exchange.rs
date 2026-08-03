@@ -23,6 +23,7 @@ use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use crate::backend::DataSource;
+use crate::control::{InternalError, hegel_internal_unwrap};
 
 /// A data source handed across the exchange, one per test case.
 pub(crate) type BoxedDataSource = Box<dyn DataSource + Send + Sync>;
@@ -49,14 +50,16 @@ impl CaseExchange {
         }
     }
 
-    /// Take the case the engine just offered. Panics if the engine suspended
-    /// without offering one, which the alternation protocol rules out.
-    pub(crate) fn take(&self) -> BoxedDataSource {
-        self.slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .expect("engine suspended without offering a test case")
+    /// Take the case the engine just offered. `Err` if the engine suspended
+    /// without offering one, which the alternation protocol rules out — a
+    /// bug in the engine, surfaced by the driver as a run-level error
+    /// instead of a panic.
+    pub(crate) fn take(&self) -> Result<BoxedDataSource, InternalError> {
+        let taken = self.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        Ok(hegel_internal_unwrap!(
+            taken,
+            "the engine suspended without offering a test case"
+        ))
     }
 }
 
@@ -104,7 +107,7 @@ pub(crate) fn drive<F: Future>(
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(out) => return out,
-            Poll::Pending => run_case(exchange.take()),
+            Poll::Pending => run_case(exchange.take().unwrap()),
         }
     }
 }

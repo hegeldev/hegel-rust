@@ -256,7 +256,7 @@ where
     let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
     let exchange = crate::exchange::CaseExchange::new();
     let fut = async {
-        let mut engine = Engine::new(&settings, None, &exchange);
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
         engine
             .targeting
             .record(&start, &HashMap::from_iter([("".to_string(), start_score)]));
@@ -266,7 +266,7 @@ where
             max_valid: 10_000,
             max_calls: 100_000,
         };
-        optimiser.optimise_targets().await;
+        optimiser.optimise_targets().await.unwrap();
     };
     crate::exchange::drive(&exchange, fut, |ds| {
         let result = body(&*ds);

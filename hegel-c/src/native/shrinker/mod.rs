@@ -15,6 +15,7 @@ mod strings;
 
 pub use scheduling::ShrinkPass;
 
+use crate::backend::RunError;
 use crate::control::InternalError;
 use crate::native::{HashMap, HashSet};
 use std::future::Future;
@@ -41,7 +42,7 @@ pub enum ShrinkRun<'a> {
 
 /// The boxed future a [`ShrinkProbe`] resolves to: the
 /// `(is_interesting, actual_nodes, actual_spans)` outcome of one run, or
-/// the [`ShrinkHalt`] that cut it short (an internal error raised inside
+/// the [`ShrinkHalt`] that cut it short (a run-level error raised inside
 /// the engine's replay machinery).
 pub type ProbeFuture<'s> =
     Pin<Box<dyn Future<Output = ShrinkResult<(bool, Vec<ChoiceNode>, Spans)>> + Send + 's>>;
@@ -84,18 +85,26 @@ pub type DebugFn<'a> = dyn FnMut(&str) + Send + 'a;
 /// — once the deadline is exceeded, and passes propagate it with `?`.
 /// Shrinking therefore unwinds promptly, even mid-pass, keeping the best
 /// example found so far. This is the Rust analogue of Hypothesis's
-/// `RunIsComplete` unwind. `Internal` is a violated internal invariant
-/// raised by a pass; it propagates the same way but surfaces from
-/// [`Shrinker::shrink`] as a run-level error instead of being absorbed.
+/// `RunIsComplete` unwind. `Error` is a run-level error raised mid-shrink —
+/// a violated internal invariant in a pass, or a [`RunError`] from the
+/// engine probe executing a candidate; it propagates the same way but
+/// surfaces from [`Shrinker::shrink`] as a run-level error instead of
+/// being absorbed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShrinkHalt {
     Stop,
-    Internal(InternalError),
+    Error(RunError),
 }
 
 impl From<InternalError> for ShrinkHalt {
     fn from(e: InternalError) -> Self {
-        ShrinkHalt::Internal(e)
+        ShrinkHalt::Error(RunError::Internal(e))
+    }
+}
+
+impl From<RunError> for ShrinkHalt {
+    fn from(e: RunError) -> Self {
+        ShrinkHalt::Error(e)
     }
 }
 
@@ -126,7 +135,7 @@ impl From<ShrinkHalt> for PassExit {
 
 impl From<InternalError> for PassExit {
     fn from(e: InternalError) -> Self {
-        PassExit::Halt(ShrinkHalt::Internal(e))
+        PassExit::Halt(ShrinkHalt::from(e))
     }
 }
 
@@ -142,10 +151,10 @@ pub(super) fn absorb_node_gone<T>(result: Result<T, PassExit>) -> ShrinkResult<(
 
 /// Fold a whole-shrink outcome into the runner's error channel:
 /// [`ShrinkHalt::Stop`] is absorbed (the shrink simply ended early, keeping
-/// the best example found so far) and an internal error keeps propagating.
-pub(crate) fn absorb_stop<T>(result: ShrinkResult<T>) -> Result<(), InternalError> {
+/// the best example found so far) and a run-level error keeps propagating.
+pub(crate) fn absorb_stop<T>(result: ShrinkResult<T>) -> Result<(), RunError> {
     match result {
-        Err(ShrinkHalt::Internal(e)) => Err(e),
+        Err(ShrinkHalt::Error(e)) => Err(e),
         _ => Ok(()),
     }
 }
@@ -534,16 +543,14 @@ impl<'a> Shrinker<'a> {
     /// compiler prove the future `Send` without chasing the cycle.
     ///
     /// A [`ShrinkHalt::Stop`] (deadline, improvement cap) is absorbed here —
-    /// it ends the shrink with the best example found so far. An internal
-    /// error propagates as `Err` for the runner to surface as a run-level
-    /// error.
-    pub fn shrink(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), InternalError>> + Send + '_>> {
+    /// it ends the shrink with the best example found so far. A run-level
+    /// error (an internal invariant violation in a pass, or a [`RunError`]
+    /// from the engine probe) propagates as `Err` for the runner to surface.
+    pub fn shrink(&mut self) -> Pin<Box<dyn Future<Output = Result<(), RunError>> + Send + '_>> {
         Box::pin(self.shrink_inner())
     }
 
-    async fn shrink_inner(&mut self) -> Result<(), InternalError> {
+    async fn shrink_inner(&mut self) -> Result<(), RunError> {
         let mut passes: Vec<ShrinkPass> = vec![
             ShrinkPass::new(
                 "remove_discarded",

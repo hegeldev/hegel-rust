@@ -108,7 +108,7 @@ where
     let settings = Settings::new().database(None);
     let exchange = CaseExchange::new();
     let fut = async {
-        let mut ctx = Engine::new(&settings, None, &exchange);
+        let mut ctx = Engine::new(&settings, None, &exchange).unwrap();
         after(&mut ctx, &exec_count).await;
     };
     crate::exchange::drive(&exchange, fut, |ds| {
@@ -131,6 +131,7 @@ fn run_single_case_sync(
         run_single_case(settings, key, &exchange),
         run_case,
     )
+    .unwrap()
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -249,7 +250,8 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
         async |ctx, _| {
             let run = ctx
                 .execute(NativeTestCase::for_choices(&[], None, None))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
         },
     );
@@ -384,14 +386,20 @@ fn span_mutation_stops_when_example_budget_is_full() {
 #[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Prng(_))
+    ));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Urandom(_))
+    ));
 }
 
 /// Wrap a `run_main` outcome into the aggregate
@@ -641,7 +649,8 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
         async |ctx, _count| {
             let (run, _mismatch) = ctx
                 .test_function(NativeTestCase::for_simplest(1).unwrap())
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
 
             let mut tree = DataTreeNode::default();

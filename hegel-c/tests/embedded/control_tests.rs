@@ -36,6 +36,17 @@ fn hegel_internal_error_returns_err_with_the_message() {
 }
 
 #[test]
+fn internal_unwrap_yields_the_value_and_raises_on_none() {
+    fn check(opt: Option<i32>) -> Result<i32, InternalError> {
+        Ok(hegel_internal_unwrap!(opt, "value missing {}", "here"))
+    }
+    assert_eq!(check(Some(3)).unwrap(), 3);
+    let msg = assert_err(check(None));
+    assert!(msg.contains("value missing here"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
 fn internal_assert_includes_the_condition_when_it_fails() {
     fn check(value: i32) -> Result<(), InternalError> {
         hegel_internal_assert!(value == 4);

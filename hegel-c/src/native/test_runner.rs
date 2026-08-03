@@ -25,7 +25,6 @@ use hashbrown::hash_map::Entry;
 use rand::RngExt;
 
 use crate::backend::{Failure, RunError, TestCaseResult};
-use crate::control::InternalError;
 use crate::exchange::CaseExchange;
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
@@ -130,15 +129,15 @@ pub(crate) async fn run_single_case(
     settings: &Settings,
     database_key: Option<&str>,
     exchange: &CaseExchange,
-) -> Option<Failure> {
-    let mut rng = create_rng(settings, database_key);
+) -> Result<Option<Failure>, RunError> {
+    let mut rng = create_rng(settings, database_key)?;
     let ntc = NativeTestCase::new_random(rng.spawn());
     ntc.family().set_state_machine_steps_unbounded();
     let (data_source, handle) = NativeDataSource::new(ntc);
     exchange.offer(Box::new(data_source)).await;
-    match NativeDataSource::take_outcome(&handle) {
-        TestCaseResult::Interesting(failure) => Some(failure),
-        _ => None,
+    match NativeDataSource::take_outcome(&handle)? {
+        TestCaseResult::Interesting(failure) => Ok(Some(failure)),
+        _ => Ok(None),
     }
 }
 
@@ -151,7 +150,7 @@ async fn run_main(
     too_slow_threshold: std::time::Duration,
     shrink_budget: std::time::Duration,
 ) -> Result<Vec<Failure>, RunError> {
-    Engine::new(settings, database_key, exchange)
+    Engine::new(settings, database_key, exchange)?
         .run(too_slow_threshold, shrink_budget)
         .await
 }
@@ -233,7 +232,7 @@ impl<'a> Engine<'a> {
                     };
                     let ntc =
                         NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE);
-                    let (run, mismatch) = self.test_function(ntc).await;
+                    let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
                     }
@@ -285,7 +284,7 @@ impl<'a> Engine<'a> {
         {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
-                .await;
+                .await?;
             if let Some(msg) = mismatch {
                 return Err(RunError::NonDeterministic(msg));
             }
@@ -347,7 +346,7 @@ impl<'a> Engine<'a> {
                     output.line("Running test case");
                 }
 
-                let (run, mismatch) = self.test_function(ntc).await;
+                let (run, mismatch) = self.test_function(ntc).await?;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -411,7 +410,7 @@ impl<'a> Engine<'a> {
                         max_valid: max_test_cases,
                         max_calls: max_test_cases * 10,
                     };
-                    optimiser.optimise_targets().await;
+                    optimiser.optimise_targets().await?;
                 }
 
                 if run.status == Status::Valid
@@ -484,7 +483,7 @@ impl<'a> Engine<'a> {
                     }
                     if let Some(stored_choices) = deserialize_choices(&raw) {
                         let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                        let _ = self.test_function(ntc).await;
+                        self.test_function(ntc).await?;
                     }
                     if let Some(db) = self.db() {
                         db.delete(&secondary_key, &raw);
@@ -512,7 +511,7 @@ impl<'a> Engine<'a> {
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, mismatch) = self.test_function(verify_ntc).await;
+                let (verify, mismatch) = self.test_function(verify_ntc).await?;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -935,17 +934,17 @@ impl<'a> Engine<'a> {
         settings: &'a Settings,
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
-    ) -> Self {
+    ) -> Result<Self, RunError> {
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
             Database::Disabled => None,
         };
-        Engine {
+        Ok(Engine {
             settings,
             database_key,
             exchange,
-            rng: create_rng(settings, database_key),
+            rng: create_rng(settings, database_key)?,
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::default(),
@@ -959,7 +958,7 @@ impl<'a> Engine<'a> {
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
-        }
+        })
     }
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
@@ -976,15 +975,16 @@ impl<'a> Engine<'a> {
     /// Execute one test case and record everything about its outcome —
     /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
     /// the choice-tree non-determinism diagnostic, if recording the run's
-    /// path contradicted an earlier run.
+    /// path contradicted an earlier run. `Err` means the driver violated
+    /// the run contract (see [`NativeDataSource::take_outcome`]).
     pub(crate) async fn test_function(
         &mut self,
         ntc: NativeTestCase,
-    ) -> (RunResult, Option<String>) {
+    ) -> Result<(RunResult, Option<String>), RunError> {
         let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc).await;
+        let run = self.execute(ntc).await?;
         let mismatch = self.record_run(&run, tc_start.elapsed());
-        (run, mismatch)
+        Ok((run, mismatch))
     }
 
     /// Record one executed test case: the choice tree (losslessly — nodes,
@@ -1046,15 +1046,17 @@ impl<'a> Engine<'a> {
     /// the trie and returning a [`RunResult`] populated from the outcome
     /// reported by the data source's `mark_complete` plus the
     /// [`NativeTestCase`]'s realized choice nodes. Always a non-final
-    /// execution.
-    async fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
+    /// execution. `Err` means the driver violated the run contract by
+    /// resuming the engine without concluding the offered case (see
+    /// [`NativeDataSource::take_outcome`]).
+    async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
         let (data_source, handle) = NativeDataSource::new(ntc);
         self.exchange.offer(Box::new(data_source)).await;
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle);
+        let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
@@ -1063,14 +1065,14 @@ impl<'a> Engine<'a> {
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
         };
 
-        RunResult {
+        Ok(RunResult {
             status,
             nodes,
             spans,
             origin,
             target_observations,
             span_events,
-        }
+        })
     }
 
     /// The single replay chokepoint — Hypothesis's `cached_test_function` —
@@ -1094,7 +1096,7 @@ impl<'a> Engine<'a> {
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
-    ) -> Result<RunResult, InternalError> {
+    ) -> Result<RunResult, RunError> {
         if extend == 0 {
             if let Some(out) =
                 crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
@@ -1115,7 +1117,7 @@ impl<'a> Engine<'a> {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
         };
-        let (run, _mismatch) = self.test_function(ntc).await;
+        let (run, _mismatch) = self.test_function(ntc).await?;
         Ok(run)
     }
 }
@@ -1177,7 +1179,7 @@ impl<'a> Engine<'a> {
         &mut self,
         nodes: &[ChoiceNode],
         spans: &[Span],
-    ) -> Result<(), InternalError> {
+    ) -> Result<(), RunError> {
         let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
@@ -1255,19 +1257,21 @@ impl<'a> Engine<'a> {
     }
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
-    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis())
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineRng, RunError> {
+    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis()?)
         == Backend::Urandom
     {
-        return EngineRng::urandom();
+        return Ok(EngineRng::urandom());
     }
     if let Some(seed) = settings.seed {
-        EngineRng::seeded(seed)
+        Ok(EngineRng::seeded(seed))
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
+        Ok(EngineRng::seeded(crate::native::database::fnv1a(
+            key.as_bytes(),
+        )))
     } else {
-        EngineRng::from_os()
+        Ok(EngineRng::from_os())
     }
 }
 

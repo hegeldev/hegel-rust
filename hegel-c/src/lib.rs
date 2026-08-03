@@ -1248,13 +1248,20 @@ pub unsafe extern "C" fn hegel_next_test_case(
     };
 
     match poll_engine(engine) {
-        Ok(Poll::Pending) => {
-            let family = new_family(run.exchange.take());
-            let case = handle_from_family(Arc::clone(&family));
-            run.current_family = Some(family);
-            unsafe { *out_test_case = case };
-            HEGEL_OK
-        }
+        Ok(Poll::Pending) => match run.exchange.take() {
+            Ok(ds) => {
+                let family = new_family(ds);
+                let case = handle_from_family(Arc::clone(&family));
+                run.current_family = Some(family);
+                unsafe { *out_test_case = case };
+                HEGEL_OK
+            }
+            Err(e) => {
+                run.result = Some(HegelRunResult::from_error(&e.to_string()));
+                run.engine = None;
+                HEGEL_OK
+            }
+        },
         Ok(Poll::Ready(r)) => {
             run.result = Some(match r {
                 Ok(r) => HegelRunResult::from(r),

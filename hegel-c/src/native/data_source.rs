@@ -2,7 +2,7 @@ use crate::native::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
@@ -93,19 +93,27 @@ impl NativeDataSource {
     /// or hit a terminal assume, or the body via `mark_complete` — set the
     /// status, and a later report could not change it.
     ///
-    /// Panics only if the family never concluded — i.e. `mark_complete` was
-    /// never called on a case that didn't conclude during a draw, which the
-    /// cross-backend lifecycle in `run_lifecycle::run_test_case` guarantees
-    /// won't occur.
-    pub fn take_outcome(handle: &NativeTestCaseHandle) -> TestCaseResult {
+    /// `Err` if the family never concluded — i.e. the driver resumed the
+    /// engine without calling `mark_complete` on a case that didn't conclude
+    /// during a draw. That violates the driving contract every client must
+    /// uphold (libhegel's `hegel_next_test_case` refuses to resume an
+    /// unconcluded run, so its callers can't reach this), reported as a
+    /// run-level [`RunError::UsageError`] rather than a panic.
+    pub fn take_outcome(handle: &NativeTestCaseHandle) -> Result<TestCaseResult, RunError> {
         let conclusion = handle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .family()
             .conclusion();
-        let (status, origin) =
-            conclusion.expect("mark_complete must be called for every test case");
-        match status {
+        let Some((status, origin)) = conclusion else {
+            return Err(RunError::UsageError(
+                "the test case was never marked complete: every test case the \
+                 engine offers must be concluded with mark_complete before the \
+                 run is resumed"
+                    .to_string(),
+            ));
+        };
+        Ok(match status {
             Status::Valid => TestCaseResult::Valid,
             Status::Invalid => TestCaseResult::Invalid,
             Status::EarlyStop => TestCaseResult::Overrun,
@@ -113,7 +121,7 @@ impl NativeDataSource {
                 origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
             }),
-        }
+        })
     }
 
     /// Returns true if a previous request triggered a EngineError abort.

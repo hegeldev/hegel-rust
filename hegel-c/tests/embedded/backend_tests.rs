@@ -29,6 +29,12 @@ fn internal_error_converts_into_data_source_error_and_displays_framed() {
 }
 
 #[test]
+fn usage_error_displays_its_message_verbatim() {
+    let run = RunError::UsageError("mark_complete was never called".to_string());
+    assert_eq!(run.to_string(), "mark_complete was never called");
+}
+
+#[test]
 fn internal_error_converts_into_run_error_and_displays_framed() {
     let e = crate::control::InternalError::new(format_args!("broken invariant"));
     let run = RunError::from(e);

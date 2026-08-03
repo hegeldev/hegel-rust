@@ -1,7 +1,7 @@
-//! Tests for the shrinker's internal-error channel: a violated internal
-//! invariant raised during a shrink run propagates out of
-//! [`Shrinker::shrink`] as an `Err` instead of being absorbed like the
-//! deadline sentinel.
+//! Tests for the shrinker's run-level error channel: a violated internal
+//! invariant (or other [`RunError`]) raised during a shrink run propagates
+//! out of [`Shrinker::shrink`] as an `Err` instead of being absorbed like
+//! the deadline sentinel.
 
 use super::*;
 use crate::control::InternalError;
@@ -26,7 +26,7 @@ struct FailingProbe;
 
 impl ShrinkProbe for FailingProbe {
     fn run<'s>(&'s mut self, _req: ShrinkRun<'s>) -> ProbeFuture<'s> {
-        Box::pin(std::future::ready(Err(ShrinkHalt::Internal(
+        Box::pin(std::future::ready(Err(ShrinkHalt::from(
             InternalError::new(format_args!("probe invariant violated")),
         ))))
     }
@@ -43,13 +43,18 @@ fn internal_error_from_the_probe_surfaces_from_shrink() {
 }
 
 #[test]
-fn absorb_stop_keeps_internal_errors_and_absorbs_the_deadline() {
+fn absorb_stop_keeps_run_errors_and_absorbs_the_deadline() {
     assert_eq!(absorb_stop::<()>(Ok(())), Ok(()));
     assert_eq!(absorb_stop::<()>(Err(ShrinkHalt::Stop)), Ok(()));
     let e = InternalError::new(format_args!("halted"));
     assert_eq!(
-        absorb_stop::<()>(Err(ShrinkHalt::Internal(e.clone()))),
-        Err(e)
+        absorb_stop::<()>(Err(ShrinkHalt::from(e.clone()))),
+        Err(RunError::Internal(e))
+    );
+    let usage = RunError::UsageError("driver misbehaved".to_string());
+    assert_eq!(
+        absorb_stop::<()>(Err(ShrinkHalt::from(usage.clone()))),
+        Err(usage)
     );
 }
 
@@ -64,7 +69,10 @@ fn absorb_node_gone_propagates_halts_and_swallows_node_gone() {
     let e = InternalError::new(format_args!("halted"));
     assert_eq!(
         absorb_node_gone::<()>(Err(PassExit::from(e.clone()))),
-        Err(ShrinkHalt::Internal(e.clone()))
+        Err(ShrinkHalt::Error(RunError::Internal(e.clone())))
     );
-    assert_eq!(ShrinkHalt::from(e.clone()), ShrinkHalt::Internal(e));
+    assert_eq!(
+        ShrinkHalt::from(e.clone()),
+        ShrinkHalt::Error(RunError::Internal(e))
+    );
 }

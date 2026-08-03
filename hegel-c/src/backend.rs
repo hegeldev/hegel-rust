@@ -246,7 +246,7 @@ pub enum TestCaseResult {
 /// These are returned as `Err` from the engine's exploration and surface at
 /// the API boundary — the panic API panics with the message; libhegel reports
 /// it through its error channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
     /// LargeInitialTestCase).
@@ -255,6 +255,11 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// The client misused Hegel at run scope — violated the driving
+    /// contract (e.g. never reported a test case's outcome before the run
+    /// resumed) or launched the process with an invalid configuration. Not
+    /// a bug in Hegel: the diagnostic tells the client what to fix.
+    UsageError(String),
     /// A violated internal invariant of Hegel itself (a bug in Hegel)
     /// detected while the engine explored — generation, mutation, or
     /// shrinking. The diagnostic carries the bug-report framing.
@@ -270,7 +275,10 @@ impl From<crate::control::InternalError> for RunError {
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunError::HealthCheck(msg) | RunError::Flaky(msg) | RunError::NonDeterministic(msg) => {
+            RunError::HealthCheck(msg)
+            | RunError::Flaky(msg)
+            | RunError::NonDeterministic(msg)
+            | RunError::UsageError(msg) => {
                 write!(f, "{}", msg)
             }
             RunError::Internal(e) => write!(f, "{e}"),

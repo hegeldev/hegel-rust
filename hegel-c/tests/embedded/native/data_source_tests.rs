@@ -366,8 +366,19 @@ fn mark_complete_from_a_clone_concludes_the_family() {
     ));
     assert!(matches!(
         NativeDataSource::take_outcome(&handle),
-        TestCaseResult::Invalid
+        Ok(TestCaseResult::Invalid)
     ));
+}
+
+#[test]
+fn take_outcome_reports_a_usage_error_for_an_unconcluded_family() {
+    let (ds, handle) = random_source();
+    ds.generate_boolean(0.5, None).unwrap();
+    let err = NativeDataSource::take_outcome(&handle).unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
+    let msg = err.to_string();
+    assert!(msg.contains("never marked complete"), "{msg}");
+    assert!(msg.contains("mark_complete"), "{msg}");
 }
 
 #[test]

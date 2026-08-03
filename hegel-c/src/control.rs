@@ -48,6 +48,24 @@ macro_rules! hegel_internal_error {
 }
 pub(crate) use hegel_internal_error;
 
+/// Unwrap an `Option` whose `None` case is a violated internal invariant of
+/// Hegel itself: yields the contained value, or returns an [`InternalError`]
+/// from the containing function (converted into its error type with
+/// `.into()`) carrying the formatted message. The `Option`-shaped sibling of
+/// [`hegel_internal_assert!`], for values a proven-elsewhere invariant
+/// guarantees to be present.
+macro_rules! hegel_internal_unwrap {
+    ($option:expr, $($arg:tt)+) => {
+        match $option {
+            ::core::option::Option::Some(value) => value,
+            ::core::option::Option::None => {
+                $crate::control::hegel_internal_error!($($arg)+)
+            }
+        }
+    };
+}
+pub(crate) use hegel_internal_unwrap;
+
 /// Assert an internal invariant of Hegel itself. Use in place of `assert!`
 /// everywhere under `src/` (enforced by `scripts/check-internal-asserts.py`):
 /// a plain `assert!` panics, and the engine must never panic — a violated

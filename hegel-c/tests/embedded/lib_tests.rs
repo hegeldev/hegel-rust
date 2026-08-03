@@ -243,6 +243,48 @@ fn engine_panic_during_poll_becomes_a_run_error() {
     }
 }
 
+/// An engine future that suspends without storing a case in the exchange
+/// violates the alternation protocol. `hegel_next_test_case` finishes the
+/// run with a run-level error instead of panicking; the protocol makes this
+/// unreachable for the real engine, so the misbehaving future is injected
+/// directly.
+#[test]
+fn engine_suspending_without_an_offer_becomes_a_run_error() {
+    let ctx = hegel_context_new();
+    let exchange = Arc::new(CaseExchange::new());
+    let engine: EngineFuture = Box::pin(std::future::pending());
+    let run = Box::into_raw(Box::new(HegelRun {
+        engine: Some(engine),
+        exchange,
+        current_family: None,
+        result: None,
+    }));
+
+    unsafe {
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_next_test_case(ctx, run, &mut tc));
+        assert!(tc.is_null(), "a protocol-violating run offers no test case");
+
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        ok(hegel_run_result(ctx, run, &mut result));
+        let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
+        ok(hegel_run_result_status(ctx, result, &mut status));
+        assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
+        let mut message: *const c_char = ptr::null();
+        ok(hegel_run_result_error(ctx, result, &mut message));
+        let message = CStr::from_ptr(message).to_str().unwrap();
+        assert!(
+            message.contains("suspended without offering a test case"),
+            "{message}"
+        );
+        assert!(message.contains("bug in hegel"), "{message}");
+
+        ok(hegel_run_result_free(ctx, result));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 #[test]
 fn translate_ds_error_maps_internal_to_hegel_e_internal_with_diagnostic() {
     let ctx = hegel_context_new();
