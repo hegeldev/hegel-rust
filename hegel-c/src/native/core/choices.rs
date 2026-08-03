@@ -343,8 +343,7 @@ impl StringChoice {
         let codepoint = self.key_to_codepoint(rank as u32);
         Ok(hegel_internal_unwrap!(
             codepoint,
-            "StringChoice::codepoint_at_rank: rank {rank} outside alphabet of size {}",
-            self.alpha_size()
+            "StringChoice::codepoint_at_rank: rank {rank} outside the alphabet"
         ))
     }
 
