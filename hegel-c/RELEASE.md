@@ -18,3 +18,5 @@ hegel_collection_free(ctx, collection);
 ```
 
 The threading contract is now per object rather than per family. A collection may be driven by at most one thread at a time: concurrent use reports `HEGEL_E_CONCURRENT_USE`, like a test-case handle. Pools and state machines may be shared between clone handles driven from parallel threads; their operations serialize internally. This also removes a hidden serialization point — collection and pool operations from parallel clones previously contended on one family-wide lock even when touching different objects.
+
+Internal refactoring of the engine's choice-sequence representation. Choice constraints and values are now carried as a single paired type, removing a large class of internal panics on impossible constraint/value combinations; the on-disk choice serialization and reproduce-blob formats are unchanged.

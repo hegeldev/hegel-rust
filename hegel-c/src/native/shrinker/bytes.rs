@@ -3,23 +3,21 @@ use crate::native::HashMap;
 use crate::native::core::{BytesChoice, ChoiceValue};
 
 use super::search::{BinSearchDown, FindInteger};
-use super::{ShrinkResult, Shrinker};
+use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
 
 impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_bytes(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            self.shrink_bytes_node(i).await?;
+            absorb_node_gone(self.shrink_bytes_node(i).await)?;
             i += 1;
         }
         Ok(())
     }
 
-    async fn shrink_bytes_node(&mut self, i: usize) -> ShrinkResult<()> {
+    async fn shrink_bytes_node(&mut self, i: usize) -> Result<(), PassExit> {
         {
-            let Some((bc, current)) = self.bytes_at(i) else {
-                return Ok(());
-            };
+            let (bc, current) = self.bytes_at(i).ok_or(PassExit::NodeGone)?;
             let min_size = bc.min_size;
 
             let simplest = vec![0u8; min_size];
@@ -28,9 +26,7 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let Some(captured) = self.current_byte_value(i) else {
-                return Ok(());
-            };
+            let captured = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
             let cur_len = captured.len();
             if cur_len > min_size {
                 let mut search = BinSearchDown::new(min_size as i128, cur_len as i128);
@@ -44,14 +40,10 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            let Some(cur) = self.current_byte_value(i) else {
-                return Ok(());
-            };
+            let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
             let scan_end = (min_size + 8).min(cur.len());
             for sz in min_size..scan_end {
-                let Some(cur) = self.current_byte_value(i) else {
-                    return Ok(());
-                };
+                let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                 if sz > cur.len() {
                     break;
                 }
@@ -60,15 +52,11 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let Some(cur) = self.current_byte_value(i) else {
-                return Ok(());
-            };
+            let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
             let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_byte_value(i) else {
-                    return Ok(());
-                };
+                let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                 if cur.len() <= min_size {
                     continue;
                 }
@@ -78,24 +66,18 @@ impl<'a> Shrinker<'a> {
                     .await?;
             }
 
-            let Some(cur) = self.current_byte_value(i) else {
-                return Ok(());
-            };
+            let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
             let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let Some(cur) = self.current_byte_value(i) else {
-                    return Ok(());
-                };
+                let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                 if cur[j] == 0 {
                     continue;
                 }
                 let hi = cur[j] as i128;
                 let mut search = BinSearchDown::new(0, hi);
                 while let Some(e) = search.probe() {
-                    let Some(mut cand) = self.current_byte_value(i) else {
-                        return Ok(());
-                    };
+                    let mut cand = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                     cand[j] = e as u8;
                     let ok = self
                         .replace(&HashMap::from_iter([(i, ChoiceValue::Bytes(cand))]))
@@ -106,17 +88,13 @@ impl<'a> Shrinker<'a> {
 
             let mut pos = 1;
             loop {
-                let Some(cur) = self.current_byte_value(i) else {
-                    return Ok(());
-                };
+                let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                 if pos >= cur.len() {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let Some(cur) = self.current_byte_value(i) else {
-                        return Ok(());
-                    };
+                    let cur = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
                     if cur[j - 1] <= cur[j] {
                         break;
                     }
@@ -168,7 +146,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let i = indices[idx];
                 let j = indices[idx + gap];
-                self.redistribute_bytes_pair(i, j).await?;
+                absorb_node_gone(self.redistribute_bytes_pair(i, j).await)?;
                 idx += 1;
             }
         }
@@ -183,13 +161,9 @@ impl<'a> Shrinker<'a> {
             .collect()
     }
 
-    async fn redistribute_bytes_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
-        let Some(s) = self.current_byte_value(i) else {
-            return Ok(());
-        };
-        let Some((kind_j, t)) = self.bytes_at(j) else {
-            return Ok(());
-        };
+    async fn redistribute_bytes_pair(&mut self, i: usize, j: usize) -> Result<(), PassExit> {
+        let s = self.current_byte_value(i).ok_or(PassExit::NodeGone)?;
+        let (kind_j, t) = self.bytes_at(j).ok_or(PassExit::NodeGone)?;
 
         if s.is_empty() {
             return Ok(());

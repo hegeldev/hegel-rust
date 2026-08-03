@@ -7,7 +7,7 @@ use crate::native::core::{
 };
 
 use super::search::{BinSearchDown, FindInteger};
-use super::{ShrinkResult, ShrinkRun, Shrinker};
+use super::{PassExit, ShrinkResult, ShrinkRun, Shrinker, absorb_node_gone};
 use crate::control::hegel_internal_debug_assert;
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
@@ -67,13 +67,13 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_floats(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            self.shrink_float_node(i).await?;
+            absorb_node_gone(self.shrink_float_node(i).await)?;
             i += 1;
         }
         Ok(())
     }
 
-    async fn shrink_float_node(&mut self, i: usize) -> ShrinkResult<()> {
+    async fn shrink_float_node(&mut self, i: usize) -> Result<(), PassExit> {
         {
             if let ChoiceData::Float(fc, v) = &self.current_nodes[i].data {
                 let v = *v;
@@ -85,9 +85,7 @@ impl<'a> Shrinker<'a> {
                         .await?;
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_infinite() {
                     if v < 0.0 && fc.validate(f64::INFINITY) {
@@ -97,9 +95,7 @@ impl<'a> Shrinker<'a> {
                         )]))
                         .await?;
                     }
-                    let Some(v) = self.float_at(i) else {
-                        return Ok(());
-                    };
+                    let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                     if v.is_infinite() {
                         let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
                         if fc.validate(cand) {
@@ -109,9 +105,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_nan() {
                     let mut stepped = false;
@@ -140,9 +134,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_nan() {
                     return Ok(());
@@ -156,9 +148,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 let v_abs = v.abs();
                 let is_neg = v.is_sign_negative();
@@ -194,9 +184,7 @@ impl<'a> Shrinker<'a> {
                         };
                         search.record(ok);
                     }
-                    let Some(cur) = self.float_at(i) else {
-                        return Ok(());
-                    };
+                    let cur = self.float_at(i).ok_or(PassExit::NodeGone)?;
                     if cur.is_finite() {
                         let base_after = cur.abs() as i128;
                         let lo: i128 = if is_neg {
@@ -229,9 +217,7 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                 } else if v_abs.is_finite() && v_abs > 0.0 {
-                    let Some(cur) = self.float_at(i) else {
-                        return Ok(());
-                    };
+                    let cur = self.float_at(i).ok_or(PassExit::NodeGone)?;
                     let cur_abs = cur.abs();
                     for p in (0..=10).rev() {
                         let scale = libm::exp2(f64::from(p));
@@ -259,9 +245,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                 let v_abs = v.abs();
                 let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
@@ -284,9 +268,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let Some(v) = self.float_at(i) else {
-                    return Ok(());
-                };
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                 if v.is_finite() && v != 0.0 {
                     let is_neg = v.is_sign_negative();
                     if let Some((m, n)) = as_integer_ratio(v.abs()) {

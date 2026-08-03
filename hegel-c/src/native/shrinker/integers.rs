@@ -5,7 +5,7 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceData, ChoiceValue};
 
 use super::search::{BinSearchDownBig, FindInteger};
-use super::{ShrinkResult, Shrinker};
+use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
 use crate::control::hegel_internal_debug_assert;
 
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
@@ -107,16 +107,17 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            self.binary_search_node_towards_zero(i).await?;
+            absorb_node_gone(self.binary_search_node_towards_zero(i).await)?;
             i += 1;
         }
         Ok(())
     }
 
-    async fn binary_search_node_towards_zero(&mut self, i: usize) -> ShrinkResult<()> {
-        let Some((ic, _)) = self.current_nodes[i].data.as_integer() else {
-            return Ok(());
-        };
+    async fn binary_search_node_towards_zero(&mut self, i: usize) -> Result<(), PassExit> {
+        let (ic, _) = self.current_nodes[i]
+            .data
+            .as_integer()
+            .ok_or(PassExit::NodeGone)?;
         let ic = ic.clone();
         let target = ic.clamped_shrink_towards();
 
@@ -125,9 +126,7 @@ impl<'a> Shrinker<'a> {
         self.try_at_distance(i, &ic, &target, &BigInt::from(1))
             .await?;
 
-        let Some(base) = self.distance_from(i, &target) else {
-            return Ok(());
-        };
+        let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
         let n_bits = base.bits();
         let mut search = FindInteger::new();
         while let Some(k) = search.probe() {
@@ -141,9 +140,7 @@ impl<'a> Shrinker<'a> {
             search.record(ok);
         }
 
-        let Some(base) = self.distance_from(i, &target) else {
-            return Ok(());
-        };
+        let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
         if base.bits() > 8 {
             let top = &base >> (base.bits() as usize - 8);
             self.try_at_distance(i, &ic, &target, &top).await?;
@@ -152,9 +149,7 @@ impl<'a> Shrinker<'a> {
         }
 
         loop {
-            let Some(before) = self.distance_from(i, &target) else {
-                return Ok(());
-            };
+            let before = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
             if before == BigInt::from(0) {
                 break;
             }
@@ -166,9 +161,7 @@ impl<'a> Shrinker<'a> {
                 search.record(ok);
             }
             for step in [2u64, 1] {
-                let Some(base) = self.distance_from(i, &target) else {
-                    return Ok(());
-                };
+                let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
                 let mut search = FindInteger::new();
                 while let Some(n) = search.probe() {
                     let sub = BigInt::from(step) * BigInt::from(n as u64);
@@ -356,26 +349,6 @@ impl<'a> Shrinker<'a> {
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
     pub(super) async fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
-        async fn group_replace(
-            sh: &mut Shrinker<'_>,
-            valid: &[usize],
-            candidate: &BigInt,
-        ) -> ShrinkResult<bool> {
-            let current_valid: Vec<usize> = valid
-                .iter()
-                .copied()
-                .filter(|&i| i < sh.current_nodes.len())
-                .collect();
-            if current_valid.len() < 2 {
-                return Ok(false);
-            }
-            let replacements: HashMap<usize, ChoiceValue> = current_valid
-                .iter()
-                .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
-                .collect();
-            sh.replace(&replacements).await
-        }
-
         let mut groups: HashMap<(std::mem::Discriminant<ChoiceData>, ChoiceValue), Vec<usize>> =
             HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
@@ -437,79 +410,107 @@ impl<'a> Shrinker<'a> {
             let valid: Vec<usize> = members.iter().map(|&(i, _)| i).collect();
             let ic = std::sync::Arc::clone(&members[0].1);
 
-            let simplest = ic.simplest();
-            if simplest != value {
-                let replacements: HashMap<usize, ChoiceValue> = valid
-                    .iter()
-                    .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
-                    .collect();
-                self.replace(&replacements).await?;
-            }
+            absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
+        }
+        Ok(())
+    }
 
-            let live_base = |sh: &Shrinker<'_>| -> Option<BigInt> { sh.int_value_bigint(valid[0]) };
-            let Some(cur_value) = live_base(self) else {
-                continue;
-            };
-            if cur_value.sign() == Sign::Plus {
-                let lo = ic.simplest().max(BigInt::from(0));
-                let dist = &cur_value - &lo;
-                if dist.sign() == Sign::Plus {
-                    let max_shift = dist.bits() as usize + 1;
-                    let mut search = FindInteger::new();
-                    while let Some(k) = search.probe() {
-                        let candidate = &lo + (&dist >> k.min(max_shift));
-                        let ok = group_replace(self, &valid, &candidate).await?;
-                        search.record(ok);
-                    }
+    async fn shrink_int_duplicate_group(
+        &mut self,
+        value: &BigInt,
+        valid: &[usize],
+        ic: &IntegerChoice,
+    ) -> Result<(), PassExit> {
+        async fn group_replace(
+            sh: &mut Shrinker<'_>,
+            valid: &[usize],
+            candidate: &BigInt,
+        ) -> ShrinkResult<bool> {
+            let current_valid: Vec<usize> = valid
+                .iter()
+                .copied()
+                .filter(|&i| i < sh.current_nodes.len())
+                .collect();
+            if current_valid.len() < 2 {
+                return Ok(false);
+            }
+            let replacements: HashMap<usize, ChoiceValue> = current_valid
+                .iter()
+                .map(|&i| (i, ChoiceValue::Integer(candidate.clone())))
+                .collect();
+            sh.replace(&replacements).await
+        }
+
+        let simplest = ic.simplest();
+        if simplest != *value {
+            let replacements: HashMap<usize, ChoiceValue> = valid
+                .iter()
+                .map(|&i| (i, ChoiceValue::Integer(simplest.clone())))
+                .collect();
+            self.replace(&replacements).await?;
+        }
+
+        let live_base = |sh: &Shrinker<'_>| -> Option<BigInt> { sh.int_value_bigint(valid[0]) };
+        let cur_value = live_base(self).ok_or(PassExit::NodeGone)?;
+        if cur_value.sign() == Sign::Plus {
+            let lo = ic.simplest().max(BigInt::from(0));
+            let dist = &cur_value - &lo;
+            if dist.sign() == Sign::Plus {
+                let max_shift = dist.bits() as usize + 1;
+                let mut search = FindInteger::new();
+                while let Some(k) = search.probe() {
+                    let candidate = &lo + (&dist >> k.min(max_shift));
+                    let ok = group_replace(self, valid, &candidate).await?;
+                    search.record(ok);
                 }
-                if live_base(self).is_some_and(|b| b > lo) {
-                    let mut search = FindInteger::new();
-                    while let Some(n) = search.probe() {
-                        let Some(base) = live_base(self) else { break };
-                        let attempt = base - BigInt::from(2u128 * n as u128);
-                        let ok = group_replace(self, &valid, &attempt).await?;
-                        search.record(ok);
-                    }
+            }
+            if live_base(self).is_some_and(|b| b > lo) {
+                let mut search = FindInteger::new();
+                while let Some(n) = search.probe() {
+                    let base = live_base(self).ok_or(PassExit::NodeGone)?;
+                    let attempt = base - BigInt::from(2u128 * n as u128);
+                    let ok = group_replace(self, valid, &attempt).await?;
+                    search.record(ok);
                 }
-                if live_base(self).is_some_and(|b| b > lo) {
-                    let mut search = FindInteger::new();
-                    while let Some(n) = search.probe() {
-                        let Some(base) = live_base(self) else { break };
-                        let attempt = base - BigInt::from(n as u64);
-                        let ok = group_replace(self, &valid, &attempt).await?;
-                        search.record(ok);
-                    }
+            }
+            if live_base(self).is_some_and(|b| b > lo) {
+                let mut search = FindInteger::new();
+                while let Some(n) = search.probe() {
+                    let base = live_base(self).ok_or(PassExit::NodeGone)?;
+                    let attempt = base - BigInt::from(n as u64);
+                    let ok = group_replace(self, valid, &attempt).await?;
+                    search.record(ok);
                 }
-            } else if cur_value.sign() == Sign::Minus {
-                let lo = (-ic.simplest()).max(BigInt::from(0));
-                let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
-                if dist.sign() == Sign::Plus {
-                    let max_shift = dist.bits() as usize + 1;
-                    let mut search = FindInteger::new();
-                    while let Some(k) = search.probe() {
-                        let candidate_abs = &lo + (&dist >> k.min(max_shift));
-                        let ok = group_replace(self, &valid, &(-&candidate_abs)).await?;
-                        search.record(ok);
-                    }
+            }
+        } else if cur_value.sign() == Sign::Minus {
+            let lo = (-ic.simplest()).max(BigInt::from(0));
+            let dist = ((-&cur_value) - &lo).max(BigInt::from(0));
+            if dist.sign() == Sign::Plus {
+                let max_shift = dist.bits() as usize + 1;
+                let mut search = FindInteger::new();
+                while let Some(k) = search.probe() {
+                    let candidate_abs = &lo + (&dist >> k.min(max_shift));
+                    let ok = group_replace(self, valid, &(-&candidate_abs)).await?;
+                    search.record(ok);
                 }
-                let neg_hi = -&lo;
-                if live_base(self).is_some_and(|b| b < neg_hi) {
-                    let mut search = FindInteger::new();
-                    while let Some(n) = search.probe() {
-                        let Some(base) = live_base(self) else { break };
-                        let attempt = base + BigInt::from(2u128 * n as u128);
-                        let ok = group_replace(self, &valid, &attempt).await?;
-                        search.record(ok);
-                    }
+            }
+            let neg_hi = -&lo;
+            if live_base(self).is_some_and(|b| b < neg_hi) {
+                let mut search = FindInteger::new();
+                while let Some(n) = search.probe() {
+                    let base = live_base(self).ok_or(PassExit::NodeGone)?;
+                    let attempt = base + BigInt::from(2u128 * n as u128);
+                    let ok = group_replace(self, valid, &attempt).await?;
+                    search.record(ok);
                 }
-                if live_base(self).is_some_and(|b| b < neg_hi) {
-                    let mut search = FindInteger::new();
-                    while let Some(n) = search.probe() {
-                        let Some(base) = live_base(self) else { break };
-                        let attempt = base + BigInt::from(n as u64);
-                        let ok = group_replace(self, &valid, &attempt).await?;
-                        search.record(ok);
-                    }
+            }
+            if live_base(self).is_some_and(|b| b < neg_hi) {
+                let mut search = FindInteger::new();
+                while let Some(n) = search.probe() {
+                    let base = live_base(self).ok_or(PassExit::NodeGone)?;
+                    let attempt = base + BigInt::from(n as u64);
+                    let ok = group_replace(self, valid, &attempt).await?;
+                    search.record(ok);
                 }
             }
         }

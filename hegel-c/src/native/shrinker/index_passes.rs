@@ -82,7 +82,8 @@ impl<'a> Shrinker<'a> {
 
                     if j < self.current_nodes.len() && !is_sequence(&self.current_nodes[j].data) {
                         let data_j = self.current_nodes[j].data.clone();
-                        let Some(target_idx) = data_j.to_index() else {
+                        let Some((target_idx, max_j)) = data_j.to_index().zip(data_j.max_index())
+                        else {
                             continue;
                         };
                         let mut bumped_any_relative = false;
@@ -96,9 +97,6 @@ impl<'a> Shrinker<'a> {
                             }
                         }
                         if !bumped_any_relative {
-                            let Some(max_j) = data_j.max_index() else {
-                                continue;
-                            };
                             let mut p = BigUint::from(1u32);
                             for _ in 0..8 {
                                 if p > max_j {

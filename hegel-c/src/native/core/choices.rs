@@ -101,10 +101,6 @@ impl IntegerChoice {
         if up { Some(s + d) } else { Some(s - d) }
     }
 
-    pub fn max_children(&self) -> BigUint {
-        self.max_index() + BigUint::from(1u32)
-    }
-
     pub fn value_from_bigint(&self, v: &BigInt) -> Option<BigInt> {
         if self.validate(v) {
             Some(v.clone())
@@ -841,11 +837,6 @@ impl CloneRecord {
         }
     }
 
-    /// The child choice values, in order, as borrowed views.
-    pub fn values(&self) -> impl Iterator<Item = ChoiceValueRef<'_>> + '_ {
-        (0..self.len()).map(move |i| self.value_at(i))
-    }
-
     /// The child choice values, in order, as owned values. Children stored
     /// as bare values are cloned; realized children are rebuilt from their
     /// nodes (nested realized streams stay shared).
@@ -1187,19 +1178,6 @@ impl ChoiceKind {
             ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
             ChoiceKind::String(sc) => sc.from_index(index).map(ChoiceValue::String),
             ChoiceKind::Clone => None,
-        }
-    }
-
-    /// Whether `value` is a valid draw for this kind.
-    pub fn validate(&self, value: &ChoiceValue) -> bool {
-        match (self, value) {
-            (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => ic.validate(v),
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(_)) => true,
-            (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => fc.validate(*v),
-            (ChoiceKind::Bytes(bc), ChoiceValue::Bytes(v)) => bc.validate(v),
-            (ChoiceKind::String(sc), ChoiceValue::String(v)) => sc.validate(v),
-            (ChoiceKind::Clone, ChoiceValue::Clone(_)) => true,
-            _ => false,
         }
     }
 

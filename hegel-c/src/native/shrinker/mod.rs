@@ -87,6 +87,37 @@ pub(crate) struct ShrinkStop;
 /// Result of a shrinker operation that the deadline may cut short.
 pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkStop>;
 
+/// Signal that ends one pass's work on a single node.
+///
+/// `Stop` propagates the wall-clock [`ShrinkStop`] deadline. `NodeGone`
+/// means the node under work stopped matching the pass's kind mid-pass — a
+/// probe's accepted result punned the kind at that position or shortened
+/// the sequence past it — so the pass abandons the node and moves on.
+/// Per-node pass bodies return `Result<_, PassExit>` and read the node's
+/// current typed value with `.ok_or(PassExit::NodeGone)?`;
+/// [`absorb_node_gone`] converts the outcome back into a [`ShrinkResult`]
+/// at the pass loop.
+pub(super) enum PassExit {
+    Stop(ShrinkStop),
+    NodeGone,
+}
+
+impl From<ShrinkStop> for PassExit {
+    fn from(stop: ShrinkStop) -> Self {
+        PassExit::Stop(stop)
+    }
+}
+
+/// Fold a per-node pass outcome into the pass's [`ShrinkResult`]:
+/// `NodeGone` is absorbed (the pass simply moves to the next node) and the
+/// deadline keeps propagating.
+pub(super) fn absorb_node_gone<T>(result: Result<T, PassExit>) -> ShrinkResult<()> {
+    match result {
+        Err(PassExit::Stop(stop)) => Err(stop),
+        _ => Ok(()),
+    }
+}
+
 pub struct Shrinker<'a> {
     test_fn: Box<dyn ShrinkProbe + Send + 'a>,
     pub current_nodes: Vec<ChoiceNode>,
