@@ -796,8 +796,8 @@ unsafe impl Sync for CollectionHandle {}
 
 impl Drop for CollectionHandle {
     fn drop(&mut self) {
-        // SAFETY: `raw` came from hegel_new_collection (or is null after a
-        // failed creation, which the free accepts) and is freed exactly once.
+        // SAFETY: `raw` came from a successful hegel_new_collection call and
+        // is freed exactly once here.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_collection_free(ctx, self.raw) });
     }
 }
@@ -822,8 +822,8 @@ unsafe impl Sync for PoolHandle {}
 
 impl Drop for PoolHandle {
     fn drop(&mut self) {
-        // SAFETY: `raw` came from hegel_new_pool (or is null after a failed
-        // creation, which the free accepts) and is freed exactly once.
+        // SAFETY: `raw` came from a successful hegel_new_pool call and is
+        // freed exactly once here.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_pool_free(ctx, self.raw) });
     }
 }
@@ -848,8 +848,8 @@ unsafe impl Sync for StateMachineHandle {}
 
 impl Drop for StateMachineHandle {
     fn drop(&mut self) {
-        // SAFETY: `raw` came from hegel_new_state_machine (or is null after a
-        // failed creation, which the free accepts) and is freed exactly once.
+        // SAFETY: `raw` came from a successful hegel_new_state_machine call
+        // and is freed exactly once here.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_state_machine_free(ctx, self.raw) });
     }
 }

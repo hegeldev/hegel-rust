@@ -251,7 +251,7 @@ impl DataSource for NativeDataSource {
         min_size: u64,
         max_size: Option<u64>,
     ) -> Result<ManyState, DataSourceError> {
-        self.with_ntc(|_ntc| {
+        self.with_ntc(|_| {
             let min_size = usize::try_from(min_size).unwrap_or(usize::MAX);
             let max_size = max_size.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
             Ok(ManyState::new(min_size, max_size))
@@ -280,7 +280,7 @@ impl DataSource for NativeDataSource {
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
-        self.with_ntc(|_ntc| Ok(NativeStateMachine::new(rule_names, invariant_names)))
+        self.with_ntc(|_| Ok(NativeStateMachine::new(rule_names, invariant_names)))
     }
 
     fn state_machine_next_rule(
@@ -295,11 +295,11 @@ impl DataSource for NativeDataSource {
     }
 
     fn new_pool(&self) -> Result<NativeVariables, DataSourceError> {
-        self.with_ntc(|_ntc| Ok(NativeVariables::new()))
+        self.with_ntc(|_| Ok(NativeVariables::new()))
     }
 
     fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError> {
-        self.with_ntc(|_ntc| Ok(pool.next()))
+        self.with_ntc(|_| Ok(pool.next()))
     }
 
     fn pool_generate(

@@ -897,7 +897,7 @@ impl<'a> Collection<'a> {
         }
     }
 
-    fn ensure_initialized(&mut self) -> &crate::ffi::CollectionHandle {
+    fn ensure_initialized(&mut self) {
         if self.handle.is_none() {
             let result = self.tc.with_ctc(|ctc| {
                 ctc.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
@@ -908,7 +908,6 @@ impl<'a> Collection<'a> {
             };
             self.handle = Some(handle);
         }
-        self.handle.as_ref().unwrap()
     }
 
     /// Ask the backend whether to produce another element.

@@ -1899,8 +1899,9 @@ pub unsafe extern "C" fn hegel_new_collection(
 /// `false` into `*out_more` and returns `HEGEL_OK`. Call in a loop until
 /// `*out_more` is `false`, drawing the next element each time.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `collection`,
-/// `HEGEL_E_INVALID_ARG` for a NULL `out_more`, and
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+/// `collection`, `HEGEL_E_INVALID_ARG` for a NULL `out_more`, and
 /// `HEGEL_E_CONCURRENT_USE` when another thread is mid-operation on either
 /// the test-case handle or the collection.
 #[unsafe(no_mangle)]
@@ -1942,9 +1943,10 @@ pub unsafe extern "C" fn hegel_collection_more(
 /// rejection reason (NULL is allowed); it is validated but currently
 /// unused, reserved for future rejection diagnostics.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `collection`, and
-/// `HEGEL_E_CONCURRENT_USE` when another thread is mid-operation on either
-/// the test-case handle or the collection.
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+/// `collection`, and `HEGEL_E_CONCURRENT_USE` when another thread is
+/// mid-operation on either the test-case handle or the collection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_collection_reject(
     ctx: *mut HegelContext,
@@ -2083,9 +2085,10 @@ pub unsafe extern "C" fn hegel_new_pool(
 ///
 /// On success writes the new variable's id into `*out_variable_id` and
 /// returns `HEGEL_OK`. `pool` must be a handle from `hegel_new_pool` on a
-/// handle of this test case's family. Returns `HEGEL_E_INVALID_HANDLE` for
-/// a NULL `tc` or `pool`, and `HEGEL_E_INVALID_ARG` for a NULL
-/// `out_variable_id`.
+/// handle of this test case's family. Returns `HEGEL_E_STOP_TEST` when the
+/// engine's choice budget is exhausted for this test case,
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_variable_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_pool_add(
     ctx: *mut HegelContext,
@@ -2128,7 +2131,8 @@ pub unsafe extern "C" fn hegel_pool_add(
 /// failed assumption: it may recover and continue the test case (as
 /// stateful testing does when a rule's assumption fails, by skipping the
 /// action), or give up on the case and mark it INVALID. Returns
-/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
 /// `HEGEL_E_INVALID_ARG` for a NULL `out_variable_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_pool_generate(
