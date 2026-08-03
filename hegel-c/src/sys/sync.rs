@@ -38,8 +38,8 @@ const CONTENDED: u32 = 2;
 ///
 /// Modelled on `std::sync::Mutex` minus poisoning: [`lock`](Self::lock)
 /// hands back the guard directly rather than a `Result`, and
-/// [`try_lock`](Self::try_lock) reports contention as `None`. It is
-/// unconditionally unwind-safe, also as `std::sync::Mutex` is: a panic while
+/// [`try_lock`](Self::try_lock) reports contention as `None`. Like
+/// `std::sync::Mutex` it is unconditionally unwind-safe: a panic while
 /// the lock is held releases it and leaves the value however the panicking
 /// code left it, which is exactly what the engine wants from its caches and
 /// per-handle state.
