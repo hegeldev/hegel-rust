@@ -58,6 +58,7 @@ pub mod __bench {
 use crate::backend::{
     DataSource, DataSourceError, Failure, RunError, TestCaseResult, TestRunResult,
 };
+use crate::control::hegel_internal_unwrap;
 use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
@@ -695,9 +696,7 @@ impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
             origin: cstring_lossy(&f.origin),
-            reproduce_blob: f
-                .reproduce_blob
-                .map(|b| CString::new(b).expect("reproduce blob is base64 and contains no NUL")),
+            reproduce_blob: f.reproduce_blob.map(|b| cstring_lossy(&b)),
         }
     }
 }
@@ -733,15 +732,20 @@ impl HegelRunResult {
 }
 
 /// Replace interior NULs (which can't appear in C strings) with the
-/// REPLACEMENT CHARACTER's underline. Hegel-produced diagnostic strings
-/// shouldn't contain NULs, but defending against that here means the
-/// caller never sees `CString::new` panic.
+/// REPLACEMENT CHARACTER. Hegel-produced diagnostic strings shouldn't
+/// contain NULs, but defending against that here means the caller never
+/// sees a `CString` construction fail.
 fn cstring_lossy(s: &str) -> CString {
     let sanitized: String = s
         .chars()
         .map(|c| if c == '\0' { '\u{FFFD}' } else { c })
         .collect();
-    CString::new(sanitized).expect("NULs replaced above")
+    let mut bytes = sanitized.into_bytes();
+    bytes.push(0);
+    // SAFETY: `sanitized` contains no U+0000, and no other char's UTF-8
+    // encoding contains a zero byte, so the only NUL in `bytes` is the
+    // terminator pushed above.
+    unsafe { CString::from_vec_with_nul_unchecked(bytes) }
 }
 
 /// Allocate a new settings handle initialised with libhegel's defaults
@@ -2419,10 +2423,16 @@ pub unsafe extern "C" fn hegel_generate_integer(
             "hegel_generate_integer",
             out_value.is_null(),
             |tc| {
-                tc.stream
-                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
+                let v = tc
+                    .stream
+                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))?;
+                let narrowed = i64::try_from(v).ok();
+                Ok(hegel_internal_unwrap!(
+                    narrowed,
+                    "hegel_generate_integer: drawn value does not fit the requested i64 bounds"
+                ))
             },
-            |v| *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds"),
+            |v| *out_value = v,
         )
     }
 }

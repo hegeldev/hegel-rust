@@ -14,7 +14,7 @@ use std::sync::Arc;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 
-use crate::control::{InternalError, hegel_internal_debug_assert};
+use crate::control::{InternalError, hegel_internal_debug_assert, hegel_internal_unwrap};
 use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceData, ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Span, SpanEvent,
@@ -479,11 +479,10 @@ pub(crate) fn generate_novel_prefix(
     let mut current = tree_root;
     while let Some(ref kind) = current.kind {
         if current.forced {
-            let (key, child) = current
-                .children
-                .iter()
-                .next()
-                .expect("a forced node records its single child in the same run");
+            let (key, child) = hegel_internal_unwrap!(
+                current.children.iter().next(),
+                "generate_novel_prefix: a forced node has no recorded child"
+            );
             prefix.push(key.to_value());
             hegel_internal_debug_assert!(!child.is_exhausted);
             current = child;

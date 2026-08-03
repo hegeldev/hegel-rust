@@ -3,6 +3,7 @@
 //! Both passes use the `to_index`/`from_index` API on `ChoiceData` for
 //! type-generic shrinking.
 
+use crate::control::hegel_internal_unwrap;
 use crate::native::HashMap;
 
 use crate::native::bignum::{BigInt, BigUint, Zero};
@@ -47,10 +48,10 @@ impl<'a> Shrinker<'a> {
 
                 let mut decrement_targets: Vec<ChoiceValue> = Vec::new();
                 if current_idx > BigUint::from(1u32) {
-                    let v0 = node_i
-                        .data
-                        .from_index(BigUint::zero())?
-                        .expect("from_index(0) is simplest and always valid");
+                    let v0 = hegel_internal_unwrap!(
+                        node_i.data.from_index(BigUint::zero())?,
+                        "lower_and_bump: from_index(0) has no value for an indexed kind"
+                    );
                     decrement_targets.push(v0);
                 }
                 if let Some(v_prev) = node_i.data.from_index(&current_idx - BigUint::from(1u32))? {

@@ -94,7 +94,7 @@ impl<'a> Shrinker<'a> {
     /// iteration. Called by [`Shrinker::shrink`].
     pub async fn fixate_shrink_passes(
         &mut self,
-        passes: &mut [ShrinkPass<'a>],
+        passes: &mut Vec<ShrinkPass<'a>>,
     ) -> ShrinkResult<()> {
         const MAX_FAILURES: usize = 20;
         let mut any_ran = true;
@@ -159,35 +159,21 @@ impl<'a> Shrinker<'a> {
                 };
             }
 
-            let mut indexed: Vec<(i32, usize, usize)> = reorder_keys
-                .iter()
+            let mut indexed: Vec<(i32, usize, ShrinkPass<'a>)> = std::mem::take(passes)
+                .into_iter()
                 .enumerate()
-                .map(|(i, &k)| {
+                .map(|(i, pass)| {
                     let tiebreaker = if shuffle_requested {
                         shuffle_state = next_rand(shuffle_state);
                         shuffle_state as usize
                     } else {
                         i
                     };
-                    (k, tiebreaker, i)
+                    (reorder_keys[i], tiebreaker, pass)
                 })
                 .collect();
             indexed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            let permutation: Vec<usize> = indexed.iter().map(|t| t.2).collect();
-            let mut new_order: Vec<Option<ShrinkPass<'a>>> =
-                (0..passes.len()).map(|_| None).collect();
-            for (dest, &src) in permutation.iter().enumerate() {
-                new_order[dest] = Some(std::mem::replace(
-                    &mut passes[src],
-                    ShrinkPass::new(
-                        "__placeholder__",
-                        Box::new(|_| Box::pin(std::future::ready(Ok(())))),
-                    ),
-                ));
-            }
-            for (dest, slot) in new_order.into_iter().enumerate() {
-                passes[dest] = slot.expect("permutation fills every slot");
-            }
+            passes.extend(indexed.into_iter().map(|(_, _, pass)| pass));
         }
         Ok(())
     }

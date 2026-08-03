@@ -423,6 +423,20 @@ fn flag_for_char(c: char) -> Option<u32> {
         _ => None,
     }
 }
+/// Parse the digits of a numeric escape in the given radix, reporting a
+/// non-digit as a bad escape. The callers only pass strings `getwhile`
+/// already restricted to the matching digit set (with lengths capped so
+/// the value fits in `u32`), so the error branch is defensive.
+fn parse_escape_value(
+    source: &Tokenizer,
+    escape: &str,
+    digits: &str,
+    radix: u32,
+) -> ParseResult<u32> {
+    u32::from_str_radix(digits, radix)
+        .map_err(|_| source.error(&format!("bad escape {escape}"), escape.chars().count()))
+}
+
 /// Escape handler inside a character class `[...]`.
 ///
 /// Port of `_parser._class_escape`. `escape` is always the two-char
@@ -437,7 +451,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
     let c = escape
         .chars()
         .nth(1)
-        .expect("tokenizer emits escape tokens as backslash + one char");
+        .ok_or_else(|| source.error("bad escape (end of pattern)", 0))?;
     let mut escape = escape.to_string();
     match c {
         'x' => {
@@ -449,8 +463,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             Ok(ClassEscapeResult::Literal(n))
         }
         'u' => {
@@ -462,8 +475,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(
                     &format!("surrogate codepoint {} cannot appear in a string", escape),
@@ -481,8 +493,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
@@ -495,8 +506,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
         ch if OCTDIGITS.contains(ch) => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
-            let n = u32::from_str_radix(&oct, 8)
-                .expect("getwhile only emits OCTDIGITS, so radix-8 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &oct, 8)?;
             if n > 0o377 {
                 return Err(source.error(
                     &format!("octal escape value {} outside of range 0-0o377", escape),
@@ -541,7 +551,7 @@ fn escape_code(
     let c = escape
         .chars()
         .nth(1)
-        .expect("tokenizer emits escape tokens as backslash + one char");
+        .ok_or_else(|| source.error("bad escape (end of pattern)", 0))?;
     let mut escape = escape.to_string();
     match c {
         'x' => {
@@ -553,8 +563,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             Ok(EscapeResult::Literal(n))
         }
         'u' => {
@@ -566,8 +575,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(
                     &format!("surrogate codepoint {} cannot appear in a string", escape),
@@ -585,8 +593,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
@@ -599,8 +606,7 @@ fn escape_code(
         '0' => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
-            let n = u32::from_str_radix(&oct, 8)
-                .expect("getwhile only emits OCTDIGITS, so radix-8 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &oct, 8)?;
             Ok(EscapeResult::Literal(n))
         }
         ch if DIGITS.contains(ch) => {
@@ -620,8 +626,7 @@ fn escape_code(
                         let more = source.get()?.unwrap();
                         escape.push_str(&more);
                         let oct: String = escape.chars().skip(1).collect();
-                        let n = u32::from_str_radix(&oct, 8)
-                            .expect("3 OCTDIGITS parse as u32 (max 0o777 < u32::MAX)");
+                        let n = parse_escape_value(source, &escape, &oct, 8)?;
                         if n > 0o377 {
                             return Err(source.error(
                                 &format!("octal escape value {} outside of range 0-0o377", escape),
@@ -633,9 +638,7 @@ fn escape_code(
                 }
             }
             let dec: String = escape.chars().skip(1).collect();
-            let group = dec
-                .parse::<u32>()
-                .expect("escape decimal is at most 2 digits");
+            let group = parse_escape_value(source, &escape, &dec, 10)?;
             if group < state.groups() {
                 if !state.checkgroup(group) {
                     return Err(

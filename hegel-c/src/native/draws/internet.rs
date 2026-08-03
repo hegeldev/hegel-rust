@@ -5,7 +5,7 @@ use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
 
 use super::many_more;
-use crate::control::{InternalError, hegel_internal_debug_assert};
+use crate::control::{InternalError, hegel_internal_debug_assert, hegel_internal_unwrap};
 
 /// The IANA top-level-domain list, vendored from
 /// `http://data.iana.org/TLD/tlds-alpha-by-domain.txt`. Same file Hypothesis
@@ -104,9 +104,16 @@ impl DomainSpec {
     }
 }
 
-/// The full-length domain spec used by email and URL draws.
-static FULL_LENGTH_DOMAIN: LazyLock<DomainSpec> =
-    LazyLock::new(|| DomainSpec::new(255).expect("max_length 255 admits every TLD"));
+/// The full-length domain spec used by email and URL draws. `max_length`
+/// 255 admits every TLD, so a construction failure is an internal error,
+/// deferred to the first draw that reads the spec.
+static FULL_LENGTH_DOMAIN: LazyLock<Result<DomainSpec, InternalError>> = LazyLock::new(|| {
+    let spec = DomainSpec::new(255).ok();
+    Ok(hegel_internal_unwrap!(
+        spec,
+        "the full-length domain spec failed to build"
+    ))
+});
 
 /// Draw an RFC 1035 fully-qualified domain name.
 ///
@@ -243,7 +250,8 @@ fn draw_ascii_alnum_or_hyphen(ntc: &mut NativeTestCase) -> Result<char, EngineEr
 pub(crate) fn generate_email(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
     let alphabet = Arc::clone(EMAIL_LOCAL_PART_INTERVALS.as_ref().map_err(Clone::clone)?);
     let local = ntc.draw_string(alphabet, 1, 64)?;
-    let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
+    let domain_spec = FULL_LENGTH_DOMAIN.as_ref().map_err(Clone::clone)?;
+    let domain = generate_domain(ntc, domain_spec)?;
     let address = format!("{local}@{domain}");
     if address.len() > 254 {
         return mark_invalid(ntc);
@@ -268,7 +276,8 @@ pub(crate) fn generate_url(ntc: &mut NativeTestCase) -> Result<String, EngineErr
         "http"
     };
 
-    let domain = generate_domain(ntc, &FULL_LENGTH_DOMAIN)?;
+    let domain_spec = FULL_LENGTH_DOMAIN.as_ref().map_err(Clone::clone)?;
+    let domain = generate_domain(ntc, domain_spec)?;
 
     let port = if ntc.weighted(0.5, None)? {
         format!(

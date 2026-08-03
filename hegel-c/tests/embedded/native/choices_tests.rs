@@ -670,7 +670,7 @@ fn bytes_choice_index_round_trip_across_lengths() {
         vec![0xff, 0xff, 0xff],
     ] {
         let idx = bc.to_index(&v);
-        assert_eq!(bc.from_index(idx), Some(v));
+        assert_eq!(bc.from_index(idx).unwrap(), Some(v));
     }
 }
 
@@ -682,6 +682,7 @@ fn bytes_choice_from_index_past_max_returns_none() {
     };
     assert!(
         bc.from_index(crate::native::bignum::BigUint::from(1000u32))
+            .unwrap()
             .is_none()
     );
 }

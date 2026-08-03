@@ -15,7 +15,9 @@ use super::choices::{
 };
 use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
-use crate::control::{InternalError, hegel_internal_assert, hegel_internal_debug_assert};
+use crate::control::{
+    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
+};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
@@ -1486,9 +1488,10 @@ impl NativeTestCase {
         self.nodes
             .push(ChoiceNode::integer(kind, v.clone(), was_forced));
 
-        Ok(T::try_from(v)
-            .ok()
-            .expect("validated value fits the requested width"))
+        Ok(hegel_internal_unwrap!(
+            T::try_from(v).ok(),
+            "draw_integer: validated value does not fit the requested width"
+        ))
     }
 
     /// Record a forced integer draw in `[min_value, max_value]`.
@@ -1748,10 +1751,10 @@ impl NativeTestCase {
             return Ok((value, false));
         }
 
-        let rng = self
-            .rng
-            .as_mut()
-            .expect("No RNG available for random generation");
+        let rng = hegel_internal_unwrap!(
+            self.rng.as_mut(),
+            "resolve_choice: no RNG available for random generation"
+        );
         Ok((random(rng)?, false))
     }
 }

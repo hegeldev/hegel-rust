@@ -1,3 +1,4 @@
+use crate::control::hegel_internal_unwrap;
 use crate::native::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -816,7 +817,10 @@ fn draw_any_char(
                 .draw_integer(BigInt::from(32), BigInt::from(126))?
                 .to_i128()
                 .unwrap();
-            Ok(char::from_u32(cp as u32).expect("ASCII codepoint"))
+            Ok(hegel_internal_unwrap!(
+                char::from_u32(cp as u32),
+                "draw_any_char: printable-ASCII draw {cp} is not a char"
+            ))
         }
         Some(intervals) => {
             let n = intervals.len();
@@ -828,10 +832,14 @@ fn draw_any_char(
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
                 .to_i128()
                 .unwrap();
-            let cp = intervals
-                .get(idx as isize)
-                .expect("draw_integer respects len bound");
-            Ok(char::from_u32(cp).expect("IntervalSet excludes surrogates"))
+            let cp = hegel_internal_unwrap!(
+                intervals.get(idx as isize),
+                "draw_any_char: alphabet index {idx} out of bounds"
+            );
+            Ok(hegel_internal_unwrap!(
+                char::from_u32(cp),
+                "draw_any_char: alphabet codepoint {cp} is not a char"
+            ))
         }
     }
 }

@@ -5,7 +5,9 @@ use crate::unicodedata;
 
 use super::search::{BinSearchDown, FindInteger};
 use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
-use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_ne};
+use crate::control::{
+    hegel_internal_debug_assert, hegel_internal_debug_assert_ne, hegel_internal_unwrap,
+};
 
 impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_strings(&mut self) -> ShrinkResult<()> {
@@ -121,9 +123,10 @@ impl<'a> Shrinker<'a> {
                     if cur_key > 0 {
                         let mut search = BinSearchDown::new(0, cur_key as i128);
                         while let Some(k) = search.probe() {
-                            let cp = kind
-                                .key_to_codepoint(k as u32)
-                                .expect("bin_search probe stays within alpha_size");
+                            let cp = hegel_internal_unwrap!(
+                                kind.key_to_codepoint(k as u32),
+                                "shrink pass probed a key outside the alphabet"
+                            );
                             let ok = try_replace_all(self, i, val, cp).await?;
                             search.record(ok);
                         }
@@ -157,9 +160,10 @@ impl<'a> Shrinker<'a> {
                 if cur_key > 0 {
                     let mut search = BinSearchDown::new(0, cur_key as i128);
                     while let Some(k) = search.probe() {
-                        let cp = kind
-                            .key_to_codepoint(k as u32)
-                            .expect("bin_search probe stays within alpha_size");
+                        let cp = hegel_internal_unwrap!(
+                            kind.key_to_codepoint(k as u32),
+                            "shrink pass probed a key outside the alphabet"
+                        );
                         let mut cand = self.current_string(i).ok_or(PassExit::NodeGone)?;
                         cand[j] = cp;
                         let ok = self
@@ -335,9 +339,10 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut search = BinSearchDown::new(0, original_key as i128);
                     while let Some(new_key) = search.probe() {
-                        let new_cp = kind_i
-                            .key_to_codepoint(new_key as u32)
-                            .expect("key < original_key < alpha_size");
+                        let new_cp = hegel_internal_unwrap!(
+                            kind_i.key_to_codepoint(new_key as u32),
+                            "shrink pass probed a key outside the alphabet"
+                        );
                         hegel_internal_debug_assert_ne!(new_cp, ch);
                         let new_i: Vec<u32> = val_i
                             .iter()

@@ -234,7 +234,14 @@ impl IntervalSet {
 
     /// Inverse of `char_in_shrink_order`.
     pub fn index_from_char_in_shrink_order(&self, c: char) -> usize {
-        let mut i = self.index(c as u32).unwrap() as isize;
+        self.index_from_codepoint_in_shrink_order(c as u32)
+    }
+
+    /// [`Self::index_from_char_in_shrink_order`] keyed by raw codepoint,
+    /// for callers that hold `u32` codepoints rather than `char`s. Panics
+    /// if the codepoint is not in the set.
+    pub fn index_from_codepoint_in_shrink_order(&self, cp: u32) -> usize {
+        let mut i = self.index(cp).unwrap() as isize;
         if i <= self.idx_of_z {
             let n = self.idx_of_z - self.idx_of_zero as isize;
             if (self.idx_of_zero as isize) <= i && i <= self.idx_of_z {

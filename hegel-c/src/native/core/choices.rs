@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use super::state::{Span, SpanEvent};
-use crate::control::{InternalError, hegel_internal_assert, hegel_internal_error};
+use crate::control::{
+    InternalError, hegel_internal_assert, hegel_internal_error, hegel_internal_unwrap,
+};
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::floats::sign_aware_lte;
 use crate::native::intervalsets::IntervalSet;
@@ -201,10 +203,13 @@ impl BytesChoice {
         offset + position
     }
 
-    /// Inverse of [`to_index`]. Returns `None` if the index is past the
+    /// Inverse of [`to_index`]. Returns `Ok(None)` if the index is past the
     /// last representable sequence.
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_index(&self, index: crate::native::bignum::BigUint) -> Option<Vec<u8>> {
+    pub fn from_index(
+        &self,
+        index: crate::native::bignum::BigUint,
+    ) -> Result<Option<Vec<u8>>, InternalError> {
         use crate::native::bignum::BigUint;
         let base = BigUint::from(256u32);
         let mut remaining = index;
@@ -213,18 +218,18 @@ impl BytesChoice {
             if remaining < bucket {
                 let mut result: Vec<u8> = Vec::with_capacity(length);
                 for _ in 0..length {
-                    let b: u8 = (&remaining % &base)
-                        .try_into()
-                        .expect("byte < 256 fits in u8");
+                    let digit = (&remaining % &base).try_into().ok();
+                    let b: u8 =
+                        hegel_internal_unwrap!(digit, "BytesChoice::from_index: byte digit > 255");
                     result.push(b);
                     remaining /= &base;
                 }
                 result.reverse();
-                return Some(result);
+                return Ok(Some(result));
             }
             remaining -= bucket;
         }
-        None
+        Ok(None)
     }
 }
 
@@ -248,8 +253,8 @@ impl StringChoice {
     /// Position of `codepoint` in the alphabet's shrink-preferred ordering.
     /// Panics if `codepoint` is not in the alphabet.
     pub fn codepoint_key(&self, codepoint: u32) -> u32 {
-        let c = char::from_u32(codepoint).expect("non-surrogate codepoint");
-        self.intervals.index_from_char_in_shrink_order(c) as u32
+        self.intervals
+            .index_from_codepoint_in_shrink_order(codepoint) as u32
     }
 
     /// Codepoint at shrink-order position `key`, or `None` if `key` is past
@@ -331,11 +336,16 @@ impl StringChoice {
         u64::from(self.codepoint_key(codepoint))
     }
 
-    /// Codepoint at the given shrink-order rank. Panics if `rank` exceeds
-    /// `alpha_size`.
-    pub fn codepoint_at_rank(&self, rank: u64) -> u32 {
-        self.key_to_codepoint(rank as u32)
-            .expect("rank within alpha_size")
+    /// Codepoint at the given shrink-order rank. A rank past `alpha_size`
+    /// is an internal error: the index machinery only produces in-range
+    /// ranks.
+    pub fn codepoint_at_rank(&self, rank: u64) -> Result<u32, InternalError> {
+        let codepoint = self.key_to_codepoint(rank as u32);
+        Ok(hegel_internal_unwrap!(
+            codepoint,
+            "StringChoice::codepoint_at_rank: rank {rank} outside alphabet of size {}",
+            self.alpha_size()
+        ))
     }
 
     /// Largest valid index for [`from_index`].
@@ -383,10 +393,12 @@ impl StringChoice {
             if remaining < bucket_size {
                 let mut cps: Vec<u32> = Vec::with_capacity(length);
                 for _ in 0..length {
-                    let r: u64 = (&remaining % &alpha)
-                        .try_into()
-                        .expect("rank < alpha_size fits in u64");
-                    cps.push(self.codepoint_at_rank(r));
+                    let digit = (&remaining % &alpha).try_into().ok();
+                    let r: u64 = hegel_internal_unwrap!(
+                        digit,
+                        "StringChoice::from_index: rank does not fit in u64"
+                    );
+                    cps.push(self.codepoint_at_rank(r)?);
                     remaining /= &alpha;
                 }
                 cps.reverse();
@@ -622,9 +634,7 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
             return Some(f64::NEG_INFINITY);
         }
         let nan_rel = offset - BigUint::from(3u32);
-        let sign: u64 = (&nan_rel % BigUint::from(2u32))
-            .try_into()
-            .expect("mod 2 fits in u64");
+        let sign = u64::from(&nan_rel % BigUint::from(2u32) == BigUint::from(1u32));
         let mantissa_base: u64 = (nan_rel / BigUint::from(2u32)).try_into().ok()?;
         if mantissa_base >> 52 != 0 {
             return None;
@@ -634,16 +644,14 @@ fn float_from_global_rank(rank: crate::native::bignum::BigUint) -> Option<f64> {
         let v = f64::from_bits(bits);
         return if v.is_nan() { Some(v) } else { None };
     }
-    let is_neg_u: u64 = (&rank % BigUint::from(2u32))
-        .try_into()
-        .expect("mod 2 fits in u64");
+    let is_neg = &rank % BigUint::from(2u32) == BigUint::from(1u32);
     let mag_big = rank / BigUint::from(2u32);
     let mag_idx: u64 = (&mag_big).try_into().ok()?;
     if mag_idx >> 63 == 0 && mag_idx >> 56 != 0 {
         return None;
     }
     let mag = index_to_float(mag_idx);
-    Some(if is_neg_u == 1 { -mag } else { mag })
+    Some(if is_neg { -mag } else { mag })
 }
 
 /// Largest dense rank used by any finite float. The maximum lex index over
@@ -1188,7 +1196,7 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => ic.from_index(index).map(ChoiceValue::Integer),
             ChoiceKind::Boolean(bc) => bc.from_index(index).map(ChoiceValue::Boolean),
             ChoiceKind::Float(fc) => fc.from_index(index)?.map(ChoiceValue::Float),
-            ChoiceKind::Bytes(bc) => bc.from_index(index).map(ChoiceValue::Bytes),
+            ChoiceKind::Bytes(bc) => bc.from_index(index)?.map(ChoiceValue::Bytes),
             ChoiceKind::String(sc) => sc.from_index(index)?.map(ChoiceValue::String),
             ChoiceKind::Clone => None,
         })

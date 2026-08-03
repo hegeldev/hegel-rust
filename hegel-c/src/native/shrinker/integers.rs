@@ -6,7 +6,7 @@ use crate::native::core::{ChoiceData, ChoiceValue};
 
 use super::search::{BinSearchDownBig, FindInteger};
 use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
-use crate::control::hegel_internal_debug_assert;
+use crate::control::{hegel_internal_debug_assert, hegel_internal_unwrap};
 
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
 fn low_bits(v: &BigInt, keep: usize) -> BigInt {
@@ -558,11 +558,11 @@ impl<'a> Shrinker<'a> {
         if indices.len() <= 1 {
             return Ok(());
         }
-        let offset = distances
-            .iter()
-            .min()
-            .expect("non-empty by check above")
-            .clone();
+        let offset = hegel_internal_unwrap!(
+            distances.iter().min(),
+            "lower_common_node_offset: no distances despite multiple changed nodes"
+        )
+        .clone();
         hegel_internal_debug_assert!(offset.sign() == Sign::Plus);
         let residual: Vec<BigInt> = distances.iter().map(|d| d - &offset).collect();
 
