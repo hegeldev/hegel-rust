@@ -1994,3 +1994,21 @@ fn internal_error_converts_to_parse_error_with_bug_report_framing() {
     assert!(err.msg.contains("bug in hegel"), "{}", err.msg);
     assert_eq!(err.pos, 0);
 }
+
+#[test]
+fn into_subpattern_extracts_only_subpattern_ops() {
+    let p = SubPattern {
+        data: vec![lit(97)],
+    };
+    assert_eq!(
+        OpCode::Subpattern {
+            group: None,
+            add_flags: 0,
+            del_flags: 0,
+            p: p.clone()
+        }
+        .into_subpattern(),
+        Some(p)
+    );
+    assert_eq!(lit(97).into_subpattern(), None);
+}

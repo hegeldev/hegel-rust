@@ -15,8 +15,8 @@ use crate::native::HashMap;
 
 use super::constants::*;
 use crate::control::{
-    InternalError, hegel_internal_debug_assert, hegel_internal_debug_assert_eq,
-    hegel_internal_error,
+    InternalError, hegel_internal_assert_eq, hegel_internal_debug_assert,
+    hegel_internal_debug_assert_eq, hegel_internal_unwrap,
 };
 
 /// A single parsed operation. Each variant corresponds to an entry in
@@ -77,6 +77,17 @@ pub enum OpCode {
     },
     /// `(FAILURE, ())`: emitted for empty negative-lookahead `(?!)`.
     Failure,
+}
+
+impl OpCode {
+    /// The nested pattern of a [`OpCode::Subpattern`], or `None` for any
+    /// other op.
+    fn into_subpattern(self) -> Option<SubPattern> {
+        match self {
+            OpCode::Subpattern { p, .. } => Some(p),
+            _ => None,
+        }
+    }
 }
 
 /// An item inside a character class `[...]`. Maps to the nested `(op, av)`
@@ -931,7 +942,8 @@ fn parse(
             } else if this == "+" {
                 min = 1;
                 max = MAXREPEAT;
-            } else if this == "{" {
+            } else {
+                hegel_internal_assert_eq!(this, "{");
                 if source.peek_next_char() == Some('}') {
                     subpattern.push(OpCode::Literal(first_char as u32));
                     continue;
@@ -985,8 +997,6 @@ fn parse(
                         ));
                     }
                 }
-            } else {
-                hegel_internal_error!("token {this:?} passed the REPEAT_CHARS gate unhandled");
             }
             let item_opt = if subpattern.is_empty() {
                 None
@@ -1283,12 +1293,9 @@ fn parse(
             subpattern.push(OpCode::At(AtCode::Beginning));
             continue;
         }
-        if this == "$" {
-            subpattern.push(OpCode::At(AtCode::End));
-            continue;
-        }
 
-        hegel_internal_error!("unhandled special character {this:?}");
+        hegel_internal_assert_eq!(this, "$");
+        subpattern.push(OpCode::At(AtCode::End));
     }
 
     let mut i = subpattern.data.len();
@@ -1304,11 +1311,10 @@ fn parse(
             }
         );
         if take_inner {
-            let OpCode::Subpattern { p, .. } = subpattern.data.remove(i) else {
-                hegel_internal_error!(
-                    "opcode at index {i} was matched as Subpattern by the take_inner check"
-                );
-            };
+            let p = hegel_internal_unwrap!(
+                subpattern.data.remove(i).into_subpattern(),
+                "opcode at index {i} was matched as Subpattern by the take_inner check"
+            );
             let expanded = p.data;
             let expanded_len = expanded.len();
             for (j, op) in expanded.into_iter().enumerate() {
@@ -1346,9 +1352,10 @@ fn parse_flags(
     let mut ch = first_ch.to_string();
     if ch != "-" {
         loop {
-            let Some(flag) = flag_for_char(ch.chars().next().unwrap()) else {
-                hegel_internal_error!("parse_flags called with non-flag char {ch:?}");
-            };
+            let flag = hegel_internal_unwrap!(
+                flag_for_char(ch.chars().next().unwrap()),
+                "parse_flags called with non-flag char {ch:?}"
+            );
             if ch == "L" {
                 return Err(source.error(
                     "bad inline flags: cannot use 'L' flag with a str pattern",

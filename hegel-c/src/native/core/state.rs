@@ -16,8 +16,7 @@ use super::choices::{
 use super::float_index::index_to_float;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::control::{
-    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_error,
-    hegel_internal_unwrap,
+    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
 };
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
@@ -403,16 +402,15 @@ pub(crate) fn biased_float_sample(
 
     if rng.random::<f64>() < nasty_threshold {
         let idx = rng.random_range(0..valid_count);
-        let mut skip = idx;
-        for &v in candidates.iter() {
-            if fc.validate(v) {
-                if skip == 0 {
-                    return Ok(v);
-                }
-                skip -= 1;
-            }
-        }
-        hegel_internal_error!("the second validate pass found fewer candidates than valid_count");
+        let picked = candidates
+            .iter()
+            .copied()
+            .filter(|&v| fc.validate(v))
+            .nth(idx);
+        return Ok(hegel_internal_unwrap!(
+            picked,
+            "the second validate pass found fewer candidates than valid_count"
+        ));
     }
     let mag = index_to_float(rng.random::<u64>());
     let raw = if rng.random::<u64>() & 1 == 1 {
@@ -689,18 +687,16 @@ pub(crate) fn biased_string_sample(
             hegel_internal_debug_assert!(want_two && slot == 0);
             return Ok(vec![simplest_cp, simplest_cp]);
         }
-        let mut skip = idx - small_count;
-        for (cps, &m) in global_pool.iter().zip(contained.iter()) {
-            if m && size_ok(cps) {
-                if skip == 0 {
-                    return Ok(cps.clone());
-                }
-                skip -= 1;
-            }
-        }
-        hegel_internal_error!(
+        let picked = global_pool
+            .iter()
+            .zip(contained.iter())
+            .filter(|(cps, m)| **m && size_ok(cps))
+            .nth(idx - small_count);
+        let (cps, _) = hegel_internal_unwrap!(
+            picked,
             "the second validate pass found fewer candidates than valid_global_count"
         );
+        return Ok(cps.clone());
     }
 
     let alpha = sc.intervals.len();

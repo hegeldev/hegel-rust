@@ -1,4 +1,4 @@
-use crate::control::{InternalError, hegel_internal_error, hegel_internal_unwrap};
+use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -79,8 +79,7 @@ pub(crate) fn generate_regex(
             return Ok(s);
         }
     }
-    mark_invalid(ntc)?;
-    hegel_internal_error!("mark_invalid returned Ok")
+    Err(mark_invalid(ntc))
 }
 
 /// One generation attempt. Returns `Ok(None)` when the candidate was
@@ -377,14 +376,14 @@ fn generate_op(
                         .unwrap();
                     let pick = if which == 0 { c } else { sw };
                     if !alphabet_allows(alphabet, pick) {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                     out.push(pick);
                     return Ok(());
                 }
             }
             if !alphabet_allows(alphabet, c) {
-                mark_invalid(ntc)?;
+                return Err(mark_invalid(ntc));
             }
             out.push(c);
         }
@@ -420,16 +419,16 @@ fn generate_op(
         }
         OpCode::At(at) => match at {
             AtCode::BeginningString if !out.is_empty() => {
-                mark_invalid(ntc)?;
+                return Err(mark_invalid(ntc));
             }
             AtCode::BeginningString => {}
             AtCode::Beginning => {
                 if state.flags & SRE_FLAG_MULTILINE != 0 {
                     if !out.is_empty() && !out.ends_with('\n') {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                 } else if !out.is_empty() {
-                    mark_invalid(ntc)?;
+                    return Err(mark_invalid(ntc));
                 }
             }
             AtCode::End | AtCode::EndString | AtCode::Boundary | AtCode::NonBoundary => {
@@ -487,7 +486,7 @@ fn generate_op(
         }
         OpCode::GroupRef(gid) => {
             let Some(val) = state.groups.get(gid).cloned() else {
-                return mark_invalid(ntc);
+                return Err(mark_invalid(ntc));
             };
             out.push_str(&val);
         }
@@ -523,7 +522,7 @@ fn generate_op(
                     if match_seq(&p.data, start, &out_chars, state.flags, &state.groups)
                         == Some(end)
                     {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                 }
             } else {
@@ -537,7 +536,7 @@ fn generate_op(
             }
         }
         OpCode::Failure => {
-            mark_invalid(ntc)?;
+            return Err(mark_invalid(ntc));
         }
         OpCode::AtomicGroup(p) => {
             state.needs_whole_match = true;
@@ -828,8 +827,7 @@ fn draw_any_char(
         Some(intervals) => {
             let n = intervals.len();
             if n == 0 {
-                mark_invalid(ntc)?;
-                hegel_internal_error!("mark_invalid returned Ok")
+                return Err(mark_invalid(ntc));
             }
             let idx = ntc
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
@@ -852,7 +850,7 @@ fn emit_from_chars(
     out: &mut String,
 ) -> Result<(), EngineError> {
     if chars.is_empty() {
-        mark_invalid(ntc)?;
+        return Err(mark_invalid(ntc));
     }
     let n = chars.len();
     let idx = if n > 256 && ntc.weighted(0.8, None)? {
@@ -872,9 +870,9 @@ fn emit_from_chars(
     Ok(())
 }
 
-fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
+fn mark_invalid(ntc: &mut NativeTestCase) -> EngineError {
     ntc.conclude(Status::Invalid, None);
-    Err(EngineError::InvalidTestCase)
+    EngineError::InvalidTestCase
 }
 
 fn codepoint_to_char(cp: u32) -> Result<char, InternalError> {
