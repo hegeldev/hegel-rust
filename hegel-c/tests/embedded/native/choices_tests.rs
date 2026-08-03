@@ -1059,7 +1059,10 @@ fn random_value_boolean_consumes_exactly_one_byte() {
     let mut a = EngineRng::seeded(2024);
     let mut b = EngineRng::seeded(2024);
 
-    let value = kind.random_value(&mut a).unwrap().unwrap();
+    let value = kind
+        .random_value(&mut a, crate::native::core::GenerationParameters::default())
+        .unwrap()
+        .unwrap();
     let ChoiceValue::Boolean(got) = value else {
         panic!("expected a boolean choice value");
     };
@@ -1389,7 +1392,15 @@ fn clone_values_is_empty_matches_child_count() {
 #[test]
 fn clone_kind_random_value_is_none() {
     let mut rng = crate::native::rng::EngineRng::seeded(0);
-    assert!(ChoiceKind::Clone.random_value(&mut rng).unwrap().is_none());
+    assert!(
+        ChoiceKind::Clone
+            .random_value(
+                &mut rng,
+                crate::native::core::GenerationParameters::default()
+            )
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

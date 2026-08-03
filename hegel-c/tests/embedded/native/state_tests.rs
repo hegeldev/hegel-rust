@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::GenerationParameters;
 use crate::native::rng::EngineRng;
 
 #[test]
@@ -268,7 +269,7 @@ fn data_observer_conclude_test_default_is_no_op() {
 
 #[test]
 fn weighted_with_p_zero_returns_false_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let v = tc.weighted(0.0, None).ok().unwrap();
     assert!(!v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -276,7 +277,7 @@ fn weighted_with_p_zero_returns_false_without_consulting_rng() {
 
 #[test]
 fn weighted_with_p_one_returns_true_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let v = tc.weighted(1.0, None).ok().unwrap();
     assert!(v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -284,7 +285,7 @@ fn weighted_with_p_one_returns_true_without_consulting_rng() {
 
 #[test]
 fn weighted_with_explicit_forced_records_forced_node() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let v = tc.weighted(0.5, Some(true)).ok().unwrap();
     assert!(v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -472,7 +473,7 @@ fn stop_span_extends_parent_label_stack() {
 #[test]
 fn draw_float_unbounded_with_nan_can_produce_nan() {
     for seed in 0..200u64 {
-        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let v = tc
             .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true, 5e-324)
             .ok()
@@ -486,7 +487,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 
 #[test]
 fn draw_float_half_bounded_below_explores_finite_range() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let v = tc
         .draw_float(1.0, f64::INFINITY, false, false, 5e-324)
         .ok()
@@ -697,11 +698,19 @@ fn template_count_decrements_on_each_draw() {
     assert_eq!(tc.trailing_template.as_ref().unwrap().count, Some(0));
 }
 
+/// Draw one full-width i64 sample under a fresh set of swarm parameters — the
+/// aggregate marginal a caller sees across many test cases (each of which draws
+/// its own parameters). Used by the distribution tests below.
+fn swarm_sample(min: i128, max: i128, rng: &mut EngineRng) -> i128 {
+    let params = GenerationParameters::draw(rng).unwrap();
+    biased_i128_sample(min, max, rng, params).unwrap()
+}
+
 #[test]
 fn biased_integer_sample_stays_in_range_for_small_bounds() {
     let mut rng = EngineRng::seeded(1);
     for _ in 0..1000 {
-        let v = biased_i128_sample(0, 100, &mut rng).unwrap();
+        let v = swarm_sample(0, 100, &mut rng);
         assert!((0..=100).contains(&v), "out of range: {v}");
     }
 }
@@ -710,7 +719,7 @@ fn biased_integer_sample_stays_in_range_for_small_bounds() {
 fn biased_integer_sample_stays_in_range_for_wide_bounds() {
     let mut rng = EngineRng::seeded(2);
     for _ in 0..2000 {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
+        let v = swarm_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         assert!(
             (i64::MIN as i128..=i64::MAX as i128).contains(&v),
             "out of range: {v}"
@@ -722,7 +731,7 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
 fn biased_integer_sample_stays_in_range_for_full_i128() {
     let mut rng = EngineRng::seeded(3);
     for _ in 0..1000 {
-        biased_i128_sample(i128::MIN, i128::MAX, &mut rng).unwrap();
+        swarm_sample(i128::MIN, i128::MAX, &mut rng);
     }
 }
 
@@ -730,7 +739,7 @@ fn biased_integer_sample_stays_in_range_for_full_i128() {
 fn biased_integer_sample_collapses_when_min_equals_max() {
     let mut rng = EngineRng::seeded(4);
     for _ in 0..100 {
-        assert_eq!(biased_i128_sample(42, 42, &mut rng).unwrap(), 42);
+        assert_eq!(swarm_sample(42, 42, &mut rng), 42);
     }
 }
 
@@ -739,7 +748,7 @@ fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
     let mut rng = EngineRng::seeded(5);
     let mut magnitudes: HashSet<i32> = HashSet::default();
     for _ in 0..2000 {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
+        let v = swarm_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         let mag = if v == 0 {
             0
         } else {
@@ -760,7 +769,7 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
     let mut in_inner = 0;
     let total = 2000;
     for _ in 0..total {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
+        let v = swarm_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         if v.unsigned_abs() <= 256 {
             in_inner += 1;
         }
@@ -779,7 +788,7 @@ fn biased_integer_sample_wide_range_still_draws_from_distribution() {
     let total = 2000;
     let mut outside_pool = 0;
     for _ in 0..total {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
+        let v = swarm_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
         if pool.binary_search(&v).is_err() {
             outside_pool += 1;
         }
@@ -795,7 +804,7 @@ fn biased_integer_sample_wide_range_still_draws_from_distribution() {
 fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     let mut rng = EngineRng::seeded(11);
     let mut samples: Vec<i128> = (0..2000)
-        .map(|_| biased_i128_sample(10_000, 10_000_000, &mut rng).unwrap())
+        .map(|_| swarm_sample(10_000, 10_000_000, &mut rng))
         .collect();
     samples.sort();
     let median = samples[samples.len() / 2];
@@ -805,76 +814,251 @@ fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     );
 }
 
-/// A wide integer draw must land on the *core* special values — the range
-/// endpoints, their inner neighbours, zero, ±1, and the small magnitudes —
-/// with a meaningful (not vanishing) frequency. Regression test for the
-/// boundary under-sampling: the diffuse constant pool (hundreds of powers of
-/// two, factorials, primorials) previously diluted these to well under 1%.
+/// Each category weight directly controls how often a wide draw returns a value
+/// from that category: a high `endpoint_probability` makes the range edges
+/// common, a high `interesting_probability` makes small magnitudes common, and
+/// with every special weight at zero the endpoints (`min + 1` / `max - 1`, which
+/// only the endpoint category produces) essentially vanish. Confirms the swarm
+/// parameters are a pure reweighting of the same reachable values.
 #[test]
-fn biased_integer_sample_hits_core_special_values_often() {
-    let mut rng = EngineRng::seeded(4242);
+fn biased_integer_sample_category_weights_control_the_mix() {
     let total = 200_000;
+    let (lo, hi) = (i64::MIN as i128, i64::MAX as i128);
 
-    // Full-width i64.
-    let (mut boundary, mut small) = (0u64, 0u64);
-    for _ in 0..total {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
-        if v == i64::MIN as i128
-            || v == i64::MAX as i128
-            || v == i64::MIN as i128 + 1
-            || v == i64::MAX as i128 - 1
-            || v == 0
-            || v == 1
-            || v == -1
-        {
-            boundary += 1;
+    let measure = |params: GenerationParameters, seed: u64| -> (f64, f64) {
+        let mut rng = EngineRng::seeded(seed);
+        let (mut endpoint, mut small) = (0u64, 0u64);
+        for _ in 0..total {
+            let v = biased_i128_sample(lo, hi, &mut rng, params).unwrap();
+            if v == lo || v == hi || v == lo + 1 || v == hi - 1 {
+                endpoint += 1;
+            }
+            if v.unsigned_abs() <= 8 {
+                small += 1;
+            }
         }
-        if v.unsigned_abs() <= 8 {
-            small += 1;
+        (endpoint as f64 / total as f64, small as f64 / total as f64)
+    };
+
+    // Endpoint-heavy: the range edges dominate.
+    let endpoint_heavy = GenerationParameters {
+        endpoint_probability: 0.7,
+        interesting_probability: 0.1,
+        diffuse_probability: 0.05,
+    };
+    let (endpoint_rate, _) = measure(endpoint_heavy, 4242);
+    assert!(
+        endpoint_rate > 0.6,
+        "at endpoint=0.7 endpoints only {endpoint_rate:.4}; expected > 60%"
+    );
+
+    // Interesting-heavy: small magnitudes become common.
+    let interesting_heavy = GenerationParameters {
+        endpoint_probability: 0.0,
+        interesting_probability: 0.8,
+        diffuse_probability: 0.0,
+    };
+    let (_, small_rate) = measure(interesting_heavy, 4243);
+    assert!(
+        small_rate > 0.1,
+        "at interesting=0.8 small values only {small_rate:.4}; expected > 10%"
+    );
+
+    // All-middle: the `min + 1` / `max - 1` edges (unique to the endpoint
+    // category) disappear.
+    let all_middle = GenerationParameters {
+        endpoint_probability: 0.0,
+        interesting_probability: 0.0,
+        diffuse_probability: 0.0,
+    };
+    let mut rng = EngineRng::seeded(4244);
+    let mut inner_edges = 0u64;
+    for _ in 0..total {
+        let v = biased_i128_sample(lo, hi, &mut rng, all_middle).unwrap();
+        if v == lo + 1 || v == hi - 1 {
+            inner_edges += 1;
         }
     }
-    let boundary_frac = boundary as f64 / total as f64;
-    let small_frac = small as f64 / total as f64;
+    let inner_edge_rate = inner_edges as f64 / total as f64;
     assert!(
-        boundary_frac > 0.03,
-        "full-width boundary values only {boundary_frac:.4}; expected > 3%"
+        inner_edge_rate < 0.001,
+        "with all special weights zero the inner edges still appear \
+         {inner_edge_rate:.4} of the time; endpoint category not switched off"
     );
-    assert!(
-        small_frac > 0.05,
-        "full-width small values only {small_frac:.4}; expected > 5%"
-    );
+}
 
-    // Large but bounded: the endpoints themselves must appear often, not
-    // just get lost among the interior constants.
-    let (lo, hi) = (-(1i128 << 40), 1i128 << 40);
-    let (mut min_hits, mut max_hits, mut small_b) = (0u64, 0u64, 0u64);
-    for _ in 0..total {
-        let v = biased_i128_sample(lo, hi, &mut rng);
-        if v == lo {
-            min_hits += 1;
-        }
-        if v == hi {
-            max_hits += 1;
-        }
-        if v.unsigned_abs() <= 8 {
-            small_b += 1;
+/// The heart of swarm testing: because a whole test case shares one set of
+/// category weights, two operands drawn in the same case are *both* from the
+/// interesting category far more often than when each operand draws its own
+/// weights — even though the per-operand marginal is identical in both arms.
+/// This positive correlation is what makes interactions that need several
+/// special operands at once (e.g. `x + y` overflow) reachable; independent
+/// per-operand weights reach them only at rate ~the product of the marginals.
+#[test]
+fn swarm_shared_parameters_correlate_operand_extremeness() {
+    let (lo, hi) = (i64::MIN as i128, i64::MAX as i128);
+    // Power-of-two values the interesting category draws directly but the other
+    // sources essentially never land on *exactly*: they sit above the middle
+    // distribution's `[-256, 256]` uniform core, below the diffuse pool's 2^16
+    // floor, and the middle's heavy tail hits any specific integer with
+    // vanishing probability. So "`v` is one of these" is effectively a pure
+    // indicator that the interesting category fired — whose weight the shared
+    // parameters control.
+    const INTERESTING_ONLY: [i128; 10] = [
+        512, -512, 1024, -1024, 2048, -2048, 4096, -4096, 8192, -8192,
+    ];
+    let interesting_hit = |v: i128| INTERESTING_ONLY.contains(&v);
+    let pairs = 200_000;
+
+    // `shared`: one parameter set per pair (both operands share the case's
+    // mood). `independent`: a fresh parameter set per operand. Same per-operand
+    // marginal; the only difference is the correlation `shared` introduces.
+    let mut rng = EngineRng::seeded(2024);
+    let (mut shared_both, mut independent_both) = (0u64, 0u64);
+    for _ in 0..pairs {
+        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let a = biased_i128_sample(lo, hi, &mut rng, params).unwrap();
+        let b = biased_i128_sample(lo, hi, &mut rng, params).unwrap();
+        if interesting_hit(a) && interesting_hit(b) {
+            shared_both += 1;
         }
     }
-    let min_frac = min_hits as f64 / total as f64;
-    let max_frac = max_hits as f64 / total as f64;
-    let small_b_frac = small_b as f64 / total as f64;
+    for _ in 0..pairs {
+        let pa = GenerationParameters::draw(&mut rng).unwrap();
+        let a = biased_i128_sample(lo, hi, &mut rng, pa).unwrap();
+        let pb = GenerationParameters::draw(&mut rng).unwrap();
+        let b = biased_i128_sample(lo, hi, &mut rng, pb).unwrap();
+        if interesting_hit(a) && interesting_hit(b) {
+            independent_both += 1;
+        }
+    }
+    let shared = shared_both as f64 / pairs as f64;
+    let independent = independent_both as f64 / pairs as f64;
     assert!(
-        min_frac > 0.004,
-        "bounded min endpoint only {min_frac:.4}; expected > 0.4%"
+        shared > independent * 1.4,
+        "sharing the swarm parameters across operands should raise the \
+         both-interesting rate well above independent draws (the E[p²] > E[p]² \
+         effect): shared {shared:.4} vs independent {independent:.4}"
+    );
+}
+
+/// `GenerationParameters::draw` (a Dirichlet over the four categories) must
+/// produce valid, lumpy weights: each special weight in `[0, 1]` with their sum
+/// `<= 1` (so the middle keeps positive probability), most cases middle-dominated
+/// ("normal") with a near-zero endpoint weight, and a thin lumpy tail of
+/// endpoint-heavy cases — the clustering that makes `x + y` overflow reachable.
+#[test]
+fn generation_parameters_draw_is_valid_lumpy_and_mostly_normal() {
+    let mut rng = EngineRng::seeded(77);
+    let total = 100_000;
+    let (mut endpoint_heavy, mut endpoint_negligible, mut middle_dominant) = (0u64, 0u64, 0u64);
+    for _ in 0..total {
+        let p = GenerationParameters::draw(&mut rng).unwrap();
+        for (name, v) in [
+            ("endpoint", p.endpoint_probability),
+            ("interesting", p.interesting_probability),
+            ("diffuse", p.diffuse_probability),
+        ] {
+            assert!((0.0..=1.0).contains(&v), "{name} weight {v} out of [0, 1]");
+        }
+        let special = p.endpoint_probability + p.interesting_probability + p.diffuse_probability;
+        assert!(special <= 1.0 + 1e-9, "special mass {special} exceeds 1");
+        let middle = 1.0 - special;
+        if p.endpoint_probability > 0.5 {
+            endpoint_heavy += 1;
+        }
+        if p.endpoint_probability < 0.01 {
+            endpoint_negligible += 1;
+        }
+        if middle > 0.5 {
+            middle_dominant += 1;
+        }
+    }
+    assert!(
+        endpoint_heavy > 0,
+        "no endpoint-heavy cases; the lumpy tail that drives overflow is missing"
     );
     assert!(
-        max_frac > 0.004,
-        "bounded max endpoint only {max_frac:.4}; expected > 0.4%"
+        endpoint_negligible as f64 / total as f64 > 0.5,
+        "endpoint weight is near zero in only {}/{total} cases; expected most \
+         cases to have essentially no endpoints (lumpiness)",
+        endpoint_negligible
     );
     assert!(
-        small_b_frac > 0.05,
-        "bounded small values only {small_b_frac:.4}; expected > 5%"
+        middle_dominant as f64 / total as f64 > 0.5,
+        "the middle dominates in only {}/{total} cases; expected most cases to \
+         be normal",
+        middle_dominant
     );
+}
+
+/// `sample_gamma` must have the Gamma distribution's mean and variance (both
+/// equal to the shape), across both the `shape >= 1` path and the `shape < 1`
+/// boost path.
+#[test]
+fn sample_gamma_matches_distribution_moments() {
+    let n = 200_000;
+    for shape in [0.3_f64, 1.0, 2.5] {
+        let mut rng = EngineRng::seeded(1000 + (shape * 10.0) as u64);
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        for _ in 0..n {
+            let g = sample_gamma(shape, &mut rng).unwrap();
+            assert!(g >= 0.0 && g.is_finite(), "gamma produced {g}");
+            sum += g;
+            sum_sq += g * g;
+        }
+        let mean = sum / n as f64;
+        let var = sum_sq / n as f64 - mean * mean;
+        assert!(
+            (mean - shape).abs() < 0.05 * shape.max(1.0),
+            "Gamma({shape}) mean {mean:.4}; expected ~{shape}"
+        );
+        assert!(
+            (var - shape).abs() < 0.1 * shape.max(1.0),
+            "Gamma({shape}) variance {var:.4}; expected ~{shape}"
+        );
+    }
+}
+
+/// `sample_dirichlet4` must return a point on the simplex (weights in `[0, 1]`
+/// summing to 1) whose component means match the normalised concentrations.
+#[test]
+fn sample_dirichlet4_lands_on_simplex_with_right_means() {
+    let alphas = [0.08_f64, 0.8, 0.12, 2.2];
+    let total_alpha: f64 = alphas.iter().sum();
+    let n = 200_000;
+    let mut rng = EngineRng::seeded(9999);
+    let mut sums = [0.0_f64; 4];
+    for _ in 0..n {
+        let w = sample_dirichlet4(alphas, &mut rng).unwrap();
+        let s: f64 = w.iter().sum();
+        assert!((s - 1.0).abs() < 1e-9, "weights sum to {s}, not 1");
+        for (acc, &wi) in sums.iter_mut().zip(w.iter()) {
+            assert!((0.0..=1.0).contains(&wi), "weight {wi} out of [0, 1]");
+            *acc += wi;
+        }
+    }
+    for (i, (&acc, &alpha)) in sums.iter().zip(alphas.iter()).enumerate() {
+        let mean = acc / n as f64;
+        let expected = alpha / total_alpha;
+        assert!(
+            (mean - expected).abs() < 0.01,
+            "category {i} mean {mean:.4}; expected {expected:.4}"
+        );
+    }
+}
+
+/// `normalize_to_simplex` scales positive weights to sum to 1, and falls back
+/// to an even split when every weight is zero (the all-underflowed guard).
+#[test]
+fn normalize_to_simplex_scales_and_handles_all_zero() {
+    let n = normalize_to_simplex([1.0, 3.0, 0.0, 0.0]);
+    assert!((n.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    assert!((n[0] - 0.25).abs() < 1e-12 && (n[1] - 0.75).abs() < 1e-12);
+    assert_eq!(n[2], 0.0);
+
+    assert_eq!(normalize_to_simplex([0.0; 4]), [0.25; 4]);
 }
 
 #[test]
@@ -965,7 +1149,8 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     let mut seen_zero = false;
     let mut seen_one = false;
     for _ in 0..200 {
-        let v = biased_i128_sample(0, 1, &mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let v = biased_i128_sample(0, 1, &mut rng, params).unwrap();
         assert!((0..=1).contains(&v), "out of range: {v}");
         match v {
             0 => seen_zero = true,
@@ -990,7 +1175,8 @@ fn biased_integer_sample_erased_small_width_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(21);
     for _ in 0..500 {
-        let v = biased_integer_sample(&kind, &mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let v = biased_integer_sample(&kind, &mut rng, params).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
 }
@@ -1008,7 +1194,8 @@ fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(22);
     for _ in 0..500 {
-        let v = biased_integer_sample(&kind, &mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let v = biased_integer_sample(&kind, &mut rng, params).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
 }
@@ -1044,8 +1231,9 @@ fn biased_integer_sample_erased_bigint_single_value() {
     };
     let mut rng = EngineRng::seeded(23);
     for _ in 0..20 {
+        let params = GenerationParameters::draw(&mut rng).unwrap();
         assert_eq!(
-            biased_integer_sample(&kind, &mut rng).unwrap(),
+            biased_integer_sample(&kind, &mut rng, params).unwrap(),
             fixed.clone()
         );
     }

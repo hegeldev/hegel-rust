@@ -709,7 +709,7 @@ fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     let cache = Mutex::new(HashMap::default());
     let char_cache = Mutex::new(HashMap::default());
     for seed in 0..50 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
@@ -724,7 +724,7 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     let cache = Mutex::new(HashMap::default());
     let char_cache = Mutex::new(HashMap::default());
     for seed in 0..50 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
@@ -749,7 +749,7 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
     let cache = Mutex::new(HashMap::default());
     let char_cache = Mutex::new(HashMap::default());
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(
@@ -767,7 +767,7 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 #[test]
 fn generate_regex_handles_huge_character_class_ranges() {
     use crate::native::rng::EngineRng;
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let re = CompiledRegex::compile("[\\x20-\\U0010FFFF]", None).unwrap();
     let s = generate_regex(&mut ntc, &re, false).unwrap();
     assert!(!s.is_empty());
@@ -779,7 +779,7 @@ fn generate_regex_word_boundaries_hold_in_the_final_string() {
     let re = CompiledRegex::compile(r"\bfoo\b", None).unwrap();
     let mut produced = 0;
     for seed in 0..300 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -801,7 +801,7 @@ fn generate_regex_end_anchor_inside_branch_holds_in_the_final_string() {
     let re = CompiledRegex::compile("foo$|bar", None).unwrap();
     let mut produced = 0;
     for seed in 0..300 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -820,7 +820,7 @@ fn generate_regex_fullmatch_lookahead_does_not_emit_the_assertion_body() {
     let re = CompiledRegex::compile("(?=a)ab", None).unwrap();
     let mut produced = 0;
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, true) else {
             continue;
         };
@@ -835,9 +835,9 @@ fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string()
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("a*+a", None).unwrap();
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         for fullmatch in [false, true] {
-            let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000));
+            let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000)).unwrap();
             let ntc_ref = if fullmatch { &mut ntc2 } else { &mut ntc };
             if let Ok(s) = generate_regex(ntc_ref, &re, fullmatch) {
                 panic!(
@@ -865,7 +865,7 @@ fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
     let re = CompiledRegex::compile("(?i)[^\u{130}a]", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, true) else {
             continue;
         };
@@ -916,7 +916,7 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("(?<=a)b", None).unwrap();
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         assert!(
             generate_regex(&mut ntc, &re, true).is_err(),
             "a fixed-width lookbehind can never hold at the start of a fullmatch"
@@ -926,7 +926,7 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
     let re = CompiledRegex::compile("(?<=a*)b", None).unwrap();
     let mut produced = 0;
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         if let Ok(s) = generate_regex(&mut ntc, &re, true) {
             produced += 1;
             assert_eq!(s, "b");
@@ -942,7 +942,7 @@ fn generate_regex_end_anchor_with_no_newline_in_alphabet_does_not_pad() {
     let re = CompiledRegex::compile("a$", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -957,7 +957,7 @@ fn generate_regex_multiline_caret_in_the_middle_generates_nothing() {
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("(?m)a^b", None).unwrap();
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         assert!(
             generate_regex(&mut ntc, &re, false).is_err(),
             "a mid-pattern ^ preceded by a literal can never match"
