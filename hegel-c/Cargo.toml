@@ -58,6 +58,10 @@ std = []
 # links without std. Only takes effect when `std` is disabled: builds that
 # link std must use std's lang items, and defining a second set would fail
 # to link. Build with `-C panic=abort` — without std there is no unwinder.
+# `cargo test` cannot run under this configuration (integration-test
+# harnesses link std and collide with these lang items, a duplicate
+# `panic_impl` error); `just c-test-runtime` instead builds the runtime
+# cdylib and runs the std-linked smoke suite against it via dlopen.
 runtime = []
 # Internal: exposes engine internals via `__bench` for hegeltest's benches/.
 # Not part of the public C API; depend on at your peril.
