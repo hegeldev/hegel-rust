@@ -52,7 +52,8 @@ pub(super) fn read_dir(path: &str) -> Result<Vec<String>, Error> {
 
 /// The full contents of the file at `path`.
 pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
-    let fd = retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
+    let fd =
+        retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
     let mut out = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -67,7 +68,8 @@ pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
 /// Read exactly `buf.len()` bytes from the start of the file at `path`.
 /// Fails if the file is shorter than the buffer.
 pub(super) fn read_exact(path: &str, buf: &mut [u8]) -> Result<(), Error> {
-    let fd = retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
+    let fd =
+        retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
     let mut filled = 0;
     while filled < buf.len() {
         let n = retry_intr(|| rustix::io::read(&fd, &mut buf[filled..]))?;

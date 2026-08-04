@@ -57,9 +57,15 @@ fn is_in_ci_from_detects_presence_variables_even_when_empty() {
 
 #[test]
 fn is_in_ci_from_requires_the_expected_value_for_value_variables() {
-    assert!(is_in_ci_from(|key| (key == "TF_BUILD").then(|| "true".to_string())));
-    assert!(!is_in_ci_from(|key| (key == "TF_BUILD").then(|| "false".to_string())));
-    assert!(!is_in_ci_from(|key| (key == "GITHUB_ACTIONS").then(String::new)));
+    assert!(is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "true".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "false".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "GITHUB_ACTIONS").then(String::new)
+    ));
 }
 
 #[test]
