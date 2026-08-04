@@ -1,5 +1,8 @@
 use crate::native::HashSet;
-use std::cmp::min;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cmp::min;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;

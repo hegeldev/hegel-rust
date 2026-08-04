@@ -1,3 +1,6 @@
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
@@ -37,8 +40,8 @@ impl From<crate::control::InternalError> for DataSourceError {
     }
 }
 
-impl std::fmt::Display for DataSourceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DataSourceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             DataSourceError::StopTest => {
                 write!(f, "Backend ran out of data for this test case (StopTest)")
@@ -272,8 +275,8 @@ impl From<crate::control::InternalError> for RunError {
     }
 }
 
-impl std::fmt::Display for RunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for RunError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             RunError::HealthCheck(msg)
             | RunError::Flaky(msg)

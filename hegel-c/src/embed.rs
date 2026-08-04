@@ -16,6 +16,8 @@
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
+use alloc::boxed::Box;
+use alloc::format;
 
 /// Synchronous driver for [`run_native_async`], retained for tests: runs the
 /// whole exploration on the calling thread, invoking `run_case` once per

@@ -18,8 +18,10 @@
 //! the new shrink target (and is now reflected in `current`), `false`
 //! otherwise.
 
-use std::future::Future;
-use std::pin::Pin;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
 
 use super::ShrinkResult;
 use super::search::{FindInteger, SearchStep};
@@ -45,7 +47,7 @@ where
     F: FnMut(&[usize]) -> ShrinkResult<bool>,
 {
     fn accept<'s>(&'s mut self, permutation: &'s [usize]) -> JudgeFuture<'s> {
-        Box::pin(std::future::ready(self(permutation)))
+        Box::pin(core::future::ready(self(permutation)))
     }
 }
 

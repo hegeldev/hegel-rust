@@ -2,6 +2,9 @@
 //! Linux, so no libc thread-local state) plus a direct `getenv` declaration
 //! for environment lookups.
 
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 
 use rustix::fs::{Mode, OFlags};
@@ -168,7 +171,11 @@ pub(super) fn urandom(buf: &mut [u8]) -> Result<(), Error> {
 /// Best-effort single `write` of `bytes` to stderr; failures and short
 /// writes are ignored.
 pub(super) fn stderr_write(bytes: &[u8]) {
-    let _ = rustix::io::write(rustix::stdio::stderr(), bytes);
+    // SAFETY: nothing in libhegel closes fd 2, and a host process that does
+    // so accepts misdirected diagnostics from every library it loaded; this
+    // write is best-effort output on a fd we never retain.
+    let fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(rustix::stdio::raw_stderr()) };
+    let _ = rustix::io::write(fd, bytes);
 }
 
 unsafe extern "C" {
@@ -232,3 +239,65 @@ pub(super) fn park(_word: &AtomicU32, _expected: u32) {
 /// nobody to wake.
 #[cfg(not(target_os = "linux"))]
 pub(super) fn unpark(_word: &AtomicU32) {}
+
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+unsafe extern "C" {
+    fn malloc(size: usize) -> *mut core::ffi::c_void;
+    fn free(ptr: *mut core::ffi::c_void);
+    fn posix_memalign(
+        memptr: *mut *mut core::ffi::c_void,
+        alignment: usize,
+        size: usize,
+    ) -> core::ffi::c_int;
+    fn abort() -> !;
+}
+
+/// The alignment `malloc` guarantees for any allocation at least that large
+/// (`max_align_t`): 16 on 64-bit platforms, 8 on 32-bit ones.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+const MALLOC_ALIGN: usize = if size_of::<usize>() == 8 { 16 } else { 8 };
+
+/// Allocate `layout.size()` bytes at `layout.align()` alignment from the C
+/// heap, via plain `malloc` when its guaranteed alignment suffices and
+/// `posix_memalign` otherwise. Returns null on failure. `layout` must have
+/// non-zero size (the `GlobalAlloc` contract).
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) fn alloc(layout: core::alloc::Layout) -> *mut u8 {
+    if layout.align() <= MALLOC_ALIGN && layout.align() <= layout.size() {
+        // SAFETY: `malloc` has no preconditions.
+        unsafe { malloc(layout.size()).cast() }
+    } else {
+        let mut out: *mut core::ffi::c_void = core::ptr::null_mut();
+        let align = layout.align().max(size_of::<*const core::ffi::c_void>());
+        // SAFETY: `out` is a valid pointer to write the allocation through,
+        // and `align` is a power of two at least `sizeof(void *)` as
+        // `posix_memalign` requires.
+        let rc = unsafe { posix_memalign(&mut out, align, layout.size()) };
+        if rc == 0 {
+            out.cast()
+        } else {
+            core::ptr::null_mut()
+        }
+    }
+}
+
+/// Return an allocation made by [`alloc`] to the C heap. Both `malloc` and
+/// `posix_memalign` results are freed with plain `free`, so the layout is
+/// not needed here (unlike on Windows).
+///
+/// # Safety
+///
+/// `ptr` must have been returned by [`alloc`] and not yet deallocated.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) unsafe fn dealloc(ptr: *mut u8, _layout: core::alloc::Layout) {
+    // SAFETY: both `malloc` and `posix_memalign` results are freed with
+    // `free`, and the caller guarantees `ptr` is such a live result.
+    unsafe { free(ptr.cast()) }
+}
+
+/// Abort the process without unwinding or running any cleanup.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) fn abort_process() -> ! {
+    // SAFETY: `abort` has no preconditions.
+    unsafe { abort() }
+}

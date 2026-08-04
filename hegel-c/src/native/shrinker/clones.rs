@@ -9,7 +9,9 @@
 //! clone node. Clones nested inside the child recurse through the same pass
 //! of the nested shrinker.
 
-use std::sync::Arc;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use crate::native::core::{
     ChoiceData, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Spans, flattened_values_len,

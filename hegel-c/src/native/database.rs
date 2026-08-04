@@ -1,4 +1,8 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceValue, ChoiceValueRef};
@@ -282,7 +286,7 @@ fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> 
     let mut pos = pos + 1;
     macro_rules! native {
         ($t:ty) => {{
-            const N: usize = std::mem::size_of::<$t>();
+            const N: usize = core::mem::size_of::<$t>();
             let raw: [u8; N] = bytes.get(pos..pos + N)?.try_into().ok()?;
             pos += N;
             BigInt::from(<$t>::from_le_bytes(raw))
@@ -400,7 +404,7 @@ fn deserialize_choice_list(
                 pos += 1;
                 let (children, new_pos) = deserialize_choice_list(bytes, pos, depth + 1)?;
                 pos = new_pos;
-                choices.push(ChoiceValue::Clone(std::sync::Arc::new(
+                choices.push(ChoiceValue::Clone(alloc::sync::Arc::new(
                     crate::native::core::CloneRecord::from_values(children),
                 )));
             }

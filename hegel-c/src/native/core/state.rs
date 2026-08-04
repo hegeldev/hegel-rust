@@ -1,7 +1,12 @@
 use crate::native::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::fmt::Debug;
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use rand::{Rng, RngExt};
 
@@ -616,7 +621,7 @@ static GLOBAL_CONSTANTS_STRINGS: Lazy<Vec<Vec<u32>>> = Lazy::new(|| {
 /// identity check, so an address reused after a drop cannot serve a stale
 /// mask — it recomputes and overwrites its slot.
 fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
-    type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
+    type Cache = Mutex<HashMap<usize, (alloc::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
     static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
     let key = Arc::as_ptr(intervals) as usize;
     {
@@ -916,7 +921,7 @@ impl From<Vec<Span>> for Spans {
     }
 }
 
-impl std::ops::Deref for Spans {
+impl core::ops::Deref for Spans {
     type Target = [Span];
     fn deref(&self) -> &[Span] {
         &self.inner
@@ -925,13 +930,13 @@ impl std::ops::Deref for Spans {
 
 impl<'a> IntoIterator for &'a Spans {
     type Item = &'a Span;
-    type IntoIter = std::slice::Iter<'a, Span>;
+    type IntoIter = core::slice::Iter<'a, Span>;
     fn into_iter(self) -> Self::IntoIter {
         self.inner.iter()
     }
 }
 
-impl std::ops::Index<usize> for Spans {
+impl core::ops::Index<usize> for Spans {
     type Output = Span;
     fn index(&self, i: usize) -> &Span {
         &self.inner[i]
@@ -1318,7 +1323,7 @@ impl NativeTestCase {
         if self.family.status().is_none() {
             return;
         }
-        for (idx, handle) in std::mem::take(&mut self.clone_children) {
+        for (idx, handle) in core::mem::take(&mut self.clone_children) {
             let mut child = handle.lock();
             child.freeze();
             child.reassemble();

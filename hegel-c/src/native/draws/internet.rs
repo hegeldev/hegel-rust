@@ -1,4 +1,8 @@
-use std::sync::Arc;
+use alloc::format;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};

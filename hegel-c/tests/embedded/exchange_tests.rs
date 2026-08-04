@@ -1,6 +1,7 @@
 //! Embedded tests for `src/exchange.rs`.
 
 use super::*;
+use alloc::string::ToString;
 
 use crate::backend::TestCaseResult;
 use crate::native::core::NativeTestCase;

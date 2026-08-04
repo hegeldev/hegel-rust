@@ -3,6 +3,9 @@
 
 use crate::native::HashMap;
 use crate::native::bignum::BigInt;
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::exchange::drive_no_yield;
 use crate::native::core::choices::IntegerChoice;

@@ -2,6 +2,8 @@ use super::*;
 use crate::native::core::choices::ChoiceTemplate;
 use crate::native::core::{ChoiceKind, ChoiceValue, Status};
 use crate::native::rng::EngineRng;
+use alloc::format;
+use alloc::string::ToString;
 
 fn machine(num_rules: usize) -> NativeStateMachine {
     let names = (0..num_rules).map(|i| format!("rule_{i}")).collect();

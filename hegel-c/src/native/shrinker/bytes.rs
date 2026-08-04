@@ -1,4 +1,6 @@
 use crate::native::HashMap;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::native::core::{BytesChoice, ChoiceValue};
 

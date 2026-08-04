@@ -1,3 +1,4 @@
+use alloc::string::String;
 /// A violated internal invariant of Hegel itself (a bug in Hegel), carrying
 /// the formatted diagnostic and the source location that raised it.
 ///
@@ -6,6 +7,8 @@
 /// into the draw error channel (`EngineError`), engine-side violations
 /// (shrinker, statistics, data tree) surface as a run-level error
 /// (`RunError`) read back through `hegel_run_result_error`.
+use alloc::string::ToString;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InternalError {
     message: String,
@@ -43,7 +46,7 @@ impl core::error::Error for InternalError {}
 /// control flow rather than a testable condition.
 macro_rules! hegel_internal_error {
     ($($arg:tt)+) => {
-        return Err($crate::control::InternalError::new(::std::format_args!($($arg)+)).into())
+        return Err($crate::control::InternalError::new(::core::format_args!($($arg)+)).into())
     };
 }
 pub(crate) use hegel_internal_error;
@@ -78,7 +81,7 @@ macro_rules! hegel_internal_assert {
         } else {
             $crate::control::hegel_internal_error!(
                 "internal assertion failed: {}",
-                ::std::stringify!($cond)
+                ::core::stringify!($cond)
             );
         }
     };
@@ -98,8 +101,8 @@ macro_rules! hegel_internal_assert_eq {
             (left, right) => $crate::control::hegel_internal_assert!(
                 left == right,
                 "internal assertion failed: {} == {} (left: {:?}, right: {:?})",
-                ::std::stringify!($left),
-                ::std::stringify!($right),
+                ::core::stringify!($left),
+                ::core::stringify!($right),
                 left,
                 right
             ),
@@ -115,8 +118,8 @@ macro_rules! hegel_internal_assert_ne {
             (left, right) => $crate::control::hegel_internal_assert!(
                 left != right,
                 "internal assertion failed: {} != {} (both: {:?})",
-                ::std::stringify!($left),
-                ::std::stringify!($right),
+                ::core::stringify!($left),
+                ::core::stringify!($right),
                 left
             ),
         }
@@ -128,7 +131,7 @@ pub(crate) use hegel_internal_assert_ne;
 /// out unless `debug_assertions` are enabled. For engine hot paths.
 macro_rules! hegel_internal_debug_assert {
     ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
+        if ::core::cfg!(debug_assertions) {
             $crate::control::hegel_internal_assert!($($arg)+);
         }
     };
@@ -138,7 +141,7 @@ pub(crate) use hegel_internal_debug_assert;
 /// [`hegel_internal_assert_eq!`] with `debug_assert!`'s cost model.
 macro_rules! hegel_internal_debug_assert_eq {
     ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
+        if ::core::cfg!(debug_assertions) {
             $crate::control::hegel_internal_assert_eq!($($arg)+);
         }
     };
@@ -148,7 +151,7 @@ pub(crate) use hegel_internal_debug_assert_eq;
 /// [`hegel_internal_assert_ne!`] with `debug_assert!`'s cost model.
 macro_rules! hegel_internal_debug_assert_ne {
     ($($arg:tt)+) => {
-        if ::std::cfg!(debug_assertions) {
+        if ::core::cfg!(debug_assertions) {
             $crate::control::hegel_internal_assert_ne!($($arg)+);
         }
     };

@@ -12,6 +12,11 @@
 //! Source: `resources/cpython/Lib/re/_parser.py`.
 
 use crate::native::HashMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::constants::*;
 use crate::control::{
@@ -145,8 +150,8 @@ pub struct ParseError {
     pub pos: usize,
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} at position {}", self.msg, self.pos)
     }
 }

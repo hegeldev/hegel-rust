@@ -1,6 +1,8 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
+use alloc::string::ToString;
+use alloc::vec;
 use tempfile::TempDir;
 
 fn fresh_db() -> (DirectoryTestCaseDatabase, TempDir) {

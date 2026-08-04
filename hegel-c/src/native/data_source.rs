@@ -1,6 +1,11 @@
 use crate::native::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};

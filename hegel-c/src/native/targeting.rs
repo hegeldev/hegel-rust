@@ -1,6 +1,8 @@
 use crate::backend::RunError;
 use crate::control::hegel_internal_unwrap;
 use crate::native::{HashMap, HashSet};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::native::core::{
     BUFFER_SIZE, ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status,

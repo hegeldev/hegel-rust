@@ -1,4 +1,6 @@
 use super::*;
+use alloc::string::ToString;
+use alloc::vec;
 
 #[test]
 fn build_intervals_default_excludes_surrogates() {

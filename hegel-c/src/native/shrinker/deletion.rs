@@ -1,4 +1,5 @@
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue};
@@ -31,7 +32,7 @@ impl<'a> Shrinker<'a> {
                     let decremented: Option<ChoiceData> = match &prev.data {
                         ChoiceData::Integer(ic, v) if *v != ic.simplest() => ic
                             .value_from_bigint(&(v.clone() - 1))
-                            .map(|nv| ChoiceData::Integer(std::sync::Arc::clone(ic), nv)),
+                            .map(|nv| ChoiceData::Integer(alloc::sync::Arc::clone(ic), nv)),
                         ChoiceData::Boolean(true) => Some(ChoiceData::Boolean(false)),
                         _ => None,
                     };
@@ -155,7 +156,7 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             };
-            let (ic, current_val) = (std::sync::Arc::clone(ic), current_val.clone());
+            let (ic, current_val) = (alloc::sync::Arc::clone(ic), current_val.clone());
             let simplest = ic.simplest();
             if current_val == simplest {
                 i += 1;
@@ -182,7 +183,7 @@ impl<'a> Shrinker<'a> {
             };
             let mut lowered = self.current_nodes.clone();
             lowered[i] = ChoiceNode::new(
-                ChoiceData::Integer(std::sync::Arc::clone(&ic), towards),
+                ChoiceData::Integer(alloc::sync::Arc::clone(&ic), towards),
                 lowered[i].was_forced,
             );
 

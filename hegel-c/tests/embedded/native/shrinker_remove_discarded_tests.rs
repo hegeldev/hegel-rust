@@ -1,6 +1,10 @@
 //! Unit tests for `Shrinker::remove_discarded`.
 
 use crate::native::bignum::BigInt;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 use std::sync::{Arc, Mutex};
 
 use crate::exchange::drive_no_yield;

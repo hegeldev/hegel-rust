@@ -2,6 +2,10 @@
 ///
 /// Health checks detect common issues with test configuration that would
 /// otherwise cause tests to run inefficiently or not at all.
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.
@@ -89,7 +93,7 @@ pub struct Output {
 }
 
 /// A caller-supplied destination for engine output lines.
-type OutputSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+type OutputSink = alloc::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Output {
     /// The default destination: each line is written to stderr.
@@ -100,7 +104,7 @@ impl Output {
     /// Deliver each line to `sink` instead of stderr.
     pub fn callback(sink: impl Fn(&str) + Send + Sync + 'static) -> Self {
         Output {
-            sink: Some(std::sync::Arc::new(sink)),
+            sink: Some(alloc::sync::Arc::new(sink)),
         }
     }
 
@@ -113,8 +117,8 @@ impl Output {
     }
 }
 
-impl std::fmt::Debug for Output {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Output {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.sink {
             Some(_) => f.write_str("Output(callback)"),
             None => f.write_str("Output(stderr)"),

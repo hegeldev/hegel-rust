@@ -234,20 +234,20 @@ impl BinSearchDownBig {
     /// Record the predicate's verdict for the value last returned by
     /// [`Self::probe`].
     pub(super) fn record(&mut self, ok: bool) {
-        self.state = match std::mem::replace(&mut self.state, BinSearchState::Done(BigInt::from(0)))
-        {
-            BinSearchState::CheckLo { lo, .. } if ok => BinSearchState::Done(lo),
-            BinSearchState::CheckLo { lo, hi } => Self::narrow_or_done(lo, hi),
-            BinSearchState::Narrow { lo, hi } => {
-                let mid = &lo + (&hi - &lo) / 2;
-                if ok {
-                    Self::narrow_or_done(lo, mid)
-                } else {
-                    Self::narrow_or_done(mid, hi)
+        self.state =
+            match core::mem::replace(&mut self.state, BinSearchState::Done(BigInt::from(0))) {
+                BinSearchState::CheckLo { lo, .. } if ok => BinSearchState::Done(lo),
+                BinSearchState::CheckLo { lo, hi } => Self::narrow_or_done(lo, hi),
+                BinSearchState::Narrow { lo, hi } => {
+                    let mid = &lo + (&hi - &lo) / 2;
+                    if ok {
+                        Self::narrow_or_done(lo, mid)
+                    } else {
+                        Self::narrow_or_done(mid, hi)
+                    }
                 }
-            }
-            BinSearchState::Done(v) => BinSearchState::Done(v),
-        };
+                BinSearchState::Done(v) => BinSearchState::Done(v),
+            };
     }
 
     fn narrow_or_done(lo: BigInt, hi: BigInt) -> BinSearchState<BigInt> {

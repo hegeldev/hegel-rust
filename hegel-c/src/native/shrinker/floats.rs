@@ -1,4 +1,5 @@
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;

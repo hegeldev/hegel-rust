@@ -18,8 +18,12 @@ pub use scheduling::ShrinkPass;
 use crate::backend::RunError;
 use crate::control::InternalError;
 use crate::native::{HashMap, HashSet};
-use std::future::Future;
-use std::pin::Pin;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
 
 use crate::sys::Instant;
 
@@ -70,7 +74,7 @@ where
     F: FnMut(ShrinkRun<'_>) -> (bool, Vec<ChoiceNode>, Spans),
 {
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
-        Box::pin(std::future::ready(Ok(self(req))))
+        Box::pin(core::future::ready(Ok(self(req))))
     }
 }
 
@@ -420,7 +424,7 @@ impl<'a> Shrinker<'a> {
             && prev
                 .iter()
                 .zip(new.iter())
-                .all(|(a, b)| std::mem::discriminant(&a.data) == std::mem::discriminant(&b.data));
+                .all(|(a, b)| core::mem::discriminant(&a.data) == core::mem::discriminant(&b.data));
         if !shape_preserved {
             changed.clear();
             return;
@@ -517,7 +521,7 @@ impl<'a> Shrinker<'a> {
                 .filter(|(_, calls, shrinks, _)| *calls > 0 && ((*shrinks > 0) == useful))
                 .collect();
             buckets.sort_by_key(|(_, calls, shrinks, deletions)| {
-                (std::cmp::Reverse(*calls), *deletions, *shrinks)
+                (core::cmp::Reverse(*calls), *deletions, *shrinks)
             });
             for (name, calls, shrinks, deletions) in buckets {
                 self.debug_msg(&format!(

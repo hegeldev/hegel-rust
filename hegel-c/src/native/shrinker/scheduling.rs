@@ -10,8 +10,12 @@
 //! finer-grained step is a future refinement; the scheduling skeleton
 //! here stays the same either way.
 
-use std::future::Future;
-use std::pin::Pin;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
 
 use super::{ShrinkResult, Shrinker};
 
@@ -159,7 +163,7 @@ impl<'a> Shrinker<'a> {
                 };
             }
 
-            let mut indexed: Vec<(i32, usize, ShrinkPass<'a>)> = std::mem::take(passes)
+            let mut indexed: Vec<(i32, usize, ShrinkPass<'a>)> = core::mem::take(passes)
                 .into_iter()
                 .enumerate()
                 .map(|(i, pass)| {

@@ -1,4 +1,5 @@
 use super::*;
+use alloc::string::ToString;
 
 const PYTHON_RANGES: &[(u32, &str)] = &include!("unicodedata_python_reference_data.rs");
 

@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::*;

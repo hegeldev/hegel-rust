@@ -3,6 +3,8 @@
 
 use super::shrink_ordering;
 use crate::exchange::drive_no_yield;
+use alloc::vec;
+use alloc::vec::Vec;
 
 #[test]
 fn shrink_ordering_short_circuits_to_full_sort() {

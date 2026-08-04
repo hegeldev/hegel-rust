@@ -7,6 +7,9 @@ use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, Stri
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn bool_node(value: bool) -> ChoiceNode {
     ChoiceNode::boolean(value, false)

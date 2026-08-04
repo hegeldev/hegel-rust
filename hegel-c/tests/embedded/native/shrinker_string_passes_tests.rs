@@ -7,6 +7,9 @@ use crate::native::core::choices::StringChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn string_node_with(min_cp: u32, max_cp: u32, value: Vec<u32>) -> ChoiceNode {
     ChoiceNode::string(

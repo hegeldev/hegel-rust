@@ -5,6 +5,7 @@
 
 use crate::control::hegel_internal_unwrap;
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::core::{ChoiceData, ChoiceValue};
@@ -27,7 +28,7 @@ impl<'a> Shrinker<'a> {
     /// case where decrementing changes the kind at position `j` (e.g. a
     /// `one_of` branch switch).
     pub(super) async fn lower_and_bump(&mut self) -> ShrinkResult<()> {
-        let max_gap = std::cmp::min(self.current_nodes.len(), 4);
+        let max_gap = core::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
             let mut idx = 0;
             while idx < self.current_nodes.len() {

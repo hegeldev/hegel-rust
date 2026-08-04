@@ -20,6 +20,11 @@
 //! and span-mutation passes can drive replays.
 
 use crate::native::HashMap;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use hashbrown::hash_map::Entry;
 
 use rand::RngExt;
@@ -477,7 +482,7 @@ impl<'a> Engine<'a> {
                 for raw in entries {
                     if primary_max
                         .as_ref()
-                        .is_some_and(|m| shortlex(&raw, m) == std::cmp::Ordering::Greater)
+                        .is_some_and(|m| shortlex(&raw, m) == core::cmp::Ordering::Greater)
                     {
                         break;
                     }
@@ -592,7 +597,7 @@ impl<'a> Engine<'a> {
         }
 
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
-            std::mem::take(&mut self.interesting).into_iter().collect();
+            core::mem::take(&mut self.interesting).into_iter().collect();
         origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
         if !settings.report_multiple_failures {
@@ -776,7 +781,7 @@ fn within_invalid_budget(
 
 /// Shortlex ordering over serialized choice sequences: by length first, then
 /// lexicographically. Mirrors Hypothesis's `shortlex` database ordering.
-fn shortlex(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+fn shortlex(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
     a.len().cmp(&b.len()).then_with(|| a.cmp(b))
 }
 
@@ -1219,8 +1224,8 @@ impl<'a> Engine<'a> {
             let (mut start_a, mut end_a) = group[i_a];
             let (mut start_b, mut end_b) = group[i_b];
             if start_a > start_b {
-                std::mem::swap(&mut start_a, &mut start_b);
-                std::mem::swap(&mut end_a, &mut end_b);
+                core::mem::swap(&mut start_a, &mut start_b);
+                core::mem::swap(&mut end_a, &mut end_b);
             }
 
             let attempt: Vec<ChoiceValue> = if start_a <= start_b && end_b <= end_a {

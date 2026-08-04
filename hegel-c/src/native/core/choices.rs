@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::state::{Span, SpanEvent};
 use crate::control::{
@@ -68,7 +71,7 @@ impl IntegerChoice {
         let d_abs = (value - &s).magnitude();
         let one = BigUint::from(1u32);
         let d_minus_one = &d_abs - &one;
-        let mut count = std::cmp::min(&d_minus_one, &above) + std::cmp::min(&d_minus_one, &below);
+        let mut count = core::cmp::min(&d_minus_one, &above) + core::cmp::min(&d_minus_one, &below);
         if *value > s {
             return count + &one;
         }
@@ -89,14 +92,14 @@ impl IntegerChoice {
         if index > &above + &below {
             return None;
         }
-        let two_a = std::cmp::min(&above, &below) << 1usize;
+        let two_a = core::cmp::min(&above, &below) << 1usize;
         let one = BigUint::from(1u32);
         let (d, up) = if index <= two_a {
             let d = (&index + &one) >> 1u32;
             let up = !(&index % &BigUint::from(2u32)).is_zero();
             (d, up)
         } else {
-            let d = &index - std::cmp::min(&above, &below);
+            let d = &index - core::cmp::min(&above, &below);
             (d, above > below)
         };
         let d = BigInt::from(d);
@@ -897,8 +900,8 @@ impl PartialEq for CloneRecord {
 
 impl Eq for CloneRecord {}
 
-impl std::hash::Hash for CloneRecord {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for CloneRecord {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         CloneValues::Record(self).hash(state);
     }
 }
@@ -948,8 +951,8 @@ impl PartialEq for ChoiceValue {
 
 impl Eq for ChoiceValue {}
 
-impl std::hash::Hash for ChoiceValue {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for ChoiceValue {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         ChoiceValueRef::from(self).hash(state);
     }
 }
@@ -1004,9 +1007,9 @@ impl PartialEq<ChoiceValue> for ChoiceValueRef<'_> {
     }
 }
 
-impl std::hash::Hash for ChoiceValueRef<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
+impl core::hash::Hash for ChoiceValueRef<'_> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
         match self {
             ChoiceValueRef::Integer(n) => n.hash(state),
             ChoiceValueRef::Boolean(b) => b.hash(state),
@@ -1068,8 +1071,8 @@ impl<'a> CloneValues<'a> {
 impl PartialEq for CloneValues<'_> {
     fn eq(&self, other: &Self) -> bool {
         let identical = match (self, other) {
-            (CloneValues::Record(a), CloneValues::Record(b)) => std::ptr::eq(*a, *b),
-            (CloneValues::Stream(a), CloneValues::Stream(b)) => std::ptr::eq(*a, *b),
+            (CloneValues::Record(a), CloneValues::Record(b)) => core::ptr::eq(*a, *b),
+            (CloneValues::Stream(a), CloneValues::Stream(b)) => core::ptr::eq(*a, *b),
             _ => false,
         };
         identical
@@ -1081,8 +1084,8 @@ impl PartialEq for CloneValues<'_> {
 
 impl Eq for CloneValues<'_> {}
 
-impl std::hash::Hash for CloneValues<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for CloneValues<'_> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.len().hash(state);
         for v in self.values() {
             v.hash(state);
@@ -1691,21 +1694,21 @@ impl<'a> NodeSortKeyRef<'a> {
 
 impl<'a> PartialEq for NodeSortKeyRef<'a> {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
+        self.cmp(other) == core::cmp::Ordering::Equal
     }
 }
 
 impl<'a> Eq for NodeSortKeyRef<'a> {}
 
 impl<'a> PartialOrd for NodeSortKeyRef<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl<'a> Ord for NodeSortKeyRef<'a> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        use core::cmp::Ordering;
         match (self, other) {
             (NodeSortKeyRef::Scalar(am, an), NodeSortKeyRef::Scalar(bm, bn)) => {
                 (am, an).cmp(&(bm, bn))
@@ -1731,8 +1734,8 @@ impl<'a> Ord for NodeSortKeyRef<'a> {
 
 /// Ordering between two realized clone streams: flattened choice count
 /// first, then child count, then per-child node keys.
-fn realized_streams_cmp(a: &RealizedStream, b: &RealizedStream) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
+fn realized_streams_cmp(a: &RealizedStream, b: &RealizedStream) -> core::cmp::Ordering {
+    use core::cmp::Ordering;
     match a.flat_len().cmp(&b.flat_len()) {
         Ordering::Equal => {}
         ord => return ord,
@@ -1745,14 +1748,14 @@ fn realized_streams_cmp(a: &RealizedStream, b: &RealizedStream) -> std::cmp::Ord
 }
 
 /// Per-node key comparison of two equal-length node slices.
-fn elementwise_nodes_cmp(a: &[ChoiceNode], b: &[ChoiceNode]) -> std::cmp::Ordering {
+fn elementwise_nodes_cmp(a: &[ChoiceNode], b: &[ChoiceNode]) -> core::cmp::Ordering {
     for (na, nb) in a.iter().zip(b.iter()) {
         match na.sort_key_ref().cmp(&nb.sort_key_ref()) {
-            std::cmp::Ordering::Equal => continue,
+            core::cmp::Ordering::Equal => continue,
             ord => return ord,
         }
     }
-    std::cmp::Ordering::Equal
+    core::cmp::Ordering::Equal
 }
 
 impl ChoiceNode {
@@ -1792,21 +1795,21 @@ pub struct NodesSortKey<'a>(pub &'a [ChoiceNode]);
 
 impl<'a> PartialEq for NodesSortKey<'a> {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
+        self.cmp(other) == core::cmp::Ordering::Equal
     }
 }
 
 impl<'a> Eq for NodesSortKey<'a> {}
 
 impl<'a> PartialOrd for NodesSortKey<'a> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl<'a> Ord for NodesSortKey<'a> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        use core::cmp::Ordering;
         match flattened_len(self.0).cmp(&flattened_len(other.0)) {
             Ordering::Equal => {}
             ord => return ord,
@@ -1878,8 +1881,8 @@ impl From<InternalError> for EngineError {
     }
 }
 
-impl std::fmt::Display for EngineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for EngineError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             EngineError::Overrun => write!(f, "choice buffer exhausted (Overrun)"),
             EngineError::InvalidTestCase => write!(f, "engine rejected test case (Invalid)"),

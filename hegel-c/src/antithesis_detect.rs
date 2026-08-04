@@ -1,4 +1,5 @@
 use crate::backend::RunError;
+use alloc::format;
 
 pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
     #[cfg(not(windows))]

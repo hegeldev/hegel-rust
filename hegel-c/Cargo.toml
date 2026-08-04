@@ -29,7 +29,7 @@ libm = { version = "0.2", default-features = false }
 once_cell = { version = "1.21", default-features = false, features = ["alloc"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["fs", "time", "rand", "stdio", "process", "thread"] }
+rustix = { version = "1.1", default-features = false, features = ["alloc", "fs", "time", "rand", "stdio", "process", "thread"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -40,11 +40,25 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Environment",
     "Win32_System_IO",
+    "Win32_System_Memory",
     "Win32_System_Performance",
     "Win32_System_Threading",
 ] }
 
 [features]
+default = ["std"]
+# Link the Rust standard library into the built artifacts. The crate's own
+# code is `#![no_std]` either way; this feature only makes std provide the
+# global allocator, panic handling, and unwinding support that a final
+# artifact (cdylib/staticlib) needs. Disable it together with enabling
+# `runtime` to build a libhegel with no std runtime state at all.
+std = []
+# Provide the crate's own `#[global_allocator]` (the platform allocator) and
+# `#[panic_handler]` (write the message to stderr, then abort) so the cdylib
+# links without std. Only takes effect when `std` is disabled: builds that
+# link std must use std's lang items, and defining a second set would fail
+# to link. Build with `-C panic=abort` — without std there is no unwinder.
+runtime = []
 # Internal: exposes engine internals via `__bench` for hegeltest's benches/.
 # Not part of the public C API; depend on at your peril.
 __bench = []

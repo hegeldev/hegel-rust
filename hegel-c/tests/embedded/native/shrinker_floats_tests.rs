@@ -4,6 +4,8 @@ use crate::native::bignum::BigInt;
 use crate::native::core::Spans;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::shrinker::Shrinker;
+use alloc::boxed::Box;
+use alloc::vec;
 
 fn float_node(value: f64, min: f64, max: f64) -> ChoiceNode {
     ChoiceNode::float(
