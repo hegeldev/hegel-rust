@@ -256,10 +256,6 @@ static INTERESTING_INTEGERS: &[i128] = &[
     i64::MIN as i128,
 ];
 
-/// Sorted, deduped union of [`INTERESTING_INTEGERS`] and
-/// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
-/// the in-range boundary candidates via two `partition_point` calls instead
-/// of an O(n²) per-call dedup loop.
 /// [`INTERESTING_INTEGERS`] sorted and deduped, so the curated tier can find
 /// its in-range slice with `partition_point`.
 static SORTED_INTERESTING: Lazy<Vec<i128>> = Lazy::new(|| {
@@ -269,6 +265,10 @@ static SORTED_INTERESTING: Lazy<Vec<i128>> = Lazy::new(|| {
     v
 });
 
+/// Sorted, deduped union of [`INTERESTING_INTEGERS`] and
+/// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`narrow_nasty_sample`] to find
+/// the in-range boundary candidates via two `partition_point` calls instead
+/// of an O(n²) per-call dedup loop.
 static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut all: Vec<i128> = INTERESTING_INTEGERS
         .iter()
@@ -304,7 +304,8 @@ fn sample_gamma(shape: f64, rng: &mut EngineRng) -> Result<f64, InternalError> {
     let c = 1.0 / libm::sqrt(9.0 * d);
     loop {
         let x = standard_normal(rng);
-        let v = libm::pow(1.0 + c * x, 3.0);
+        let t = 1.0 + c * x;
+        let v = t * t * t;
         if v <= 0.0 {
             continue;
         }
@@ -399,13 +400,18 @@ impl GenerationParameters {
 impl Default for GenerationParameters {
     /// A fixed fallback used only when no test-case parameters have been drawn
     /// (a replay-only test case never samples, so it never consults these). The
-    /// values are the approximate mean of [`Self::draw`], so any accidental use
-    /// still produces a reasonable distribution rather than a degenerate one.
+    /// values are the mean of [`Self::draw`] — each category's Dirichlet
+    /// concentration over their total — so any accidental use still produces a
+    /// reasonable distribution rather than a degenerate one.
     fn default() -> Self {
+        let total = DIRICHLET_ALPHA_ENDPOINT
+            + DIRICHLET_ALPHA_INTERESTING
+            + DIRICHLET_ALPHA_DIFFUSE
+            + DIRICHLET_ALPHA_MIDDLE;
         GenerationParameters {
-            endpoint_probability: 0.02,
-            interesting_probability: 0.12,
-            diffuse_probability: 0.03,
+            endpoint_probability: DIRICHLET_ALPHA_ENDPOINT / total,
+            interesting_probability: DIRICHLET_ALPHA_INTERESTING / total,
+            diffuse_probability: DIRICHLET_ALPHA_DIFFUSE / total,
         }
     }
 }
