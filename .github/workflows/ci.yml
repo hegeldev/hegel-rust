@@ -184,6 +184,33 @@ jobs:
       - name: Run C bindings under panic=abort
         run: just c-test-abort
 
+  test-c-runtime:
+    # Builds libhegel as a self-contained no-std cdylib (--features runtime),
+    # verifies via `nm -D` that it references no thread-local-storage
+    # machinery (__cxa_thread_atexit_impl / __tls_get_addr /
+    # pthread_key_create — the registrations that make dlclose unsafe), and
+    # runs the smoke tests, including the dlopen/dlclose replay test,
+    # against that build.
+    name: test-c-runtime
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal -c clippy && rustup default stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: just
+
+      - name: Run no-std runtime C bindings recipe
+        run: just c-test-runtime
+
   docs:
     name: docs
     runs-on: ubuntu-latest
@@ -373,7 +400,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, test-c-bindings, compile-examples, docs, coverage, nix, miri]
+    needs: [lint, test, test-all-features, test-minimal-versions, test-c-bindings, test-c-runtime, compile-examples, docs, coverage, nix, miri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
