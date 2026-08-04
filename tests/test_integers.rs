@@ -607,8 +607,8 @@ mod nocover_boundary_exploration {
 /// off-by-one / overflow / sign bugs hard to find.
 ///
 /// The rates here are *marginal* over test cases: because each case draws its
-/// own swarm `curated_probability` (most cases low, a boundary-heavy minority
-/// high), boundary values are clustered in the heavy cases rather than spread
+/// own swarm category weights (most cases middle-dominated, a boundary-heavy
+/// minority not), boundary values are clustered in the heavy cases rather than spread
 /// evenly, so the aggregate per-draw rate is lower than the in-a-heavy-case
 /// rate. The `x + y` overflow check exercises what that clustering buys: a bug
 /// needing *two* extreme operands at once, which a fixed per-draw probability
@@ -673,7 +673,7 @@ mod special_value_distribution {
     }
 
     // `x` and `y` are drawn in the same test case, so they share that case's
-    // swarm `curated_probability`. In a boundary-heavy case both are pulled
+    // swarm category weights. In a boundary-heavy case both are pulled
     // toward the endpoints together, so `x + y` overflows far more often than
     // the ~p² a fixed per-draw boundary probability `p` would yield — this is
     // the interaction swarm testing exists to reach.
