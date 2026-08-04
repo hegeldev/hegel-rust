@@ -50,6 +50,13 @@ fn new_disables_database_in_ci() {
 }
 
 #[test]
+fn nondeterministic_defaults_off_and_is_settable() {
+    let settings = Settings::new();
+    assert!(!settings.nondeterministic);
+    assert!(settings.nondeterministic(true).nondeterministic);
+}
+
+#[test]
 fn output_debug_names_the_destination() {
     assert_eq!(format!("{:?}", Output::stderr()), "Output(stderr)");
     assert_eq!(

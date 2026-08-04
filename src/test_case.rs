@@ -104,6 +104,11 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
+    /// Whether the run was declared nondeterministic
+    /// ([`Settings::nondeterministic`](crate::Settings::nondeterministic)).
+    /// Read by `stateful::run_concurrent` to reject use inside a run that
+    /// hasn't declared it.
+    nondeterministic: bool,
     /// Draw-name bookkeeping shared between every clone of a `TestCase`,
     /// behind a blocking, non-reentrant mutex. The backend handle is no longer
     /// shared here — each `TestCase` instance owns its own libhegel handle (so
@@ -298,6 +303,7 @@ pub(crate) fn emit_verbose_line(msg: &str) {
 /// from a different thread than the one that started it) never see the
 /// starting thread's thread-local override, so resolving lazily at emit
 /// time would send their output to the wrong place.
+#[derive(Clone)]
 pub(crate) struct RunOutput {
     sink: Option<OutputSink>,
 }
@@ -350,17 +356,29 @@ impl TestCase {
         handle: Arc<CTestCase>,
         emit: bool,
         mode: Mode,
+        nondeterministic: bool,
         sink: Option<OutputSink>,
     ) -> Self {
-        let on_draw: OutputSink = match sink {
-            Some(sink) if emit => sink,
-            _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
-            _ => Arc::new(|_| {}),
+        let on_draw: OutputSink = if emit {
+            let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
+            // Captured once per test case and shared by every worker's
+            // clone, so worker-line offsets are comparable across workers.
+            let case_start = std::time::Instant::now();
+            Arc::new(move |msg| match crate::stateful::current_worker_index() {
+                Some(worker) => {
+                    let ms = case_start.elapsed().as_secs_f64() * 1000.0;
+                    raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
+                }
+                None => raw(msg),
+            })
+        } else {
+            Arc::new(|_| {})
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
                 emit,
+                nondeterministic,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
                     named_draw_repeatable: HashMap::new(),
@@ -378,6 +396,12 @@ impl TestCase {
 
     pub(crate) fn mode(&self) -> Mode {
         self.global.mode
+    }
+
+    /// Whether the run was declared nondeterministic
+    /// ([`Settings::nondeterministic`](crate::Settings::nondeterministic)).
+    pub(crate) fn nondeterministic(&self) -> bool {
+        self.global.nondeterministic
     }
 
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.
@@ -789,7 +813,6 @@ impl TestCase {
     }
 
     /// Draw a float according to the full libhegel spec.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,

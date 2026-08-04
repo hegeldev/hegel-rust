@@ -125,20 +125,46 @@ pub trait DataSource: Send + Sync {
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
 
-    /// Register a state machine with the given rule and invariant names for
-    /// engine-owned (swarm) rule selection. Returns an opaque state-machine
-    /// id. Errors with `InvalidArgument` if `rule_names` is empty.
+    /// Register a state machine for engine-owned (swarm) rule selection:
+    /// rules (each assigned to a concurrency group via `rule_groups`,
+    /// parallel to `rule_names`), invariants, and concurrency bounds.
+    /// Groups are identified by arbitrary `i64` ids: the machine has one
+    /// group per distinct value of `rule_groups`. Draws the machine's
+    /// concurrency level in
+    /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
+    /// (concurrency bugs need concurrency); `min == max` fixes the level
+    /// without consuming entropy. Returns the opaque state-machine id and
+    /// the drawn level. Errors with `InvalidArgument` if `rule_names` is
+    /// empty, `rule_groups` is not parallel to `rule_names`,
+    /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
+        rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
-    ) -> Result<i64, DataSourceError>;
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), DataSourceError>;
 
-    /// Draw the index of the next rule to run, in `[0, num_rules)`, or
-    /// `None` once the test case has run enough steps.
+    /// Start the machine's next round, drawing which concurrency group is
+    /// current for it. Returns that group's id (a value of `rule_groups`),
+    /// or `None` once the test case has run enough rounds. Must be called
+    /// (from the root stream) at every join point, including before the
+    /// first `state_machine_next_rule` call.
+    fn state_machine_next_group(
+        &self,
+        state_machine_id: i64,
+    ) -> Result<Option<i64>, DataSourceError>;
+
+    /// Draw the index of the next rule for `worker_index` to run — always a
+    /// rule belonging to the current group, in `[0, num_rules)` — or `None`
+    /// once the worker's round budget is exhausted and it should wait for
+    /// the next join point. Consults only per-worker and per-stream state,
+    /// so draws on one worker never affect draws on another.
     fn state_machine_next_rule(
         &self,
         state_machine_id: i64,
+        worker_index: i64,
     ) -> Result<Option<i64>, DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.

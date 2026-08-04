@@ -15,6 +15,9 @@ readme = "README.md"
 # crates sharing a lib name cannot. This only changes the build-output stem
 # (`libhegel_c.{so,a}`); the C header (`hegel.h`), the exported `hegel_*`
 # symbols, and the released `libhegel-<os>-<arch>` assets are unaffected.
+[lints]
+workspace = true
+
 [lib]
 name = "hegel_c"
 crate-type = ["cdylib", "staticlib", "rlib"]

@@ -303,28 +303,50 @@ impl DataSource for NativeDataSource {
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
-        invariant_names: Vec<String>,
-    ) -> Result<i64, DataSourceError> {
+        rule_groups: Vec<i64>,
+        _invariant_names: Vec<String>,
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(i64, i64), DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
             ));
         }
+        if rule_groups.len() != rule_names.len() {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "rule_groups must be parallel to rule_names: got {} group assignments \
+                 for {} rules",
+                rule_groups.len(),
+                rule_names.len()
+            )));
+        }
+        if min_concurrency < 1 || max_concurrency < min_concurrency {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "state machine concurrency bounds must satisfy 1 <= min <= max, \
+                 got [{min_concurrency}, {max_concurrency}]"
+            )));
+        }
         self.with_ntc(|ntc| {
+            let machine = crate::native::core::NativeStateMachine::new(
+                ntc,
+                rule_groups,
+                min_concurrency,
+                max_concurrency,
+            )?;
+            let concurrency = machine.concurrency();
             let mut machines = ntc
                 .family()
                 .state_machines
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let id = machines.len() as i64;
-            machines.push(Arc::new(std::sync::Mutex::new(
-                crate::native::core::NativeStateMachine::new(rule_names, invariant_names),
-            )));
-            Ok(id)
+            machines.push(Arc::new(std::sync::Mutex::new(machine)));
+            Ok((id, concurrency))
         })
     }
 
-    fn state_machine_next_rule(
+    fn state_machine_next_group(
         &self,
         state_machine_id: i64,
     ) -> Result<Option<i64>, DataSourceError> {
@@ -339,7 +361,27 @@ impl DataSource for NativeDataSource {
                 Arc::clone(&machines[idx])
             };
             let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
-            machine.next_rule(ntc)
+            machine.next_group(ntc)
+        })
+    }
+
+    fn state_machine_next_rule(
+        &self,
+        state_machine_id: i64,
+        worker_index: i64,
+    ) -> Result<Option<i64>, DataSourceError> {
+        self.with_ntc(|ntc| {
+            let machine = {
+                let machines = ntc
+                    .family()
+                    .state_machines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let idx = checked_id("state machine", state_machine_id, machines.len())?;
+                Arc::clone(&machines[idx])
+            };
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            machine.next_rule(ntc, worker_index)
         })
     }
 

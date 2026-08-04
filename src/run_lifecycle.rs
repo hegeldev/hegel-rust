@@ -46,8 +46,36 @@ thread_local! {
     static CAPTURE_BACKTRACE: Cell<bool> = const { Cell::new(false) };
 }
 
-fn take_panic_info() -> Option<(String, String, String, Backtrace)> {
+/// The `(thread_name, thread_id, location, backtrace)` tuple the panic hook
+/// captures.
+pub(crate) type PanicInfo = (String, String, String, Backtrace);
+
+pub(crate) fn take_panic_info() -> Option<PanicInfo> {
     LAST_PANIC_INFO.with(|info| info.borrow_mut().take())
+}
+
+/// Install `info` into this thread's panic-info slot, as if the panic hook
+/// had captured it here. Used by `stateful::run_concurrent` to re-install a
+/// worker thread's capture on the main thread before `resume_unwind`ing the
+/// ferried payload — the re-raise skips the panic hook, so without this the
+/// lifecycle would fall back to [`unknown_panic_info`] and every concurrent
+/// failure would share the origin `"Panic at <unknown>"`.
+pub(crate) fn install_panic_info(info: PanicInfo) {
+    LAST_PANIC_INFO.with(|slot| *slot.borrow_mut() = Some(info));
+}
+
+/// Whether the panic hook captures backtraces on this thread right now.
+/// `run_test_case` decides this per case; `stateful::run_concurrent` reads
+/// it on the main thread to mirror the setting onto its worker threads.
+pub(crate) fn backtrace_capture_enabled() -> bool {
+    CAPTURE_BACKTRACE.get()
+}
+
+/// Set whether the panic hook captures backtraces on this thread. Called by
+/// `stateful::run_concurrent` on each worker thread (see
+/// [`backtrace_capture_enabled`]).
+pub(crate) fn set_backtrace_capture(enabled: bool) {
+    CAPTURE_BACKTRACE.set(enabled);
 }
 
 /// Install the cross-backend panic hook on first call.
@@ -224,8 +252,11 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// location, message, backtrace) is printed here, at the moment the panic
 /// is caught — on a non-quiet final replay it is returned to the caller to
 /// print (right after the live draw/note lines, which is what keeps each
-/// failure one block), and for a non-final case in verbose mode it goes to
-/// `output`, the run's resolved destination.
+/// failure one block), for a non-final case in verbose mode it goes to
+/// `output`, the run's resolved destination, and at a nondeterministic
+/// run's discovery it is returned to the caller for the deferred failure
+/// report (and, in verbose mode, printed to `output` as well, like any
+/// other non-final case's).
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -237,6 +268,8 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
+    nondeterministic: bool,
+    case_sink: Option<crate::test_case::OutputSink>,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -244,7 +277,8 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    let should_emit = (is_final && !quiet) || verbose;
+    let capture_at_discovery = nondeterministic && !is_final;
+    let should_emit = ((is_final || capture_at_discovery) && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
     // Drop any capture left over from a previous test case on this thread
     // (e.g. a body that caught its own panic and then passed): a later panic
@@ -252,7 +286,13 @@ pub(crate) fn run_test_case(
     take_panic_info();
 
     let c_tc = Arc::new(c_tc);
-    let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
+    let tc = TestCase::new(
+        Arc::clone(&c_tc),
+        should_emit,
+        mode,
+        nondeterministic,
+        case_sink.or_else(|| output.sink().cloned()),
+    );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
     let (tc_result, payload, diagnostic) = match result {
@@ -274,15 +314,14 @@ pub(crate) fn run_test_case(
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
-            let captured = if is_final && !quiet {
+            let captured = if (is_final || capture_at_discovery) && !quiet {
                 let msg = panic_message(&e);
-                Some(render_diagnostic(
-                    &thread_name,
-                    &thread_id,
-                    &location,
-                    &msg,
-                    &backtrace,
-                ))
+                let diagnostic =
+                    render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
+                if verbose && capture_at_discovery {
+                    output.block(&diagnostic);
+                }
+                Some(diagnostic)
             } else {
                 if verbose {
                     let msg = panic_message(&e);
@@ -400,6 +439,66 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
     ))
 }
 
+/// The run's failure candidate retained by a declared-nondeterministic run:
+/// everything captured at discovery time from the last test case that
+/// classified interesting frontend-side. There is no replay for such a run,
+/// so discovery is the only chance to capture — but printing it *as the
+/// failure report* is deferred to the run verdict (verbose runs stream the
+/// lines live at discovery too, like any other case's), because a
+/// frontend-interesting report can lose silently to an engine-side family
+/// conclusion (an overrunning or invalidating draw concluded the family
+/// first, and `mark_complete` after a conclusion is a no-op). If the run
+/// comes back failed the stash is the accepted bug and the report is
+/// printed then; if the run passes the stash lost, and is discarded — a
+/// genuine racy bug resurfaces in a later case.
+struct NondetStash {
+    /// The buffered draw/note lines of the case (empty under
+    /// [`Verbosity::Quiet`], where nothing would be printed), regrouped by
+    /// [`group_concurrent_output`] so each round reads worker by worker.
+    lines: Vec<String>,
+    /// The rendered panic diagnostic (thread, location, message, backtrace);
+    /// `None` under quiet.
+    diagnostic: Option<String>,
+    /// The caught panic payload, re-raised as the run's closing unwind.
+    payload: Box<dyn std::any::Any + Send>,
+}
+
+/// One buffered output line of a nondeterministic case, tagged with the
+/// emitting worker's index — `None` for main-thread lines (round markers,
+/// invariant notes).
+type WorkerLine = (Option<usize>, String);
+
+/// Regroup a nondeterministic case's buffered output so each round reads
+/// worker by worker.
+///
+/// Worker lines land in the buffer in wall-clock arrival order,
+/// interleaved across workers. Workers only emit between a round's marker
+/// note and its join point, and the main thread only emits outside rounds,
+/// so every maximal run of worker-tagged records is exactly one round's
+/// output. A stable sort by worker index groups each such run per worker
+/// while preserving each worker's own program order; main-thread lines
+/// stay where they are. The `[worker N +X.XXXms]` offsets carried in the
+/// line text are what remains of the arrival order.
+fn group_concurrent_output(records: Vec<WorkerLine>) -> Vec<String> {
+    fn flush(round: &mut Vec<(usize, String)>, lines: &mut Vec<String>) {
+        round.sort_by_key(|(worker, _)| *worker);
+        lines.extend(round.drain(..).map(|(_, line)| line));
+    }
+    let mut lines = Vec::with_capacity(records.len());
+    let mut round: Vec<(usize, String)> = Vec::new();
+    for (worker, line) in records {
+        match worker {
+            Some(worker) => round.push((worker, line)),
+            None => {
+                flush(&mut round, &mut lines);
+                lines.push(line);
+            }
+        }
+    }
+    flush(&mut round, &mut lines);
+    lines
+}
+
 /// Message for a flaky test — one whose outcome changed when re-run with the
 /// same generated data. After the engine shrinks and verifies a counterexample,
 /// the client replays its blob one final time; if that replay does not fail,
@@ -455,12 +554,69 @@ pub(crate) fn drive<F>(
     };
 
     if mode == Mode::SingleTestCase {
-        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
+        drive_single_case(
+            &run,
+            &mut test_fn,
+            verbosity,
+            settings.nondeterministic,
+            test_location,
+            &output,
+        );
         return;
     }
 
+    let nondeterministic = settings.nondeterministic;
+    let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
+    let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
-        run_test_case(c_tc, &mut test_fn, false, mode, verbosity, &output);
+        if nondeterministic {
+            let buffer: Arc<std::sync::Mutex<Vec<WorkerLine>>> = Arc::default();
+            let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
+            let case_sink: Option<crate::test_case::OutputSink> = if quiet {
+                None
+            } else {
+                let buffer = Arc::clone(&buffer);
+                Some(Arc::new(move |line: &str| {
+                    if let Some(live) = &live {
+                        live.line(line);
+                    }
+                    buffer
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push((crate::stateful::current_worker_index(), line.to_string()));
+                }))
+            };
+            let (tc_result, payload, diagnostic) = run_test_case(
+                c_tc,
+                &mut test_fn,
+                false,
+                mode,
+                verbosity,
+                &output,
+                true,
+                case_sink,
+            );
+            if matches!(tc_result, TestCaseResult::Interesting(_)) {
+                let records =
+                    std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
+                stash = Some(NondetStash {
+                    lines: group_concurrent_output(records),
+                    diagnostic,
+                    payload: payload.expect("an interesting case carries the caught panic payload"),
+                });
+            }
+        } else {
+            run_test_case(
+                c_tc,
+                &mut test_fn,
+                false,
+                mode,
+                verbosity,
+                &output,
+                false,
+                None,
+            );
+        }
     }
 
     let result = run.result();
@@ -475,6 +631,16 @@ pub(crate) fn drive<F>(
                 .error()
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
+        }
+        RunStatus::HEGEL_RUN_STATUS_FAILED if nondeterministic => {
+            let stash = stash.expect("a failed nondeterministic run has a stashed failure");
+            for line in &stash.lines {
+                output.line(line);
+            }
+            if let Some(diagnostic) = stash.diagnostic {
+                output.block(&diagnostic);
+            }
+            std::panic::resume_unwind(stash.payload);
         }
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
@@ -497,8 +663,16 @@ pub(crate) fn drive<F>(
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
-                let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output);
+                let (tc_result, payload, diagnostic) = run_test_case(
+                    c_tc,
+                    &mut test_fn,
+                    true,
+                    mode,
+                    verbosity,
+                    &output,
+                    false,
+                    None,
+                );
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -534,14 +708,23 @@ fn drive_single_case(
     run: &RunHandle,
     test_fn: &mut dyn FnMut(TestCase),
     verbosity: Verbosity,
+    nondeterministic: bool,
     test_location: Option<&TestLocation>,
     output: &RunOutput,
 ) {
     let c_tc = run
         .next_test_case()
         .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) =
-        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity, output);
+    let (result, payload, diagnostic) = run_test_case(
+        c_tc,
+        test_fn,
+        true,
+        Mode::SingleTestCase,
+        verbosity,
+        output,
+        nondeterministic,
+        None,
+    );
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
         if let Some(diagnostic) = diagnostic {
@@ -586,6 +769,8 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
+        settings.nondeterministic,
+        None,
     );
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);
