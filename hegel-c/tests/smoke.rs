@@ -16,6 +16,8 @@ const HEGEL_E_INVALID_HANDLE: c_int = -4;
 const HEGEL_E_INVALID_ARG: c_int = -5;
 /// HEGEL_E_NOT_COMPLETE from hegel.h.
 const HEGEL_E_NOT_COMPLETE: c_int = -7;
+/// HEGEL_STATE_MACHINE_DONE from hegel.h.
+const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
 
 fn lib_path() -> PathBuf {
     let filename = if cfg!(target_os = "macos") {
@@ -1075,7 +1077,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                     break;
                 }
                 assert_eq!(rc, HEGEL_OK, "state_machine_next_group failed: rc={}", rc);
-                if group == -1 {
+                if group == HEGEL_STATE_MACHINE_DONE {
                     break;
                 }
                 assert_eq!(group, 0, "a single-group machine is always in group 0");
@@ -1087,7 +1089,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                         break 'case;
                     }
                     assert_eq!(rc, HEGEL_OK, "state_machine_next_rule failed: rc={}", rc);
-                    if index == -1 {
+                    if index == HEGEL_STATE_MACHINE_DONE {
                         break;
                     }
                     assert!((0..3).contains(&index), "rule index {} out of range", index);
