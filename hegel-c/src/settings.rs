@@ -163,7 +163,10 @@ pub struct Settings {
 impl Settings {
     /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        let in_ci = is_in_ci();
+        Self::for_ci(is_in_ci())
+    }
+
+    fn for_ci(in_ci: bool) -> Self {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
@@ -174,7 +177,7 @@ impl Settings {
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
             phases: vec![
@@ -329,6 +332,10 @@ pub(crate) enum Database {
 }
 
 fn is_in_ci() -> bool {
+    is_in_ci_from(crate::sys::env_var)
+}
+
+fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
@@ -344,8 +351,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => crate::sys::env_var(key).is_some(),
-        Some(expected) => crate::sys::env_var(key).as_deref() == Some(expected),
+        None => env(key).is_some(),
+        Some(expected) => env(key).as_deref() == Some(expected),
     })
 }
 

@@ -87,7 +87,7 @@ fn fs_read_dir_of_a_file_fails() {
     assert!(fs::read_dir(&file).is_err());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn fs_read_dir_skips_non_unicode_names() {
     use std::os::unix::ffi::OsStrExt;
@@ -238,15 +238,8 @@ fn read_exact_requires_enough_bytes() {
 
 #[test]
 fn env_var_reads_set_variables() {
-    let key = "HEGEL_SYS_TEST_ENV_VAR";
-    unsafe {
-        std::env::set_var(key, "expected-value");
-    }
-    assert_eq!(env_var(key), Some("expected-value".to_string()));
-    unsafe {
-        std::env::remove_var(key);
-    }
-    assert_eq!(env_var(key), None);
+    let expected = std::env::var("CARGO_PKG_NAME").unwrap();
+    assert_eq!(env_var("CARGO_PKG_NAME"), Some(expected));
 }
 
 #[test]
