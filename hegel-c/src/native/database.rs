@@ -76,16 +76,23 @@ impl DirectoryTestCaseDatabase {
 /// across processes).
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Write `value` to `path` atomically: write it to a uniquely named
-/// sibling `<path>.tmp.<pid>.<counter>` file, then rename over `path`
-/// (same-directory renames are atomic). Failures leave no partial file
-/// behind — the temporary is removed and `path` is untouched.
-fn atomic_write(path: &str, value: &[u8]) {
-    let tmp = format!(
+/// A `<path>.tmp.<pid>.<counter>` sibling name for [`atomic_write`]'s
+/// temporary file: the counter keeps concurrent saves in one process
+/// distinct, the process id keeps processes sharing a database distinct.
+fn temp_path(path: &str) -> String {
+    format!(
         "{path}.tmp.{}.{}",
         sys::pid(),
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
+    )
+}
+
+/// Write `value` to `path` atomically: write it to a uniquely named
+/// sibling [`temp_path`] file, then rename over `path` (same-directory
+/// renames are atomic). Failures leave no partial file behind — the
+/// temporary is removed and `path` is untouched.
+fn atomic_write(path: &str, value: &[u8]) {
+    let tmp = temp_path(path);
     if sys::fs::write(&tmp, value).is_ok() && sys::fs::rename(&tmp, path).is_ok() {
         return;
     }

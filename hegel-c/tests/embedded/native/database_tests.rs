@@ -391,12 +391,27 @@ fn save_leaves_no_temporary_files_behind() {
 }
 
 #[test]
-fn concurrent_saves_use_distinct_temporary_names() {
+fn temp_paths_are_distinct_and_pid_tagged() {
+    let a = temp_path("dir/value");
+    let b = temp_path("dir/value");
+    assert_ne!(a, b);
+    let prefix = format!("dir/value.tmp.{}.", crate::sys::pid());
+    assert!(a.starts_with(&prefix));
+    assert!(b.starts_with(&prefix));
+}
+
+#[test]
+fn parallel_saves_store_all_values_and_leave_no_temporaries() {
     let (db, _dir) = fresh_db();
-    for i in 0..4u8 {
-        db.save(b"key", &[i]);
-    }
+    std::thread::scope(|scope| {
+        for i in 0..4u8 {
+            let db = &db;
+            scope.spawn(move || db.save(b"key", &[i]));
+        }
+    });
     assert_eq!(db.fetch(b"key").len(), 4);
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert!(names.iter().all(|name| !name.contains(".tmp.")));
 }
 
 #[test]
