@@ -185,12 +185,13 @@ jobs:
         run: just c-test-abort
 
   test-c-runtime:
-    # Builds libhegel as a self-contained no-std cdylib (--features runtime),
-    # verifies via `nm -D` that it references no thread-local-storage
-    # machinery (__cxa_thread_atexit_impl / __tls_get_addr /
-    # pthread_key_create — the registrations that make dlclose unsafe), and
-    # runs the smoke tests, including the dlopen/dlclose replay test,
-    # against that build.
+    # Builds libhegel as a self-contained no-std release cdylib
+    # (--features runtime), verifies via `nm -D`/`readelf` that it
+    # references no thread-local-storage machinery
+    # (__cxa_thread_atexit_impl / __tls_get_addr / pthread_key_create — the
+    # registrations that make dlclose unsafe), carries no PT_TLS segment,
+    # and exports only hegel_* symbols, and runs the smoke tests, including
+    # the dlopen/dlclose replay test, against that build.
     name: test-c-runtime
     runs-on: ubuntu-latest
     permissions:
