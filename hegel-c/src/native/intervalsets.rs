@@ -3,10 +3,10 @@
 //! indexing and set-algebra operations.
 
 use crate::control::{InternalError, hegel_internal_assert};
-/// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
-/// both endpoints. Acts like a sorted sequence of the covered integers.
 use alloc::vec::Vec;
 
+/// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
+/// both endpoints. Acts like a sorted sequence of the covered integers.
 #[derive(Debug, Clone)]
 pub struct IntervalSet {
     pub intervals: Vec<(u32, u32)>,

@@ -1,11 +1,11 @@
-/// Health checks that can be suppressed during test execution.
-///
-/// Health checks detect common issues with test configuration that would
-/// otherwise cause tests to run inefficiently or not at all.
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// Health checks that can be suppressed during test execution.
+///
+/// Health checks detect common issues with test configuration that would
+/// otherwise cause tests to run inefficiently or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.

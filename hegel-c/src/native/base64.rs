@@ -1,7 +1,7 @@
-/// Standard base64 alphabet (RFC 4648).
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// Standard base64 alphabet (RFC 4648).
 const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Encode bytes as a padded standard-alphabet base64 string.

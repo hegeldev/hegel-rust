@@ -1,4 +1,6 @@
 use alloc::string::String;
+use alloc::string::ToString;
+
 /// A violated internal invariant of Hegel itself (a bug in Hegel), carrying
 /// the formatted diagnostic and the source location that raised it.
 ///
@@ -7,8 +9,6 @@ use alloc::string::String;
 /// into the draw error channel (`EngineError`), engine-side violations
 /// (shrinker, statistics, data tree) surface as a run-level error
 /// (`RunError`) read back through `hegel_run_result_error`.
-use alloc::string::ToString;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InternalError {
     message: String,
