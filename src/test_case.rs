@@ -376,10 +376,6 @@ impl TestCase {
         }
     }
 
-    pub(crate) fn mode(&self) -> Mode {
-        self.global.mode
-    }
-
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.
     ///
     /// Held briefly around draw-state updates, never around whole user-visible
@@ -960,6 +956,7 @@ pub mod labels {
     pub const SAMPLED_FROM: u64 = hegel_label_t::HEGEL_LABEL_SAMPLED_FROM as u64;
     pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
     pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
+    pub const STATEFUL_RULE: u64 = hegel_label_t::HEGEL_LABEL_STATEFUL_RULE as u64;
 }
 
 #[cfg(test)]

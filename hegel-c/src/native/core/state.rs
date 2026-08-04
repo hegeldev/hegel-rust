@@ -975,6 +975,11 @@ pub struct FamilyCore {
     /// rule sequence as done. Set for single-test-case runs, which explore
     /// one unbounded test case instead of many capped ones.
     state_machine_steps_unbounded: AtomicBool,
+    /// Target number of steps a stateful test case runs. Bounds the
+    /// per-step stop decision in [`NativeStateMachine::next_rule`]; ignored
+    /// when [`Self::state_machine_steps_unbounded`] is set. Defaults to 50,
+    /// overridden per run from the `stateful_step_count` setting.
+    stateful_step_count: AtomicI64,
 }
 
 impl FamilyCore {
@@ -990,6 +995,7 @@ impl FamilyCore {
             variable_pools: Mutex::new(Vec::new()),
             state_machines: Mutex::new(Vec::new()),
             state_machine_steps_unbounded: AtomicBool::new(false),
+            stateful_step_count: AtomicI64::new(50),
         }
     }
 
@@ -1002,6 +1008,16 @@ impl FamilyCore {
     /// Whether state machines of this family run without a step cap.
     pub(crate) fn state_machine_steps_unbounded(&self) -> bool {
         self.state_machine_steps_unbounded.load(Ordering::Relaxed)
+    }
+
+    /// Set the target number of steps a stateful test case runs.
+    pub(crate) fn set_stateful_step_count(&self, count: i64) {
+        self.stateful_step_count.store(count, Ordering::Relaxed);
+    }
+
+    /// The target number of steps a stateful test case runs.
+    pub(crate) fn stateful_step_count(&self) -> i64 {
+        self.stateful_step_count.load(Ordering::Relaxed)
     }
 
     /// The family's concluded status, or `None` while still running.

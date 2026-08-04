@@ -364,6 +364,10 @@ pub enum hegel_label_t {
     /// Span around one text string draw (`hegel_generate_string` with a
     /// text generator).
     HEGEL_LABEL_STRING = 30,
+    /// Outer span around one stateful-testing rule invocation, grouping all
+    /// the draws a single rule makes so the shrinker can delete a whole step
+    /// at once. Opened by the frontend's state-machine driver.
+    HEGEL_LABEL_STATEFUL_RULE = 31,
 }
 
 /// Per-line output callback, passed to `hegel_run_start` /
@@ -892,6 +896,34 @@ pub unsafe extern "C" fn hegel_settings_set_test_cases(
         Err(rc) => return rc,
     };
     handle.inner = handle.inner.clone().test_cases(n);
+    HEGEL_OK
+}
+
+/// Target number of steps to run per stateful test case. The default is
+/// 50. Each stateful case runs at least one step and at most `n`; the
+/// engine chooses where in that range to stop. `n` must be at least 1.
+/// A smaller value is a reportable `HEGEL_E_INVALID_ARG`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    n: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_stateful_step_count") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if n < 1 {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_settings_set_stateful_step_count: step count must be at least 1, got {n}"
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    handle.inner = handle.inner.clone().stateful_step_count(n);
     HEGEL_OK
 }
 
