@@ -83,7 +83,7 @@
  `hegel_state_machine_next_group` when the whole state machine is done
  (run no further rounds).
  */
-#define HEGEL_STATE_MACHINE_DONE -1
+#define HEGEL_STATE_MACHINE_DONE INT64_MIN
 
 /*
  Result of a libhegel call.
@@ -1201,8 +1201,8 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  value in the creating `rule_groups`) into `*out_group_id` when a new
  round has begun and the workers should pull rules again — the id
  identifies the round's group, e.g. for trace output — or
- `HEGEL_STATE_MACHINE_DONE` (-1) to indicate termination of the whole
- state machine. (`hegel_new_state_machine` rejects
+ `HEGEL_STATE_MACHINE_DONE` (`INT64_MIN`) to indicate termination of the
+ whole state machine. (`hegel_new_state_machine` rejects
  `HEGEL_STATE_MACHINE_DONE` as a group id so it stays unambiguous here.)
 
  Call this on the root test-case handle (the handle used for
@@ -1250,9 +1250,9 @@ hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
  per-worker and per-clone state, so draws on one worker don't affect
  draws on another.
 
- Writes `HEGEL_STATE_MACHINE_DONE` (-1) into `*out_rule_index` when the
- worker's round budget is exhausted: stop running rules and wait for the
- next group / join point.
+ Writes `HEGEL_STATE_MACHINE_DONE` (`INT64_MIN`) into `*out_rule_index`
+ when the worker's round budget is exhausted: stop running rules and wait
+ for the next group / join point.
 
  `state_machine_id` must be an id returned by `hegel_new_state_machine`
  on this test-case family. Returns `HEGEL_E_STOP_TEST` when the engine's
