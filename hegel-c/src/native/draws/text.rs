@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::native::core::EngineError;
@@ -197,7 +197,7 @@ fn chars_to_intervals(chars: &[char]) -> IntervalSet {
 /// runs once per process per category name.
 fn categories_union(cats: &[String]) -> IntervalSet {
     static CACHE: OnceLock<Mutex<HashMap<String, Arc<IntervalSet>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
 
     let mut union: Option<IntervalSet> = None;
     for cat in cats {

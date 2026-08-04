@@ -21,10 +21,11 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 rand = { version = "0.10" }
-dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
-miniz_oxide = { version = "0.8" }
-rustc-hash = { version = "2" }
-crc32fast = "1.4"
+dashu-int = { version = "0.4.1", default-features = false }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+rustc-hash = { version = "2", default-features = false }
+hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
+libm = { version = "0.2", default-features = false }
 parking_lot = "0.12"
 tempfile = "3"
 

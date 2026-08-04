@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue};
 
@@ -101,7 +101,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let v_j = self.current_nodes[idx_j].value.clone();
                 let v_prev = self.current_nodes[idx_prev].value.clone();
-                let mut swap = HashMap::new();
+                let mut swap = HashMap::default();
                 swap.insert(idx_prev, v_j);
                 swap.insert(idx_j, v_prev);
                 if self.replace(&swap).await? {
@@ -149,7 +149,7 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                let mut swap = HashMap::new();
+                let mut swap = HashMap::default();
                 for k in 0..block_size {
                     swap.insert(i + k, block_b[k].clone());
                     swap.insert(j + k, block_a[k].clone());

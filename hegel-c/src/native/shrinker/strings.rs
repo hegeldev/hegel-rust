@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
 use crate::unicodedata;
@@ -24,7 +24,7 @@ impl<'a> Shrinker<'a> {
 
             let simplest = kind.simplest();
             if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(simplest))]))
                     .await?;
             }
 
@@ -35,7 +35,7 @@ impl<'a> Shrinker<'a> {
                 while let Some(sz) = search.probe() {
                     let cand: Vec<u32> = captured[..sz as usize].to_vec();
                     let ok = self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                         .await?;
                     search.record(ok);
                 }
@@ -49,7 +49,7 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let cand: Vec<u32> = cur[..target_len].to_vec();
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                     .await?;
             }
 
@@ -62,13 +62,13 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut cand = cur.clone();
                 cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                     .await?;
             }
 
             let dup_codepoints: Vec<u32> = {
                 let cur = self.current_string(i);
-                let mut counts: HashMap<u32, usize> = HashMap::new();
+                let mut counts: HashMap<u32, usize> = HashMap::default();
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
@@ -97,7 +97,7 @@ impl<'a> Shrinker<'a> {
                 if !changed {
                     return Ok(false);
                 }
-                sh.replace(&HashMap::from([(i, ChoiceValue::String(new_str))]))
+                sh.replace(&HashMap::from_iter([(i, ChoiceValue::String(new_str))]))
                     .await
             }
 
@@ -143,7 +143,7 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut cand = self.current_string(i);
                     cand[j] = cand_cp;
-                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                    self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                         .await?;
                 }
 
@@ -157,7 +157,7 @@ impl<'a> Shrinker<'a> {
                         let mut cand = self.current_string(i);
                         cand[j] = cp;
                         let ok = self
-                            .replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                            .replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                             .await?;
                         search.record(ok);
                     }
@@ -181,7 +181,7 @@ impl<'a> Shrinker<'a> {
                     let mut swapped = cur.clone();
                     swapped.swap(j - 1, j);
                     if self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(swapped))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::String(swapped))]))
                         .await?
                     {
                         j -= 1;
@@ -297,7 +297,7 @@ impl<'a> Shrinker<'a> {
         if !kind_j.validate(&new_t) {
             return Ok(false);
         }
-        self.replace(&HashMap::from([
+        self.replace(&HashMap::from_iter([
             (i, ChoiceValue::String(new_s)),
             (j, ChoiceValue::String(new_t)),
         ]))
@@ -354,7 +354,7 @@ impl<'a> Shrinker<'a> {
                         let ok = if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
                             false
                         } else {
-                            self.replace(&HashMap::from([
+                            self.replace(&HashMap::from_iter([
                                 (i, ChoiceValue::String(new_i)),
                                 (j, ChoiceValue::String(new_j)),
                             ]))
@@ -402,7 +402,7 @@ impl<'a> Shrinker<'a> {
                     new_value[pos] = replacement;
                     hegel_internal_debug_assert!(kind.validate(&new_value));
                     if self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(new_value))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::String(new_value))]))
                         .await?
                     {
                         break;

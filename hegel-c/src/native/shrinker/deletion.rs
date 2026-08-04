@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
@@ -104,7 +104,10 @@ impl<'a> Shrinker<'a> {
         value: ChoiceValue,
         expected_len: usize,
     ) -> ShrinkResult<bool> {
-        if self.replace(&HashMap::from([(idx, value.clone())])).await? {
+        if self
+            .replace(&HashMap::from_iter([(idx, value.clone())]))
+            .await?
+        {
             return Ok(true);
         }
 

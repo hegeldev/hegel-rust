@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
 use crate::native::draws::special::{Date, DateTime, Time};
@@ -37,7 +37,7 @@ impl std::fmt::Display for DataSourceError {
         }
     }
 }
-impl std::error::Error for DataSourceError {}
+impl core::error::Error for DataSourceError {}
 
 /// Data source for test case generation.
 ///
@@ -238,7 +238,7 @@ impl std::fmt::Display for RunError {
     }
 }
 
-impl std::error::Error for RunError {}
+impl core::error::Error for RunError {}
 
 /// Result of a full test run: the run's outcome once generation and
 /// shrinking are done.

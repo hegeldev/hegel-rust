@@ -11,7 +11,7 @@
 //!
 //! Source: `resources/cpython/Lib/re/_parser.py`.
 
-use std::collections::HashMap;
+use crate::native::HashMap;
 
 use super::constants::*;
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
@@ -137,7 +137,7 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-impl std::error::Error for ParseError {}
+impl core::error::Error for ParseError {}
 
 type ParseResult<T> = Result<T, ParseError>;
 
@@ -156,10 +156,10 @@ impl State {
     fn new() -> Self {
         Self {
             flags: 0,
-            groupdict: HashMap::new(),
+            groupdict: HashMap::default(),
             groupwidths: vec![None],
             lookbehindgroups: None,
-            grouprefpos: HashMap::new(),
+            grouprefpos: HashMap::default(),
         }
     }
 
@@ -667,7 +667,7 @@ enum EscapeResult {
 }
 
 fn uniq_set(items: Vec<SetItem>) -> Vec<SetItem> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::native::HashSet::default();
     items
         .into_iter()
         .filter(|item| seen.insert(item.clone()))

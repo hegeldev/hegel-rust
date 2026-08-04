@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::native::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -116,7 +116,7 @@ fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> us
     }
     let p_continue = length_p_continue(min_size, Some(max_size));
     let u: f64 = rng.random();
-    let extra = (u.ln() / p_continue.ln()).floor();
+    let extra = libm::floor(libm::log(u) / libm::log(p_continue));
     hegel_internal_assert!(extra >= 0.0);
     min_size.saturating_add(extra as usize).min(max_size)
 }
@@ -157,7 +157,7 @@ fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut 
         return rng.random_range(min_value..=max_value);
     }
     let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
-    (dist.inverse_cdf(p).round() as i128).clamp(min_value, max_value)
+    (libm::round(dist.inverse_cdf(p)) as i128).clamp(min_value, max_value)
 }
 
 /// Hand-picked "interesting" boundary values: powers of two and their
@@ -478,7 +478,7 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
 /// boolean) matters for the urandom backend, where every byte is
 /// fuzzer-controlled entropy and a one-bit decision should cost one byte.
 pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
-    let falsey = ((256.0 * (1.0 - p)).floor().max(1.0) as u32).min(255);
+    let falsey = (libm::floor(256.0 * (1.0 - p)).max(1.0) as u32).min(255);
     let mut byte = [0u8; 1];
     rng.fill_bytes(&mut byte);
     u32::from(byte[0]) >= falsey
@@ -597,7 +597,7 @@ fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
     use std::sync::OnceLock;
     type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     let key = Arc::as_ptr(intervals) as usize;
     {
         let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -713,7 +713,7 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
 pub struct NativeVariables {
     last_id: i64,
     variables: Vec<i64>,
-    removed: std::collections::HashSet<i64>,
+    removed: crate::native::HashSet<i64>,
 }
 
 impl NativeVariables {
@@ -721,7 +721,7 @@ impl NativeVariables {
         NativeVariables {
             last_id: 0,
             variables: Vec::new(),
-            removed: std::collections::HashSet::new(),
+            removed: crate::native::HashSet::default(),
         }
     }
 
@@ -801,7 +801,7 @@ pub struct CoverageTag {
 }
 
 static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+    LazyLock::new(|| Mutex::new(HashMap::default()));
 
 /// Look up (or insert) the [`CoverageTag`] for `label`.
 ///
@@ -984,8 +984,8 @@ impl FamilyCore {
             concluded_status: AtomicU8::new(STATUS_UNSET),
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
-            target_observations: Mutex::new(HashMap::new()),
-            collections: Mutex::new(HashMap::new()),
+            target_observations: Mutex::new(HashMap::default()),
+            collections: Mutex::new(HashMap::default()),
             next_collection_id: AtomicI64::new(0),
             variable_pools: Mutex::new(Vec::new()),
             state_machines: Mutex::new(Vec::new()),
@@ -1186,7 +1186,7 @@ impl NativeTestCase {
             span_stack: Vec::new(),
             span_events: Vec::new(),
             has_discards: false,
-            tags: HashSet::new(),
+            tags: HashSet::default(),
             labels_for_structure_stack: Vec::new(),
             observer,
             trailing_template,
@@ -1354,7 +1354,7 @@ impl NativeTestCase {
         });
         self.span_stack.push(idx);
         self.span_events.push((start, SpanEvent::Open { label }));
-        let mut frame = HashSet::new();
+        let mut frame = HashSet::default();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH {

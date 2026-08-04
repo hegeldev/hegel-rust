@@ -6,8 +6,8 @@
 //! the test closure, the single source of truth, matching Hypothesis's
 //! `Shrinker.cached_test_function`.)
 
+use crate::native::HashMap;
 use crate::native::bignum::BigInt;
-use std::collections::HashMap;
 
 use crate::exchange::drive_no_yield;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
@@ -45,7 +45,7 @@ fn replace_rejects_index_past_end_of_current_nodes() {
         vec![int_node(5), int_node(10)],
         Spans::new(),
     );
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     values.insert(99, ChoiceValue::Integer(BigInt::from(0)));
     assert!(!drive_no_yield(shrinker.replace(&values)).unwrap());
 }
@@ -60,7 +60,7 @@ fn replace_rejects_value_that_fails_kind_validate() {
         vec![bool_node(true)],
         Spans::new(),
     );
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     values.insert(0, ChoiceValue::Integer(BigInt::from(42)));
     assert!(!drive_no_yield(shrinker.replace(&values)).unwrap());
 }

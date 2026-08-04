@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use crate::native::{HashMap, HashSet};
 
 use crate::native::core::{
     BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
@@ -15,8 +15,8 @@ pub(crate) struct TargetingState {
 impl TargetingState {
     pub fn new() -> Self {
         Self {
-            best_observed_targets: HashMap::new(),
-            best_choices_for_target: HashMap::new(),
+            best_observed_targets: HashMap::default(),
+            best_choices_for_target: HashMap::default(),
         }
     }
 
@@ -176,7 +176,7 @@ impl Optimiser<'_, '_> {
             .unwrap_or(&f64::NEG_INFINITY);
         let mut improvements: usize = 0;
 
-        let mut nodes_examined: HashSet<usize> = HashSet::new();
+        let mut nodes_examined: HashSet<usize> = HashSet::default();
         let mut i: isize = current_nodes.len() as isize - 1;
         let mut prev_len = current_nodes.len();
         while i >= 0 && improvements <= max_improvements {

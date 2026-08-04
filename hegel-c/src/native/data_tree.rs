@@ -8,10 +8,8 @@
 //! drawn, an optional terminal `Status`, and a cached exhaustion flag
 //! so the walker can short-circuit dead branches.
 
-use std::collections::HashMap;
+use crate::native::HashMap;
 use std::sync::Arc;
-
-use rustc_hash::FxHashMap;
 
 use rand::RngExt;
 use rand::seq::SliceRandom;
@@ -98,7 +96,7 @@ pub(crate) struct DataTreeNode {
     /// replay's prefix value at that position is ignored. [`simulate`] needs
     /// this to predict realised values correctly.
     forced: bool,
-    children: FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    children: HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     /// Span open/close events that fired at this node's draw position, in
     /// order. Recorded once (per path) by [`record_tree_full`] and replayed by
     /// [`simulate_full`] to rebuild the [`Span`] list faithfully — including
@@ -207,7 +205,7 @@ pub(crate) fn record_tree(
         nodes,
         status,
         None,
-        &HashMap::new(),
+        &HashMap::default(),
         &[],
         kill_depths,
     )
@@ -404,7 +402,7 @@ const ENUMERATION_CAP: u64 = 1024;
 /// exhausted too).
 fn pick_non_exhausted_value(
     kind: &ChoiceKind,
-    children: &FxHashMap<ChoiceValueKey, Box<DataTreeNode>>,
+    children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     rng: &mut EngineRng,
 ) -> Option<ChoiceValue> {
     for _ in 0..10 {
