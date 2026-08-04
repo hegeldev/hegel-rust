@@ -453,7 +453,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
     let machine_id = match tc
-        .with_ctc(|ctc| ctc.new_state_machine(1, &rule_names, &rule_groups, &invariant_names, 1, 1))
+        .with_ctc(|ctc| ctc.new_state_machine(&rule_names, &rule_groups, &invariant_names, 1, 1))
     {
         Ok((id, _)) => id,
         Err(rc) => raise_for_rc(rc),
@@ -842,7 +842,6 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
 
     let (machine_id, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
-            group_names.len(),
             &rule_names,
             &rule_groups,
             &invariant_names,
@@ -890,7 +889,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
         while let Some(group) = machine_next_group(&tc, machine_id) {
             hegel_internal_assert!(
                 group < group_names.len(),
-                "state_machine_next_group returned out-of-range group index {group}"
+                "state_machine_next_group returned unknown group id {group}"
             );
             round += 1;
             tc.note(&format!(

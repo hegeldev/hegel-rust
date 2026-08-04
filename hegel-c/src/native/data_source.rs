@@ -302,7 +302,6 @@ impl DataSource for NativeDataSource {
 
     fn new_state_machine(
         &self,
-        num_groups: usize,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         _invariant_names: Vec<String>,
@@ -312,11 +311,6 @@ impl DataSource for NativeDataSource {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
                 "cannot run a state machine with no rules".to_string(),
-            ));
-        }
-        if num_groups == 0 {
-            return Err(DataSourceError::InvalidArgument(
-                "cannot run a state machine with no concurrency groups".to_string(),
             ));
         }
         if rule_groups.len() != rule_names.len() {
@@ -333,25 +327,9 @@ impl DataSource for NativeDataSource {
                  got [{min_concurrency}, {max_concurrency}]"
             )));
         }
-        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
-        for (rule, &group) in rule_groups.iter().enumerate() {
-            let Some(members) = usize::try_from(group).ok().and_then(|g| groups.get_mut(g)) else {
-                return Err(DataSourceError::InvalidArgument(format!(
-                    "rule_groups[{rule}] must be in [0, {num_groups}), got {group}"
-                )));
-            };
-            members.push(rule);
-        }
-        if let Some(empty) = groups.iter().position(|members| members.is_empty()) {
-            return Err(DataSourceError::InvalidArgument(format!(
-                "concurrency group {empty} has no rules"
-            )));
-        }
-        let rule_groups: Vec<usize> = rule_groups.iter().map(|&g| g as usize).collect();
         self.with_ntc(|ntc| {
             let machine = crate::native::core::NativeStateMachine::new(
                 ntc,
-                num_groups,
                 rule_groups,
                 min_concurrency,
                 max_concurrency,
@@ -383,7 +361,7 @@ impl DataSource for NativeDataSource {
                 Arc::clone(&machines[idx])
             };
             let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
-            Ok(machine.next_group(ntc)?.map(|group| group as i64))
+            machine.next_group(ntc)
         })
     }
 

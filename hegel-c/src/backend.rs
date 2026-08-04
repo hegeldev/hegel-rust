@@ -126,21 +126,19 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(), DataSourceError>;
 
     /// Register a state machine for engine-owned (swarm) rule selection:
-    /// `num_groups` concurrency groups (identified by index only), rules
-    /// (each assigned to a group via `rule_groups`, parallel to
-    /// `rule_names`), invariants, and concurrency bounds. Draws the
-    /// machine's concurrency level in
+    /// rules (each assigned to a concurrency group via `rule_groups`,
+    /// parallel to `rule_names`), invariants, and concurrency bounds.
+    /// Groups are identified by arbitrary `i64` ids: the machine has one
+    /// group per distinct value of `rule_groups`. Draws the machine's
+    /// concurrency level in
     /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
     /// (concurrency bugs need concurrency); `min == max` fixes the level
     /// without consuming entropy. Returns the opaque state-machine id and
     /// the drawn level. Errors with `InvalidArgument` if `rule_names` is
-    /// empty, `num_groups` is zero, `rule_groups` is not parallel to
-    /// `rule_names` or contains an out-of-range index, a group has no
-    /// rules, `min_concurrency < 1`, or
-    /// `max_concurrency < min_concurrency`.
+    /// empty, `rule_groups` is not parallel to `rule_names`,
+    /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
     fn new_state_machine(
         &self,
-        num_groups: usize,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
@@ -149,8 +147,8 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(i64, i64), DataSourceError>;
 
     /// Start the machine's next round, drawing which concurrency group is
-    /// current for it. Returns that group's index in `[0, num_groups)`, or
-    /// `None` once the test case has run enough rounds. Must be called
+    /// current for it. Returns that group's id (a value of `rule_groups`),
+    /// or `None` once the test case has run enough rounds. Must be called
     /// (from the root stream) at every join point, including before the
     /// first `state_machine_next_rule` call.
     fn state_machine_next_group(

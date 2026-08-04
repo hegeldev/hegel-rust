@@ -12,15 +12,11 @@ fn machine_concurrent(
     num_rules: usize,
     concurrency: i64,
 ) -> NativeStateMachine {
-    NativeStateMachine::new(ntc, 1, vec![0; num_rules], concurrency, concurrency).unwrap()
+    NativeStateMachine::new(ntc, vec![0; num_rules], concurrency, concurrency).unwrap()
 }
 
-fn grouped_machine(
-    ntc: &mut NativeTestCase,
-    rule_groups: &[usize],
-    num_groups: usize,
-) -> NativeStateMachine {
-    NativeStateMachine::new(ntc, num_groups, rule_groups.to_vec(), 1, 1).unwrap()
+fn grouped_machine(ntc: &mut NativeTestCase, rule_groups: &[i64]) -> NativeStateMachine {
+    NativeStateMachine::new(ntc, rule_groups.to_vec(), 1, 1).unwrap()
 }
 
 fn replay(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
@@ -249,7 +245,7 @@ fn fallback_draws_from_allowed_when_speculative_index_is_past_the_end() {
 fn next_group_draws_and_returns_the_current_group_when_there_are_several() {
     let prefix = [cap(), int(254), int(1), int(0)];
     let mut ntc = replay(&prefix, 8);
-    let mut sm = grouped_machine(&mut ntc, &[0, 0, 1], 2);
+    let mut sm = grouped_machine(&mut ntc, &[0, 0, 1]);
     assert_eq!(sm.next_group(&mut ntc).unwrap(), Some(1));
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 2);
@@ -259,11 +255,21 @@ fn next_group_draws_and_returns_the_current_group_when_there_are_several() {
 }
 
 #[test]
+fn group_ids_are_arbitrary_and_deduplicated_by_first_appearance() {
+    let prefix = [cap(), int(254), int(1), int(0)];
+    let mut ntc = replay(&prefix, 8);
+    let mut sm = grouped_machine(&mut ntc, &[7, 7, -3]);
+    assert_eq!(sm.next_group(&mut ntc).unwrap(), Some(-3));
+    let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
+    assert_eq!(rule, 2);
+}
+
+#[test]
 fn selection_stays_in_the_current_group() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
         ntc.family().set_state_machine_steps_unbounded();
-        let mut sm = grouped_machine(&mut ntc, &[0, 1, 0, 1, 1], 2);
+        let mut sm = grouped_machine(&mut ntc, &[0, 1, 0, 1, 1]);
         for _ in 0..30 {
             let group = sm.next_group(&mut ntc).unwrap().unwrap();
             let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap() as usize;
@@ -283,7 +289,7 @@ fn at_least_one_rule_per_group_is_forced_enabled() {
         int(1),
     ];
     let mut ntc = replay(&prefix, 16);
-    let mut sm = grouped_machine(&mut ntc, &[0, 0, 1], 2);
+    let mut sm = grouped_machine(&mut ntc, &[0, 0, 1]);
     assert_eq!(sm.next_group(&mut ntc).unwrap(), Some(0));
     let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap();
     assert_eq!(rule, 1);
@@ -332,7 +338,7 @@ fn concurrent_round_cap_truncates_to_its_max() {
 #[test]
 fn fixed_concurrency_bounds_consume_no_entropy() {
     let mut ntc = replay(&[cap(), int(0), int(0), int(0)], 8);
-    let sm = NativeStateMachine::new(&mut ntc, 1, vec![0], 3, 3).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], 3, 3).unwrap();
     assert_eq!(sm.concurrency(), 3);
     assert_eq!(ntc.nodes.len(), 4);
 }
@@ -348,7 +354,7 @@ fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
         int(0),
     ];
     let mut ntc = replay(&prefix, 8);
-    let sm = NativeStateMachine::new(&mut ntc, 1, vec![0], 1, 4).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], 1, 4).unwrap();
     assert_eq!(sm.concurrency(), 4);
     assert_eq!(
         ntc.spans[0usize].label,
@@ -360,7 +366,7 @@ fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
 fn concurrency_draw_falls_back_to_a_uniform_level() {
     let prefix = [ChoiceValue::Boolean(false), int(2), cap(), int(0), int(0)];
     let mut ntc = replay(&prefix, 8);
-    let sm = NativeStateMachine::new(&mut ntc, 1, vec![0], 1, 4).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], 1, 4).unwrap();
     assert_eq!(sm.concurrency(), 2);
 }
 
@@ -368,7 +374,7 @@ fn concurrency_draw_falls_back_to_a_uniform_level() {
 fn drawn_concurrency_respects_bounds() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
-        let sm = NativeStateMachine::new(&mut ntc, 1, vec![0], 2, 5).unwrap();
+        let sm = NativeStateMachine::new(&mut ntc, vec![0], 2, 5).unwrap();
         assert!((2..=5).contains(&sm.concurrency()));
     }
 }
@@ -377,7 +383,7 @@ fn drawn_concurrency_respects_bounds() {
 fn overrun_while_drawing_the_concurrency_level_propagates() {
     let mut ntc = replay(&[], 0);
     assert!(matches!(
-        NativeStateMachine::new(&mut ntc, 1, vec![0], 1, 4),
+        NativeStateMachine::new(&mut ntc, vec![0], 1, 4),
         Err(EngineError::Overrun)
     ));
 }
@@ -411,7 +417,7 @@ fn try_machine(
     ntc: &mut NativeTestCase,
     num_rules: usize,
 ) -> Result<NativeStateMachine, EngineError> {
-    NativeStateMachine::new(ntc, 1, vec![0; num_rules], 1, 1)
+    NativeStateMachine::new(ntc, vec![0; num_rules], 1, 1)
 }
 
 #[test]
@@ -447,7 +453,7 @@ fn overrun_while_drawing_a_try_index_propagates() {
 fn overrun_while_drawing_a_group_index_propagates() {
     let prefix = [cap(), int(254)];
     let mut ntc = replay(&prefix, 2);
-    let mut sm = grouped_machine(&mut ntc, &[0, 1], 2);
+    let mut sm = grouped_machine(&mut ntc, &[0, 1]);
     assert!(matches!(sm.next_group(&mut ntc), Err(EngineError::Overrun)));
 }
 
@@ -548,36 +554,15 @@ fn no_rules_is_error() {
 }
 
 #[test]
-#[should_panic(expected = "Stateful testing: there must be at least one concurrency group")]
-fn no_groups_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(&mut ntc, 0, vec![0], 1, 1);
-}
-
-#[test]
-#[should_panic(expected = "Stateful testing: rule group index out of range")]
-fn out_of_range_rule_group_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(&mut ntc, 1, vec![1], 1, 1);
-}
-
-#[test]
-#[should_panic(expected = "Stateful testing: every concurrency group must have at least one rule")]
-fn empty_group_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(&mut ntc, 2, vec![0], 1, 1);
-}
-
-#[test]
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn zero_min_concurrency_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(&mut ntc, 1, vec![0], 0, 1);
+    let _ = NativeStateMachine::new(&mut ntc, vec![0], 0, 1);
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn inverted_concurrency_bounds_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
-    let _ = NativeStateMachine::new(&mut ntc, 1, vec![0], 2, 1);
+    let _ = NativeStateMachine::new(&mut ntc, vec![0], 2, 1);
 }
