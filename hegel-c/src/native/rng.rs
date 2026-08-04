@@ -69,12 +69,24 @@ impl EngineRng {
     }
 
     /// A PRNG seeded from the operating system's entropy source. Each process
-    /// run draws a different stream. If the entropy source fails, the seed
-    /// silently falls back to zero — a degraded but functional PRNG.
+    /// run draws a different stream. If the entropy source fails, a warning
+    /// is written to stderr and the seed falls back to zero — a degraded but
+    /// functional PRNG whose runs all draw the same stream.
     pub fn from_os() -> Self {
         let mut seed = [0u8; 8];
-        let _ = sys::entropy(&mut seed);
-        Self::seeded(u64::from_le_bytes(seed))
+        let entropy_ok = sys::entropy(&mut seed).is_ok();
+        Self::from_os_or_zero(u64::from_le_bytes(seed), entropy_ok)
+    }
+
+    fn from_os_or_zero(seed: u64, entropy_ok: bool) -> Self {
+        if entropy_ok {
+            return Self::seeded(seed);
+        }
+        sys::stderr_line(
+            "warning: reading entropy from the OS failed; falling back to a \
+             fixed zero seed, so every run will generate the same sequence.",
+        );
+        Self::seeded(0)
     }
 
     /// The urandom backend: every draw reads fresh from the OS random

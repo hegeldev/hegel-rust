@@ -65,6 +65,20 @@ fn from_os_draws_without_panicking() {
 }
 
 #[test]
+fn from_os_or_zero_uses_the_seed_when_entropy_succeeded() {
+    let mut rng = EngineRng::from_os_or_zero(42, true);
+    let mut expected = EngineRng::seeded(42);
+    assert_eq!(rng.next_u64(), expected.next_u64());
+}
+
+#[test]
+fn from_os_or_zero_warns_and_seeds_zero_when_entropy_failed() {
+    let mut rng = EngineRng::from_os_or_zero(42, false);
+    let mut expected = EngineRng::seeded(0);
+    assert_eq!(rng.next_u64(), expected.next_u64());
+}
+
+#[test]
 fn urandom_or_fallback_warns_and_uses_a_prng_when_unavailable() {
     let mut rng = EngineRng::urandom_or_fallback(false);
     assert!(matches!(rng, EngineRng::Prng(_)));
