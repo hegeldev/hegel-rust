@@ -690,13 +690,15 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    /// Register a state machine. The engine draws the concurrency level in
+    /// Register a state machine. Each rule is assigned to a concurrency
+    /// group by `rule_groups` (parallel to `rule_names`); group ids are
+    /// arbitrary and the machine has one group per distinct value. The
+    /// engine draws the concurrency level in
     /// `[min_concurrency, max_concurrency]` at creation — weighted toward
     /// the maximum (the engine owns the distribution) — and returns it
     /// alongside the new machine's id.
     pub(crate) fn new_state_machine(
         &self,
-        num_groups: usize,
         rule_names: &[&str],
         rule_groups: &[i64],
         invariant_names: &[&str],
@@ -715,7 +717,6 @@ impl CTestCase {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
-                num_groups,
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),
@@ -730,11 +731,11 @@ impl CTestCase {
         rc_to_value(rc, (id, concurrency))
     }
 
-    /// Start the machine's next round, yielding the index of the round's
-    /// current concurrency group; `None` once the engine has run enough
-    /// rounds (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case
-    /// handle at every join point, including before the first rule is
-    /// requested.
+    /// Start the machine's next round, yielding the id of the round's
+    /// current concurrency group (its value in the registering
+    /// `rule_groups`); `None` once the engine has run enough rounds
+    /// (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case handle at
+    /// every join point, including before the first rule is requested.
     pub(crate) fn state_machine_next_group(
         &self,
         state_machine_id: i64,

@@ -165,8 +165,13 @@ struct WorkerState {
 pub struct NativeStateMachine {
     /// Per group: the global indices of its member rules, in registration
     /// order. Selection draws range over the current group's list only, so
-    /// every selection is in-group by construction.
+    /// every selection is in-group by construction. Groups are indexed by
+    /// order of first appearance in the creating `rule_groups`; the
+    /// caller-supplied identifiers live in `group_ids`, parallel to this.
     groups: Vec<Vec<usize>>,
+    /// Per group: the caller-supplied identifier, as it appeared in
+    /// `rule_groups`. `next_group` reports the current group by this id.
+    group_ids: Vec<i64>,
     concurrency: i64,
     /// The group whose rules are handed out this round, written by every
     /// `next_group` call. Meaningful only once `rounds_started > 0`;
@@ -190,8 +195,7 @@ impl NativeStateMachine {
     /// continue forever.
     pub fn new(
         ntc: &mut NativeTestCase,
-        num_groups: usize,
-        rule_groups: Vec<usize>,
+        rule_groups: Vec<i64>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<Self, EngineError> {
@@ -200,27 +204,19 @@ impl NativeStateMachine {
             "Stateful testing: there must be at least one rule"
         );
         hegel_internal_assert!(
-            num_groups >= 1,
-            "Stateful testing: there must be at least one concurrency group"
-        );
-        hegel_internal_assert!(
             min_concurrency >= 1 && min_concurrency <= max_concurrency,
             "Stateful testing: concurrency bounds must satisfy 1 <= min <= max"
         );
 
-        let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
-        for (rule, &group) in rule_groups.iter().enumerate() {
-            hegel_internal_assert!(
-                group < num_groups,
-                "Stateful testing: rule group index out of range"
-            );
+        let mut group_ids: Vec<i64> = Vec::new();
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (rule, &id) in rule_groups.iter().enumerate() {
+            let group = group_ids.iter().position(|&g| g == id).unwrap_or_else(|| {
+                group_ids.push(id);
+                groups.push(Vec::new());
+                groups.len() - 1
+            });
             groups[group].push(rule);
-        }
-        for members in &groups {
-            hegel_internal_assert!(
-                !members.is_empty(),
-                "Stateful testing: every concurrency group must have at least one rule"
-            );
         }
 
         let concurrency = draw_concurrency(ntc, min_concurrency, max_concurrency)?;
@@ -245,6 +241,7 @@ impl NativeStateMachine {
             .collect::<Result<Vec<WorkerState>, EngineError>>()?;
         Ok(NativeStateMachine {
             groups,
+            group_ids,
             concurrency,
             current_group: 0,
             round_cap,
@@ -261,14 +258,14 @@ impl NativeStateMachine {
 
     /// Start the next round: draw whether another round should run at all
     /// and, if so, which concurrency group is current for it and each
-    /// worker's step budget. Returns the current group's index, or `None`
-    /// once the test case has run enough rounds.
+    /// worker's step budget. Returns the current group's caller-supplied
+    /// id, or `None` once the test case has run enough rounds.
     ///
     /// Must be called from the root handle at each join point, including
     /// before the first `next_rule` call. Families marked as unbounded at
     /// creation (single-test-case runs) never return `None`: rounds
     /// continue forever.
-    pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<usize>, EngineError> {
+    pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
         if !ntc.family().state_machine_steps_unbounded() && self.rounds_started >= self.round_cap {
             return Ok(None);
         }
@@ -287,7 +284,7 @@ impl NativeStateMachine {
         }
         self.current_group = group;
         self.rounds_started += 1;
-        Ok(Some(group))
+        Ok(Some(self.group_ids[group]))
     }
 
     /// Draw the index of the next rule for `worker_index` to run this round

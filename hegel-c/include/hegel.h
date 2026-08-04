@@ -79,7 +79,7 @@
 /*
  Value written to `*out_rule_index` by `hegel_state_machine_next_rule`
  when the calling worker's round budget is exhausted (stop running rules
- and wait for the next group / join point), and to `*out_group_index` by
+ and wait for the next group / join point), and to `*out_group_id` by
  `hegel_state_machine_next_group` when the whole state machine is done
  (run no further rounds).
  */
@@ -1139,11 +1139,14 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
 
 /*
  Register a *state machine* for engine-owned stateful (rule-based)
- testing, sequential or concurrent: `num_groups` concurrency groups
- (identified by index only), `num_rules` rules — each assigned to a group
- by `rule_groups`, an array of group indices parallel to `rule_names` —
- and `num_invariants` invariants, with names as NUL-terminated UTF-8,
- plus concurrency bounds. The engine draws the machine's concurrency
+ testing, sequential or concurrent: `num_rules` rules — each assigned to
+ a concurrency group by `rule_groups`, an array of group ids parallel to
+ `rule_names` — and `num_invariants` invariants, with names as
+ NUL-terminated UTF-8, plus concurrency bounds. Group ids are arbitrary
+ (any value except `HEGEL_STATE_MACHINE_DONE`, which
+ `hegel_state_machine_next_group` reserves as its termination sentinel):
+ the machine has one concurrency group per distinct value of
+ `rule_groups`. The engine draws the machine's concurrency
  level — the number of workers (typically worker threads) that will pull
  rules — in `[min_concurrency, max_concurrency]` and writes it into
  `*out_concurrency`; the caller must run exactly that many workers. The
@@ -1175,14 +1178,12 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
  calls on the *same* test-case family. Returns `HEGEL_E_STOP_TEST` when
  the engine's choice budget is exhausted (the caller should abort the
  body and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
- Returns `HEGEL_E_INVALID_ARG` if `num_rules` or `num_groups` is zero,
- an entry of `rule_groups` is outside `[0, num_groups)`, a group ends up
- with no rules, `min_concurrency < 1`,
+ Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of
+ `rule_groups` is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
  `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
-                                       size_t num_groups,
                                        const char *const *rule_names,
                                        const int64_t *rule_groups,
                                        size_t num_rules,
@@ -1196,12 +1197,13 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
 /*
  Start the machine's next round: draw whether another round should run
  at all and, if so, which concurrency group is current for it and each
- worker's step budget for the round. Writes the current group's
- index in `[0, num_groups)` into `*out_group_index` when a new round
- has begun and the workers should pull rules again — the index
+ worker's step budget for the round. Writes the current group's id (its
+ value in the creating `rule_groups`) into `*out_group_id` when a new
+ round has begun and the workers should pull rules again — the id
  identifies the round's group, e.g. for trace output — or
  `HEGEL_STATE_MACHINE_DONE` (-1) to indicate termination of the whole
- state machine.
+ state machine. (`hegel_new_state_machine` rejects
+ `HEGEL_STATE_MACHINE_DONE` as a group id so it stays unambiguous here.)
 
  Call this on the root test-case handle (the handle used for
  hegel_new_state_machine) at every join point — after each worker's
@@ -1209,7 +1211,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  first rule is requested. This applies to sequential machines too: the
  frontend must advance the group when the rule stream is exhausted, even
  though there is only a single group. In single-test-case mode (steps
- unbounded, e.g. under Antithesis) `*out_group_index` is never set to
+ unbounded, e.g. under Antithesis) `*out_group_id` is never set to
  `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
 
  `state_machine_id` must be an id returned by `hegel_new_state_machine`
@@ -1220,7 +1222,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
 hegel_result_t hegel_state_machine_next_group(hegel_context_t *ctx,
                                               hegel_test_case_t *tc,
                                               int64_t state_machine_id,
-                                              int64_t *out_group_index);
+                                              int64_t *out_group_id);
 
 /*
  Draw the index of the next rule for worker `worker_index` to run this
