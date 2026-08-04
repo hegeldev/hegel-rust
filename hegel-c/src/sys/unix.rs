@@ -14,23 +14,37 @@ impl From<rustix::io::Errno> for Error {
     }
 }
 
+/// Call `op` until it returns anything other than `EINTR`, so a signal
+/// delivered mid-syscall restarts the operation instead of failing it.
+pub(super) fn retry_intr<T>(
+    mut op: impl FnMut() -> Result<T, rustix::io::Errno>,
+) -> Result<T, rustix::io::Errno> {
+    loop {
+        match op() {
+            Err(e) if e == rustix::io::Errno::INTR => {}
+            other => return other,
+        }
+    }
+}
+
 /// Names of the entries in the directory at `path`, excluding `.` and `..`.
 /// Entries whose names are not valid UTF-8 are skipped.
 pub(super) fn read_dir(path: &str) -> Result<Vec<String>, Error> {
-    let fd = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?;
+    let fd = retry_intr(|| {
+        rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+    })?;
     let dir = rustix::fs::Dir::read_from(&fd)?;
     let mut names = Vec::new();
     for entry in dir {
         let entry = entry?;
-        if let Ok(name) = entry.file_name().to_str()
-            && name != "."
-            && name != ".."
-        {
-            names.push(name.to_owned());
+        if let Ok(name) = entry.file_name().to_str() {
+            if name != "." && name != ".." {
+                names.push(name.to_owned());
+            }
         }
     }
     Ok(names)
@@ -38,11 +52,11 @@ pub(super) fn read_dir(path: &str) -> Result<Vec<String>, Error> {
 
 /// The full contents of the file at `path`.
 pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
-    let fd = rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())?;
+    let fd = retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
     let mut out = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
-        let n = rustix::io::read(&fd, &mut chunk[..])?;
+        let n = retry_intr(|| rustix::io::read(&fd, &mut chunk[..]))?;
         if n == 0 {
             return Ok(out);
         }
@@ -53,10 +67,10 @@ pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
 /// Read exactly `buf.len()` bytes from the start of the file at `path`.
 /// Fails if the file is shorter than the buffer.
 pub(super) fn read_exact(path: &str, buf: &mut [u8]) -> Result<(), Error> {
-    let fd = rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())?;
+    let fd = retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
     let mut filled = 0;
     while filled < buf.len() {
-        let n = rustix::io::read(&fd, &mut buf[filled..])?;
+        let n = retry_intr(|| rustix::io::read(&fd, &mut buf[filled..]))?;
         if n == 0 {
             return Err(Error);
         }
@@ -67,14 +81,16 @@ pub(super) fn read_exact(path: &str, buf: &mut [u8]) -> Result<(), Error> {
 
 /// Create (or truncate) the file at `path` and write `data` to it.
 pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
-    let fd = rustix::fs::open(
-        path,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
-        Mode::from_bits_truncate(0o666),
-    )?;
+    let fd = retry_intr(|| {
+        rustix::fs::open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
+        )
+    })?;
     let mut remaining = data;
     while !remaining.is_empty() {
-        let n = rustix::io::write(&fd, remaining)?;
+        let n = retry_intr(|| rustix::io::write(&fd, remaining))?;
         remaining = &remaining[n..];
     }
     Ok(())

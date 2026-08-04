@@ -196,6 +196,34 @@ fn urandom_is_unavailable() {
 
 #[cfg(unix)]
 #[test]
+fn retry_intr_retries_interrupted_calls() {
+    let mut calls = 0;
+    let result = imp::retry_intr(|| {
+        calls += 1;
+        if calls < 3 {
+            Err(rustix::io::Errno::INTR)
+        } else {
+            Ok(7)
+        }
+    });
+    assert_eq!(result, Ok(7));
+    assert_eq!(calls, 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn retry_intr_passes_other_errors_through() {
+    let mut calls = 0;
+    let result: Result<u8, rustix::io::Errno> = imp::retry_intr(|| {
+        calls += 1;
+        Err(rustix::io::Errno::NOENT)
+    });
+    assert_eq!(result, Err(rustix::io::Errno::NOENT));
+    assert_eq!(calls, 1);
+}
+
+#[cfg(unix)]
+#[test]
 fn read_exact_requires_enough_bytes() {
     let dir = TempDir::new().unwrap();
     let path = temp_path(&dir, "file");
