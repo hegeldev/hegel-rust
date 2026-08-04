@@ -4,7 +4,8 @@
 use core::sync::atomic::AtomicU32;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    SetLastError,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_ATTRIBUTE_NORMAL,
@@ -52,6 +53,7 @@ fn open(path: &str, access: u32, share: u32, disposition: u32) -> Result<OwnedHa
 }
 
 /// Names of the entries in the directory at `path`, excluding `.` and `..`.
+/// Entries whose names are not valid UTF-16 are skipped.
 pub(super) fn read_dir(path: &str) -> Result<Vec<String>, Error> {
     let pattern = wide(&format!("{path}/*"));
     // SAFETY: `data` is a valid out-pointer and `pattern` is NUL-terminated.
@@ -67,9 +69,10 @@ pub(super) fn read_dir(path: &str) -> Result<Vec<String>, Error> {
             .iter()
             .position(|&c| c == 0)
             .unwrap_or(data.cFileName.len());
-        let name = String::from_utf16_lossy(&data.cFileName[..len]);
-        if name != "." && name != ".." {
-            names.push(name);
+        if let Ok(name) = String::from_utf16(&data.cFileName[..len]) {
+            if name != "." && name != ".." {
+                names.push(name);
+            }
         }
         // SAFETY: `find` is a valid search handle and `data` a valid out-pointer.
         if unsafe { FindNextFileW(find, &mut data) } == 0 {
@@ -243,7 +246,9 @@ pub(super) fn stderr_write(bytes: &[u8]) {
     }
 }
 
-/// The value of the environment variable `name`. `None` if unset.
+/// The value of the environment variable `name`. `None` if unset; a
+/// variable set to the empty string is `Some("")`, distinguished from
+/// "unset" via `GetLastError` as `std` does.
 pub(super) fn env_var(name: &str) -> Option<String> {
     let wname = wide(name);
     let mut buf = vec![0u16; 256];
@@ -251,6 +256,7 @@ pub(super) fn env_var(name: &str) -> Option<String> {
         // SAFETY: `wname` is NUL-terminated and `buf` is valid for writes
         // of its length.
         let n = unsafe {
+            SetLastError(0);
             windows_sys::Win32::System::Environment::GetEnvironmentVariableW(
                 wname.as_ptr(),
                 buf.as_mut_ptr(),
@@ -258,7 +264,13 @@ pub(super) fn env_var(name: &str) -> Option<String> {
             )
         };
         if n == 0 {
-            return None;
+            // SAFETY: no preconditions.
+            let empty_but_set = unsafe { GetLastError() } == 0;
+            return if empty_but_set {
+                Some(String::new())
+            } else {
+                None
+            };
         }
         if (n as usize) < buf.len() {
             return Some(String::from_utf16_lossy(&buf[..n as usize]));
