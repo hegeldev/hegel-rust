@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.7 - 2026-08-04
+
+This release updates the `hegeltest-c` dependency to 0.30.4.
+
 ## 0.28.6 - 2026-07-29
 
 This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.
