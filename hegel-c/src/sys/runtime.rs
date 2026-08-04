@@ -61,11 +61,20 @@ impl Write for TruncatingBuffer {
     }
 }
 
+#[cfg(all(unix, not(target_vendor = "apple")))]
+core::arch::global_asm!(".hidden rust_eh_personality", ".hidden _Unwind_Resume");
+
 /// Satisfy the unwinding references the precompiled `core`/`alloc` carry
 /// (they are built with `panic = "unwind"`), so the shared library has no
 /// undefined unwinder symbols and loads under `RTLD_NOW`. Never called:
 /// these builds use `-C panic=abort` and the panic handler aborts, so no
 /// unwind can start. Aborts if something calls it anyway.
+///
+/// Both stubs are given hidden visibility on ELF targets (the
+/// `global_asm!` `.hidden` directives above) so a library loaded with
+/// `RTLD_GLOBAL` cannot interpose them over a real unwinder in another
+/// shared object, and so no other object's PLT can bind to them and dangle
+/// after `dlclose`; the dynamic symbol table then exports only `hegel_*`.
 #[unsafe(no_mangle)]
 extern "C" fn rust_eh_personality() -> ! {
     imp::abort_process()

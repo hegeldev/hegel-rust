@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # Check that a built libhegel shared library registers no thread-local
-# state: a dynamic reference to __cxa_thread_atexit_impl, __tls_get_addr,
-# or pthread_key_create means some code path can plant a destructor or
-# key pointing into the library, which dangles after dlclose and crashes
-# the host at thread teardown. Run against the no-std runtime build
-# (`just c-test-runtime`), whose whole point is that none of these exist.
+# state and exports nothing beyond the hegel_* C API:
+#   - a dynamic reference to __cxa_thread_atexit_impl, __tls_get_addr, or
+#     pthread_key_create means some code path can plant a destructor or
+#     key pointing into the library, which dangles after dlclose and
+#     crashes the host at thread teardown;
+#   - a PT_TLS program header means the library carries initial-exec
+#     thread-locals, which pin per-thread state the dynamic loader cannot
+#     reclaim on dlclose;
+#   - any defined dynamic symbol outside hegel_* (e.g. the unwinder stubs)
+#     could be interposed into other shared objects under RTLD_GLOBAL and
+#     leave their PLT entries dangling after dlclose.
+# Run against the no-std runtime build (`just c-test-runtime`), whose
+# whole point is that none of these exist.
 set -euo pipefail
 
 lib="${1:?usage: check-no-tls.sh <path-to-libhegel_c.so>}"
@@ -18,4 +26,20 @@ if [ -n "$bad" ]; then
     exit 1
 fi
 
-echo "ok: $lib has no TLS-registration symbols"
+tls_segment=$(readelf -lW "$lib" | awk '$1 == "TLS"' || true)
+
+if [ -n "$tls_segment" ]; then
+    echo "error: $lib has a PT_TLS program header:" >&2
+    echo "$tls_segment" >&2
+    exit 1
+fi
+
+stray_exports=$(echo "$symbols" | awk '$2 ~ /^[TtWwDdBb]$/ && $3 !~ /^hegel_/' || true)
+
+if [ -n "$stray_exports" ]; then
+    echo "error: $lib exports dynamic symbols outside hegel_*:" >&2
+    echo "$stray_exports" >&2
+    exit 1
+fi
+
+echo "ok: $lib has no TLS machinery and exports only hegel_* symbols"
