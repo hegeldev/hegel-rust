@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.28.8 - 2026-08-04
+
+This patch adds a `stateful_step_count` setting controlling how many steps a stateful (`#[state_machine]`) test case runs. It defaults to 50, and each case now runs at least one step and at most `stateful_step_count`.
+
+```rust
+Settings::new().stateful_step_count(20)
+```
+
 ## 0.28.7 - 2026-08-04
 
 This release updates the `hegeltest-c` dependency to 0.30.4.

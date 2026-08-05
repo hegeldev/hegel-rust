@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.5 - 2026-08-04
+
+This patch adds `hegel_settings_set_stateful_step_count`, which sets the target number of steps a stateful test case runs (default 50).
+
+The stateful stop generation decision has changed. Instead of drawing a single per-case step cap up front, `hegel_state_machine_next_rule` makes a per-step stop decision, forced to keep going before the first step and forced to halt once `stateful_step_count` steps have been handed out. Every stateful case therefore runs at least one step and at most `stateful_step_count`.
+
 ## 0.30.4 - 2026-08-04
 
 Internal preparation for making the engine core `no_std`-compatible: the engine's hash tables now use `hashbrown` and its floating-point math now goes through the `libm` crate instead of the platform math library, and the unused `crc32fast` dependency is gone. `libm` can round differently from a platform math library in the last bit, so on some platforms fixed-seed runs may generate different values than previous releases. Stored failures are unaffected: database replay is value-based, and seed reproducibility has always been build-specific.

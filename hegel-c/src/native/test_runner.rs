@@ -986,6 +986,8 @@ impl<'a> Engine<'a> {
         &mut self,
         ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
+        ntc.family()
+            .set_stateful_step_count(self.settings.stateful_step_count);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
