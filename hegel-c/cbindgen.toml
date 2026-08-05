@@ -36,6 +36,9 @@ header = """
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
  *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_new_collection       ->  hegel_collection_free
+ *     hegel_new_pool             ->  hegel_pool_free
+ *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
  *
@@ -111,6 +114,9 @@ include = [
 "HegelRunResult" = "hegel_run_result_t"
 "HegelFailure" = "hegel_failure_t"
 "HegelStringGenerator" = "hegel_string_generator_t"
+"HegelCollection" = "hegel_collection_t"
+"HegelPool" = "hegel_pool_t"
+"HegelStateMachine" = "hegel_state_machine_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic

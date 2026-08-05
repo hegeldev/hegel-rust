@@ -27,8 +27,8 @@
 static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t min_size, uint64_t max_size) {
     if (hegel_start_span(ctx, tc, HEGEL_LABEL_LIST) != HEGEL_OK) return -1;
 
-    int64_t cid;
-    if (hegel_new_collection(ctx, tc, min_size, max_size, &cid) != HEGEL_OK) {
+    hegel_collection_t *collection;
+    if (hegel_new_collection(ctx, tc, min_size, max_size, &collection) != HEGEL_OK) {
         hegel_stop_span(ctx, tc, false);
         return -1;
     }
@@ -36,20 +36,23 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
     int n = 0;
     while (true) {
         bool more;
-        hegel_result_t rc = hegel_collection_more(ctx, tc, cid, &more);
+        hegel_result_t rc = hegel_collection_more(ctx, tc, collection, &more);
         if (rc != HEGEL_OK) {
+            hegel_collection_free(ctx, collection);
             hegel_stop_span(ctx, tc, false);
             return -1;
         }
         if (!more) break;
 
         if (hegel_start_span(ctx, tc, HEGEL_LABEL_LIST_ELEMENT) != HEGEL_OK) {
+            hegel_collection_free(ctx, collection);
             hegel_stop_span(ctx, tc, false);
             return -1;
         }
         bool value;
         rc = hegel_generate_boolean(ctx, tc, 0.5, false, false, &value);
         if (rc != HEGEL_OK) {
+            hegel_collection_free(ctx, collection);
             hegel_stop_span(ctx, tc, false);
             hegel_stop_span(ctx, tc, false);
             return -1;
@@ -58,6 +61,9 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
         n++;
     }
 
+    /* The collection handle is caller-owned and freed independently of the
+     * test case. */
+    hegel_collection_free(ctx, collection);
     hegel_stop_span(ctx, tc, false);
     return n;
 }

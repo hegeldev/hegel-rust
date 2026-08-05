@@ -144,6 +144,51 @@ fn completion_is_reported_before_concurrent_use() {
     }
 }
 
+/// A collection used from two threads at once reports
+/// `HEGEL_E_CONCURRENT_USE`. As in
+/// [`concurrent_use_of_one_handle_is_rejected`], "another thread is
+/// mid-operation" is stood in for by holding the collection's own state lock
+/// on this thread — the two test-case handles are distinct clones, so the
+/// contention observed is the collection's, not the test case's.
+#[test]
+fn concurrent_use_of_one_collection_is_rejected() {
+    unsafe {
+        let (ctx, s, run, tc) = start_run_and_first_case();
+
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 0, 3, &mut collection));
+        let mut clone: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_clone(ctx, tc, &mut clone));
+
+        let held = (&*collection).state.try_lock().unwrap();
+        let mut more = false;
+        assert_eq!(
+            hegel_collection_more(ctx, clone, collection, &mut more),
+            HEGEL_E_CONCURRENT_USE
+        );
+        assert_eq!(
+            hegel_collection_reject(ctx, clone, collection, ptr::null()),
+            HEGEL_E_CONCURRENT_USE
+        );
+        drop(held);
+
+        loop {
+            ok(hegel_collection_more(ctx, clone, collection, &mut more));
+            if !more {
+                break;
+            }
+            let mut value = false;
+            ok(hegel_generate_boolean(
+                ctx, clone, 0.5, false, false, &mut value,
+            ));
+        }
+
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_test_case_free(ctx, clone));
+        finish(ctx, s, run, tc);
+    }
+}
+
 #[test]
 fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
     assert_eq!(size_arg(0), 0);

@@ -1,6 +1,6 @@
 use crate::native::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use rand::{Rng, RngExt};
@@ -14,7 +14,6 @@ use super::choices::{
     StringChoice,
 };
 use super::float_index::index_to_float;
-use super::state_machine::NativeStateMachine;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
 use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
@@ -942,10 +941,9 @@ const STATUS_UNSET: u8 = u8::MAX;
 /// A family concludes exactly once: the first stream to conclude wins, and
 /// every other stream's subsequent draws fail fast with the family's
 /// verdict. The draw budget and `tc.target()` observations are likewise
-/// family-wide. Collections, variable pools, and state machines are shared
-/// across streams so ids remain valid on any clone; they are shared mutable
-/// state, so when several clones use one concurrently the interleaving (and
-/// therefore replay of the affected values) is scheduling-dependent.
+/// family-wide. Collections, variable pools, and state machines live in
+/// caller-owned handles rather than here; any stream of the family can
+/// drive one, drawing from its own choice sequence.
 pub struct FamilyCore {
     /// The family's write-once conclusion, with the interesting origin for
     /// an `Interesting` verdict.
@@ -962,15 +960,6 @@ pub struct FamilyCore {
     /// `tc.target()` observations, keyed by label. Family-wide so the
     /// once-per-test-case label uniqueness holds across clones.
     pub(crate) target_observations: Mutex<HashMap<String, f64>>,
-    /// Variable-length collection state, keyed by collection id.
-    pub(crate) collections: Mutex<HashMap<i64, ManyState>>,
-    next_collection_id: AtomicI64,
-    /// Variable pools for stateful testing, indexed by pool id.
-    pub(crate) variable_pools: Mutex<Vec<NativeVariables>>,
-    /// State machines, indexed by machine id. Each machine sits behind its
-    /// own lock so two clones drawing rules concurrently serialize on the
-    /// machine while drawing from their own streams.
-    pub(crate) state_machines: Mutex<Vec<Arc<Mutex<NativeStateMachine>>>>,
     /// When set, state machines draw no step cap and never report their
     /// rule sequence as done. Set for single-test-case runs, which explore
     /// one unbounded test case instead of many capped ones.
@@ -985,10 +974,6 @@ impl FamilyCore {
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
-            collections: Mutex::new(HashMap::default()),
-            next_collection_id: AtomicI64::new(0),
-            variable_pools: Mutex::new(Vec::new()),
-            state_machines: Mutex::new(Vec::new()),
             state_machine_steps_unbounded: AtomicBool::new(false),
         }
     }
@@ -1044,11 +1029,6 @@ impl FamilyCore {
 
     fn set_budget(&self, budget: usize) {
         self.budget.store(budget, Ordering::Relaxed);
-    }
-
-    /// Allocate the next collection id.
-    pub(crate) fn next_collection_id(&self) -> i64 {
-        self.next_collection_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -1437,17 +1417,6 @@ impl NativeTestCase {
     /// The family's concluded status, or `None` while still running.
     pub fn status(&self) -> Option<Status> {
         self.family.status()
-    }
-
-    /// Allocate a new collection ID and store the given state.
-    pub fn new_collection(&mut self, state: ManyState) -> i64 {
-        let id = self.family.next_collection_id();
-        self.family
-            .collections
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, state);
-        id
     }
 
     /// Draw a random integer in `[min_value, max_value]`.

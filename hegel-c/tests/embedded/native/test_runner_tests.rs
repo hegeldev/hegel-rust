@@ -506,13 +506,13 @@ fn slow_shrink_warning_mentions_shrinking() {
 #[test]
 fn run_main_stops_shrinking_when_budget_is_exhausted() {
     let body = |ds: &dyn DataSource| -> TestCaseResult {
-        let cid = match ds.new_collection(0, None) {
+        let mut collection = match ds.new_collection(0, None) {
             Ok(c) => c,
             Err(_) => return TestCaseResult::Overrun,
         };
         let mut len = 0usize;
         loop {
-            match ds.collection_more(cid) {
+            match ds.collection_more(&mut collection) {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(_) => return TestCaseResult::Overrun,

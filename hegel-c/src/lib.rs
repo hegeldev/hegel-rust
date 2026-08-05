@@ -1557,9 +1557,11 @@ pub unsafe extern "C" fn hegel_test_case_free(
 /// produces are deterministic under replay and shrink correctly. (Whereas
 /// using a *single* handle from two threads returns
 /// `HEGEL_E_CONCURRENT_USE`.) Collections, variable pools, and state
-/// machines remain shared across the family — ids from one handle work on
-/// any other — but *concurrent* use of one such object from two streams
-/// makes the affected values scheduling-dependent.
+/// machines remain usable across the family — a handle created through one
+/// test-case handle works with any other — but *concurrent* use of one such
+/// object from two streams makes the affected values scheduling-dependent
+/// (and a *collection* used from two threads at once reports
+/// `HEGEL_E_CONCURRENT_USE`; see `hegel_collection_t`).
 ///
 /// Cloning is a stream operation: it occupies one choice position on the
 /// source handle's stream, takes the source handle's lock like a draw
@@ -1778,31 +1780,90 @@ pub unsafe extern "C" fn hegel_stop_span(
     }
 }
 
+/// Opaque handle to an engine-managed variable-length collection.
+///
+/// Created by `hegel_new_collection` on a test case; driven by
+/// `hegel_collection_more` / `hegel_collection_reject` through any handle of
+/// the *same* test-case family (the root or any clone) — the continue/stop
+/// decisions are drawn from whichever handle makes the call. A collection
+/// must not be used from two threads at once: the operations take an
+/// internal non-blocking lock and return `HEGEL_E_CONCURRENT_USE` on
+/// contention.
+///
+/// The handle is independent of the test case and run it was created under:
+/// free it with `hegel_collection_free` exactly once, at any point — before
+/// or after the test case or run is freed, in any order relative to other
+/// frees.
+pub struct HegelCollection {
+    state: Mutex<crate::native::core::ManyState>,
+}
+
+/// Resolve a collection handle, recording a diagnostic and returning
+/// `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn collection_ref<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    collection: *const HegelCollection,
+) -> Result<&'a HegelCollection, hegel_result_t> {
+    match unsafe { collection.as_ref() } {
+        Some(c) => Ok(c),
+        None => {
+            set_last_error(ctx, &format!("{fn_name}: collection handle is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
+    }
+}
+
+/// Lock a collection's sizing state for one operation. A collection may be
+/// driven by at most one thread at a time, so contention is reported as
+/// `HEGEL_E_CONCURRENT_USE` rather than waited out.
+fn collection_lock<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    collection: &'a HegelCollection,
+) -> Result<parking_lot::MutexGuard<'a, crate::native::core::ManyState>, hegel_result_t> {
+    match collection.state.try_lock() {
+        Some(guard) => Ok(guard),
+        None => {
+            set_last_error(
+                ctx,
+                &format!("{fn_name}: collection handle is in use on another thread"),
+            );
+            Err(HEGEL_E_CONCURRENT_USE)
+        }
+    }
+}
+
 /// Start an engine-managed variable-length collection. The engine
 /// chooses how many elements to produce; the caller pulls them one at
 /// a time by calling `hegel_collection_more` in a loop. Pass
 /// `max_size = UINT64_MAX` for no upper bound.
 ///
-/// On success writes the new collection's id into `*out_collection_id`
-/// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
-/// `hegel_collection_more` / `hegel_collection_reject` calls.
+/// On success writes a caller-owned handle into `*out_collection` (release
+/// with `hegel_collection_free`) and returns `HEGEL_OK`. Pass the handle to
+/// subsequent `hegel_collection_more` / `hegel_collection_reject` calls with
+/// any handle of the same test-case family. Returns `HEGEL_E_STOP_TEST` when
+/// the engine's choice budget is already exhausted for this test case, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_collection` or
+/// `min_size > max_size`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_collection(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     min_size: u64,
     max_size: u64,
-    out_collection_id: *mut i64,
+    out_collection: *mut *mut HegelCollection,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_new_collection", tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_collection_id.is_null() {
+    if out_collection.is_null() {
         set_last_error(ctx, "hegel_new_collection: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_collection = ptr::null_mut() };
     let max = if max_size == u64::MAX {
         None
     } else {
@@ -1821,23 +1882,33 @@ pub unsafe extern "C" fn hegel_new_collection(
         }
     }
     match tc.stream.new_collection(min_size, max) {
-        Ok(id) => {
-            unsafe { *out_collection_id = id };
+        Ok(state) => {
+            unsafe {
+                *out_collection = into_raw_send_sync(HegelCollection {
+                    state: Mutex::new(state),
+                });
+            }
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
     }
 }
 
-/// Ask whether the engine wants another element in this collection.
-/// On success writes `true` or `false` into `*out_more` and returns
-/// `HEGEL_OK`. Call in a loop until `*out_more` is `false`, drawing
-/// the next element each time.
+/// Ask whether the engine wants another element in this collection,
+/// drawing the decision from `tc`'s stream. On success writes `true` or
+/// `false` into `*out_more` and returns `HEGEL_OK`. Call in a loop until
+/// `*out_more` is `false`, drawing the next element each time.
+///
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+/// `collection`, `HEGEL_E_INVALID_ARG` for a NULL `out_more`, and
+/// `HEGEL_E_CONCURRENT_USE` when another thread is mid-operation on either
+/// the test-case handle or the collection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_collection_more(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    collection_id: i64,
+    collection: *mut HegelCollection,
     out_more: *mut bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -1845,11 +1916,19 @@ pub unsafe extern "C" fn hegel_collection_more(
         Ok(t) => t,
         Err(rc) => return rc,
     };
+    let collection = match unsafe { collection_ref(ctx, "hegel_collection_more", collection) } {
+        Ok(c) => c,
+        Err(rc) => return rc,
+    };
     if out_more.is_null() {
         set_last_error(ctx, "hegel_collection_more: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.stream.collection_more(collection_id) {
+    let mut state = match collection_lock(ctx, "hegel_collection_more", collection) {
+        Ok(state) => state,
+        Err(rc) => return rc,
+    };
+    match tc.stream.collection_more(&mut state) {
         Ok(m) => {
             unsafe { *out_more = m };
             HEGEL_OK
@@ -1863,16 +1942,25 @@ pub unsafe extern "C" fn hegel_collection_more(
 /// should try a different one. `why` is an optional human-readable
 /// rejection reason (NULL is allowed); it is validated but currently
 /// unused, reserved for future rejection diagnostics.
+///
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
+/// for this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or
+/// `collection`, and `HEGEL_E_CONCURRENT_USE` when another thread is
+/// mid-operation on either the test-case handle or the collection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_collection_reject(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    collection_id: i64,
+    collection: *mut HegelCollection,
     why: *const c_char,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_collection_reject", tc) } {
         Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let collection = match unsafe { collection_ref(ctx, "hegel_collection_reject", collection) } {
+        Ok(c) => c,
         Err(rc) => return rc,
     };
     let why_str = if why.is_null() {
@@ -1886,9 +1974,66 @@ pub unsafe extern "C" fn hegel_collection_reject(
             }
         }
     };
-    match tc.stream.collection_reject(collection_id, why_str) {
+    let mut state = match collection_lock(ctx, "hegel_collection_reject", collection) {
+        Ok(state) => state,
+        Err(rc) => return rc,
+    };
+    match tc.stream.collection_reject(&mut state, why_str) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Release a collection handle from `hegel_new_collection`. Safe to call
+/// with NULL (a no-op that returns `HEGEL_OK`), and safe at any point in any
+/// order relative to freeing the test case or the run. Each handle must be
+/// freed exactly once; freeing the same handle twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_collection_free(
+    ctx: *mut HegelContext,
+    collection: *mut HegelCollection,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !collection.is_null() {
+        // SAFETY: `collection` came from `hegel_new_collection`'s
+        // Box::into_raw and is freed exactly once here.
+        drop(unsafe { Box::from_raw(collection) });
+    }
+    HEGEL_OK
+}
+
+/// Opaque handle to an engine-managed *variable pool* for stateful testing.
+///
+/// Created by `hegel_new_pool` on a test case; driven by `hegel_pool_add` /
+/// `hegel_pool_generate` through any handle of the *same* test-case family
+/// (the root or any clone) — the draw comes from whichever handle makes the
+/// call. Unlike a collection, a pool may legitimately be shared between
+/// clone handles driven from parallel threads: it holds an internal lock,
+/// so concurrent operations serialize instead of erroring. (Which variable
+/// a concurrent draw picks then depends on scheduling order, with the usual
+/// replay caveat for racy tests.)
+///
+/// The handle is independent of the test case and run it was created under:
+/// free it with `hegel_pool_free` exactly once, at any point — before or
+/// after the test case or run is freed, in any order relative to other
+/// frees.
+pub struct HegelPool {
+    variables: Mutex<crate::native::core::NativeVariables>,
+}
+
+/// Resolve a pool handle, recording a diagnostic and returning
+/// `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn pool_ref<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    pool: *const HegelPool,
+) -> Result<&'a HegelPool, hegel_result_t> {
+    match unsafe { pool.as_ref() } {
+        Some(p) => Ok(p),
+        None => {
+            set_last_error(ctx, &format!("{fn_name}: pool handle is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
     }
 }
 
@@ -1900,27 +2045,35 @@ pub unsafe extern "C" fn hegel_collection_reject(
 /// its own mapping from variable id to the actual value it generated
 /// (mirroring how `Pool<T>` holds a `HashMap<i64, T>`).
 ///
-/// On success writes the new pool's id into `*out_pool_id` and returns
-/// `HEGEL_OK`. The id is opaque; pass it to subsequent `hegel_pool_add`
-/// / `hegel_pool_generate` calls on the *same* test case.
+/// On success writes a caller-owned handle into `*out_pool` (release with
+/// `hegel_pool_free`) and returns `HEGEL_OK`. Pass the handle to subsequent
+/// `hegel_pool_add` / `hegel_pool_generate` calls with any handle of the
+/// same test-case family. Returns `HEGEL_E_STOP_TEST` when the engine's
+/// choice budget is already exhausted for this test case, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_pool`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_pool(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    out_pool_id: *mut i64,
+    out_pool: *mut *mut HegelPool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_new_pool", tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_pool_id.is_null() {
+    if out_pool.is_null() {
         set_last_error(ctx, "hegel_new_pool: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_pool = ptr::null_mut() };
     match tc.stream.new_pool() {
-        Ok(id) => {
-            unsafe { *out_pool_id = id };
+        Ok(variables) => {
+            unsafe {
+                *out_pool = into_raw_send_sync(HegelPool {
+                    variables: Mutex::new(variables),
+                });
+            }
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
@@ -1931,13 +2084,16 @@ pub unsafe extern "C" fn hegel_new_pool(
 /// id, which the caller associates with the value it just generated.
 ///
 /// On success writes the new variable's id into `*out_variable_id` and
-/// returns `HEGEL_OK`. `pool_id` must be an id returned by
-/// `hegel_new_pool` on this test case.
+/// returns `HEGEL_OK`. `pool` must be a handle from `hegel_new_pool` on a
+/// handle of this test case's family. Returns `HEGEL_E_STOP_TEST` when the
+/// engine's choice budget is exhausted for this test case,
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_variable_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_pool_add(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    pool_id: i64,
+    pool: *mut HegelPool,
     out_variable_id: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -1945,11 +2101,16 @@ pub unsafe extern "C" fn hegel_pool_add(
         Ok(t) => t,
         Err(rc) => return rc,
     };
+    let pool = match unsafe { pool_ref(ctx, "hegel_pool_add", pool) } {
+        Ok(p) => p,
+        Err(rc) => return rc,
+    };
     if out_variable_id.is_null() {
         set_last_error(ctx, "hegel_pool_add: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.stream.pool_add(pool_id) {
+    let mut variables = pool.variables.lock();
+    match tc.stream.pool_add(&mut variables) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -1962,19 +2123,22 @@ pub unsafe extern "C" fn hegel_pool_add(
 /// shrink) which previously-added variable to reuse. When
 /// `consume = true` the drawn variable is removed from the pool (model a
 /// destructive action); when `false` it stays available for future
-/// draws.
+/// draws. The choice is drawn from `tc`'s stream.
 ///
 /// On success writes the chosen variable id into `*out_variable_id` and
 /// returns `HEGEL_OK`. Returns `HEGEL_E_ASSUME` if the pool currently
 /// has no active variables — the caller should treat that like any other
 /// failed assumption: it may recover and continue the test case (as
 /// stateful testing does when a rule's assumption fails, by skipping the
-/// action), or give up on the case and mark it INVALID.
+/// action), or give up on the case and mark it INVALID. Returns
+/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted for
+/// this test case, `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `pool`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_variable_id`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_pool_generate(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    pool_id: i64,
+    pool: *mut HegelPool,
     consume: bool,
     out_variable_id: *mut i64,
 ) -> hegel_result_t {
@@ -1983,17 +2147,40 @@ pub unsafe extern "C" fn hegel_pool_generate(
         Ok(t) => t,
         Err(rc) => return rc,
     };
+    let pool = match unsafe { pool_ref(ctx, "hegel_pool_generate", pool) } {
+        Ok(p) => p,
+        Err(rc) => return rc,
+    };
     if out_variable_id.is_null() {
         set_last_error(ctx, "hegel_pool_generate: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.stream.pool_generate(pool_id, consume) {
+    let mut variables = pool.variables.lock();
+    match tc.stream.pool_generate(&mut variables, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
     }
+}
+
+/// Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a
+/// no-op that returns `HEGEL_OK`), and safe at any point in any order
+/// relative to freeing the test case or the run. Each handle must be freed
+/// exactly once; freeing the same handle twice is undefined behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_free(
+    ctx: *mut HegelContext,
+    pool: *mut HegelPool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !pool.is_null() {
+        // SAFETY: `pool` came from `hegel_new_pool`'s Box::into_raw and is
+        // freed exactly once here.
+        drop(unsafe { Box::from_raw(pool) });
+    }
+    HEGEL_OK
 }
 
 /// Convert a C array of `len` NUL-terminated strings into owned Rust
@@ -2033,6 +2220,41 @@ unsafe fn names_from_c_array(
     Ok(out)
 }
 
+/// Opaque handle to an engine-owned *state machine* for stateful
+/// (rule-based) testing.
+///
+/// Created by `hegel_new_state_machine` on a test case; driven by
+/// `hegel_state_machine_next_rule` through any handle of the *same*
+/// test-case family (the root or any clone) — each rule choice is drawn
+/// from whichever handle makes the call. The machine holds an internal
+/// lock, so concurrent use from two clone handles serializes instead of
+/// erroring. (Which rule a concurrent draw picks then depends on scheduling
+/// order, with the usual replay caveat for racy tests.)
+///
+/// The handle is independent of the test case and run it was created under:
+/// free it with `hegel_state_machine_free` exactly once, at any point —
+/// before or after the test case or run is freed, in any order relative to
+/// other frees.
+pub struct HegelStateMachine {
+    machine: Mutex<crate::native::core::NativeStateMachine>,
+}
+
+/// Resolve a state-machine handle, recording a diagnostic and returning
+/// `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn state_machine_ref<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    state_machine: *const HegelStateMachine,
+) -> Result<&'a HegelStateMachine, hegel_result_t> {
+    match unsafe { state_machine.as_ref() } {
+        Some(m) => Ok(m),
+        None => {
+            set_last_error(ctx, &format!("{fn_name}: state machine handle is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
+    }
+}
+
 /// Register a *state machine* for engine-owned stateful (rule-based)
 /// testing: `num_rules` rules and `num_invariants` invariants, each
 /// identified by a NUL-terminated UTF-8 name. The engine owns rule
@@ -2043,11 +2265,13 @@ unsafe fn names_from_c_array(
 /// applies it, until that call signals that no more steps should
 /// follow.
 ///
-/// On success writes the new machine's id into `*out_state_machine_id`
-/// and returns `HEGEL_OK`. The id is opaque; pass it to subsequent
-/// `hegel_state_machine_next_rule` calls on the *same* test case.
-/// Returns `HEGEL_E_INVALID_ARG` if `num_rules` is zero, or on null /
-/// non-UTF-8 names.
+/// On success writes a caller-owned handle into `*out_state_machine`
+/// (release with `hegel_state_machine_free`) and returns `HEGEL_OK`. Pass
+/// the handle to subsequent `hegel_state_machine_next_rule` calls with any
+/// handle of the same test-case family. Returns `HEGEL_E_STOP_TEST` when
+/// the engine's choice budget is already exhausted for this test case, and
+/// `HEGEL_E_INVALID_ARG` if `num_rules` is zero, on null / non-UTF-8 names,
+/// or for a NULL `out_state_machine`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_state_machine(
     ctx: *mut HegelContext,
@@ -2056,17 +2280,18 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     num_rules: usize,
     invariant_names: *const *const c_char,
     num_invariants: usize,
-    out_state_machine_id: *mut i64,
+    out_state_machine: *mut *mut HegelStateMachine,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_new_state_machine", tc) } {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if out_state_machine_id.is_null() {
+    if out_state_machine.is_null() {
         set_last_error(ctx, "hegel_new_state_machine: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
+    unsafe { *out_state_machine = ptr::null_mut() };
     let rules = match unsafe {
         names_from_c_array(
             ctx,
@@ -2092,8 +2317,12 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         Err(rc) => return rc,
     };
     match tc.stream.new_state_machine(rules, invariants) {
-        Ok(id) => {
-            unsafe { *out_state_machine_id = id };
+        Ok(machine) => {
+            unsafe {
+                *out_state_machine = into_raw_send_sync(HegelStateMachine {
+                    machine: Mutex::new(machine),
+                });
+            }
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
@@ -2112,16 +2341,16 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = -1;
 /// of the test case, with restrictions that shrink away in minimal
 /// counterexamples.
 ///
-/// `state_machine_id` must be an id returned by
-/// `hegel_new_state_machine` on this test case. Returns
-/// `HEGEL_E_STOP_TEST` when the engine's choice budget is exhausted
-/// (the caller should abort the body and call `hegel_mark_complete`
-/// with `HEGEL_STATUS_OVERRUN`).
+/// `state_machine` must be a handle from `hegel_new_state_machine` on a
+/// handle of this test case's family. Returns `HEGEL_E_STOP_TEST` when the
+/// engine's choice budget is exhausted (the caller should abort the body
+/// and call `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`), and
+/// `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or `state_machine`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_state_machine_next_rule(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
-    state_machine_id: i64,
+    state_machine: *mut HegelStateMachine,
     out_rule_index: *mut i64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
@@ -2129,11 +2358,17 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         Ok(t) => t,
         Err(rc) => return rc,
     };
+    let state_machine =
+        match unsafe { state_machine_ref(ctx, "hegel_state_machine_next_rule", state_machine) } {
+            Ok(m) => m,
+            Err(rc) => return rc,
+        };
     if out_rule_index.is_null() {
         set_last_error(ctx, "hegel_state_machine_next_rule: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    match tc.stream.state_machine_next_rule(state_machine_id) {
+    let mut machine = state_machine.machine.lock();
+    match tc.stream.state_machine_next_rule(&mut machine) {
         Ok(Some(index)) => {
             unsafe { *out_rule_index = index };
             HEGEL_OK
@@ -2144,6 +2379,25 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
         }
         Err(e) => translate_ds_error(ctx, e),
     }
+}
+
+/// Release a state-machine handle from `hegel_new_state_machine`. Safe to
+/// call with NULL (a no-op that returns `HEGEL_OK`), and safe at any point
+/// in any order relative to freeing the test case or the run. Each handle
+/// must be freed exactly once; freeing the same handle twice is undefined
+/// behaviour.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_free(
+    ctx: *mut HegelContext,
+    state_machine: *mut HegelStateMachine,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !state_machine.is_null() {
+        // SAFETY: `state_machine` came from `hegel_new_state_machine`'s
+        // Box::into_raw and is freed exactly once here.
+        drop(unsafe { Box::from_raw(state_machine) });
+    }
+    HEGEL_OK
 }
 
 /// Draw a single boolean that is `true` with probability `p`. `p`
