@@ -245,25 +245,25 @@ fn generate_url_fragments_chars_in_safe_set() {
 #[test]
 fn url_encode_path_safe_chars_passthrough() {
     assert_eq!(
-        url_encode_path("abcXYZ012$-_.+!*'(),~"),
+        url_encode_path("abcXYZ012$-_.+!*'(),~").unwrap(),
         "abcXYZ012$-_.+!*'(),~"
     );
 }
 
 #[test]
 fn url_encode_path_encodes_space_and_slash() {
-    assert_eq!(url_encode_path("a b/c"), "a%20b%2Fc");
+    assert_eq!(url_encode_path("a b/c").unwrap(), "a%20b%2Fc");
 }
 
 #[test]
 fn url_encode_path_encodes_control_chars() {
-    assert_eq!(url_encode_path("\t\n"), "%09%0A");
+    assert_eq!(url_encode_path("\t\n").unwrap(), "%09%0A");
 }
 
 #[test]
 fn url_encode_path_encodes_high_latin1() {
     let s: String = ['\u{00FF}', '\u{0080}'].iter().collect();
-    assert_eq!(url_encode_path(&s), "%FF%80");
+    assert_eq!(url_encode_path(&s).unwrap(), "%FF%80");
 }
 
 #[test]

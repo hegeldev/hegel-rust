@@ -3,17 +3,17 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -60,7 +60,7 @@ fn try_trivial_spans_zeroes_non_forced_children() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
@@ -93,7 +93,7 @@ fn try_trivial_spans_preserves_forced_children() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
@@ -143,7 +143,7 @@ fn try_trivial_spans_handles_oversized_span_end() {
     );
     drive_no_yield(shrinker.try_trivial_spans()).unwrap();
     assert_eq!(shrinker.current_nodes.len(), 1);
-    match &shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value() {
         ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 5),
         _ => unreachable!(),
     }
@@ -184,8 +184,8 @@ fn try_trivial_spans_retries_with_realised_span_content() {
     assert_eq!(call_count.load(Ordering::Relaxed), 2);
     assert_eq!(shrinker.current_nodes.len(), 2);
     match (
-        &shrinker.current_nodes[0].value,
-        &shrinker.current_nodes[1].value,
+        &shrinker.current_nodes[0].value(),
+        &shrinker.current_nodes[1].value(),
     ) {
         (ChoiceValue::Integer(a), ChoiceValue::Integer(b)) => {
             assert_eq!(i128::try_from(a.clone()).unwrap(), 2);

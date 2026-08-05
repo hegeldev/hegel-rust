@@ -1,6 +1,6 @@
 /// Encode a biased exponent to a Hypothesis lex rank.
 /// Exponents closer to 1023 (values near 1.0) rank first.
-use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
+use crate::control::{InternalError, hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 
 pub fn encode_exponent(biased_exp: u64) -> u64 {
     if biased_exp == 2047 {
@@ -62,13 +62,11 @@ fn is_simple_float(v: f64) -> bool {
 /// Map a non-negative (finite or infinite) float to its Hypothesis lex index.
 ///
 /// Port of Hypothesis's `float_to_lex`. Integer floats 0, 1, 2, ... map to
-/// 0, 1, 2, ... Non-integer floats map to values with bit 63 set.
+/// 0, 1, 2, ... Non-integer floats map to values with bit 63 set. Callers
+/// must pass a non-negative, non-NaN value (every call site takes `abs()`
+/// of a NaN-checked float first); the encoding of anything else is
+/// meaningless.
 pub fn float_to_index(v: f64) -> u64 {
-    hegel_internal_debug_assert!(
-        !v.is_sign_negative(),
-        "float_to_index called on negative: {v}"
-    );
-    hegel_internal_debug_assert!(!v.is_nan(), "float_to_index called on NaN");
     if is_simple_float(v) {
         return v as u64;
     }
@@ -105,12 +103,12 @@ pub fn index_to_float(i: u64) -> f64 {
 /// the smallest integer wins when the range contains one; otherwise the
 /// winner has the closest-to-1 exponent present in the range and, within
 /// that binade, the mantissa whose [`update_mantissa`] encoding is minimal.
-pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
+pub fn simplest_in_range(lo: f64, hi: f64) -> Result<f64, InternalError> {
     hegel_internal_debug_assert!(lo > 0.0 && lo <= hi && hi.is_finite());
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
     let c = libm::ceil(lo);
     if c <= hi && c < (1u64 << 56) as f64 {
-        return c;
+        return Ok(c);
     }
     let lo_bits = lo.to_bits();
     let hi_bits = hi.to_bits();
@@ -138,27 +136,27 @@ pub fn simplest_in_range(lo: f64, hi: f64) -> f64 {
         hegel_internal_debug_assert_eq!(m_max >> n_frac, h);
         let l_lo = m_min & low_mask;
         let l_hi = m_max & low_mask;
-        (h << n_frac) | min_reversed_in_range(l_lo, l_hi, n_frac)
+        (h << n_frac) | min_reversed_in_range(l_lo, l_hi, n_frac)?
     };
-    f64::from_bits((e << 52) | m_best)
+    Ok(f64::from_bits((e << 52) | m_best))
 }
 
 /// The `l` in `[lo, hi]` minimising `reverse_bits_n(l, n)`. The reversed
 /// value's most significant bit is `l`'s least significant bit, so an even
 /// `l` always beats every odd one; recurse on the halved range of even
 /// candidates until none remains (then `lo == hi`, which is forced).
-fn min_reversed_in_range(lo: u64, hi: u64, n: u32) -> u64 {
+fn min_reversed_in_range(lo: u64, hi: u64, n: u32) -> Result<u64, InternalError> {
     if n == 0 {
         hegel_internal_debug_assert_eq!((lo, hi), (0, 0));
-        return 0;
+        return Ok(0);
     }
     let k_lo = lo.div_ceil(2);
     let k_hi = hi / 2;
     if k_lo <= k_hi {
-        min_reversed_in_range(k_lo, k_hi, n - 1) * 2
+        Ok(min_reversed_in_range(k_lo, k_hi, n - 1)? * 2)
     } else {
         hegel_internal_debug_assert_eq!(lo, hi);
-        lo
+        Ok(lo)
     }
 }
 

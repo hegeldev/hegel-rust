@@ -25,6 +25,16 @@ pub enum DataSourceError {
     /// the message exposed via `hegel_context_last_error`. Carries a
     /// human-readable diagnostic.
     InvalidArgument(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected during a draw. libhegel maps it to `HEGEL_E_INTERNAL` with
+    /// the bug-report diagnostic exposed via `hegel_context_last_error`.
+    Internal(crate::control::InternalError),
+}
+
+impl From<crate::control::InternalError> for DataSourceError {
+    fn from(e: crate::control::InternalError) -> Self {
+        DataSourceError::Internal(e)
+    }
 }
 
 impl std::fmt::Display for DataSourceError {
@@ -35,6 +45,7 @@ impl std::fmt::Display for DataSourceError {
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
             DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
+            DataSourceError::Internal(e) => write!(f, "{e}"),
         }
     }
 }
@@ -235,7 +246,7 @@ pub enum TestCaseResult {
 /// These are returned as `Err` from the engine's exploration and surface at
 /// the API boundary — the panic API panics with the message; libhegel reports
 /// it through its error channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
     /// LargeInitialTestCase).
@@ -244,14 +255,33 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// The client misused Hegel at run scope — violated the driving
+    /// contract (e.g. never reported a test case's outcome before the run
+    /// resumed) or launched the process with an invalid configuration. Not
+    /// a bug in Hegel: the diagnostic tells the client what to fix.
+    UsageError(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected while the engine explored — generation, mutation, or
+    /// shrinking. The diagnostic carries the bug-report framing.
+    Internal(crate::control::InternalError),
+}
+
+impl From<crate::control::InternalError> for RunError {
+    fn from(e: crate::control::InternalError) -> Self {
+        RunError::Internal(e)
+    }
 }
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RunError::HealthCheck(msg) | RunError::Flaky(msg) | RunError::NonDeterministic(msg) => {
+            RunError::HealthCheck(msg)
+            | RunError::Flaky(msg)
+            | RunError::NonDeterministic(msg)
+            | RunError::UsageError(msg) => {
                 write!(f, "{}", msg)
             }
+            RunError::Internal(e) => write!(f, "{e}"),
         }
     }
 }

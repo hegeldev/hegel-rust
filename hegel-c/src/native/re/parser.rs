@@ -14,7 +14,10 @@
 use crate::native::HashMap;
 
 use super::constants::*;
-use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
+use crate::control::{
+    InternalError, hegel_internal_assert_eq, hegel_internal_debug_assert,
+    hegel_internal_debug_assert_eq, hegel_internal_unwrap,
+};
 
 /// A single parsed operation. Each variant corresponds to an entry in
 /// CPython's `OPCODES` list, with the argument shape matching the
@@ -74,6 +77,17 @@ pub enum OpCode {
     },
     /// `(FAILURE, ())`: emitted for empty negative-lookahead `(?!)`.
     Failure,
+}
+
+impl OpCode {
+    /// The nested pattern of a [`OpCode::Subpattern`], or `None` for any
+    /// other op.
+    fn into_subpattern(self) -> Option<SubPattern> {
+        match self {
+            OpCode::Subpattern { p, .. } => Some(p),
+            _ => None,
+        }
+    }
 }
 
 /// An item inside a character class `[...]`. Maps to the nested `(op, av)`
@@ -138,6 +152,18 @@ impl std::fmt::Display for ParseError {
 }
 
 impl core::error::Error for ParseError {}
+
+/// A violated invariant of the parser itself surfaces through the parser's
+/// one error channel, keeping the [`InternalError`] bug-report framing in
+/// the message.
+impl From<InternalError> for ParseError {
+    fn from(e: InternalError) -> Self {
+        ParseError {
+            msg: e.to_string(),
+            pos: 0,
+        }
+    }
+}
 
 type ParseResult<T> = Result<T, ParseError>;
 
@@ -424,6 +450,20 @@ fn flag_for_char(c: char) -> Option<u32> {
         _ => None,
     }
 }
+/// Parse the digits of a numeric escape in the given radix, reporting a
+/// non-digit as a bad escape. The callers only pass strings `getwhile`
+/// already restricted to the matching digit set (with lengths capped so
+/// the value fits in `u32`), so the error branch is defensive.
+fn parse_escape_value(
+    source: &Tokenizer,
+    escape: &str,
+    digits: &str,
+    radix: u32,
+) -> ParseResult<u32> {
+    u32::from_str_radix(digits, radix)
+        .map_err(|_| source.error(&format!("bad escape {escape}"), escape.chars().count()))
+}
+
 /// Escape handler inside a character class `[...]`.
 ///
 /// Port of `_parser._class_escape`. `escape` is always the two-char
@@ -438,7 +478,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
     let c = escape
         .chars()
         .nth(1)
-        .expect("tokenizer emits escape tokens as backslash + one char");
+        .ok_or_else(|| source.error("bad escape (end of pattern)", 0))?;
     let mut escape = escape.to_string();
     match c {
         'x' => {
@@ -450,8 +490,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             Ok(ClassEscapeResult::Literal(n))
         }
         'u' => {
@@ -463,8 +502,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(
                     &format!("surrogate codepoint {} cannot appear in a string", escape),
@@ -482,8 +520,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
@@ -496,8 +533,7 @@ fn class_escape(source: &mut Tokenizer, escape: &str) -> ParseResult<ClassEscape
         ch if OCTDIGITS.contains(ch) => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
-            let n = u32::from_str_radix(&oct, 8)
-                .expect("getwhile only emits OCTDIGITS, so radix-8 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &oct, 8)?;
             if n > 0o377 {
                 return Err(source.error(
                     &format!("octal escape value {} outside of range 0-0o377", escape),
@@ -542,7 +578,7 @@ fn escape_code(
     let c = escape
         .chars()
         .nth(1)
-        .expect("tokenizer emits escape tokens as backslash + one char");
+        .ok_or_else(|| source.error("bad escape (end of pattern)", 0))?;
     let mut escape = escape.to_string();
     match c {
         'x' => {
@@ -554,8 +590,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             Ok(EscapeResult::Literal(n))
         }
         'u' => {
@@ -567,8 +602,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(
                     &format!("surrogate codepoint {} cannot appear in a string", escape),
@@ -586,8 +620,7 @@ fn escape_code(
                 ));
             }
             let hex: String = escape.chars().skip(2).collect();
-            let n = u32::from_str_radix(&hex, 16)
-                .expect("getwhile only emits HEXDIGITS, so radix-16 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &hex, 16)?;
             if char::from_u32(n).is_none() {
                 return Err(source.error(&format!("bad escape {}", escape), escape.chars().count()));
             }
@@ -600,8 +633,7 @@ fn escape_code(
         '0' => {
             escape.push_str(&source.getwhile(2, OCTDIGITS)?);
             let oct: String = escape.chars().skip(1).collect();
-            let n = u32::from_str_radix(&oct, 8)
-                .expect("getwhile only emits OCTDIGITS, so radix-8 parse cannot fail");
+            let n = parse_escape_value(source, &escape, &oct, 8)?;
             Ok(EscapeResult::Literal(n))
         }
         ch if DIGITS.contains(ch) => {
@@ -621,8 +653,7 @@ fn escape_code(
                         let more = source.get()?.unwrap();
                         escape.push_str(&more);
                         let oct: String = escape.chars().skip(1).collect();
-                        let n = u32::from_str_radix(&oct, 8)
-                            .expect("3 OCTDIGITS parse as u32 (max 0o777 < u32::MAX)");
+                        let n = parse_escape_value(source, &escape, &oct, 8)?;
                         if n > 0o377 {
                             return Err(source.error(
                                 &format!("octal escape value {} outside of range 0-0o377", escape),
@@ -634,9 +665,7 @@ fn escape_code(
                 }
             }
             let dec: String = escape.chars().skip(1).collect();
-            let group = dec
-                .parse::<u32>()
-                .expect("escape decimal is at most 2 digits");
+            let group = parse_escape_value(source, &escape, &dec, 10)?;
             if group < state.groups() {
                 if !state.checkgroup(group) {
                     return Err(
@@ -913,7 +942,8 @@ fn parse(
             } else if this == "+" {
                 min = 1;
                 max = MAXREPEAT;
-            } else if this == "{" {
+            } else {
+                hegel_internal_assert_eq!(this, "{");
                 if source.peek_next_char() == Some('}') {
                     subpattern.push(OpCode::Literal(first_char as u32));
                     continue;
@@ -967,8 +997,6 @@ fn parse(
                         ));
                     }
                 }
-            } else {
-                unreachable!("REPEAT_CHARS dispatch");
             }
             let item_opt = if subpattern.is_empty() {
                 None
@@ -1265,12 +1293,9 @@ fn parse(
             subpattern.push(OpCode::At(AtCode::Beginning));
             continue;
         }
-        if this == "$" {
-            subpattern.push(OpCode::At(AtCode::End));
-            continue;
-        }
 
-        unreachable!("unhandled special character {:?}", this);
+        hegel_internal_assert_eq!(this, "$");
+        subpattern.push(OpCode::At(AtCode::End));
     }
 
     let mut i = subpattern.data.len();
@@ -1286,11 +1311,10 @@ fn parse(
             }
         );
         if take_inner {
-            let OpCode::Subpattern { p, .. } = subpattern.data.remove(i) else {
-                unreachable!(
-                    "opcode at index i was matched as Subpattern by the surrounding take_inner check"
-                )
-            };
+            let p = hegel_internal_unwrap!(
+                subpattern.data.remove(i).into_subpattern(),
+                "opcode at index {i} was matched as Subpattern by the take_inner check"
+            );
             let expanded = p.data;
             let expanded_len = expanded.len();
             for (j, op) in expanded.into_iter().enumerate() {
@@ -1328,9 +1352,10 @@ fn parse_flags(
     let mut ch = first_ch.to_string();
     if ch != "-" {
         loop {
-            let Some(flag) = flag_for_char(ch.chars().next().unwrap()) else {
-                unreachable!("parse_flags called with non-flag char");
-            };
+            let flag = hegel_internal_unwrap!(
+                flag_for_char(ch.chars().next().unwrap()),
+                "parse_flags called with non-flag char {ch:?}"
+            );
             if ch == "L" {
                 return Err(source.error(
                     "bad inline flags: cannot use 'L' flag with a str pattern",

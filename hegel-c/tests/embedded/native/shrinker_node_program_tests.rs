@@ -3,17 +3,17 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
@@ -63,7 +63,7 @@ fn node_program_left_extension_accumulates_across_accepted_steps() {
     fn values(nodes: &[ChoiceNode]) -> Vec<i128> {
         nodes
             .iter()
-            .map(|n| match &n.value {
+            .map(|n| match &n.value() {
                 ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
                 _ => unreachable!(),
             })
@@ -181,7 +181,7 @@ fn node_program_deletes_short_ranges() {
                 let mut idx = 0;
                 let mut interesting = false;
                 while idx < nodes.len() {
-                    let n = match &nodes[idx].value {
+                    let n = match &nodes[idx].value() {
                         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                         _ => return (false, nodes.to_vec(), Spans::new()),
                     };
@@ -190,7 +190,7 @@ fn node_program_deletes_short_ranges() {
                         break;
                     }
                     for k in idx + 1..block_end {
-                        match &nodes[k].value {
+                        match &nodes[k].value() {
                             ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == n => {}
                             _ => return (false, nodes.to_vec(), Spans::new()),
                         }
@@ -227,21 +227,10 @@ fn initial_node_count() -> usize {
 /// to a single `true` within a tight call budget.
 #[test]
 fn node_program_adaptively_deletes_long_false_run() {
-    use crate::native::core::choices::BooleanChoice;
     let mut initial: Vec<ChoiceNode> = (0..1000)
-        .map(|_| {
-            ChoiceNode::new(
-                ChoiceKind::Boolean(BooleanChoice),
-                ChoiceValue::Boolean(false),
-                false,
-            )
-        })
+        .map(|_| ChoiceNode::boolean(false, false))
         .collect();
-    initial.push(ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    ));
+    initial.push(ChoiceNode::boolean(true, false));
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
@@ -249,7 +238,7 @@ fn node_program_adaptively_deletes_long_false_run() {
                 let mut interesting = false;
                 for n in nodes {
                     realised.push(n.clone());
-                    if matches!(n.value, ChoiceValue::Boolean(true)) {
+                    if matches!(n.value(), ChoiceValue::Boolean(true)) {
                         interesting = true;
                         break;
                     }

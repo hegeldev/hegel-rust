@@ -61,7 +61,7 @@ pub(crate) async fn run_native_async(
 ) -> Result<TestRunResult, RunError> {
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
+            crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });

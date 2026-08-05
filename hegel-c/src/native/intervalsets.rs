@@ -4,7 +4,7 @@
 
 /// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
 /// both endpoints. Acts like a sorted sequence of the covered integers.
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert};
 
 #[derive(Debug, Clone)]
 pub struct IntervalSet {
@@ -17,9 +17,10 @@ pub struct IntervalSet {
 
 impl IntervalSet {
     /// Build from a list of `(start, end)` intervals. Each must satisfy
-    /// `start <= end`; the caller is expected to pass disjoint, sorted
-    /// intervals (as all producers in this codebase do).
-    pub fn new(intervals: Vec<(u32, u32)>) -> Self {
+    /// `start <= end` (an inverted interval is an internal error); the
+    /// caller is expected to pass disjoint, sorted intervals (as all
+    /// producers in this codebase do).
+    pub fn new(intervals: Vec<(u32, u32)>) -> Result<Self, InternalError> {
         let mut offsets = Vec::with_capacity(intervals.len() + 1);
         offsets.push(0usize);
         for &(u, v) in &intervals {
@@ -43,7 +44,7 @@ impl IntervalSet {
         } else {
             z_above.min(size - 1) as isize
         };
-        set
+        Ok(set)
     }
 
     pub fn len(&self) -> usize {
@@ -129,7 +130,7 @@ impl IntervalSet {
 
     /// Set-union: every element of `self` or `other`. Overlapping or
     /// adjacent intervals are merged.
-    pub fn union(&self, other: &IntervalSet) -> IntervalSet {
+    pub fn union(&self, other: &IntervalSet) -> Result<IntervalSet, InternalError> {
         if self.intervals.is_empty() {
             return IntervalSet::new(other.intervals.clone());
         }
@@ -156,7 +157,7 @@ impl IntervalSet {
     }
 
     /// Set-difference: elements in `self` not in `other`.
-    pub fn difference(&self, other: &IntervalSet) -> IntervalSet {
+    pub fn difference(&self, other: &IntervalSet) -> Result<IntervalSet, InternalError> {
         let mut x: Vec<(u32, u32)> = self.intervals.clone();
         let y = &other.intervals;
         let mut i = 0usize;
@@ -192,7 +193,7 @@ impl IntervalSet {
     }
 
     /// Set-intersection: elements in both.
-    pub fn intersection(&self, other: &IntervalSet) -> IntervalSet {
+    pub fn intersection(&self, other: &IntervalSet) -> Result<IntervalSet, InternalError> {
         let mut result = Vec::new();
         let mut i = 0usize;
         let mut j = 0usize;
@@ -233,7 +234,14 @@ impl IntervalSet {
 
     /// Inverse of `char_in_shrink_order`.
     pub fn index_from_char_in_shrink_order(&self, c: char) -> usize {
-        let mut i = self.index(c as u32).unwrap() as isize;
+        self.index_from_codepoint_in_shrink_order(c as u32)
+    }
+
+    /// [`Self::index_from_char_in_shrink_order`] keyed by raw codepoint,
+    /// for callers that hold `u32` codepoints rather than `char`s. Panics
+    /// if the codepoint is not in the set.
+    pub fn index_from_codepoint_in_shrink_order(&self, cp: u32) -> usize {
+        let mut i = self.index(cp).unwrap() as isize;
         if i <= self.idx_of_z {
             let n = self.idx_of_z - self.idx_of_zero as isize;
             if (self.idx_of_zero as isize) <= i && i <= self.idx_of_z {

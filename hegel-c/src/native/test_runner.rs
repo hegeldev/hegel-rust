@@ -31,11 +31,12 @@ use crate::native::core::{
     Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
+use crate::native::data_tree::generate_novel_prefix;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
@@ -128,15 +129,15 @@ pub(crate) async fn run_single_case(
     settings: &Settings,
     database_key: Option<&str>,
     exchange: &CaseExchange,
-) -> Option<Failure> {
-    let mut rng = create_rng(settings, database_key);
+) -> Result<Option<Failure>, RunError> {
+    let mut rng = create_rng(settings, database_key)?;
     let ntc = NativeTestCase::new_random(rng.spawn());
     ntc.family().set_state_machine_steps_unbounded();
     let (data_source, handle) = NativeDataSource::new(ntc);
     exchange.offer(Box::new(data_source)).await;
-    match NativeDataSource::take_outcome(&handle) {
-        TestCaseResult::Interesting(failure) => Some(failure),
-        _ => None,
+    match NativeDataSource::take_outcome(&handle)? {
+        TestCaseResult::Interesting(failure) => Ok(Some(failure)),
+        _ => Ok(None),
     }
 }
 
@@ -149,7 +150,7 @@ async fn run_main(
     too_slow_threshold: std::time::Duration,
     shrink_budget: std::time::Duration,
 ) -> Result<Vec<Failure>, RunError> {
-    Engine::new(settings, database_key, exchange)
+    Engine::new(settings, database_key, exchange)?
         .run(too_slow_threshold, shrink_budget)
         .await
 }
@@ -231,7 +232,7 @@ impl<'a> Engine<'a> {
                     };
                     let ntc =
                         NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE);
-                    let (run, mismatch) = self.test_function(ntc).await;
+                    let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
                     }
@@ -243,7 +244,7 @@ impl<'a> Engine<'a> {
                                     .nodes
                                     .iter()
                                     .zip(&stored_choices)
-                                    .any(|(node, stored)| node.value != *stored)
+                                    .any(|(node, stored)| node.data.value_ref() != *stored)
                             {
                                 replay_aligned = false;
                             }
@@ -282,8 +283,8 @@ impl<'a> Engine<'a> {
             && !found_in_reuse
         {
             let (run, mismatch) = self
-                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE))
-                .await;
+                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
+                .await?;
             if let Some(msg) = mismatch {
                 return Err(RunError::NonDeterministic(msg));
             }
@@ -334,8 +335,8 @@ impl<'a> Engine<'a> {
                 }
 
                 let case_rng = self.rng.spawn();
-                let prefix =
-                    crate::native::data_tree::generate_novel_prefix(&self.tree_root, &mut self.rng);
+                let tree_root = &self.tree_root;
+                let prefix = generate_novel_prefix(tree_root, &mut self.rng)?;
                 let ntc = if prefix.is_empty() {
                     NativeTestCase::new_random(case_rng)
                 } else {
@@ -345,7 +346,7 @@ impl<'a> Engine<'a> {
                     output.line("Running test case");
                 }
 
-                let (run, mismatch) = self.test_function(ntc).await;
+                let (run, mismatch) = self.test_function(ntc).await?;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -409,14 +410,14 @@ impl<'a> Engine<'a> {
                         max_valid: max_test_cases,
                         max_calls: max_test_cases * 10,
                     };
-                    optimiser.optimise_targets().await;
+                    optimiser.optimise_targets().await?;
                 }
 
                 if run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
                 {
-                    self.try_span_mutation(&run.nodes, &run.spans).await;
+                    self.try_span_mutation(&run.nodes, &run.spans).await?;
                 }
             }
         }
@@ -469,8 +470,7 @@ impl<'a> Engine<'a> {
                     .interesting
                     .values()
                     .map(|nodes| {
-                        let choices: Vec<ChoiceValue> =
-                            nodes.iter().map(|n| n.value.clone()).collect();
+                        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                         serialize_choices(&choices)
                     })
                     .max_by(|a, b| shortlex(a, b));
@@ -483,7 +483,7 @@ impl<'a> Engine<'a> {
                     }
                     if let Some(stored_choices) = deserialize_choices(&raw) {
                         let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                        let _ = self.test_function(ntc).await;
+                        self.test_function(ntc).await?;
                     }
                     if let Some(db) = self.db() {
                         db.delete(&secondary_key, &raw);
@@ -509,9 +509,9 @@ impl<'a> Engine<'a> {
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
 
-                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value.clone()).collect();
+                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, mismatch) = self.test_function(verify_ntc).await;
+                let (verify, mismatch) = self.test_function(verify_ntc).await?;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
                 }
@@ -532,12 +532,12 @@ impl<'a> Engine<'a> {
                     let mut shrinker =
                         Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
                     shrinker.deadline = Some(shrink_deadline);
-                    let _ = shrinker.initial_coarse_reduction().await;
+                    absorb_stop(shrinker.initial_coarse_reduction().await)?;
                     if verbosity == Verbosity::Debug {
                         let output = output.clone();
                         shrinker.set_debug(move |msg| output.line(msg));
                     }
-                    shrinker.shrink().await;
+                    shrinker.shrink().await?;
                     shrink_timed_out |= shrinker.timed_out;
                     shrinker.current_nodes
                 };
@@ -569,7 +569,7 @@ impl<'a> Engine<'a> {
                 .interesting
                 .values()
                 .map(|nodes| {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     serialize_choices(&choices)
                 })
                 .collect();
@@ -605,7 +605,7 @@ impl<'a> Engine<'a> {
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
-                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                 Failure {
                     origin,
                     reproduce_blob: Some(crate::native::blob::encode_failure(&choices)),
@@ -863,7 +863,7 @@ impl<'a> Persister<'a> {
         let Some(db) = self.db.as_deref() else { return };
         let Some(key) = self.database_key else { return };
         let key_bytes = key.as_bytes();
-        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
         let new_bytes = serialize_choices(&new_choices);
 
         let needs_save = match self.last_saved.get(origin) {
@@ -875,7 +875,7 @@ impl<'a> Persister<'a> {
         }
 
         if let Some(prev) = self.last_saved.get(origin) {
-            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value.clone()).collect();
+            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value()).collect();
             let prev_bytes = serialize_choices(&prev_choices);
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             db.move_value(key_bytes, &secondary_key, &prev_bytes);
@@ -934,17 +934,17 @@ impl<'a> Engine<'a> {
         settings: &'a Settings,
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
-    ) -> Self {
+    ) -> Result<Self, RunError> {
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
             Database::Disabled => None,
         };
-        Engine {
+        Ok(Engine {
             settings,
             database_key,
             exchange,
-            rng: create_rng(settings, database_key),
+            rng: create_rng(settings, database_key)?,
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::default(),
@@ -958,7 +958,7 @@ impl<'a> Engine<'a> {
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
-        }
+        })
     }
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
@@ -975,15 +975,16 @@ impl<'a> Engine<'a> {
     /// Execute one test case and record everything about its outcome —
     /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
     /// the choice-tree non-determinism diagnostic, if recording the run's
-    /// path contradicted an earlier run.
+    /// path contradicted an earlier run. `Err` means the driver violated
+    /// the run contract (see [`NativeDataSource::take_outcome`]).
     pub(crate) async fn test_function(
         &mut self,
         ntc: NativeTestCase,
-    ) -> (RunResult, Option<String>) {
+    ) -> Result<(RunResult, Option<String>), RunError> {
         let tc_start = std::time::Instant::now();
-        let run = self.execute(ntc).await;
+        let run = self.execute(ntc).await?;
         let mismatch = self.record_run(&run, tc_start.elapsed());
-        (run, mismatch)
+        Ok((run, mismatch))
     }
 
     /// Record one executed test case: the choice tree (losslessly — nodes,
@@ -1010,7 +1011,7 @@ impl<'a> Engine<'a> {
             self.test_is_trivial = true;
         }
         if run.status >= Status::Valid && !run.target_observations.is_empty() {
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             self.targeting.record(&choices, &run.target_observations);
         }
         match run.status {
@@ -1045,15 +1046,17 @@ impl<'a> Engine<'a> {
     /// the trie and returning a [`RunResult`] populated from the outcome
     /// reported by the data source's `mark_complete` plus the
     /// [`NativeTestCase`]'s realized choice nodes. Always a non-final
-    /// execution.
-    async fn execute(&mut self, ntc: NativeTestCase) -> RunResult {
+    /// execution. `Err` means the driver violated the run contract by
+    /// resuming the engine without concluding the offered case (see
+    /// [`NativeDataSource::take_outcome`]).
+    async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
         let (data_source, handle) = NativeDataSource::new(ntc);
         self.exchange.offer(Box::new(data_source)).await;
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle);
+        let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
             TestCaseResult::Valid => (Status::Valid, None),
@@ -1062,14 +1065,14 @@ impl<'a> Engine<'a> {
             TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
         };
 
-        RunResult {
+        Ok(RunResult {
             status,
             nodes,
             spans,
             origin,
             target_observations,
             span_events,
-        }
+        })
     }
 
     /// The single replay chokepoint — Hypothesis's `cached_test_function` —
@@ -1093,19 +1096,19 @@ impl<'a> Engine<'a> {
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
-    ) -> RunResult {
+    ) -> Result<RunResult, RunError> {
         if extend == 0 {
             if let Some(out) =
-                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)
+                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
             {
-                return RunResult {
+                return Ok(RunResult {
                     status: out.status,
                     nodes: out.nodes,
                     spans: out.spans,
                     origin: out.origin,
                     target_observations: out.target_observations,
                     span_events: Vec::new(),
-                };
+                });
             }
         }
         let ntc = if extend == 0 {
@@ -1114,8 +1117,8 @@ impl<'a> Engine<'a> {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)
         };
-        let (run, _mismatch) = self.test_function(ntc).await;
-        run
+        let (run, _mismatch) = self.test_function(ntc).await?;
+        Ok(run)
     }
 }
 
@@ -1139,20 +1142,20 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             }
             let run = match req {
                 ShrinkRun::Full(nodes) => {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     self.engine
                         .cached_test_function(&choices, Some(nodes), 0)
-                        .await
+                        .await?
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
                     self.engine
                         .cached_test_function(prefix, None, max_size.saturating_sub(prefix.len()))
-                        .await
+                        .await?
                 }
             };
             let matches = run.status == Status::Interesting
                 && run.origin.as_deref() == Some(self.target_origin.as_str());
-            (matches, run.nodes, Spans::from(run.spans))
+            Ok((matches, run.nodes, Spans::from(run.spans)))
         })
     }
 }
@@ -1172,7 +1175,11 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
 /// later identical proposal is served from the tree; tree-served probes are not
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
 impl<'a> Engine<'a> {
-    async fn try_span_mutation(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
+    async fn try_span_mutation(
+        &mut self,
+        nodes: &[ChoiceNode],
+        spans: &[Span],
+    ) -> Result<(), RunError> {
         let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
@@ -1191,10 +1198,10 @@ impl<'a> Engine<'a> {
             })
             .collect();
         if multi.is_empty() {
-            return;
+            return Ok(());
         }
 
-        let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
+        let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
 
         for _ in 0..SPAN_MUTATION_ATTEMPTS {
             if self.valid_test_cases >= self.settings.test_cases {
@@ -1241,27 +1248,30 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let run = self.cached_test_function(&attempt, None, 0).await;
+            let run = self.cached_test_function(&attempt, None, 0).await?;
             if run.status == Status::Interesting {
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
-    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis())
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineRng, RunError> {
+    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis()?)
         == Backend::Urandom
     {
-        return EngineRng::urandom();
+        return Ok(EngineRng::urandom());
     }
     if let Some(seed) = settings.seed {
-        EngineRng::seeded(seed)
+        Ok(EngineRng::seeded(seed))
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
+        Ok(EngineRng::seeded(crate::native::database::fnv1a(
+            key.as_bytes(),
+        )))
     } else {
-        EngineRng::from_os()
+        Ok(EngineRng::from_os())
     }
 }
 

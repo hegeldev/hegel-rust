@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::ChoiceValue;
+use crate::native::core::{ChoiceValue, ChoiceValueRef};
 
 /// Multi-value key/value store backing the native engine's replay phase.
 ///
@@ -189,37 +189,41 @@ pub(super) fn fnv1a(s: &[u8]) -> u64 {
 ///       persisted — spans and kinds are recreated on replay.
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
-    serialize_choice_list(&mut buf, choices.len(), choices.iter());
+    serialize_choice_list(
+        &mut buf,
+        choices.len(),
+        choices.iter().map(ChoiceValueRef::from),
+    );
     buf
 }
 
 fn serialize_choice_list<'a>(
     buf: &mut Vec<u8>,
     count: usize,
-    choices: impl Iterator<Item = &'a ChoiceValue>,
+    choices: impl Iterator<Item = ChoiceValueRef<'a>>,
 ) {
     buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
         match choice {
-            ChoiceValue::Integer(v) => {
+            ChoiceValueRef::Integer(v) => {
                 buf.push(0);
                 serialize_any_integer(buf, v);
             }
-            ChoiceValue::Boolean(v) => {
+            ChoiceValueRef::Boolean(v) => {
                 buf.push(1);
-                buf.push(*v as u8);
+                buf.push(v as u8);
             }
-            ChoiceValue::Float(v) => {
+            ChoiceValueRef::Float(v) => {
                 buf.push(2);
                 buf.extend_from_slice(&v.to_bits().to_le_bytes());
             }
-            ChoiceValue::Bytes(v) => {
+            ChoiceValueRef::Bytes(v) => {
                 buf.push(3);
                 let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
                 buf.extend_from_slice(v);
             }
-            ChoiceValue::String(v) => {
+            ChoiceValueRef::String(v) => {
                 buf.push(4);
                 let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
@@ -227,9 +231,9 @@ fn serialize_choice_list<'a>(
                     buf.extend_from_slice(&cp.to_le_bytes());
                 }
             }
-            ChoiceValue::Clone(record) => {
+            ChoiceValueRef::Clone(children) => {
                 buf.push(5);
-                serialize_choice_list(buf, record.len(), record.values());
+                serialize_choice_list(buf, children.len(), children.values());
             }
         }
     }

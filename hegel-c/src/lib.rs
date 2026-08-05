@@ -5,7 +5,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
@@ -40,25 +39,26 @@ pub mod __bench {
     pub use crate::native::rng::EngineRng;
 
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
-        crate::native::core::state::biased_integer_sample(ic, rng)
+        crate::native::core::state::biased_integer_sample(ic, rng).unwrap()
     }
 
     pub fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
-        crate::native::core::state::biased_string_sample(sc, rng)
+        crate::native::core::state::biased_string_sample(sc, rng).unwrap()
     }
 
     pub fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
-        crate::native::core::state::biased_bytes_sample(bc, rng)
+        crate::native::core::state::biased_bytes_sample(bc, rng).unwrap()
     }
 
     pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
-        crate::native::core::state::biased_float_sample(fc, rng)
+        crate::native::core::state::biased_float_sample(fc, rng).unwrap()
     }
 }
 
 use crate::backend::{
     DataSource, DataSourceError, Failure, RunError, TestCaseResult, TestRunResult,
 };
+use crate::control::hegel_internal_unwrap;
 use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
@@ -696,9 +696,7 @@ impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
             origin: cstring_lossy(&f.origin),
-            reproduce_blob: f
-                .reproduce_blob
-                .map(|b| CString::new(b).expect("reproduce blob is base64 and contains no NUL")),
+            reproduce_blob: f.reproduce_blob.map(|b| cstring_lossy(&b)),
         }
     }
 }
@@ -734,15 +732,20 @@ impl HegelRunResult {
 }
 
 /// Replace interior NULs (which can't appear in C strings) with the
-/// REPLACEMENT CHARACTER's underline. Hegel-produced diagnostic strings
-/// shouldn't contain NULs, but defending against that here means the
-/// caller never sees `CString::new` panic.
+/// REPLACEMENT CHARACTER. Hegel-produced diagnostic strings shouldn't
+/// contain NULs, but defending against that here means the caller never
+/// sees a `CString` construction fail.
 fn cstring_lossy(s: &str) -> CString {
     let sanitized: String = s
         .chars()
         .map(|c| if c == '\0' { '\u{FFFD}' } else { c })
         .collect();
-    CString::new(sanitized).expect("NULs replaced above")
+    let mut bytes = sanitized.into_bytes();
+    bytes.push(0);
+    // SAFETY: `sanitized` contains no U+0000, and no other char's UTF-8
+    // encoding contains a zero byte, so the only NUL in `bytes` is the
+    // terminator pushed above.
+    unsafe { CString::from_vec_with_nul_unchecked(bytes) }
 }
 
 /// Allocate a new settings handle initialised with libhegel's defaults
@@ -1130,59 +1133,6 @@ pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
     HEGEL_OK
 }
 
-static ENGINE_PANIC_HOOK: Once = Once::new();
-
-thread_local! {
-    /// Set for the duration of an engine poll (see [`EnginePollGuard`]) so
-    /// the panic hook can recognise engine panics. Keying on this rather
-    /// than anything about the thread means the embedding application's own
-    /// panics on the same thread are reported normally.
-    static IN_ENGINE_POLL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// RAII guard marking the current thread as inside an engine poll for the
-/// panic hook, cleared on drop — including the unwind of a caught engine
-/// panic.
-struct EnginePollGuard;
-
-impl EnginePollGuard {
-    fn enter() -> Self {
-        IN_ENGINE_POLL.with(|f| f.set(true));
-        EnginePollGuard
-    }
-}
-
-impl Drop for EnginePollGuard {
-    fn drop(&mut self) {
-        IN_ENGINE_POLL.with(|f| f.set(false));
-    }
-}
-
-/// Install (once) a process-global panic hook that swallows the default
-/// `thread '…' panicked at <file>:<line>:<col>` stderr line for panics
-/// raised while the engine is being polled.
-///
-/// Every engine panic (an internal invariant, an invalid-argument usage
-/// error) is raised inside a poll, is already caught by the poll's
-/// `catch_unwind`, and is surfaced as a run-level error through
-/// `hegel_run_result_error`. Letting the default hook *also* dump a
-/// Rust-internal source location to the embedding process's stderr is pure
-/// noise — a C consumer has no use for `src/native/test_runner.rs:329:21`,
-/// and it leaks implementation detail. Panics outside an engine poll
-/// (notably from the caller's own code) fall through to the previous hook
-/// unchanged.
-fn install_engine_panic_hook() {
-    ENGINE_PANIC_HOOK.call_once(|| {
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if IN_ENGINE_POLL.try_with(|f| f.get()).unwrap_or(false) {
-                return; // nocov
-            }
-            prev(info);
-        }));
-    });
-}
-
 /// Start a property-test run with the given settings, writing a handle the
 /// caller pulls test cases out of via `hegel_next_test_case` into `*out_run`.
 ///
@@ -1218,7 +1168,6 @@ pub unsafe extern "C" fn hegel_run_start(
     out_run: *mut *mut HegelRun,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    install_engine_panic_hook();
     if out_run.is_null() {
         set_last_error(ctx, "hegel_run_start: out parameter is null");
         return HEGEL_E_INVALID_ARG;
@@ -1303,13 +1252,20 @@ pub unsafe extern "C" fn hegel_next_test_case(
     };
 
     match poll_engine(engine) {
-        Ok(Poll::Pending) => {
-            let family = new_family(run.exchange.take());
-            let case = handle_from_family(Arc::clone(&family));
-            run.current_family = Some(family);
-            unsafe { *out_test_case = case };
-            HEGEL_OK
-        }
+        Ok(Poll::Pending) => match run.exchange.take() {
+            Ok(ds) => {
+                let family = new_family(ds);
+                let case = handle_from_family(Arc::clone(&family));
+                run.current_family = Some(family);
+                unsafe { *out_test_case = case };
+                HEGEL_OK
+            }
+            Err(e) => {
+                run.result = Some(HegelRunResult::from_error(&e.to_string()));
+                run.engine = None;
+                HEGEL_OK
+            }
+        },
         Ok(Poll::Ready(r)) => {
             run.result = Some(match r {
                 Ok(r) => HegelRunResult::from(r),
@@ -1337,7 +1293,6 @@ pub unsafe extern "C" fn hegel_next_test_case(
 fn poll_engine(
     engine: &mut EngineFuture,
 ) -> Result<Poll<Result<TestRunResult, RunError>>, Box<dyn std::any::Any + Send>> {
-    let _guard = EnginePollGuard::enter();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         engine
             .as_mut()
@@ -1692,6 +1647,10 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
         DataSourceError::InvalidArgument(msg) => {
             set_last_error(ctx, &msg);
             HEGEL_E_INVALID_ARG
+        }
+        DataSourceError::Internal(e) => {
+            set_last_error(ctx, &e.to_string());
+            HEGEL_E_INTERNAL
         }
     }
 }
@@ -2464,10 +2423,16 @@ pub unsafe extern "C" fn hegel_generate_integer(
             "hegel_generate_integer",
             out_value.is_null(),
             |tc| {
-                tc.stream
-                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))
+                let v = tc
+                    .stream
+                    .generate_integer(&BigInt::from(min_value), &BigInt::from(max_value))?;
+                let narrowed = i64::try_from(v).ok();
+                Ok(hegel_internal_unwrap!(
+                    narrowed,
+                    "hegel_generate_integer: drawn value does not fit the requested i64 bounds"
+                ))
             },
-            |v| *out_value = i64::try_from(v).expect("value validated to fit the i64 bounds"),
+            |v| *out_value = v,
         )
     }
 }
@@ -2712,14 +2677,18 @@ pub struct HegelStringGenerator {
 }
 
 /// Translate a constructor-time engine error onto `ctx`. Constructors
-/// perform no draws, so any error they report is by definition an invalid
-/// argument.
+/// perform no draws, so any error they report is an invalid argument —
+/// unless it is a violated internal invariant, which reports as
+/// `HEGEL_E_INTERNAL`.
 fn translate_construct_error(
     ctx: *mut HegelContext,
     e: crate::native::core::EngineError,
 ) -> hegel_result_t {
     set_last_error(ctx, &e.to_string());
-    HEGEL_E_INVALID_ARG
+    match e {
+        crate::native::core::EngineError::Internal(_) => HEGEL_E_INTERNAL,
+        _ => HEGEL_E_INVALID_ARG,
+    }
 }
 
 /// Convert a `u64` size argument to `usize`, saturating on 32-bit targets

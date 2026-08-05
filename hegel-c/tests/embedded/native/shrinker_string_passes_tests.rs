@@ -9,13 +9,13 @@ use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
 fn string_node_with(min_cp: u32, max_cp: u32, value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::String(StringChoice {
-            intervals: IntervalSet::new(vec![(min_cp, max_cp)]).into(),
+    ChoiceNode::string(
+        StringChoice {
+            intervals: IntervalSet::new(vec![(min_cp, max_cp)]).unwrap().into(),
             min_size: 0,
             max_size: 32,
-        }),
-        ChoiceValue::String(value),
+        },
+        value,
         false,
     )
 }
@@ -35,10 +35,10 @@ fn lower_duplicated_characters_lowers_shared_codepoint_in_pair() {
         Spans::new(),
     );
     drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
-    if let ChoiceValue::String(s0) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s0) = &shrinker.current_nodes[0].value() {
         assert!(s0.contains(&(b'a' as u32)) || !s0.contains(&(b'b' as u32)));
     }
-    if let ChoiceValue::String(s1) = &shrinker.current_nodes[1].value {
+    if let ChoiceValue::String(s1) = &shrinker.current_nodes[1].value() {
         assert!(s1.contains(&(b'a' as u32)) || !s1.contains(&(b'b' as u32)));
     }
 }
@@ -48,13 +48,13 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
     use crate::native::core::choices::IntegerChoice;
     let initial = vec![
         string_node_with(b'a' as u32, b'z' as u32, vec![b'b' as u32]),
-        ChoiceNode::new(
-            ChoiceKind::Integer(IntegerChoice {
+        ChoiceNode::integer(
+            IntegerChoice {
                 min_value: BigInt::from(0),
                 max_value: BigInt::from(100),
                 shrink_towards: BigInt::from(0),
-            }),
-            ChoiceValue::Integer(BigInt::from(7)),
+            },
+            BigInt::from(7),
             false,
         ),
     ];
@@ -67,7 +67,7 @@ fn lower_duplicated_characters_skips_non_string_neighbour() {
         Spans::new(),
     );
     drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
-    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value() {
         assert_eq!(s, &vec![b'b' as u32]);
     }
 }
@@ -84,7 +84,7 @@ fn normalize_unicode_chars_replaces_accented_letter_with_base() {
         Spans::new(),
     );
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value() {
         assert!(s == &vec![b'A' as u32] || s == &vec![b'a' as u32]);
     } else {
         unreachable!();
@@ -107,7 +107,7 @@ fn normalize_unicode_chars_skips_when_no_simpler_chars() {
         Spans::new(),
     );
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value() {
         assert_eq!(s, &vec![b'A' as u32]);
     } else {
         unreachable!();
@@ -122,7 +122,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
             ShrinkRun::Full(nodes) => {
                 let mut actual: Vec<ChoiceNode> = nodes.to_vec();
                 if let Some(node) = actual.first_mut() {
-                    if let ChoiceValue::String(s) = &mut node.value {
+                    if let crate::native::core::ChoiceData::String(_, s) = &mut node.data {
                         s.truncate(1);
                     }
                 }
@@ -134,7 +134,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
         Spans::new(),
     );
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value() {
         assert_eq!(s.len(), 1);
     } else {
         unreachable!();
@@ -143,12 +143,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
 
 #[test]
 fn normalize_unicode_chars_does_nothing_on_non_string() {
-    use crate::native::core::choices::BooleanChoice;
-    let initial = vec![ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    )];
+    let initial = vec![ChoiceNode::boolean(true, false)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
@@ -158,7 +153,7 @@ fn normalize_unicode_chars_does_nothing_on_non_string() {
         Spans::new(),
     );
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
     }
@@ -179,7 +174,7 @@ fn normalize_unicode_chars_respects_intervals() {
         Spans::new(),
     );
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value {
+    if let ChoiceValue::String(s) = &shrinker.current_nodes[0].value() {
         assert!(
             s.iter().all(|&cp| (0xC0..=0xFF).contains(&cp)),
             "produced out-of-alphabet codepoints: {:?}",
@@ -204,8 +199,8 @@ fn lower_duplicated_characters_handles_mismatched_alphabets() {
     );
     drive_no_yield(shrinker.lower_duplicated_characters()).unwrap();
     if let (ChoiceKind::String(k1), ChoiceValue::String(s1)) = (
-        shrinker.current_nodes[1].kind.as_ref(),
-        &shrinker.current_nodes[1].value,
+        shrinker.current_nodes[1].kind(),
+        &shrinker.current_nodes[1].value(),
     ) {
         assert!(k1.validate(s1), "node 1 left with out-of-alphabet value");
     }

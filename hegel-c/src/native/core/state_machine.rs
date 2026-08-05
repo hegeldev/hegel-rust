@@ -3,7 +3,7 @@ use std::cmp::min;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert};
 use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
@@ -88,19 +88,22 @@ pub struct NativeStateMachine {
 }
 
 impl NativeStateMachine {
-    pub fn new(rule_names: Vec<String>, invariant_names: Vec<String>) -> Self {
+    pub fn new(
+        rule_names: Vec<String>,
+        invariant_names: Vec<String>,
+    ) -> Result<Self, InternalError> {
         hegel_internal_assert!(
             !rule_names.is_empty(),
             "Stateful testing: there must be at least one rule"
         );
 
-        NativeStateMachine {
+        Ok(NativeStateMachine {
             rule_names,
             invariant_names,
             flags: None,
             step_cap: None,
             steps_drawn: 0,
-        }
+        })
     }
 
     /// Draw the index of the next rule to run, in `[0, num_rules)`, or

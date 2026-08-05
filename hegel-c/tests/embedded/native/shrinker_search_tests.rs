@@ -40,11 +40,15 @@ fn reference_find_integer(mut f: impl FnMut(usize) -> bool, probes: &mut Vec<usi
 
 fn drive_find_integer(mut f: impl FnMut(usize) -> bool, probes: &mut Vec<usize>) -> usize {
     let mut search = FindInteger::new();
-    while let Some(k) = search.probe() {
-        probes.push(k);
-        search.record(f(k));
+    loop {
+        match search.step() {
+            SearchStep::Done(v) => break v,
+            SearchStep::Probe(k) => {
+                probes.push(k);
+                search.record(f(k));
+            }
+        }
     }
-    search.result()
 }
 
 #[test]
@@ -87,16 +91,20 @@ fn find_integer_ignores_record_after_convergence() {
     while let Some(k) = search.probe() {
         search.record(k <= 2);
     }
-    let converged = search.result();
+    let SearchStep::Done(converged) = search.step() else {
+        panic!("search should have converged");
+    };
     search.record(true);
-    assert_eq!(search.result(), converged);
+    let SearchStep::Done(after) = search.step() else {
+        panic!("a converged search must stay converged");
+    };
+    assert_eq!(after, converged);
     assert!(search.probe().is_none());
 }
 
 #[test]
-#[should_panic(expected = "result read before the search converged")]
-fn find_integer_result_panics_before_convergence() {
-    FindInteger::new().result();
+fn find_integer_step_probes_before_convergence() {
+    assert!(matches!(FindInteger::new().step(), SearchStep::Probe(1)));
 }
 
 fn reference_bin_search_down(
@@ -132,11 +140,15 @@ fn drive_bin_search_down(
     probes: &mut Vec<i128>,
 ) -> i128 {
     let mut search = BinSearchDown::new(lo, hi);
-    while let Some(v) = search.probe() {
-        probes.push(v);
-        search.record(f(v));
+    loop {
+        match search.step() {
+            SearchStep::Done(v) => break v,
+            SearchStep::Probe(v) => {
+                probes.push(v);
+                search.record(f(v));
+            }
+        }
     }
-    search.result()
 }
 
 #[test]
@@ -167,9 +179,11 @@ fn bin_search_down_matches_reference_near_the_upper_bound() {
 }
 
 #[test]
-#[should_panic(expected = "result read before the search converged")]
-fn bin_search_down_result_panics_before_convergence() {
-    BinSearchDown::new(0, 10).result();
+fn bin_search_down_step_probes_before_convergence() {
+    assert!(matches!(
+        BinSearchDown::new(0, 10).step(),
+        SearchStep::Probe(0)
+    ));
 }
 
 #[test]
@@ -178,9 +192,14 @@ fn bin_search_down_ignores_record_after_convergence() {
     while let Some(v) = search.probe() {
         search.record(v >= 4);
     }
-    let converged = search.result();
+    let SearchStep::Done(converged) = search.step() else {
+        panic!("search should have converged");
+    };
     search.record(false);
-    assert_eq!(search.result(), converged);
+    let SearchStep::Done(after) = search.step() else {
+        panic!("a converged search must stay converged");
+    };
+    assert_eq!(after, converged);
     assert!(search.probe().is_none());
 }
 
@@ -217,11 +236,15 @@ fn drive_bin_search_down_big(
     probes: &mut Vec<BigInt>,
 ) -> BigInt {
     let mut search = BinSearchDownBig::new(lo, hi);
-    while let Some(v) = search.probe() {
-        probes.push(v.clone());
-        search.record(f(&v));
+    loop {
+        match search.step() {
+            SearchStep::Done(v) => break v,
+            SearchStep::Probe(v) => {
+                probes.push(v.clone());
+                search.record(f(&v));
+            }
+        }
     }
-    search.result()
 }
 
 #[test]
@@ -262,9 +285,11 @@ fn bin_search_down_big_handles_values_beyond_machine_width() {
 }
 
 #[test]
-#[should_panic(expected = "result read before the search converged")]
-fn bin_search_down_big_result_panics_before_convergence() {
-    BinSearchDownBig::new(BigInt::from(0), BigInt::from(10)).result();
+fn bin_search_down_big_step_probes_before_convergence() {
+    assert!(matches!(
+        BinSearchDownBig::new(BigInt::from(0), BigInt::from(10)).step(),
+        SearchStep::Probe(v) if v == BigInt::from(0)
+    ));
 }
 
 #[test]
@@ -276,5 +301,8 @@ fn bin_search_down_big_ignores_record_after_convergence() {
     let converged = search.probe().is_none();
     search.record(false);
     assert!(converged);
-    assert_eq!(search.result(), BigInt::from(4));
+    let SearchStep::Done(v) = search.step() else {
+        panic!("a converged search must stay converged");
+    };
+    assert_eq!(v, BigInt::from(4));
 }

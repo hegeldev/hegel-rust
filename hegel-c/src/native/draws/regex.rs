@@ -1,3 +1,4 @@
+use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -78,8 +79,7 @@ pub(crate) fn generate_regex(
             return Ok(s);
         }
     }
-    mark_invalid(ntc)?;
-    unreachable!("mark_invalid returns Err — control flow does not reach here")
+    Err(mark_invalid(ntc))
 }
 
 /// One generation attempt. Returns `Ok(None)` when the candidate was
@@ -367,7 +367,7 @@ fn generate_op(
 ) -> Result<(), EngineError> {
     match op {
         OpCode::Literal(cp) => {
-            let c = codepoint_to_char(*cp);
+            let c = codepoint_to_char(*cp)?;
             if state.flags & SRE_FLAG_IGNORECASE != 0 {
                 if let Some(sw) = char_swapcase(c) {
                     let which = ntc
@@ -376,27 +376,27 @@ fn generate_op(
                         .unwrap();
                     let pick = if which == 0 { c } else { sw };
                     if !alphabet_allows(alphabet, pick) {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                     out.push(pick);
                     return Ok(());
                 }
             }
             if !alphabet_allows(alphabet, c) {
-                mark_invalid(ntc)?;
+                return Err(mark_invalid(ntc));
             }
             out.push(c);
         }
         OpCode::NotLiteral(cp) => {
+            let c = codepoint_to_char(*cp)?;
             if alphabet.is_none() {
-                let chars = cached_default_not_literal(*cp, state.flags);
+                let chars = cached_default_not_literal(c, state.flags);
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let chars = cached_chars(
                     state.char_cache,
                     (*cp, state.flags & SRE_FLAG_IGNORECASE),
                     || {
-                        let c = codepoint_to_char(*cp);
                         let blacklist = swapcase_blacklist(c, state.flags);
                         gather_chars(alphabet, |c| !blacklist.contains(&c))
                     },
@@ -419,16 +419,16 @@ fn generate_op(
         }
         OpCode::At(at) => match at {
             AtCode::BeginningString if !out.is_empty() => {
-                mark_invalid(ntc)?;
+                return Err(mark_invalid(ntc));
             }
             AtCode::BeginningString => {}
             AtCode::Beginning => {
                 if state.flags & SRE_FLAG_MULTILINE != 0 {
                     if !out.is_empty() && !out.ends_with('\n') {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                 } else if !out.is_empty() {
-                    mark_invalid(ntc)?;
+                    return Err(mark_invalid(ntc));
                 }
             }
             AtCode::End | AtCode::EndString | AtCode::Boundary | AtCode::NonBoundary => {
@@ -441,7 +441,7 @@ fn generate_op(
         },
         OpCode::In(items) => {
             if alphabet.is_none() {
-                let chars = cached_default_in_set(items, state.flags);
+                let chars = cached_default_in_set(items, state.flags)?;
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let key = (items.as_ptr() as usize, items.len(), state.flags);
@@ -450,7 +450,7 @@ fn generate_op(
                     Some(cached) => cached,
                     None => {
                         let computed: Arc<[char]> =
-                            build_in_set(items, state.flags, alphabet).into();
+                            build_in_set(items, state.flags, alphabet)?.into();
                         state
                             .in_cache
                             .lock()
@@ -486,7 +486,7 @@ fn generate_op(
         }
         OpCode::GroupRef(gid) => {
             let Some(val) = state.groups.get(gid).cloned() else {
-                return mark_invalid(ntc);
+                return Err(mark_invalid(ntc));
             };
             out.push_str(&val);
         }
@@ -522,7 +522,7 @@ fn generate_op(
                     if match_seq(&p.data, start, &out_chars, state.flags, &state.groups)
                         == Some(end)
                     {
-                        mark_invalid(ntc)?;
+                        return Err(mark_invalid(ntc));
                     }
                 }
             } else {
@@ -536,7 +536,7 @@ fn generate_op(
             }
         }
         OpCode::Failure => {
-            mark_invalid(ntc)?;
+            return Err(mark_invalid(ntc));
         }
         OpCode::AtomicGroup(p) => {
             state.needs_whole_match = true;
@@ -574,7 +574,7 @@ fn generate_op(
 /// cost ~35ms per draw in debug; 10 draws trips the 1s TooSlow health
 /// check on slower CI runners. Since the default alphabet is fixed, we
 /// can memoise across draws (and across patterns).
-fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
+fn cached_default_in_set(items: &[SetItem], flags: u32) -> Result<Arc<[char]>, InternalError> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache_key = (
@@ -585,15 +585,15 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Arc<[char]> {
     {
         let guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&cache_key) {
-            return Arc::clone(cached);
+            return Ok(Arc::clone(cached));
         }
     }
-    let computed: Arc<[char]> = build_in_set(items, flags, &None).into();
+    let computed: Arc<[char]> = build_in_set(items, flags, &None)?.into();
     cache
         .lock()
         .unwrap()
         .insert(cache_key, Arc::clone(&computed));
-    computed
+    Ok(computed)
 }
 
 /// Cached character set for `Any` nodes with the default alphabet: the whole
@@ -632,10 +632,10 @@ fn cached_chars<F: FnOnce() -> Vec<char>>(
 /// Cached character set for `NotLiteral` nodes with the default alphabet.
 /// Same rationale as `cached_default_in_set`: `gather_chars` scans the
 /// entire BMP (~64K codepoints) and is too expensive to repeat per draw.
-fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
+fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache_key = (cp, flags & SRE_FLAG_IGNORECASE);
+    let cache_key = (c as u32, flags & SRE_FLAG_IGNORECASE);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
         let guard = cache.lock().unwrap();
@@ -643,7 +643,6 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
             return Arc::clone(cached);
         }
     }
-    let c = codepoint_to_char(cp);
     let blacklist = swapcase_blacklist(c, flags);
     let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
     cache
@@ -656,7 +655,11 @@ fn cached_default_not_literal(cp: u32, flags: u32) -> Arc<[char]> {
 /// Build the set of characters that a `(IN, items)` node can emit, after
 /// applying the current flags (IGNORECASE swaps, ASCII restriction) and
 /// intersecting with the user-supplied alphabet.
-fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -> Vec<char> {
+fn build_in_set(
+    items: &[SetItem],
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+) -> Result<Vec<char>, InternalError> {
     let negate = matches!(items.first(), Some(SetItem::Negate));
 
     let mut positive: Vec<char> = Vec::new();
@@ -666,7 +669,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
         match item {
             SetItem::Negate => {}
             SetItem::Literal(cp) => {
-                let c = codepoint_to_char(*cp);
+                let c = codepoint_to_char(*cp)?;
                 add_with_swapcase(&mut positive, c, flags);
             }
             SetItem::Range(lo, hi) => {
@@ -711,14 +714,14 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
                 }
             }
         }
-        out
+        Ok(out)
     } else {
         let cat_blocks: Vec<ChCode> = categories;
         let mut positive_set: HashSet<char> = HashSet::default();
         for c in positive {
             positive_set.extend(swapcase_blacklist(c, flags));
         }
-        gather_chars(alphabet, |c| {
+        Ok(gather_chars(alphabet, |c| {
             if ascii_only && (c as u32) >= 128 {
                 return false;
             }
@@ -729,7 +732,7 @@ fn build_in_set(items: &[SetItem], flags: u32, alphabet: &Option<IntervalSet>) -
                 return false;
             }
             true
-        })
+        }))
     }
 }
 fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
@@ -743,10 +746,9 @@ fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
 
 /// Return whether codepoint `c` is in the given CPython character category.
 fn in_category(c: char, cat: ChCode) -> bool {
-    let cp = c as u32;
     match cat {
-        ChCode::Digit => unicodedata::is_in_group(cp, "Nd"),
-        ChCode::NotDigit => !unicodedata::is_in_group(cp, "Nd"),
+        ChCode::Digit => unicodedata::is_in_group_char(c, "Nd"),
+        ChCode::NotDigit => !unicodedata::is_in_group_char(c, "Nd"),
         ChCode::Space => is_uni_space(c),
         ChCode::NotSpace => !is_uni_space(c),
         ChCode::Word => is_uni_word(c),
@@ -757,11 +759,11 @@ fn is_uni_space(c: char) -> bool {
     matches!(
         c,
         ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\x1f' | '\u{85}'
-    ) || unicodedata::is_in_group(c as u32, "Z")
+    ) || unicodedata::is_in_group_char(c, "Z")
 }
 
 fn is_uni_word(c: char) -> bool {
-    c == '_' || unicodedata::is_in_group(c as u32, "L") || unicodedata::is_in_group(c as u32, "N")
+    c == '_' || unicodedata::is_in_group_char(c, "L") || unicodedata::is_in_group_char(c, "N")
 }
 
 /// Gather all characters in `alphabet` (or BMP-minus-surrogates when no
@@ -817,22 +819,28 @@ fn draw_any_char(
                 .draw_integer(BigInt::from(32), BigInt::from(126))?
                 .to_i128()
                 .unwrap();
-            Ok(char::from_u32(cp as u32).expect("ASCII codepoint"))
+            Ok(hegel_internal_unwrap!(
+                char::from_u32(cp as u32),
+                "draw_any_char: printable-ASCII draw {cp} is not a char"
+            ))
         }
         Some(intervals) => {
             let n = intervals.len();
             if n == 0 {
-                mark_invalid(ntc)?;
-                unreachable!("mark_invalid returns Err — control flow does not reach here")
+                return Err(mark_invalid(ntc));
             }
             let idx = ntc
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
                 .to_i128()
                 .unwrap();
-            let cp = intervals
-                .get(idx as isize)
-                .expect("draw_integer respects len bound");
-            Ok(char::from_u32(cp).expect("IntervalSet excludes surrogates"))
+            let cp = hegel_internal_unwrap!(
+                intervals.get(idx as isize),
+                "draw_any_char: alphabet index {idx} out of bounds"
+            );
+            Ok(hegel_internal_unwrap!(
+                char::from_u32(cp),
+                "draw_any_char: alphabet codepoint {cp} is not a char"
+            ))
         }
     }
 }
@@ -842,7 +850,7 @@ fn emit_from_chars(
     out: &mut String,
 ) -> Result<(), EngineError> {
     if chars.is_empty() {
-        mark_invalid(ntc)?;
+        return Err(mark_invalid(ntc));
     }
     let n = chars.len();
     let idx = if n > 256 && ntc.weighted(0.8, None)? {
@@ -862,13 +870,16 @@ fn emit_from_chars(
     Ok(())
 }
 
-fn mark_invalid(ntc: &mut NativeTestCase) -> Result<(), EngineError> {
+fn mark_invalid(ntc: &mut NativeTestCase) -> EngineError {
     ntc.conclude(Status::Invalid, None);
-    Err(EngineError::InvalidTestCase)
+    EngineError::InvalidTestCase
 }
 
-fn codepoint_to_char(cp: u32) -> char {
-    char::from_u32(cp).unwrap_or_else(|| panic!("invalid codepoint in regex AST: {:#x}", cp))
+fn codepoint_to_char(cp: u32) -> Result<char, InternalError> {
+    Ok(hegel_internal_unwrap!(
+        char::from_u32(cp),
+        "invalid codepoint in regex AST: {cp:#x}"
+    ))
 }
 
 /// Python's `str.swapcase()` on a single char.  Python's definition differs

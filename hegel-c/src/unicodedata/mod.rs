@@ -16,7 +16,7 @@
 //! To refresh the vendored data, replace `src/unicodedata/UnicodeData.txt`
 //! and run `python scripts/generate_unicodedata_tables.py`.
 
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert};
 use std::sync::OnceLock;
 
 /// Unicode General Category.
@@ -185,10 +185,22 @@ fn nfd_bases() -> &'static [(u32, u32)] {
 /// Return the Unicode General Category for `cp`.
 ///
 /// Matches Python's `unicodedata.category(chr(cp))` for every codepoint in
-/// `0..=0x10FFFF`. Codepoints outside that range panic, mirroring Python's
-/// `chr(cp)` which rejects `cp > 0x10FFFF`.
-pub fn general_category(cp: u32) -> Category {
+/// `0..=0x10FFFF`. Codepoints outside that range are an internal error,
+/// mirroring Python's `chr(cp)` which rejects `cp > 0x10FFFF`.
+pub fn general_category(cp: u32) -> Result<Category, InternalError> {
     hegel_internal_assert!(cp <= 0x10FFFF, "codepoint {:#x} out of range", cp);
+    Ok(category_lookup(cp))
+}
+
+/// [`general_category`] for a `char`, whose type already guarantees a
+/// codepoint in range — so the lookup cannot fail.
+pub fn general_category_char(c: char) -> Category {
+    category_lookup(c as u32)
+}
+
+/// Table lookup behind [`general_category`]. Callers must pass
+/// `cp <= 0x10FFFF` (the binary search indexes past the table otherwise).
+fn category_lookup(cp: u32) -> Category {
     let table = ranges();
     let idx = table
         .binary_search_by(|&(end, _)| {
@@ -211,8 +223,19 @@ pub fn general_category(cp: u32) -> Category {
 /// `hypothesis/internal/charmap.py`).
 ///
 /// Unknown `group` strings match nothing.
-pub fn is_in_group(cp: u32, group: &str) -> bool {
-    let cat = general_category(cp).as_str();
+pub fn is_in_group(cp: u32, group: &str) -> Result<bool, InternalError> {
+    Ok(group_matches(general_category(cp)?.as_str(), group))
+}
+
+/// [`is_in_group`] for a `char`, whose type already guarantees a codepoint
+/// in range — so the check cannot fail.
+pub fn is_in_group_char(c: char, group: &str) -> bool {
+    group_matches(general_category_char(c).as_str(), group)
+}
+
+/// Shared group-matching rule behind [`is_in_group`] /
+/// [`is_in_group_char`].
+fn group_matches(cat: &str, group: &str) -> bool {
     match group.len() {
         2 => cat == group,
         1 => cat.starts_with(group) && MAJOR_CLASSES.contains(&group),

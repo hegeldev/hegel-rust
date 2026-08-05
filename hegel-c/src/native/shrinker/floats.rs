@@ -3,12 +3,12 @@ use crate::native::HashMap;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{
-    ChoiceKind, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
+    ChoiceData, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
 };
 
 use super::search::{BinSearchDown, FindInteger};
-use super::{ShrinkResult, ShrinkRun, Shrinker};
-use crate::control::hegel_internal_debug_assert;
+use super::{PassExit, ShrinkResult, ShrinkRun, Shrinker, absorb_node_gone};
+use crate::control::{InternalError, hegel_internal_debug_assert};
 
 /// Largest `f64` for which `n + 1.0 != n` holds — i.e., `2^53`. Above
 /// this magnitude consecutive integers stop being individually
@@ -22,7 +22,7 @@ const MAX_PRECISE_INTEGER: f64 = (1u64 << 53) as f64;
 /// in `u128`: subnormals (denominator `2^1074`) and huge normals
 /// (numerator > `2^127`) both overflow. Callers skip the integer-ratio
 /// shrink step for those.
-pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
+pub(super) fn as_integer_ratio(v: f64) -> Result<Option<(u128, u128)>, InternalError> {
     hegel_internal_debug_assert!(v.is_finite() && v > 0.0);
     let bits = v.to_bits();
     let biased_exp = ((bits >> 52) & 0x7FF) as i32;
@@ -38,13 +38,11 @@ pub(super) fn as_integer_ratio(v: f64) -> Option<(u128, u128)> {
     let trailing = num.trailing_zeros() as i32;
     num >>= trailing;
     exp += trailing;
-    if exp >= 0 {
-        let shifted = num.checked_shl(exp as u32)?;
-        Some((shifted, 1))
+    Ok(if exp >= 0 {
+        num.checked_shl(exp as u32).map(|shifted| (shifted, 1))
     } else {
-        let n = 1u128.checked_shl((-exp) as u32)?;
-        Some((num, n))
-    }
+        1u128.checked_shl((-exp) as u32).map(|n| (num, n))
+    })
 }
 
 impl<'a> Shrinker<'a> {
@@ -67,20 +65,25 @@ impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_floats(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let node = &self.current_nodes[i];
-            if let (ChoiceKind::Float(fc), ChoiceValue::Float(v)) =
-                (node.kind.as_ref(), &node.value)
-            {
+            absorb_node_gone(self.shrink_float_node(i).await)?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    async fn shrink_float_node(&mut self, i: usize) -> Result<(), PassExit> {
+        {
+            if let ChoiceData::Float(fc, v) = &self.current_nodes[i].data {
                 let v = *v;
                 let fc = fc.clone();
 
-                let s = fc.simplest();
+                let s = fc.simplest()?;
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
                         .await?;
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_infinite() {
                     if v < 0.0 && fc.validate(f64::INFINITY) {
@@ -90,7 +93,7 @@ impl<'a> Shrinker<'a> {
                         )]))
                         .await?;
                     }
-                    let v = self.float_at(i);
+                    let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                     if v.is_infinite() {
                         let cand = if v > 0.0 { f64::MAX } else { -f64::MAX };
                         if fc.validate(cand) {
@@ -100,7 +103,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_nan() {
                     let mut stepped = false;
@@ -116,7 +119,7 @@ impl<'a> Shrinker<'a> {
                     }
                     if !stepped && v.to_bits() != f64::NAN.to_bits() && fc.validate(f64::NAN) {
                         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
-                        attempt[i] = attempt[i].with_value(ChoiceValue::Float(f64::NAN));
+                        attempt[i] = ChoiceNode::float(fc.clone(), f64::NAN, attempt[i].was_forced);
                         let (is_interesting, actual_nodes, actual_spans) =
                             self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
                         self.calls += 1;
@@ -129,11 +132,10 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 if v.is_nan() {
-                    i += 1;
-                    continue;
+                    return Ok(());
                 }
 
                 if v.is_sign_negative() {
@@ -144,7 +146,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
 
                 let v_abs = v.abs();
                 let is_neg = v.is_sign_negative();
@@ -180,7 +182,7 @@ impl<'a> Shrinker<'a> {
                         };
                         search.record(ok);
                     }
-                    let cur = self.float_at(i);
+                    let cur = self.float_at(i).ok_or(PassExit::NodeGone)?;
                     if cur.is_finite() {
                         let base_after = cur.abs() as i128;
                         let lo: i128 = if is_neg {
@@ -213,7 +215,8 @@ impl<'a> Shrinker<'a> {
                         }
                     }
                 } else if v_abs.is_finite() && v_abs > 0.0 {
-                    let cur_abs = self.float_at(i).abs();
+                    let cur = self.float_at(i).ok_or(PassExit::NodeGone)?;
+                    let cur_abs = cur.abs();
                     for p in (0..=10).rev() {
                         let scale = libm::exp2(f64::from(p));
                         let scaled = cur_abs * scale;
@@ -240,7 +243,7 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                 let v_abs = v.abs();
                 let current_idx = float_to_index(v_abs);
                 let is_neg = v.is_sign_negative();
@@ -263,10 +266,10 @@ impl<'a> Shrinker<'a> {
                     }
                 }
 
-                let v = self.float_at(i);
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
                 if v.is_finite() && v != 0.0 {
                     let is_neg = v.is_sign_negative();
-                    if let Some((m, n)) = as_integer_ratio(v.abs()) {
+                    if let Some((m, n)) = as_integer_ratio(v.abs())? {
                         let k_init = m / n;
                         let r = m % n;
                         if k_init > 0 {
@@ -296,16 +299,16 @@ impl<'a> Shrinker<'a> {
                     }
                 }
             }
-            i += 1;
         }
         Ok(())
     }
 
-    fn float_at(&self, i: usize) -> f64 {
-        match self.current_nodes[i].value {
-            ChoiceValue::Float(f) => f,
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
-        }
+    /// Current float value at node `i`, or `None` when the node is not (or
+    /// no longer) a float — a concurrent shrink can pun the kind at any
+    /// position between probes.
+    fn float_at(&self, i: usize) -> Option<f64> {
+        let (_, v) = self.current_nodes.get(i)?.data.as_float()?;
+        Some(v)
     }
 
     /// Redistribute magnitude across nearby numeric pairs.
@@ -330,64 +333,99 @@ impl<'a> Shrinker<'a> {
                     break;
                 }
                 let j = i + gap;
-                if !is_float_or_integer(self.current_nodes[i].kind.as_ref())
-                    || !is_float_or_integer(self.current_nodes[j].kind.as_ref())
-                {
+                let (Some(num_i), Some(num_j)) = (
+                    numeric_at(&self.current_nodes[i].data),
+                    numeric_at(&self.current_nodes[j].data),
+                ) else {
                     continue;
-                }
+                };
                 if matches!(
-                    (
-                        self.current_nodes[i].kind.as_ref(),
-                        self.current_nodes[j].kind.as_ref()
-                    ),
-                    (ChoiceKind::Integer(_), ChoiceKind::Integer(_))
+                    (&num_i, &num_j),
+                    (Numeric::Integer(..), Numeric::Integer(..))
                 ) {
                     continue;
                 }
-                if !can_choose_for_redistribute(&self.current_nodes[i])
-                    || !can_choose_for_redistribute(&self.current_nodes[j])
-                {
+                if !num_i.can_choose_for_redistribute() || !num_j.can_choose_for_redistribute() {
                     continue;
                 }
-                if is_trivial(&self.current_nodes[i]) {
+                if num_i.is_trivial()? {
                     continue;
                 }
-                redistribute_pair(self, i, j).await?;
+                redistribute_pair(self, i, num_i, j, num_j).await?;
             }
         }
         Ok(())
     }
 }
 
-/// Float `shrink_towards` is fixed at 0 and we don't carry it in
-/// [`FloatChoice`]; the only node-level filter
-/// `redistribute_numeric_pairs` needs is the MAX_PRECISE_INTEGER / NaN
-/// / inf check below.
-fn can_choose_for_redistribute(node: &ChoiceNode) -> bool {
-    match (node.kind.as_ref(), &node.value) {
-        (ChoiceKind::Float(_), ChoiceValue::Float(f)) => {
-            f.is_finite() && f.abs() < MAX_PRECISE_INTEGER
+/// A numeric (integer or float) constraint/value pair, extracted from a
+/// [`ChoiceData`] by [`numeric_at`]. Pairing the two keeps the arithmetic
+/// helpers below total: a delta application preserves the variant, so
+/// rebuilding a [`ChoiceValue`] can only fail validation, never mismatch.
+#[derive(Clone)]
+enum Numeric {
+    Integer(IntegerChoice, BigInt),
+    Float(FloatChoice, f64),
+}
+
+/// The numeric pair at `data`, when it is an integer or float node.
+fn numeric_at(data: &ChoiceData) -> Option<Numeric> {
+    match data {
+        ChoiceData::Integer(ic, v) => Some(Numeric::Integer((**ic).clone(), v.clone())),
+        ChoiceData::Float(fc, v) => Some(Numeric::Float(fc.clone(), *v)),
+        _ => None,
+    }
+}
+
+impl Numeric {
+    fn as_f64(&self) -> f64 {
+        match self {
+            Numeric::Integer(_, n) => bigint_as_f64(n),
+            Numeric::Float(_, f) => *f,
         }
-        (ChoiceKind::Integer(_), ChoiceValue::Integer(_)) => true,
-        _ => unreachable!("filtered by is_float_or_integer; ChoiceNode invariant otherwise"),
     }
-}
 
-fn is_float_or_integer(k: &ChoiceKind) -> bool {
-    match k {
-        ChoiceKind::Float(_) | ChoiceKind::Integer(_) => true,
-        ChoiceKind::Boolean(_)
-        | ChoiceKind::Bytes(_)
-        | ChoiceKind::String(_)
-        | ChoiceKind::Clone => false,
+    /// Float `shrink_towards` is fixed at 0 and we don't carry it in
+    /// [`FloatChoice`]; integers aim at their clamped `shrink_towards`.
+    fn shrink_target(&self) -> f64 {
+        match self {
+            Numeric::Integer(ic, _) => bigint_as_f64(&ic.simplest()),
+            Numeric::Float(..) => 0.0,
+        }
     }
-}
 
-fn is_trivial(node: &ChoiceNode) -> bool {
-    match (node.kind.as_ref(), &node.value) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => *v == ic.simplest(),
-        (ChoiceKind::Float(fc), ChoiceValue::Float(v)) => !v.is_finite() || *v == fc.simplest(),
-        _ => unreachable!("filtered by is_float_or_integer; ChoiceNode invariant otherwise"),
+    /// The only node-level filter `redistribute_numeric_pairs` needs is the
+    /// MAX_PRECISE_INTEGER / NaN / inf check for floats.
+    fn can_choose_for_redistribute(&self) -> bool {
+        match self {
+            Numeric::Float(_, f) => f.is_finite() && f.abs() < MAX_PRECISE_INTEGER,
+            Numeric::Integer(..) => true,
+        }
+    }
+
+    fn is_trivial(&self) -> Result<bool, InternalError> {
+        Ok(match self {
+            Numeric::Integer(ic, v) => *v == ic.simplest(),
+            Numeric::Float(fc, v) => !v.is_finite() || *v == fc.simplest()?,
+        })
+    }
+
+    /// This pair with `k` added to its value; the constraint (and hence the
+    /// variant) is preserved.
+    fn add(&self, k: i128) -> Numeric {
+        match self {
+            Numeric::Integer(ic, n) => Numeric::Integer(ic.clone(), n + BigInt::from(k)),
+            Numeric::Float(fc, f) => Numeric::Float(fc.clone(), *f + k as f64),
+        }
+    }
+
+    /// The value as a [`ChoiceValue`], when it passes its own constraint's
+    /// validation.
+    fn build_value(&self) -> Option<ChoiceValue> {
+        match self {
+            Numeric::Integer(ic, n) => ic.value_from_bigint(n).map(ChoiceValue::Integer),
+            Numeric::Float(fc, f) => fc.validate(*f).then_some(ChoiceValue::Float(*f)),
+        }
     }
 }
 
@@ -402,36 +440,15 @@ fn bigint_as_f64(n: &BigInt) -> f64 {
 /// `v_i` is reduced toward its shrink target (0 for floats, simplest() for
 /// integers); the matching adjustment to `v_j` raises it. If `v_i` is
 /// already below its shrink target, both deltas flip sign.
-async fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> ShrinkResult<()> {
-    let (v_i, kind_i) = match (
-        shrinker.current_nodes[i].kind.as_ref(),
-        &shrinker.current_nodes[i].value,
-    ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
-            NumericValue::Integer(n.clone()),
-            NumericKind::Integer(ic.clone()),
-        ),
-        (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
-            (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
-        }
-        _ => unreachable!("redistribute_pair gated on is_float_or_integer + is_trivial"),
-    };
-    let (v_j, kind_j) = match (
-        shrinker.current_nodes[j].kind.as_ref(),
-        &shrinker.current_nodes[j].value,
-    ) {
-        (ChoiceKind::Integer(ic), ChoiceValue::Integer(n)) => (
-            NumericValue::Integer(n.clone()),
-            NumericKind::Integer(ic.clone()),
-        ),
-        (ChoiceKind::Float(fc), ChoiceValue::Float(f)) => {
-            (NumericValue::Float(*f), NumericKind::Float(fc.clone()))
-        }
-        _ => unreachable!("redistribute_pair gated on is_float_or_integer + is_trivial"),
-    };
-
-    let target_i = shrink_target(&kind_i);
-    let dir = if v_i.as_f64() >= target_i {
+async fn redistribute_pair(
+    shrinker: &mut Shrinker<'_>,
+    i: usize,
+    num_i: Numeric,
+    j: usize,
+    num_j: Numeric,
+) -> ShrinkResult<()> {
+    let target_i = num_i.shrink_target();
+    let dir = if num_i.as_f64() >= target_i {
         Direction::LowerLeftRaiseRight
     } else {
         Direction::RaiseLeftLowerRight
@@ -439,10 +456,10 @@ async fn redistribute_pair(shrinker: &mut Shrinker<'_>, i: usize, j: usize) -> S
 
     let mut search = FindInteger::new();
     while let Some(k) = search.probe() {
-        let (cand_i, cand_j) = apply_delta(&v_i, &v_j, k as i128, dir);
-        let ok = match build_value(&kind_i, cand_i) {
+        let (cand_i, cand_j) = apply_delta(&num_i, &num_j, k as i128, dir);
+        let ok = match cand_i.build_value() {
             None => false,
-            Some(val_i) => match build_value(&kind_j, cand_j) {
+            Some(val_i) => match cand_j.build_value() {
                 None => false,
                 Some(val_j) => {
                     shrinker
@@ -464,66 +481,13 @@ enum Direction {
     RaiseLeftLowerRight,
 }
 
-#[derive(Clone)]
-enum NumericValue {
-    Integer(BigInt),
-    Float(f64),
-}
-
-impl NumericValue {
-    fn as_f64(&self) -> f64 {
-        match self {
-            NumericValue::Integer(n) => bigint_as_f64(n),
-            NumericValue::Float(f) => *f,
-        }
-    }
-}
-
-#[derive(Clone)]
-enum NumericKind {
-    Integer(IntegerChoice),
-    Float(FloatChoice),
-}
-
-fn shrink_target(kind: &NumericKind) -> f64 {
-    match kind {
-        NumericKind::Integer(ic) => bigint_as_f64(&ic.simplest()),
-        NumericKind::Float(_) => 0.0,
-    }
-}
-
-fn apply_delta(
-    v_i: &NumericValue,
-    v_j: &NumericValue,
-    k: i128,
-    dir: Direction,
-) -> (NumericValue, NumericValue) {
+fn apply_delta(v_i: &Numeric, v_j: &Numeric, k: i128, dir: Direction) -> (Numeric, Numeric) {
     let signed_k_i = match dir {
         Direction::LowerLeftRaiseRight => -k,
         Direction::RaiseLeftLowerRight => k,
     };
     let signed_k_j = -signed_k_i;
-    (add_int(v_i, signed_k_i), add_int(v_j, signed_k_j))
-}
-
-fn add_int(v: &NumericValue, k: i128) -> NumericValue {
-    match v {
-        NumericValue::Integer(n) => NumericValue::Integer(n + BigInt::from(k)),
-        NumericValue::Float(f) => NumericValue::Float(*f + k as f64),
-    }
-}
-
-fn build_value(kind: &NumericKind, candidate: NumericValue) -> Option<ChoiceValue> {
-    match (kind, candidate) {
-        (NumericKind::Integer(ic), NumericValue::Integer(n)) => ic
-            .value_from_bigint(&n)
-            .filter(|av| ic.validate(av))
-            .map(ChoiceValue::Integer),
-        (NumericKind::Float(fc), NumericValue::Float(f)) => {
-            fc.validate(f).then_some(ChoiceValue::Float(f))
-        }
-        _ => unreachable!("apply_delta preserves variant; kind and value cannot disagree"),
-    }
+    (v_i.add(signed_k_i), v_j.add(signed_k_j))
 }
 
 #[cfg(test)]

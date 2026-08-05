@@ -119,9 +119,21 @@ fn state_machine_next_rule_returns_in_range_indices() {
 }
 
 #[test]
+fn with_ntc_maps_internal_engine_errors_without_latching_abort() {
+    let (ds, _handle) = random_source();
+    let e = crate::control::InternalError::new(format_args!("engine invariant"));
+    let out: Result<(), DataSourceError> = ds.with_ntc(|_| Err(EngineError::Internal(e.clone())));
+    match out {
+        Err(DataSourceError::Internal(got)) => assert_eq!(got, e),
+        other => panic!("expected DataSourceError::Internal, got {other:?}"),
+    }
+    assert!(!ds.test_aborted());
+}
+
+#[test]
 fn state_machine_next_rule_on_exhausted_source_stops_test() {
     let (ds, _handle) = exhausted_source();
-    let mut machine = NativeStateMachine::new(vec!["a".into(), "b".into()], vec![]);
+    let mut machine = NativeStateMachine::new(vec!["a".into(), "b".into()], vec![]).unwrap();
     assert!(matches!(
         ds.state_machine_next_rule(&mut machine),
         Err(DataSourceError::StopTest)
@@ -280,7 +292,7 @@ fn clone_stream_draws_independently_and_reassembles() {
 
     let nodes = NativeDataSource::take_nodes(&handle);
     assert_eq!(nodes.len(), 3);
-    let ChoiceValue::Clone(record) = &nodes[1].value else {
+    let ChoiceValue::Clone(record) = &nodes[1].value() else {
         panic!("expected the clone node to carry its stream");
     };
     assert_eq!(record.realized_nodes().unwrap().len(), 1);
@@ -354,8 +366,19 @@ fn mark_complete_from_a_clone_concludes_the_family() {
     ));
     assert!(matches!(
         NativeDataSource::take_outcome(&handle),
-        TestCaseResult::Invalid
+        Ok(TestCaseResult::Invalid)
     ));
+}
+
+#[test]
+fn take_outcome_reports_a_usage_error_for_an_unconcluded_family() {
+    let (ds, handle) = random_source();
+    ds.generate_boolean(0.5, None).unwrap();
+    let err = NativeDataSource::take_outcome(&handle).unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
+    let msg = err.to_string();
+    assert!(msg.contains("never marked complete"), "{msg}");
+    assert!(msg.contains("mark_complete"), "{msg}");
 }
 
 #[test]

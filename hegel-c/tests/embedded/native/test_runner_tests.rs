@@ -92,8 +92,6 @@ fn invalid_thresholds_match_hypothesis() {
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::native::core::ChoiceKind;
-use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 
 /// Build an [`Engine`] whose driver runs `body` (returning the test
@@ -110,7 +108,7 @@ where
     let settings = Settings::new().database(None);
     let exchange = CaseExchange::new();
     let fut = async {
-        let mut ctx = Engine::new(&settings, None, &exchange);
+        let mut ctx = Engine::new(&settings, None, &exchange).unwrap();
         after(&mut ctx, &exec_count).await;
     };
     crate::exchange::drive(&exchange, fut, |ds| {
@@ -133,6 +131,7 @@ fn run_single_case_sync(
         run_single_case(settings, key, &exchange),
         run_case,
     )
+    .unwrap()
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -153,11 +152,7 @@ fn run_main_sync(
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 #[test]
@@ -176,7 +171,8 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
                     None,
                     0,
                 )
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 0, "tree-known path must not run the body");
             assert_eq!(run.nodes.len(), 1);
@@ -194,11 +190,11 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
         },
@@ -221,12 +217,12 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
@@ -254,7 +250,8 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
         async |ctx, _| {
             let run = ctx
                 .execute(NativeTestCase::for_choices(&[], None, None))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
         },
     );
@@ -269,11 +266,11 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
         },
         async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await;
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
-            assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
+            assert_eq!(run.nodes[0].value(), ChoiceValue::Boolean(true));
         },
     );
 }
@@ -302,7 +299,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -337,7 +334,7 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -377,7 +374,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             ctx.valid_test_cases = 100;
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 0);
             assert_eq!(ctx.calls, 0);
@@ -389,14 +386,20 @@ fn span_mutation_stops_when_example_budget_is_full() {
 #[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Prng(_))
+    ));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Urandom(_))
+    ));
 }
 
 /// Wrap a `run_main` outcome into the aggregate
@@ -644,12 +647,15 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             TestCaseResult::Valid
         },
         async |ctx, _count| {
-            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1)).await;
+            let (run, _mismatch) = ctx
+                .test_function(NativeTestCase::for_simplest(1).unwrap())
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
 
             let mut tree = DataTreeNode::default();
             record_tree(&mut tree, &run.nodes, run.status, &[]);
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value().clone()).collect();
             assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
         },
     );
@@ -1150,7 +1156,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
     };
     assert_eq!(
-        record.values().cloned().collect::<Vec<_>>(),
+        record.owned_values(),
         vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(
             100
         ))]

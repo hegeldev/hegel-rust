@@ -1,40 +1,36 @@
 use super::*;
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::native::core::choices::{BooleanChoice, IntegerChoice};
+use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{BytesChoice, FloatChoice};
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(min_value),
             max_value: BigInt::from(max_value),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn float_node(value: f64) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    ChoiceNode::float(
+        FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: true,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(value),
+        },
+        value,
         false,
     )
 }
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Bytes(BytesChoice { min_size, max_size }),
-        ChoiceValue::Bytes(value),
-        false,
-    )
+    ChoiceNode::bytes(BytesChoice { min_size, max_size }, value, false)
 }
 
 #[test]
@@ -107,17 +103,10 @@ fn schedule_for_small_max_examples_never_fires_in_range() {
 fn is_climbable_accepts_integer_float_boolean_bytes() {
     let int_node = integer_node(0, 0, 10);
     let float_node = float_node(0.0);
-    let bool_node = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    );
+    let bool_node = ChoiceNode::boolean(true, false);
     let bytes_node = bytes_node(vec![0], 0, 8);
     for node in [&int_node, &float_node, &bool_node, &bytes_node] {
-        assert!(
-            is_climbable(&node.value, &node.kind),
-            "expected climbable: {node:?}"
-        );
+        assert!(is_climbable(&node.data), "expected climbable: {node:?}");
     }
 }
 
@@ -126,24 +115,12 @@ fn is_climbable_rejects_strings() {
     use crate::native::core::StringChoice;
     use crate::native::intervalsets::IntervalSet;
     let sc = StringChoice {
-        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).into(),
+        intervals: IntervalSet::new(vec![(0x20, 0x7E)]).unwrap().into(),
         min_size: 0,
         max_size: 10,
     };
-    assert!(!is_climbable(
-        &ChoiceValue::String(vec![b'a' as u32]),
-        &ChoiceKind::String(sc),
-    ));
-}
-
-#[test]
-fn is_climbable_returns_false_for_value_and_kind_mismatch() {
-    let int_kind = ChoiceKind::Integer(IntegerChoice {
-        min_value: BigInt::from(0),
-        max_value: BigInt::from(10),
-        shrink_towards: BigInt::from(0),
-    });
-    assert!(!is_climbable(&ChoiceValue::Bytes(vec![0]), &int_kind));
+    let node = ChoiceNode::string(sc, vec![b'a' as u32], false);
+    assert!(!is_climbable(&node.data));
 }
 
 #[test]
@@ -177,12 +154,7 @@ fn step_choice_float_adds_delta_as_f64() {
 
 #[test]
 fn step_choice_boolean_only_steps_by_one() {
-    use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(false),
-        false,
-    );
+    let node = ChoiceNode::boolean(false, false);
     assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Boolean(true)));
     assert_eq!(step_choice(&node, -1), Some(ChoiceValue::Boolean(false)));
     assert_eq!(step_choice(&node, 0), Some(ChoiceValue::Boolean(false)));
@@ -239,11 +211,16 @@ fn step_choice_bytes_returns_none_when_overflows_max_size() {
 }
 
 #[test]
-fn step_choice_rejects_mismatched_value_and_kind() {
-    use crate::native::core::choices::BooleanChoice;
-    let node = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Integer(BigInt::from(0)),
+fn step_choice_rejects_unsteppable_kinds() {
+    use crate::native::core::StringChoice;
+    use crate::native::intervalsets::IntervalSet;
+    let node = ChoiceNode::string(
+        StringChoice {
+            intervals: IntervalSet::new(vec![(97, 122)]).unwrap().into(),
+            min_size: 0,
+            max_size: 4,
+        },
+        vec![97],
         false,
     );
     assert_eq!(step_choice(&node, 1), None);
@@ -279,7 +256,7 @@ where
     let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
     let exchange = crate::exchange::CaseExchange::new();
     let fut = async {
-        let mut engine = Engine::new(&settings, None, &exchange);
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
         engine
             .targeting
             .record(&start, &HashMap::from_iter([("".to_string(), start_score)]));
@@ -289,7 +266,7 @@ where
             max_valid: 10_000,
             max_calls: 100_000,
         };
-        optimiser.optimise_targets().await;
+        optimiser.optimise_targets().await.unwrap();
     };
     crate::exchange::drive(&exchange, fut, |ds| {
         let result = body(&*ds);
