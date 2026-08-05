@@ -8,6 +8,9 @@ use super::ordering::{PermutationJudge, shrink_ordering};
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 use crate::native::core::{ChoiceNode, sort_key};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// The [`PermutationJudge`] behind [`Shrinker::reorder_spans`]: splices the
 /// sibling spans' node ranges into the proposed order and asks `consider`
@@ -156,8 +159,8 @@ impl<'a> Shrinker<'a> {
             .map(|s| (s.start, s.end, s.label.clone()))
             .collect();
 
-        let mut by_label: std::collections::BTreeMap<&str, Vec<usize>> =
-            std::collections::BTreeMap::new();
+        let mut by_label: alloc::collections::BTreeMap<&str, Vec<usize>> =
+            alloc::collections::BTreeMap::new();
         for (idx, (_, _, label)) in spans.iter().enumerate() {
             by_label.entry(label.as_str()).or_default().push(idx);
         }
@@ -210,8 +213,8 @@ impl<'a> Shrinker<'a> {
     /// symmetric alternative.
     pub(crate) async fn reorder_spans(&mut self) -> ShrinkResult<()> {
         let parents: Vec<Option<usize>> = {
-            let mut seen: std::collections::BTreeSet<Option<usize>> =
-                std::collections::BTreeSet::new();
+            let mut seen: alloc::collections::BTreeSet<Option<usize>> =
+                alloc::collections::BTreeSet::new();
             for span in self.current_spans.iter() {
                 seen.insert(span.parent);
             }
@@ -219,8 +222,8 @@ impl<'a> Shrinker<'a> {
         };
 
         for parent in parents {
-            let mut by_label: std::collections::BTreeMap<String, Vec<usize>> =
-                std::collections::BTreeMap::new();
+            let mut by_label: alloc::collections::BTreeMap<String, Vec<usize>> =
+                alloc::collections::BTreeMap::new();
             for (idx, span) in self.current_spans.iter().enumerate() {
                 if span.parent == parent {
                     by_label.entry(span.label.clone()).or_default().push(idx);

@@ -9,6 +9,7 @@ use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceNode;
 use crate::native::core::choices::IntegerChoice;
+use alloc::string::ToString;
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode::integer(

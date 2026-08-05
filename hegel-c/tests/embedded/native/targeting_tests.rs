@@ -2,6 +2,8 @@ use super::*;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{BytesChoice, FloatChoice};
+use alloc::string::ToString;
+use alloc::vec;
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
     ChoiceNode::integer(

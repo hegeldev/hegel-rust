@@ -9,7 +9,13 @@
 //! so the walker can short-circuit dead branches.
 
 use crate::native::HashMap;
-use std::sync::Arc;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use rand::RngExt;
 use rand::seq::SliceRandom;

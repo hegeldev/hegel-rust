@@ -18,6 +18,7 @@
 
 use crate::control::{InternalError, hegel_internal_assert};
 use crate::sys::sync::Lazy;
+use alloc::vec::Vec;
 
 /// Unicode General Category.
 ///
@@ -205,9 +206,9 @@ fn category_lookup(cp: u32) -> Category {
     let idx = table
         .binary_search_by(|&(end, _)| {
             if end < cp {
-                std::cmp::Ordering::Less
+                core::cmp::Ordering::Less
             } else {
-                std::cmp::Ordering::Greater
+                core::cmp::Ordering::Greater
             }
         })
         .unwrap_err();

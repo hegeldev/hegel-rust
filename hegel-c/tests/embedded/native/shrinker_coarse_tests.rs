@@ -5,6 +5,9 @@ use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn small_int_node(value: i128) -> ChoiceNode {
     ChoiceNode::integer(

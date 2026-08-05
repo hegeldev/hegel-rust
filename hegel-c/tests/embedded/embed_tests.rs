@@ -2,6 +2,9 @@ use super::*;
 use crate::backend::TestCaseResult;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Database, Settings};
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn quiet_settings(test_cases: u64) -> Settings {
@@ -156,7 +159,7 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
             hits += 1;
         }
     }
-    eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
+    std::eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
     assert!(
         hits >= 25,
         "shrinker reached the boundary only {}/50 times; shrunk values: {:?}",

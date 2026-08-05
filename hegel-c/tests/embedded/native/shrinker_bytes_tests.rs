@@ -2,6 +2,7 @@ use super::*;
 use crate::exchange::drive_no_yield;
 use crate::native::core::{ChoiceNode, Spans};
 use crate::native::shrinker::Shrinker;
+use alloc::boxed::Box;
 
 fn bytes_node(value: Vec<u8>, min_size: usize, max_size: usize) -> ChoiceNode {
     ChoiceNode::bytes(BytesChoice { min_size, max_size }, value, false)

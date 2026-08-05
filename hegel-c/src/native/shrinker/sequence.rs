@@ -1,4 +1,5 @@
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::core::{ChoiceData, ChoiceValue};
 
@@ -118,11 +119,11 @@ impl<'a> Shrinker<'a> {
             while i + 2 * block_size <= self.current_nodes.len() {
                 let j = i + block_size;
 
-                let types_a: Vec<std::mem::Discriminant<ChoiceData>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(&self.current_nodes[i + k].data))
+                let types_a: Vec<core::mem::Discriminant<ChoiceData>> = (0..block_size)
+                    .map(|k| core::mem::discriminant(&self.current_nodes[i + k].data))
                     .collect();
-                let types_b: Vec<std::mem::Discriminant<ChoiceData>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(&self.current_nodes[j + k].data))
+                let types_b: Vec<core::mem::Discriminant<ChoiceData>> = (0..block_size)
+                    .map(|k| core::mem::discriminant(&self.current_nodes[j + k].data))
                     .collect();
 
                 if types_a != types_b {

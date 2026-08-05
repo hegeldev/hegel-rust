@@ -1,6 +1,10 @@
 //! Windows backend for [`crate::sys`], built on `windows-sys` (direct
 //! kernel32 / bcryptprimitives calls, no C runtime state).
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 
 use windows_sys::Win32::Foundation::{
@@ -304,4 +308,67 @@ pub(super) fn park(word: &AtomicU32, expected: u32) {
 pub(super) fn unpark(word: &AtomicU32) {
     // SAFETY: `word` is a valid address to signal on.
     unsafe { windows_sys::Win32::System::Threading::WakeByAddressSingle(word.as_ptr().cast()) };
+}
+
+/// The alignment `HeapAlloc` guarantees (`MEMORY_ALLOCATION_ALIGNMENT`):
+/// twice the pointer size, so 16 on 64-bit Windows and 8 on 32-bit.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+const HEAP_ALIGN: usize = 2 * size_of::<usize>();
+
+/// Allocate `layout.size()` bytes at `layout.align()` alignment from the
+/// process heap. Alignments beyond `HeapAlloc`'s guarantee are met by
+/// over-allocating and stashing the raw pointer in the `usize` slot just
+/// below the aligned block, where [`dealloc`] recovers it. Returns null on
+/// failure. `layout` must have non-zero size (the `GlobalAlloc` contract).
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) fn alloc(layout: core::alloc::Layout) -> *mut u8 {
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapAlloc};
+    // SAFETY: `GetProcessHeap` has no preconditions, and `HeapAlloc` on the
+    // process heap with no flags is valid for any size.
+    unsafe {
+        let heap = GetProcessHeap();
+        if layout.align() <= HEAP_ALIGN {
+            HeapAlloc(heap, 0, layout.size()).cast()
+        } else {
+            let raw: *mut u8 = HeapAlloc(heap, 0, layout.size() + layout.align()).cast();
+            if raw.is_null() {
+                return raw;
+            }
+            let aligned = raw.add(layout.align() - (raw as usize & (layout.align() - 1)));
+            aligned.cast::<usize>().sub(1).write_unaligned(raw as usize);
+            aligned
+        }
+    }
+}
+
+/// Return an allocation made by [`alloc`] to the process heap.
+///
+/// # Safety
+///
+/// `ptr` must have been returned by [`alloc`] with an equivalent `layout`
+/// and not yet deallocated.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) unsafe fn dealloc(ptr: *mut u8, layout: core::alloc::Layout) {
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
+    // SAFETY: the caller guarantees `ptr` is a live [`alloc`] result, so for
+    // an over-aligned layout the `usize` below it holds the raw `HeapAlloc`
+    // pointer, and freeing that pointer on the process heap is valid.
+    unsafe {
+        let raw = if layout.align() <= HEAP_ALIGN {
+            ptr
+        } else {
+            ptr.cast::<usize>().sub(1).read_unaligned() as *mut u8
+        };
+        HeapFree(GetProcessHeap(), 0, raw.cast());
+    }
+}
+
+/// Abort the process without unwinding or running any cleanup.
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+pub(super) fn abort_process() -> ! {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    // SAFETY: terminating the current process has no memory-safety
+    // preconditions.
+    unsafe { TerminateProcess(GetCurrentProcess(), 3) };
+    loop {}
 }

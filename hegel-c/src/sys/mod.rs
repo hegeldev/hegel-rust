@@ -20,8 +20,12 @@
 //! [`sync`] builds the engine's mutex out of: a platform needs it only to
 //! make a contended lock cheap, and a platform without it (wasm) can spin.
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::time::Duration;
 
+#[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
+mod runtime;
 pub mod sync;
 
 #[cfg(unix)]
@@ -43,6 +47,9 @@ pub struct Error;
 /// only filesystem client (the failure database) treats every failure as
 /// a silent no-op.
 pub mod fs {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
     use super::{Error, imp};
 
     /// Names of the entries in the directory at `path`, excluding `.` and

@@ -1,12 +1,22 @@
+#![no_std]
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, CString, c_char, c_void};
-use std::future::Future;
-use std::pin::Pin;
-use std::ptr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll, Waker};
+extern crate alloc;
+#[cfg(any(test, feature = "std"))]
+extern crate std;
+
+use alloc::boxed::Box;
+use alloc::ffi::CString;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::ffi::{CStr, c_char, c_void};
+use core::future::Future;
+use core::pin::Pin;
+use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::{Context, Poll, Waker};
 
 use crate::sys::sync::{Mutex, MutexGuard};
 
@@ -23,8 +33,6 @@ mod exchange;
 /// cbindgen:ignore
 mod native;
 /// cbindgen:ignore
-mod panic;
-/// cbindgen:ignore
 mod settings;
 /// cbindgen:ignore
 mod sys;
@@ -35,6 +43,8 @@ mod unicodedata;
 #[cfg(feature = "__bench")]
 #[doc(hidden)]
 pub mod __bench {
+    use alloc::vec::Vec;
+
     pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::intervalsets::IntervalSet;
@@ -203,9 +213,9 @@ pub enum hegel_backend_t {
 ///   counterexample via `hegel_run_result_failure_count` /
 ///   `hegel_run_result_failure`.
 /// - `HEGEL_RUN_STATUS_ERROR`: the run itself failed — a failed health
-///   check, a nondeterministic test, an engine panic — and produced no
-///   verdict on the property. There are no failures to inspect; the
-///   message is read via `hegel_run_result_error`.
+///   check, a nondeterministic test, a violated engine invariant — and
+///   produced no verdict on the property. There are no failures to inspect;
+///   the message is read via `hegel_run_result_error`.
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -640,9 +650,7 @@ type EngineFuture = Pin<Box<dyn Future<Output = Result<TestRunResult, RunError>>
 /// do not free a run from a garbage-collector finalizer thread while
 /// another thread may still be using it.
 pub struct HegelRun {
-    /// The suspended engine. `None` once the run has produced its result —
-    /// normally by returning, or abnormally by panicking during a poll (the
-    /// panic is caught and converted into an errored result).
+    /// The suspended engine. `None` once the run has produced its result.
     engine: Option<EngineFuture>,
     /// The exchange the engine offers each test case's data source through;
     /// the engine future holds the other reference.
@@ -1254,7 +1262,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
     };
 
     match poll_engine(engine) {
-        Ok(Poll::Pending) => match run.exchange.take() {
+        Poll::Pending => match run.exchange.take() {
             Ok(ds) => {
                 let family = new_family(ds);
                 let case = handle_from_family(Arc::clone(&family));
@@ -1268,7 +1276,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 HEGEL_OK
             }
         },
-        Ok(Poll::Ready(r)) => {
+        Poll::Ready(r) => {
             run.result = Some(match r {
                 Ok(r) => HegelRunResult::from(r),
                 Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
@@ -1276,30 +1284,16 @@ pub unsafe extern "C" fn hegel_next_test_case(
             run.engine = None;
             HEGEL_OK
         }
-        Err(payload) => {
-            run.result = Some(HegelRunResult::from_error(&format!(
-                "Engine panic: {}",
-                crate::panic::panic_message(&payload)
-            )));
-            run.engine = None;
-            HEGEL_OK
-        }
     }
 }
 
 /// Resume the engine until it offers the next test case (`Pending`) or the
-/// run finishes (`Ready`), catching engine panics so they surface as a
-/// run-level error instead of unwinding into the C caller. The engine only
-/// suspends at its case exchange and is only resumed here, so a no-op waker
-/// suffices — no executor is involved.
-fn poll_engine(
-    engine: &mut EngineFuture,
-) -> Result<Poll<Result<TestRunResult, RunError>>, Box<dyn std::any::Any + Send>> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        engine
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-    }))
+/// run finishes (`Ready`). The engine only suspends at its case exchange and
+/// is only resumed here, so a no-op waker suffices — no executor is involved.
+fn poll_engine(engine: &mut EngineFuture) -> Poll<Result<TestRunResult, RunError>> {
+    engine
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
 }
 
 /// Write a caller-owned snapshot of the aggregated result of a finished run
@@ -1661,7 +1655,7 @@ fn translate_ds_error(ctx: *mut HegelContext, e: DataSourceError) -> hegel_resul
 /// `hegel_generate_*` draw. `data` must come from `Box::into_raw` on a boxed
 /// `[u8]` of length `len` and must not be freed again.
 unsafe fn free_engine_buffer(data: *mut u8, len: usize) {
-    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len)) });
+    drop(unsafe { Box::from_raw(core::ptr::slice_from_raw_parts_mut(data, len)) });
 }
 
 /// Shared prologue/epilogue for the typed `hegel_generate_*` draws: clear
@@ -2162,7 +2156,7 @@ unsafe fn names_from_c_array(
     let ptrs: &[*const c_char] = if len == 0 {
         &[]
     } else {
-        unsafe { std::slice::from_raw_parts(names, len) }
+        unsafe { core::slice::from_raw_parts(names, len) }
     };
     let mut out = Vec::with_capacity(len);
     for (i, &p) in ptrs.iter().enumerate() {
@@ -2496,8 +2490,8 @@ pub unsafe extern "C" fn hegel_generate_integer_big(
         set_last_error(ctx, "hegel_generate_integer_big: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let min_bytes = unsafe { std::slice::from_raw_parts(min_value, min_value_len) };
-    let max_bytes = unsafe { std::slice::from_raw_parts(max_value, max_value_len) };
+    let min_bytes = unsafe { core::slice::from_raw_parts(min_value, min_value_len) };
+    let max_bytes = unsafe { core::slice::from_raw_parts(max_value, max_value_len) };
     let min = BigInt::from_signed_bytes_le(min_bytes);
     let max = BigInt::from_signed_bytes_le(max_bytes);
     match tc.stream.generate_integer(&min, &max) {
@@ -2521,8 +2515,8 @@ pub unsafe extern "C" fn hegel_generate_integer_big(
                 0x00
             };
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_value, bytes.len());
-                std::ptr::write_bytes(
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_value, bytes.len());
+                core::ptr::write_bytes(
                     out_value.add(bytes.len()),
                     fill,
                     out_value_cap - bytes.len(),
@@ -2734,8 +2728,8 @@ unsafe fn optional_utf8_buffer_arg(
     if p.is_null() {
         return Ok(None);
     }
-    let bytes = unsafe { std::slice::from_raw_parts(p, len) };
-    match std::str::from_utf8(bytes) {
+    let bytes = unsafe { core::slice::from_raw_parts(p, len) };
+    match core::str::from_utf8(bytes) {
         Ok(s) => Ok(Some(s.to_string())),
         Err(_) => {
             set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
@@ -3297,7 +3291,7 @@ pub unsafe extern "C" fn hegel_generate_uuid(
             "hegel_generate_uuid",
             out_bytes.is_null(),
             |tc| tc.stream.generate_uuid(has_version.then_some(version)),
-            |bytes| std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16),
+            |bytes| core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_bytes, 16),
         )
     }
 }
@@ -3325,7 +3319,7 @@ pub unsafe extern "C" fn hegel_generate_ipv4(
             |tc| tc.stream.generate_ipv4(),
             |a| {
                 let octets = a.octets();
-                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
+                core::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 4);
             },
         )
     }
@@ -3353,7 +3347,7 @@ pub unsafe extern "C" fn hegel_generate_ipv6(
             |tc| tc.stream.generate_ipv6(),
             |a| {
                 let octets = a.octets();
-                std::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
+                core::ptr::copy_nonoverlapping(octets.as_ptr(), out_bytes, 16);
             },
         )
     }
@@ -3553,8 +3547,8 @@ pub unsafe extern "C" fn hegel_run_result_status(
 
 /// Write the run-level error message into `*out_error` when the run ended in
 /// an error rather than a verdict on the property — a failed health check
-/// (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or an engine panic
-/// — or NULL when it completed normally. An errored run has
+/// (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or a violated
+/// engine invariant — or NULL when it completed normally. An errored run has
 /// `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
 /// error is a failure of the run itself, not a counterexample to the property.
 /// The written pointer is owned by the result snapshot and valid until

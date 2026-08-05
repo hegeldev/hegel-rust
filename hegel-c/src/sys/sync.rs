@@ -16,6 +16,7 @@
 //! Every use in the engine initialises a pure function of constants, so which
 //! racer wins is unobservable.
 
+use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};

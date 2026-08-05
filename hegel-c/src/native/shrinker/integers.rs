@@ -1,4 +1,5 @@
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::bignum::{BigInt, Sign, Signed};
 use crate::native::core::choices::IntegerChoice;
@@ -216,12 +217,12 @@ impl<'a> Shrinker<'a> {
     /// The integer nodes of the current shrink target: index, constraint,
     /// and value, snapshotted together so pair passes work from a proven
     /// view instead of re-matching each node.
-    fn integer_entries(&self) -> Vec<(usize, std::sync::Arc<IntegerChoice>, BigInt)> {
+    fn integer_entries(&self) -> Vec<(usize, alloc::sync::Arc<IntegerChoice>, BigInt)> {
         self.current_nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| match &n.data {
-                ChoiceData::Integer(ic, v) => Some((i, std::sync::Arc::clone(ic), v.clone())),
+                ChoiceData::Integer(ic, v) => Some((i, alloc::sync::Arc::clone(ic), v.clone())),
                 _ => None,
             })
             .collect()
@@ -350,10 +351,10 @@ impl<'a> Shrinker<'a> {
     /// kind-simplest replacement, and integer groups additionally drive
     /// a binary search across all members at once.
     pub(super) async fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
-        let mut groups: HashMap<(std::mem::Discriminant<ChoiceData>, ChoiceValue), Vec<usize>> =
+        let mut groups: HashMap<(core::mem::Discriminant<ChoiceData>, ChoiceValue), Vec<usize>> =
             HashMap::default();
         for (i, node) in self.current_nodes.iter().enumerate() {
-            let key = (std::mem::discriminant(&node.data), node.value());
+            let key = (core::mem::discriminant(&node.data), node.value());
             groups.entry(key).or_default().push(i);
         }
         let mut ordered_groups: Vec<_> = groups.into_iter().collect();
@@ -368,7 +369,7 @@ impl<'a> Shrinker<'a> {
                 .filter(|&i| {
                     i < self.current_nodes.len()
                         && self.current_nodes[i].data.value_ref() == *group_value
-                        && std::mem::discriminant(&self.current_nodes[i].data) == *kind_disc
+                        && core::mem::discriminant(&self.current_nodes[i].data) == *kind_disc
                 })
                 .collect();
             if valid.len() < 2 {
@@ -395,11 +396,11 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let members: Vec<(usize, std::sync::Arc<IntegerChoice>)> = indices
+            let members: Vec<(usize, alloc::sync::Arc<IntegerChoice>)> = indices
                 .iter()
                 .filter_map(|&i| match self.current_nodes.get(i).map(|n| &n.data) {
                     Some(ChoiceData::Integer(ic, v)) if *v == value => {
-                        Some((i, std::sync::Arc::clone(ic)))
+                        Some((i, alloc::sync::Arc::clone(ic)))
                     }
                     _ => None,
                 })
@@ -409,7 +410,7 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
             let valid: Vec<usize> = members.iter().map(|&(i, _)| i).collect();
-            let ic = std::sync::Arc::clone(&members[0].1);
+            let ic = alloc::sync::Arc::clone(&members[0].1);
 
             absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
         }

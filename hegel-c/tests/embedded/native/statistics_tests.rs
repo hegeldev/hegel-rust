@@ -1,4 +1,6 @@
 use super::*;
+use alloc::format;
+use alloc::string::ToString;
 
 mod oracle {
     include!("statistics_oracle_data.rs");

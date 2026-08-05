@@ -7,6 +7,9 @@ use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice};
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn int_node(value: i128, was_forced: bool) -> ChoiceNode {
     ChoiceNode::integer(

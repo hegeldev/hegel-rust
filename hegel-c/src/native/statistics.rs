@@ -1,5 +1,5 @@
 use crate::control::{InternalError, hegel_internal_assert};
-use std::f64::consts::PI;
+use core::f64::consts::PI;
 
 /// Student's t CDF for integer `df >= 1`, evaluated at `t`.
 ///
@@ -210,7 +210,7 @@ impl LogStudentTDistribution {
     }
 }
 
-const LN_2: f64 = std::f64::consts::LN_2;
+const LN_2: f64 = core::f64::consts::LN_2;
 
 impl Distribution for LogStudentTDistribution {
     fn cdf(&self, x: f64) -> Result<f64, InternalError> {

@@ -7,6 +7,7 @@
 //! divergent sequence would change shrink call counts and determinism.
 
 use super::*;
+use alloc::vec::Vec;
 
 fn reference_find_integer(mut f: impl FnMut(usize) -> bool, probes: &mut Vec<usize>) -> usize {
     let mut f = move |x: usize| {

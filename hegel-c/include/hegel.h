@@ -170,9 +170,9 @@ typedef enum {
    counterexample via `hegel_run_result_failure_count` /
    `hegel_run_result_failure`.
  - `HEGEL_RUN_STATUS_ERROR`: the run itself failed — a failed health
-   check, a nondeterministic test, an engine panic — and produced no
-   verdict on the property. There are no failures to inspect; the
-   message is read via `hegel_run_result_error`.
+   check, a nondeterministic test, a violated engine invariant — and
+   produced no verdict on the property. There are no failures to inspect;
+   the message is read via `hegel_run_result_error`.
  */
 typedef enum {
     HEGEL_RUN_STATUS_PASSED = 0,
@@ -1718,8 +1718,8 @@ hegel_result_t hegel_run_result_status(hegel_context_t *ctx,
 /*
  Write the run-level error message into `*out_error` when the run ended in
  an error rather than a verdict on the property — a failed health check
- (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or an engine panic
- — or NULL when it completed normally. An errored run has
+ (e.g. FilterTooMuch, TooSlow), a nondeterministic test, or a violated
+ engine invariant — or NULL when it completed normally. An errored run has
  `hegel_run_result_status` of `HEGEL_RUN_STATUS_ERROR` and no failures: the
  error is a failure of the run itself, not a counterexample to the property.
  The written pointer is owned by the result snapshot and valid until

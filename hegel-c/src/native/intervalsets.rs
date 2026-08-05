@@ -2,10 +2,11 @@
 //! representation of a set of `(start, end)` codepoint intervals with O(log n)
 //! indexing and set-algebra operations.
 
+use crate::control::{InternalError, hegel_internal_assert};
+use alloc::vec::Vec;
+
 /// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
 /// both endpoints. Acts like a sorted sequence of the covered integers.
-use crate::control::{InternalError, hegel_internal_assert};
-
 #[derive(Debug, Clone)]
 pub struct IntervalSet {
     pub intervals: Vec<(u32, u32)>,

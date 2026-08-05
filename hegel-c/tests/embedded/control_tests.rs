@@ -1,4 +1,5 @@
 use super::*;
+use alloc::format;
 
 fn assert_err<T: std::fmt::Debug>(result: Result<T, InternalError>) -> String {
     result.unwrap_err().to_string()

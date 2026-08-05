@@ -1,6 +1,11 @@
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::{HashMap, HashSet};
-use std::sync::Arc;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};

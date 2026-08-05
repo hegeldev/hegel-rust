@@ -1,4 +1,5 @@
 use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::core::{ChoiceValue, StringChoice};
 use crate::unicodedata;
@@ -329,8 +330,8 @@ impl<'a> Shrinker<'a> {
                 let Some((kind_j, val_j)) = self.string_at(j) else {
                     continue;
                 };
-                let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
-                let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
+                let set_i: alloc::collections::BTreeSet<u32> = val_i.iter().copied().collect();
+                let set_j: alloc::collections::BTreeSet<u32> = val_j.iter().copied().collect();
                 let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
                 for ch in shared {
                     let original_key = kind_i.codepoint_key(ch);
@@ -429,7 +430,7 @@ impl<'a> Shrinker<'a> {
 /// then sorted by that key.  Used by `normalize_unicode_chars` to
 /// directly try the most semantically obvious replacements.
 fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
     let cur_key = kind.codepoint_key(cp);
     let mut candidates: BTreeSet<u32> = BTreeSet::new();
     if let Some(c) = char::from_u32(cp) {

@@ -2,6 +2,9 @@ use crate::exchange::drive_no_yield;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans, StringChoice};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn intervals(min: u32, max: u32) -> IntervalSet {
     IntervalSet::new(vec![(min, max)]).unwrap()

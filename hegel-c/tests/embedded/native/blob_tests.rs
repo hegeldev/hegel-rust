@@ -2,6 +2,7 @@ use super::*;
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
+use alloc::vec;
 
 fn sample_choices() -> Vec<ChoiceValue> {
     vec![

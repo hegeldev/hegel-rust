@@ -1,4 +1,5 @@
 use super::*;
+use alloc::string::ToString;
 
 #[test]
 fn integer_choice_simplest_spans_zero() {

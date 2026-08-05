@@ -17,9 +17,10 @@
 //! resumes the engine, which immediately reads the case's outcome off its
 //! handle.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use alloc::boxed::Box;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::backend::DataSource;
 use crate::control::{InternalError, hegel_internal_unwrap};
@@ -102,8 +103,8 @@ pub(crate) fn drive<F: Future>(
     fut: F,
     mut run_case: impl FnMut(BoxedDataSource),
 ) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
-    let mut cx = Context::from_waker(std::task::Waker::noop());
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = Context::from_waker(core::task::Waker::noop());
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(out) => return out,
@@ -116,10 +117,10 @@ pub(crate) fn drive<F: Future>(
 /// case — e.g. a shrinker driven by a synchronous probe.
 #[cfg(test)]
 pub(crate) fn drive_no_yield<F: Future>(fut: F) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
+    let mut fut = core::pin::pin!(fut);
     match fut
         .as_mut()
-        .poll(&mut Context::from_waker(std::task::Waker::noop()))
+        .poll(&mut Context::from_waker(core::task::Waker::noop()))
     {
         Poll::Ready(out) => out,
         Poll::Pending => unreachable!("future offered a test case but none was expected"),

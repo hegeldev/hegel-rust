@@ -11,6 +11,7 @@
 
 use crate::native::bignum::BigUint;
 use crate::native::core::ChoiceValue;
+use alloc::vec::Vec;
 
 use super::{ShrinkResult, Shrinker};
 
@@ -64,7 +65,7 @@ impl<'a> Shrinker<'a> {
                 let prefix: Vec<ChoiceValue> = self.current_nodes[..i]
                     .iter()
                     .map(|n| n.value())
-                    .chain(std::iter::once(new_val.clone()))
+                    .chain(core::iter::once(new_val.clone()))
                     .collect();
                 let max_size = crate::native::core::flattened_len(&self.current_nodes);
 

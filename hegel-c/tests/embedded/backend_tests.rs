@@ -1,4 +1,5 @@
 use super::*;
+use alloc::string::ToString;
 
 #[test]
 fn data_source_error_display_messages() {

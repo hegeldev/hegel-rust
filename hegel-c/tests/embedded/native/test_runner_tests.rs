@@ -10,6 +10,7 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use alloc::vec;
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
