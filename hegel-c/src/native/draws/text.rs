@@ -1,9 +1,10 @@
 use crate::native::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use crate::control::InternalError;
 use crate::native::core::EngineError;
 use crate::native::intervalsets::IntervalSet;
+use crate::sys::sync::{Lazy, Mutex};
 use crate::unicodedata;
 
 /// Character-alphabet constraints for a text draw, as accepted at the
@@ -196,20 +197,20 @@ fn chars_to_intervals(chars: &[char]) -> Result<IntervalSet, InternalError> {
 /// built over `range(sys.maxunicode + 1)`). Cached per category: the scan
 /// runs once per process per category name.
 fn categories_union(cats: &[String]) -> Result<IntervalSet, InternalError> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Arc<IntervalSet>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
+    static CACHE: Lazy<Mutex<HashMap<String, Arc<IntervalSet>>>> =
+        Lazy::new(|| Mutex::new(HashMap::default()));
 
     let mut union: Option<IntervalSet> = None;
     for cat in cats {
         let cached = {
-            let map = cache.lock().unwrap();
+            let map = CACHE.lock();
             map.get(cat).map(Arc::clone)
         };
         let single = match cached {
             Some(s) => s,
             None => {
                 let s = Arc::new(category_intervalset(cat)?);
-                cache.lock().unwrap().insert(cat.clone(), Arc::clone(&s));
+                CACHE.lock().insert(cat.clone(), Arc::clone(&s));
                 s
             }
         };

@@ -1,6 +1,6 @@
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
@@ -9,6 +9,7 @@ use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_ASCII, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
 use crate::native::re::parser::{OpCode, ParsedPattern, SetItem, SubPattern, parse_pattern};
+use crate::sys::sync::{Lazy, Mutex};
 use crate::unicodedata;
 
 use super::many_more;
@@ -445,17 +446,13 @@ fn generate_op(
                 emit_from_chars(ntc, &chars, out)?;
             } else {
                 let key = (items.as_ptr() as usize, items.len(), state.flags);
-                let cached = state.in_cache.lock().unwrap().get(&key).cloned();
+                let cached = state.in_cache.lock().get(&key).cloned();
                 let chars = match cached {
                     Some(cached) => cached,
                     None => {
                         let computed: Arc<[char]> =
                             build_in_set(items, state.flags, alphabet)?.into();
-                        state
-                            .in_cache
-                            .lock()
-                            .unwrap()
-                            .insert(key, Arc::clone(&computed));
+                        state.in_cache.lock().insert(key, Arc::clone(&computed));
                         computed
                     }
                 };
@@ -576,23 +573,19 @@ fn generate_op(
 /// can memoise across draws (and across patterns).
 fn cached_default_in_set(items: &[SetItem], flags: u32) -> Result<Arc<[char]>, InternalError> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
+    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
     let cache_key = (
         items.to_vec(),
         flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII),
     );
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
-        let guard = cache.lock().unwrap();
+        let guard = CACHE.lock();
         if let Some(cached) = guard.get(&cache_key) {
             return Ok(Arc::clone(cached));
         }
     }
     let computed: Arc<[char]> = build_in_set(items, flags, &None)?.into();
-    cache
-        .lock()
-        .unwrap()
-        .insert(cache_key, Arc::clone(&computed));
+    CACHE.lock().insert(cache_key, Arc::clone(&computed));
     Ok(computed)
 }
 
@@ -601,14 +594,13 @@ fn cached_default_in_set(items: &[SetItem], flags: u32) -> Result<Arc<[char]>, I
 /// [`cached_default_in_set`] — the 64K-codepoint scan is too expensive to
 /// repeat per drawn character.
 fn cached_default_any(allow_newline: bool) -> Arc<[char]> {
-    static CACHE: OnceLock<[Arc<[char]>; 2]> = OnceLock::new();
-    let both = CACHE.get_or_init(|| {
+    static CACHE: Lazy<[Arc<[char]>; 2]> = Lazy::new(|| {
         [
             gather_chars(&None, |c| c != '\n').into(),
             gather_chars(&None, |_| true).into(),
         ]
     });
-    Arc::clone(&both[usize::from(allow_newline)])
+    Arc::clone(&CACHE[usize::from(allow_newline)])
 }
 
 /// Look up `key` in a per-[`CompiledRegex`] character-set cache, computing
@@ -619,13 +611,13 @@ fn cached_chars<F: FnOnce() -> Vec<char>>(
     compute: F,
 ) -> Arc<[char]> {
     {
-        let guard = cache.lock().unwrap();
+        let guard = cache.lock();
         if let Some(cached) = guard.get(&key) {
             return Arc::clone(cached);
         }
     }
     let computed: Arc<[char]> = compute().into();
-    cache.lock().unwrap().insert(key, Arc::clone(&computed));
+    cache.lock().insert(key, Arc::clone(&computed));
     computed
 }
 
@@ -634,21 +626,17 @@ fn cached_chars<F: FnOnce() -> Vec<char>>(
 /// entire BMP (~64K codepoints) and is too expensive to repeat per draw.
 fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
+    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
     let cache_key = (c as u32, flags & SRE_FLAG_IGNORECASE);
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
-        let guard = cache.lock().unwrap();
+        let guard = CACHE.lock();
         if let Some(cached) = guard.get(&cache_key) {
             return Arc::clone(cached);
         }
     }
     let blacklist = swapcase_blacklist(c, flags);
     let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
-    cache
-        .lock()
-        .unwrap()
-        .insert(cache_key, Arc::clone(&computed));
+    CACHE.lock().insert(cache_key, Arc::clone(&computed));
     computed
 }
 

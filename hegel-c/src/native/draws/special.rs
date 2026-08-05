@@ -1,9 +1,9 @@
 use core::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::LazyLock;
 
 use crate::control::{InternalError, hegel_internal_assert};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
+use crate::sys::sync::Lazy;
 
 use super::{LABEL_DATE, LABEL_DATETIME, LABEL_IP_ADDRESS, LABEL_TIME, LABEL_UUID, spanned};
 
@@ -344,21 +344,19 @@ struct V6Network {
     size_minus_1: u128,
 }
 
-static SPECIAL_IPV4_NETWORKS: LazyLock<Result<Vec<V4Network>, InternalError>> =
-    LazyLock::new(|| {
-        SPECIAL_IPV4_CIDRS
-            .iter()
-            .map(|s| parse_v4_cidr(s))
-            .collect()
-    });
+static SPECIAL_IPV4_NETWORKS: Lazy<Result<Vec<V4Network>, InternalError>> = Lazy::new(|| {
+    SPECIAL_IPV4_CIDRS
+        .iter()
+        .map(|s| parse_v4_cidr(s))
+        .collect()
+});
 
-static SPECIAL_IPV6_NETWORKS: LazyLock<Result<Vec<V6Network>, InternalError>> =
-    LazyLock::new(|| {
-        SPECIAL_IPV6_CIDRS
-            .iter()
-            .map(|s| parse_v6_cidr(s))
-            .collect()
-    });
+static SPECIAL_IPV6_NETWORKS: Lazy<Result<Vec<V6Network>, InternalError>> = Lazy::new(|| {
+    SPECIAL_IPV6_CIDRS
+        .iter()
+        .map(|s| parse_v6_cidr(s))
+        .collect()
+});
 
 fn parse_v4_cidr(s: &str) -> Result<V4Network, InternalError> {
     let (addr, prefix) = s.split_once('/').unwrap();

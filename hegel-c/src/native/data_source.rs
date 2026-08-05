@@ -23,7 +23,7 @@ impl NativeDataSource {
     /// state: choice nodes, spans, and the outcome reported by
     /// [`DataSource::mark_complete`].
     pub fn new(ntc: NativeTestCase) -> (Self, NativeTestCaseHandle) {
-        let handle: NativeTestCaseHandle = Arc::new(std::sync::Mutex::new(ntc));
+        let handle: NativeTestCaseHandle = Arc::new(crate::sys::sync::Mutex::new(ntc));
         (Self::from_handle(Arc::clone(&handle)), handle)
     }
 
@@ -45,30 +45,21 @@ impl NativeDataSource {
     /// carries its stream's realized record and the returned sequence is the
     /// self-contained pieced-together choice sequence of the whole family.
     pub fn take_nodes(handle: &NativeTestCaseHandle) -> Vec<ChoiceNode> {
-        let mut ntc = handle.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ntc = handle.lock();
         ntc.reassemble();
         ntc.nodes.clone()
     }
 
     /// Convenience: extract spans from a handle after a test case.
     pub fn take_spans(handle: &NativeTestCaseHandle) -> Vec<Span> {
-        handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .spans
-            .clone()
-            .into_vec()
+        handle.lock().spans.clone().into_vec()
     }
 
     /// Convenience: extract the live span-open/close events (with their draw
     /// positions) recorded during the test case, so the engine can fold them
     /// into the choice tree for faithful replay.
     pub fn take_span_events(handle: &NativeTestCaseHandle) -> Vec<(usize, SpanEvent)> {
-        handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .span_events
-            .clone()
+        handle.lock().span_events.clone()
     }
 
     /// Read the `tc.target()` observations the test body recorded.
@@ -78,14 +69,7 @@ impl NativeDataSource {
     /// the shared state: the handle may still be shared with a run-owned
     /// [`crate::HegelTestCase`], so reading it must not perturb it.
     pub fn take_target_observations(handle: &NativeTestCaseHandle) -> HashMap<String, f64> {
-        handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .family()
-            .target_observations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        handle.lock().family().target_observations.lock().clone()
     }
 
     /// The test case's outcome, reconstructed from its family's write-once
@@ -100,11 +84,7 @@ impl NativeDataSource {
     /// unconcluded run, so its callers can't reach this), reported as a
     /// run-level [`RunError::UsageError`] rather than a panic.
     pub fn take_outcome(handle: &NativeTestCaseHandle) -> Result<TestCaseResult, RunError> {
-        let conclusion = handle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .family()
-            .conclusion();
+        let conclusion = handle.lock().family().conclusion();
         let Some((status, origin)) = conclusion else {
             return Err(RunError::UsageError(
                 "the test case was never marked complete: every test case the \
@@ -143,7 +123,7 @@ impl NativeDataSource {
         if self.aborted.load(Ordering::Relaxed) {
             return Err(self.aborted_error());
         }
-        let mut ntc = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ntc = self.inner.lock();
         f(&mut ntc).map_err(|e| match e {
             EngineError::Overrun => {
                 self.aborted.store(true, Ordering::Relaxed);
@@ -160,11 +140,7 @@ impl NativeDataSource {
     }
 
     fn aborted_error(&self) -> DataSourceError {
-        let status = self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .status();
+        let status = self.inner.lock().status();
         match status {
             Some(Status::Invalid) => DataSourceError::Assume,
             _ => DataSourceError::StopTest,
@@ -341,16 +317,8 @@ impl DataSource for NativeDataSource {
                  got non-finite value"
             )));
         }
-        let family = Arc::clone(
-            self.inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .family(),
-        );
-        let mut observations = family
-            .target_observations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let family = Arc::clone(self.inner.lock().family());
+        let mut observations = family.target_observations.lock();
         if observations.contains_key(label) {
             return Err(DataSourceError::InvalidArgument(format!(
                 "tc.target({score}, label={label:?}) would overwrite previous \
@@ -363,7 +331,7 @@ impl DataSource for NativeDataSource {
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {
-        let mut ntc = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ntc = self.inner.lock();
         let (status, origin) = match result {
             TestCaseResult::Valid => (Status::Valid, None),
             TestCaseResult::Invalid => (Status::Invalid, None),

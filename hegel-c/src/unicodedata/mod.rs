@@ -3,7 +3,7 @@
 //! Backed by two text data files generated from
 //! `src/unicodedata/UnicodeData.txt` (vendored Unicode 15.1.0 UCD, matching
 //! Python 3.13's `unicodedata.unidata_version`). The files are embedded with
-//! `include_str!` and parsed once on first lookup into a `OnceLock`-backed
+//! `include_str!` and parsed once on first lookup into a `Lazy`-backed
 //! `Vec`, keeping `cargo build` from having to parse ~6000 tuple literals
 //! per compile.
 //!
@@ -17,7 +17,7 @@
 //! and run `python scripts/generate_unicodedata_tables.py`.
 
 use crate::control::{InternalError, hegel_internal_assert};
-use std::sync::OnceLock;
+use crate::sys::sync::Lazy;
 
 /// Unicode General Category.
 ///
@@ -142,8 +142,7 @@ const NFD_BASES_DATA: &str = include_str!("nfd_bases.txt");
 /// in `0..=0x10FFFF`. Entries are non-overlapping, contiguous, and sorted
 /// by `end`; lookup is binary search for the first entry with `end >= cp`.
 fn ranges() -> &'static [(u32, Category)] {
-    static RANGES: OnceLock<Vec<(u32, Category)>> = OnceLock::new();
-    RANGES.get_or_init(|| {
+    static RANGES: Lazy<Vec<(u32, Category)>> = Lazy::new(|| {
         CATEGORIES_DATA
             .lines()
             .map(|line| {
@@ -157,15 +156,15 @@ fn ranges() -> &'static [(u32, Category)] {
                 (end, cat)
             })
             .collect()
-    })
+    });
+    &RANGES
 }
 
 /// Recursive NFD base for codepoints that have a canonical decomposition,
 /// sorted by codepoint. Codepoints not in this table either have no
 /// canonical decomposition or are already their own base.
 fn nfd_bases() -> &'static [(u32, u32)] {
-    static BASES: OnceLock<Vec<(u32, u32)>> = OnceLock::new();
-    BASES.get_or_init(|| {
+    static BASES: Lazy<Vec<(u32, u32)>> = Lazy::new(|| {
         NFD_BASES_DATA
             .lines()
             .map(|line| {
@@ -179,7 +178,8 @@ fn nfd_bases() -> &'static [(u32, u32)] {
                 (cp, base)
             })
             .collect()
-    })
+    });
+    &BASES
 }
 
 /// Return the Unicode General Category for `cp`.

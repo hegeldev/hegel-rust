@@ -431,12 +431,14 @@ dependencies = [
  "libloading",
  "libm",
  "miniz_oxide",
- "parking_lot",
+ "once_cell",
  "rand",
  "regex",
  "rustc-hash",
+ "rustix",
  "serde_json",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]

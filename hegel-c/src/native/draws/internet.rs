@@ -1,8 +1,9 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
+use crate::sys::sync::Lazy;
 
 use super::many_more;
 use crate::control::{InternalError, hegel_internal_debug_assert, hegel_internal_unwrap};
@@ -18,7 +19,7 @@ const IANA_TLDS_TXT: &str = include_str!("tlds-alpha-by-domain.txt");
 /// look like `.in-addr.arpa` reverse-lookup names) and `COM` moved to the
 /// front so the shrink target is `.com`. Mirrors
 /// `hypothesis.provisional.get_top_level_domains`.
-static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+static TOP_LEVEL_DOMAINS: Lazy<Vec<&'static str>> = Lazy::new(|| {
     let mut sorted: Vec<&'static str> = IANA_TLDS_TXT
         .lines()
         .filter(|line| !line.starts_with('#') && *line != "ARPA")
@@ -33,8 +34,8 @@ static TOP_LEVEL_DOMAINS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 /// RFC 5322 atext set used by Hypothesis's `emails()` for the local part:
 /// `string.ascii_letters + string.digits + "!#$%&'*+-/=^_\`{|}~"`. Encoded
 /// here as merged codepoint intervals in ascending order.
-static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
-    LazyLock::new(|| {
+static EMAIL_LOCAL_PART_INTERVALS: Lazy<Result<Arc<IntervalSet>, InternalError>> =
+    Lazy::new(|| {
         let ranges = vec![
             (b'!' as u32, b'!' as u32),
             (b'#' as u32, b'\'' as u32),
@@ -53,15 +54,15 @@ static EMAIL_LOCAL_PART_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalErr
 /// `string.printable` from Python: ASCII 32..=126 plus the whitespace
 /// codepoints `\t \n \x0b \x0c \r` (9..=13). Used for URL path components
 /// before url-encoding.
-static PRINTABLE_ASCII_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
-    LazyLock::new(|| Ok(Arc::new(IntervalSet::new(vec![(9, 13), (32, 126)])?)));
+static PRINTABLE_ASCII_INTERVALS: Lazy<Result<Arc<IntervalSet>, InternalError>> =
+    Lazy::new(|| Ok(Arc::new(IntervalSet::new(vec![(9, 13), (32, 126)])?)));
 
 /// Latin-1 byte range used as the alphabet for URL fragment characters.
 /// Mirrors Hypothesis's `st.characters(min_codepoint=0, max_codepoint=255)`
 /// for `_url_fragments_strategy`. Surrogates `[0xD800, 0xDFFF]` aren't in
 /// range so the single interval is already surrogate-free.
-static FRAGMENT_BYTE_INTERVALS: LazyLock<Result<Arc<IntervalSet>, InternalError>> =
-    LazyLock::new(|| Ok(Arc::new(IntervalSet::new(vec![(0, 0xFF)])?)));
+static FRAGMENT_BYTE_INTERVALS: Lazy<Result<Arc<IntervalSet>, InternalError>> =
+    Lazy::new(|| Ok(Arc::new(IntervalSet::new(vec![(0, 0xFF)])?)));
 
 fn mark_invalid(ntc: &mut NativeTestCase) -> Result<String, EngineError> {
     ntc.conclude(Status::Invalid, None);
@@ -107,7 +108,7 @@ impl DomainSpec {
 /// The full-length domain spec used by email and URL draws. `max_length`
 /// 255 admits every TLD, so a construction failure is an internal error,
 /// deferred to the first draw that reads the spec.
-static FULL_LENGTH_DOMAIN: LazyLock<Result<DomainSpec, InternalError>> = LazyLock::new(|| {
+static FULL_LENGTH_DOMAIN: Lazy<Result<DomainSpec, InternalError>> = Lazy::new(|| {
     let spec = DomainSpec::new(255).ok();
     Ok(hegel_internal_unwrap!(
         spec,

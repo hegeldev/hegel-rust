@@ -20,14 +20,29 @@ name = "hegel_c"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-rand = { version = "0.10" }
+rand = { version = "0.10", default-features = false }
 dashu-int = { version = "0.4.1", default-features = false }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 rustc-hash = { version = "2", default-features = false }
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
 libm = { version = "0.2", default-features = false }
-parking_lot = "0.12"
-tempfile = "3"
+once_cell = { version = "1.21", default-features = false, features = ["alloc"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs", "time", "rand", "stdio", "process", "thread"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_IO",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+] }
 
 [features]
 # Internal: exposes engine internals via `__bench` for hegeltest's benches/.
