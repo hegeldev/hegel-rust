@@ -252,6 +252,28 @@ fn unknown_handle_ids_map_to_invalid_argument_without_panicking() {
         matches!(&sm_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown state machine id")),
         "{sm_past_end:?}"
     );
+    let rejected_past_end = ds.state_machine_rule_rejected(0).unwrap_err();
+    assert!(
+        matches!(&rejected_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown state machine id")),
+        "{rejected_past_end:?}"
+    );
+}
+
+#[test]
+fn state_machine_rule_rejected_reports_the_outstanding_rule() {
+    let (ds, _handle) = random_source();
+    let id = ds
+        .new_state_machine(vec!["a".into(), "b".into()], vec![])
+        .unwrap();
+    let without_draw = ds.state_machine_rule_rejected(id).unwrap_err();
+    assert!(
+        matches!(&without_draw, DataSourceError::InvalidArgument(m) if m.contains("no outstanding rule")),
+        "{without_draw:?}"
+    );
+    assert!(!ds.test_aborted());
+    assert!(ds.state_machine_next_rule(id).unwrap().is_some());
+    ds.state_machine_rule_rejected(id).unwrap();
+    assert!(ds.state_machine_rule_rejected(id).is_err());
 }
 
 #[test]

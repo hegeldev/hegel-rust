@@ -1114,6 +1114,20 @@ hegel_result_t hegel_state_machine_next_rule(hegel_context_t *ctx,
                                              int64_t *out_rule_index);
 
 /*
+ Report that the rule most recently returned by
+ `hegel_state_machine_next_rule` was rejected: an assumption failed
+ before the rule completed, so it should not count toward libhegel's
+ step budget for the test case.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the state machine has
+ no outstanding rule — no rule has been returned yet, or the current rule
+ was already reported as rejected.
+ */
+hegel_result_t hegel_state_machine_rule_rejected(hegel_context_t *ctx,
+                                                 hegel_test_case_t *tc,
+                                                 int64_t state_machine_id);
+
+/*
  Parameters:
  `p`: Probability of drawing `true`. Must be in `[0.0, 1.0]`.
  `forced` / `has_forced`: When `has_forced` is set, the result is

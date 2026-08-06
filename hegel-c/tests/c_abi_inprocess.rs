@@ -25,8 +25,9 @@ use hegel_c::{
     hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
     hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    hegel_start_span, hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
+    hegel_status_t, hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -1041,7 +1042,7 @@ fn primitives_after_overrun_all_report_stop_test() {
 
 /// Exercise the state-machine and weighted-boolean C-ABI entry points
 /// (`hegel_new_state_machine`, `hegel_state_machine_next_rule`,
-/// `hegel_generate_boolean`) in-process: the invalid-handle and
+/// `hegel_state_machine_rule_rejected`, `hegel_generate_boolean`) in-process: the invalid-handle and
 /// argument-validation paths, plus the happy paths. The smoke test that
 /// drives these over dlopen doesn't contribute coverage, so they are
 /// measured here.
@@ -1060,6 +1061,10 @@ fn state_machine_and_primitive_boolean_paths() {
         );
         assert_eq!(
             hegel_state_machine_next_rule(ctx, null_tc, 0, &mut out_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_state_machine_rule_rejected(ctx, null_tc, 0),
             HEGEL_E_INVALID_HANDLE
         );
         let mut bv = false;
@@ -1113,12 +1118,29 @@ fn state_machine_and_primitive_boolean_paths() {
             hegel_state_machine_next_rule(ctx, tc, out_id, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_state_machine_rule_rejected(ctx, tc, 9999),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("unknown state machine id"));
+        assert_eq!(
+            hegel_state_machine_rule_rejected(ctx, tc, out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("no outstanding rule"));
+
         let mut rule_idx = -1i64;
         assert_eq!(
             hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
             HEGEL_OK
         );
         assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
+        assert_eq!(hegel_state_machine_rule_rejected(ctx, tc, out_id), HEGEL_OK);
+        assert_eq!(
+            hegel_state_machine_rule_rejected(ctx, tc, out_id),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("no outstanding rule"));
         let mut steps = 1;
         loop {
             assert_eq!(

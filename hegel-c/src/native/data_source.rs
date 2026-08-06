@@ -343,6 +343,22 @@ impl DataSource for NativeDataSource {
         })
     }
 
+    fn state_machine_rule_rejected(&self, state_machine_id: i64) -> Result<(), DataSourceError> {
+        self.with_ntc(|ntc| {
+            let machine = {
+                let machines = ntc
+                    .family()
+                    .state_machines
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let idx = checked_id("state machine", state_machine_id, machines.len())?;
+                Arc::clone(&machines[idx])
+            };
+            let mut machine = machine.lock().unwrap_or_else(|e| e.into_inner());
+            machine.rule_rejected()
+        })
+    }
+
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }

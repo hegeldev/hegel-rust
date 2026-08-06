@@ -2059,6 +2059,31 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     }
 }
 
+/// Report that the rule most recently returned by
+/// `hegel_state_machine_next_rule` was rejected: an assumption failed
+/// before the rule completed, so it should not count toward libhegel's
+/// step budget for the test case.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the state machine has
+/// no outstanding rule — no rule has been returned yet, or the current rule
+/// was already reported as rejected.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    state_machine_id: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_state_machine_rule_rejected", tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match tc.stream.state_machine_rule_rejected(state_machine_id) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
 /// Parameters:
 /// `p`: Probability of drawing `true`. Must be in `[0.0, 1.0]`.
 /// `forced` / `has_forced`: When `has_forced` is set, the result is

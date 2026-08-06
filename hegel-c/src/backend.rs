@@ -141,6 +141,13 @@ pub trait DataSource: Send + Sync {
         state_machine_id: i64,
     ) -> Result<Option<i64>, DataSourceError>;
 
+    /// Report that the rule most recently returned by
+    /// [`Self::state_machine_next_rule`] was rejected — an assumption
+    /// failed before it completed — so it does not count toward the test
+    /// case's step budget. Errors with `InvalidArgument` if the state
+    /// machine has no outstanding rule.
+    fn state_machine_rule_rejected(&self, state_machine_id: i64) -> Result<(), DataSourceError>;
+
     /// Draw a boolean that is `true` with probability `p`.
     ///
     /// If `forced` is `Some`, the choice is still recorded (so replay and

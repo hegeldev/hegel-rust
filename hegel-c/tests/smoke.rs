@@ -129,6 +129,7 @@ type FnNewStateMachine = unsafe extern "C" fn(
     *mut i64,
 ) -> c_int;
 type FnStateMachineNextRule = unsafe extern "C" fn(*mut u8, *mut u8, i64, *mut i64) -> c_int;
+type FnStateMachineRuleRejected = unsafe extern "C" fn(*mut u8, *mut u8, i64) -> c_int;
 type FnPrimitiveBoolean =
     unsafe extern "C" fn(*mut u8, *mut u8, f64, bool, bool, *mut bool) -> c_int;
 type FnStringGeneratorText = unsafe extern "C" fn(
@@ -189,6 +190,7 @@ struct Api<'a> {
     pool_generate: Symbol<'a, FnPoolGenerate>,
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_rule: Symbol<'a, FnStateMachineNextRule>,
+    state_machine_rule_rejected: Symbol<'a, FnStateMachineRuleRejected>,
     primitive_boolean: Symbol<'a, FnPrimitiveBoolean>,
     string_generator_text: Symbol<'a, FnStringGeneratorText>,
     target: Symbol<'a, FnTarget>,
@@ -230,6 +232,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_rule: lib.get(b"hegel_state_machine_next_rule\0").unwrap(),
+            state_machine_rule_rejected: lib.get(b"hegel_state_machine_rule_rejected\0").unwrap(),
             primitive_boolean: lib.get(b"hegel_generate_boolean\0").unwrap(),
             string_generator_text: lib.get(b"hegel_string_generator_text\0").unwrap(),
             target: lib.get(b"hegel_target\0").unwrap(),
@@ -626,6 +629,10 @@ fn caller_usage_errors_return_error_not_abort() {
         let mut rule_idx = 0i64;
         assert_eq!(
             (a.state_machine_next_rule)(ctx, tc, 9999, &mut rule_idx),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            (a.state_machine_rule_rejected)(ctx, tc, 9999),
             HEGEL_E_INVALID_ARG
         );
 

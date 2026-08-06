@@ -326,3 +326,72 @@ fn simplest_template_always_selects_rule_zero() {
 fn no_rules_is_error() {
     machine(0);
 }
+
+fn simplest(max_size: usize) -> NativeTestCase {
+    NativeTestCase::for_choices_and_template(
+        &[],
+        None,
+        Some(ChoiceTemplate::simplest(None)),
+        max_size,
+        None,
+    )
+}
+
+#[test]
+fn rejected_rules_do_not_count_toward_the_step_budget() {
+    let mut ntc = simplest(4096);
+    ntc.family().set_stateful_step_count(3);
+    let mut sm = machine(2);
+    for _ in 0..5 {
+        assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+        sm.rule_rejected().unwrap();
+    }
+    for _ in 0..3 {
+        assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+    }
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
+}
+
+#[test]
+fn attempts_stop_at_ten_times_the_step_count_once_a_rule_has_succeeded() {
+    let mut ntc = simplest(4096);
+    ntc.family().set_stateful_step_count(2);
+    let mut sm = machine(2);
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+    for _ in 0..19 {
+        assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+        sm.rule_rejected().unwrap();
+    }
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
+}
+
+#[test]
+fn a_machine_with_no_successful_steps_gets_a_thousand_attempts() {
+    let mut ntc = simplest(8192);
+    ntc.family().set_stateful_step_count(2);
+    let mut sm = machine(2);
+    for _ in 0..1000 {
+        assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+        sm.rule_rejected().unwrap();
+    }
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), None);
+}
+
+#[test]
+fn rule_rejected_without_an_outstanding_rule_is_an_error() {
+    let mut ntc = simplest(64);
+    ntc.family().set_stateful_step_count(5);
+    let mut sm = machine(2);
+    assert!(matches!(
+        sm.rule_rejected(),
+        Err(EngineError::InvalidArgument(_))
+    ));
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+    sm.rule_rejected().unwrap();
+    assert!(matches!(
+        sm.rule_rejected(),
+        Err(EngineError::InvalidArgument(_))
+    ));
+    assert_eq!(sm.next_rule(&mut ntc).unwrap(), Some(0));
+    sm.rule_rejected().unwrap();
+}
