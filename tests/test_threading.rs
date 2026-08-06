@@ -133,7 +133,7 @@ fn test_nested_generators_work_across_thread_boundary(tc: TestCase) {
 /// same (reentrant) lock from a different thread. Fine-grained locking fixes
 /// this.
 #[hegel::composite]
-fn thread_mid_generator(tc: TestCase) -> (i32, i64, bool) {
+fn thread_mid_generator(tc: &TestCase) -> (i32, i64, bool) {
     let a: i32 = tc.draw(gs::integers::<i32>());
 
     let tc_worker = tc.clone();

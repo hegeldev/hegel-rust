@@ -107,7 +107,7 @@
 //! }
 //!
 //! #[hegel::composite]
-//! fn generate_person(tc: TestCase) -> Person {
+//! fn generate_person(tc: &TestCase) -> Person {
 //!     let age = tc.draw(gs::integers::<i32>());
 //!     let name = tc.draw(gs::text());
 //!     Person { age, name }
@@ -128,7 +128,7 @@
 //! }
 //!
 //! #[hegel::composite]
-//! fn generate_person(tc: TestCase) -> Person {
+//! fn generate_person(tc: &TestCase) -> Person {
 //!     let age = tc.draw(gs::integers::<i32>());
 //!     let name = tc.draw(gs::text());
 //!     let driving_license = if age >= 18 {
@@ -318,16 +318,19 @@ pub use hegel_macros::DefaultGenerator;
 
 /// Define a composite generator from a function.
 ///
-/// The first parameter must be a [`TestCase`] and is passed automatically
+/// The first parameter must be a `&`[`TestCase`] and is passed automatically
 /// when the generator is drawn. Any additional parameters become parameters
-/// of the returned factory function. The function must have an explicit
-/// return type.
+/// of the generator's constructor function and must implement [`Clone`]:
+/// they are stored on the generator and cloned into each draw (pass a
+/// non-`Clone` generator argument through
+/// [`boxed()`](generators::Generator::boxed)). The function must have an
+/// explicit return type.
 ///
 /// ```no_run
 /// use hegel::generators as gs;
 ///
 /// #[hegel::composite]
-/// fn sorted_vec(tc: hegel::TestCase, min_len: usize) -> Vec<i32> {
+/// fn sorted_vec(tc: &hegel::TestCase, min_len: usize) -> Vec<i32> {
 ///     let mut v: Vec<i32> = tc.draw(gs::vecs(gs::integers()).min_size(min_len));
 ///     v.sort();
 ///     v
@@ -338,6 +341,33 @@ pub use hegel_macros::DefaultGenerator;
 ///     let v = tc.draw(sorted_vec(3));
 ///     assert!(v.len() >= 3);
 ///     assert!(v.windows(2).all(|w| w[0] <= w[1]));
+/// }
+/// ```
+///
+/// The attribute expands to a struct named after the function
+/// (`sorted_vec` above becomes `SortedVecCompositeGenerator`) plus a
+/// constructor function with the original name, so the generator has a
+/// nameable type that can be stored, cloned, and passed to other
+/// composites. Because the constructor is an ordinary function returning
+/// that struct, composite generators can also call themselves recursively:
+///
+/// ```no_run
+/// use hegel::generators as gs;
+///
+/// #[derive(Debug, Clone)]
+/// enum Tree {
+///     Leaf,
+///     Branch(Box<Tree>, Box<Tree>),
+/// }
+///
+/// #[hegel::composite]
+/// fn tree(tc: &hegel::TestCase) -> Tree {
+///     tc.draw(hegel::one_of!(
+///         gs::just(Tree::Leaf),
+///         hegel::compose!(|tc| {
+///             Tree::Branch(Box::new(tc.draw(tree())), Box::new(tc.draw(tree())))
+///         }),
+///     ))
 /// }
 /// ```
 pub use hegel_macros::composite;
