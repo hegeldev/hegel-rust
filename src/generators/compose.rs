@@ -4,17 +4,21 @@ use std::marker::PhantomData;
 /// A generator built from imperative code. Created by [`compose!`](crate::compose).
 #[doc(hidden)]
 pub struct ComposedGenerator<T, F> {
+    label: u64,
     f: F,
     _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T, F> ComposedGenerator<T, F>
 where
-    F: Fn(TestCase) -> T,
+    F: Fn(&TestCase) -> T,
 {
-    /// Create a composed generator from a closure that receives a [`TestCase`].
-    pub fn new(f: F) -> Self {
+    /// Create a composed generator from a closure that receives a [`TestCase`]
+    /// by reference. Draws made by the closure are grouped under a span with
+    /// the given label.
+    pub fn new(label: u64, f: F) -> Self {
         ComposedGenerator {
+            label,
             f,
             _phantom: PhantomData,
         }
@@ -23,10 +27,13 @@ where
 
 impl<T, F> Generator<T> for ComposedGenerator<T, F>
 where
-    F: Fn(TestCase) -> T + Send + Sync,
+    F: Fn(&TestCase) -> T + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        (self.f)(tc.child(0))
+        tc.start_span(self.label);
+        let result = (self.f)(tc);
+        tc.stop_span(false);
+        result
     }
 }
 
@@ -52,7 +59,7 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// Create a generator from imperative code that draws from other generators.
 ///
 /// This is analogous to Hypothesis's `@composite` decorator. The closure
-/// receives a `TestCase` parameter. Use `tc.draw()` to draw values from
+/// receives a `&TestCase` parameter. Use `tc.draw()` to draw values from
 /// other generators within the compose block.
 ///
 /// # Example
@@ -73,11 +80,6 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 macro_rules! compose {
     (|$tc:ident| { $($body:tt)* }) => {{
         const LABEL: u64 = $crate::generators::fnv1a_hash(stringify!($($body)*).as_bytes());
-        $crate::generators::ComposedGenerator::new(move |$tc: $crate::TestCase| {
-            $tc.start_span(LABEL);
-            let __result = { $($body)* };
-            $tc.stop_span(false);
-            __result
-        })
+        $crate::generators::ComposedGenerator::new(LABEL, move |$tc: &$crate::TestCase| { $($body)* })
     }};
 }

@@ -28,6 +28,19 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
     result
 }
 
+/// Convert a snake_case string to PascalCase: each `_`-separated segment is
+/// capitalized and the underscores dropped (`http_server` → `HttpServer`).
+pub(crate) fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            let first = chars.next().unwrap();
+            first.to_ascii_uppercase().to_string() + chars.as_str()
+        })
+        .collect()
+}
+
 /// Returns true if `s` is a Rust keyword.
 pub(crate) fn is_rust_keyword(s: &str) -> bool {
     matches!(
