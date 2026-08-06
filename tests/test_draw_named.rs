@@ -722,7 +722,7 @@ mod draw_names {
     }
 
     #[hegel::composite]
-    fn composite_reuses_inner_name(tc: hegel::TestCase) -> i32 {
+    fn composite_reuses_inner_name(tc: &hegel::TestCase) -> i32 {
         tc.__draw_named(gs::just(3i32), "inner", false)
     }
 
@@ -747,5 +747,61 @@ mod draw_names {
             inner();
         },
         ["let x = 0;"]
+    );
+}
+
+mod composite_spans {
+    //! Composite and compose! bodies run inside a span on the same TestCase
+    //! handle as the caller, so inner draws must not be recorded, the
+    //! composite's own result must be, and a `return` inside a body must not
+    //! leave the span open (which would suppress recording of every later
+    //! top-level draw).
+
+    use hegel::generators as gs;
+
+    #[hegel::composite]
+    fn bool_pair(tc: &hegel::TestCase) -> (bool, bool) {
+        let a = tc.draw(gs::booleans());
+        let b = tc.draw(gs::booleans());
+        (a, b)
+    }
+
+    draw_lines_case!(
+        test_composite_records_result_not_inner_draws,
+        composite_records_result_not_inner_draws_fixture,
+        tc,
+        {
+            let pair = tc.draw(bool_pair());
+        },
+        ["let pair = (false, false);"]
+    );
+
+    #[hegel::composite]
+    fn early_return_bool(tc: &hegel::TestCase) -> bool {
+        return tc.draw(gs::booleans());
+    }
+
+    draw_lines_case!(
+        test_draws_after_composite_with_early_return_are_recorded,
+        draws_after_composite_with_early_return_are_recorded_fixture,
+        tc,
+        {
+            let a = tc.draw(early_return_bool());
+            let b = tc.draw(gs::booleans());
+        },
+        ["let a = false;", "let b = false;"]
+    );
+
+    draw_lines_case!(
+        test_draws_after_compose_with_early_return_are_recorded,
+        draws_after_compose_with_early_return_are_recorded_fixture,
+        tc,
+        {
+            let a = tc.draw(hegel::compose!(|tc| {
+                return tc.draw(gs::booleans());
+            }));
+            let b = tc.draw(gs::booleans());
+        },
+        ["let a = false;", "let b = false;"]
     );
 }

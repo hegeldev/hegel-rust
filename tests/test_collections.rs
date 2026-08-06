@@ -72,12 +72,12 @@ fn test_vec_unique_with_min_size(tc: TestCase) {
 }
 
 #[hegel::composite]
-fn composite_integer(tc: TestCase) -> i32 {
+fn composite_integer(tc: &TestCase) -> i32 {
     tc.draw(gs::integers())
 }
 
 #[hegel::composite]
-fn composite_u8(tc: TestCase) -> u8 {
+fn composite_u8(tc: &TestCase) -> u8 {
     tc.draw(gs::integers())
 }
 
@@ -241,7 +241,7 @@ fn test_vec_unique_partial_eq_struct(tc: TestCase) {
 }
 
 #[hegel::composite]
-fn composite_wrapper(tc: TestCase) -> Wrapper {
+fn composite_wrapper(tc: &TestCase) -> Wrapper {
     Wrapper {
         value: tc.draw(gs::integers()),
     }
