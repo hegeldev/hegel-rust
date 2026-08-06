@@ -18,7 +18,7 @@ The motivation is that `#[composite]` now expands to a named generator struct (`
 
 - A composite can now recursively draw from itself, directly or through combinators like `one_of!`, which previously failed to compile. Recursive generators for tree-shaped data can now be written as ordinary recursive composites.
 - The generator returned by a composite has a nameable type, so it can be stored in structs, returned from functions, and passed as an argument to other composites.
-- Composite generators implement `Clone` whenever their arguments do.
+- Composite generators implement `Clone`.
 
 Arguments to a composite (the parameters after the `TestCase`) are now stored on the generated struct and cloned into each draw, so they must implement `Clone`. Most argument types already do; to pass a non-`Clone` generator as an argument, box it first with `.boxed()`.
 
