@@ -1160,8 +1160,9 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
 /*
  Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a
  no-op that returns `HEGEL_OK`), and safe at any point in any order
- relative to freeing the test case or the run. Each handle must be freed
- exactly once; freeing the same handle twice is undefined behaviour.
+ relative to freeing the test case or the run, provided no pool operation
+ is still in flight on another thread. Each handle must be freed exactly
+ once; freeing the same handle twice is undefined behaviour.
  */
 hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
 

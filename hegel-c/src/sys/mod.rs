@@ -69,6 +69,11 @@ pub mod fs {
     }
 
     /// Create the directory at `path` and any missing parents.
+    ///
+    /// Reports success if anything already exists at `path`, even a
+    /// non-directory (unlike `std`); operations under such a path fail on
+    /// their own, which the engine's only filesystem client treats as a
+    /// no-op anyway.
     pub fn create_dir_all(path: &str) -> Result<(), Error> {
         let bytes = path.as_bytes();
         for i in 1..bytes.len() {

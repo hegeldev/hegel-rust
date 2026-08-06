@@ -1352,61 +1352,17 @@ fn run_free_after_early_exit_does_not_hang() {
     }
 }
 
-/// Reproduces hegel-go report #2 via the C API: persist a failing example
-/// on run 1, then run 2 with the same database + key and confirm the
-/// first test case is a replay of the persisted (shrunk) failing value.
-///
-/// If this test passes but hegel-go still sees the bug, the issue is in
-/// hegel-go's database / key plumbing rather than in libhegel.
-#[test]
-fn libhegel_replays_persisted_failure_with_same_database_key() {
-    let lib = unsafe { load() };
-    let a = unsafe { bind(&lib) };
-
-    let tempdir = tempfile::TempDir::new().expect("tempdir");
-    let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
-    let key = CString::new("replay-smoke").unwrap();
-
+/// One 200-case run of the `n >= 1_000_000` predicate suite against the
+/// database at `db_path` under `key`. Returns the first value generated
+/// and the last failing value observed.
+unsafe fn run_replay_predicate_suite(
+    a: &Api<'_>,
+    db_path: &CString,
+    key: &CString,
+) -> (Option<i64>, Option<i64>) {
     let predicate = |n: i64| n >= 1_000_000;
-
-    let mut last_failure: Option<i64> = None;
-    unsafe {
-        let ctx = (a.context_new)();
-        let s = a.settings_new(ctx);
-        a.settings_test_cases(ctx, s, 200);
-        (a.settings_database)(ctx, s, db_path.as_ptr());
-        (a.settings_database_key)(ctx, s, key.as_ptr());
-        a.settings_derandomize(ctx, s, true);
-        a.settings_seed(ctx, s, 1, true);
-
-        let run = a.run_start(ctx, s);
-        loop {
-            let tc = a.next_test_case(ctx, run);
-            if tc.is_null() {
-                break;
-            }
-            let mut n: i64 = 0;
-            let rc = (a.generate_integer)(ctx, tc, 0, 2_000_000, &mut n);
-            if rc == HEGEL_E_STOP_TEST {
-                a.complete_and_free(ctx, tc, CStatus::Overrun, ptr::null());
-                continue;
-            }
-            assert_eq!(rc, HEGEL_OK);
-            if predicate(n) {
-                last_failure = Some(n);
-                let origin = CString::new("n >= 1_000_000").unwrap();
-                a.complete_and_free(ctx, tc, CStatus::Interesting, origin.as_ptr());
-            } else {
-                a.complete_and_free(ctx, tc, CStatus::Valid, ptr::null());
-            }
-        }
-        a.run_free(ctx, run);
-        a.settings_free(ctx, s);
-        (a.context_free)(ctx);
-    }
-    assert!(last_failure.is_some(), "run 1 never observed the failure");
-
     let mut first_seen: Option<i64> = None;
+    let mut last_failure: Option<i64> = None;
     unsafe {
         let ctx = (a.context_new)();
         let s = a.settings_new(ctx);
@@ -1433,6 +1389,7 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
                 first_seen = Some(n);
             }
             if predicate(n) {
+                last_failure = Some(n);
                 let origin = CString::new("n >= 1_000_000").unwrap();
                 a.complete_and_free(ctx, tc, CStatus::Interesting, origin.as_ptr());
             } else {
@@ -1443,11 +1400,64 @@ fn libhegel_replays_persisted_failure_with_same_database_key() {
         a.settings_free(ctx, s);
         (a.context_free)(ctx);
     }
+    (first_seen, last_failure)
+}
 
+/// Reproduces hegel-go report #2 via the C API: persist a failing example
+/// on run 1, then run 2 with the same database + key and confirm the
+/// first test case is a replay of the persisted (shrunk) failing value.
+/// One library instance serves both runs; it is unloaded at the end of the
+/// test, so the dlclose-then-thread-exit teardown that used to SIGSEGV on
+/// TLS destructors is exercised on the way out.
+///
+/// If this test passes but hegel-go still sees the bug, the issue is in
+/// hegel-go's database / key plumbing rather than in libhegel.
+#[test]
+fn libhegel_replays_persisted_failure_with_same_database_key() {
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
+    let key = CString::new("replay-smoke").unwrap();
+
+    let (_, last_failure) = unsafe { run_replay_predicate_suite(&a, &db_path, &key) };
+    assert!(last_failure.is_some(), "run 1 never observed the failure");
+
+    let (first_seen, _) = unsafe { run_replay_predicate_suite(&a, &db_path, &key) };
     let first = first_seen.expect("run 2 never received a test case");
     assert!(
-        predicate(first),
+        first >= 1_000_000,
         "expected replay of n>=1_000_000 as first test case, got n={}",
+        first
+    );
+}
+
+/// The same persist-then-replay flow, but the library is unloaded with
+/// dlclose after run 1 and loaded afresh for run 2, as an embedder
+/// restarting its engine does: nothing run 1 planted in the process may
+/// crash the unload or the second instance, and the persisted failure must
+/// replay through the fresh instance.
+#[test]
+fn libhegel_replays_across_a_dlclose_and_reload() {
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let db_path = CString::new(tempdir.path().to_string_lossy().as_bytes()).unwrap();
+    let key = CString::new("replay-reload-smoke").unwrap();
+
+    let last_failure = {
+        let lib = unsafe { load() };
+        let a = unsafe { bind(&lib) };
+        unsafe { run_replay_predicate_suite(&a, &db_path, &key) }.1
+    };
+    assert!(last_failure.is_some(), "run 1 never observed the failure");
+
+    let lib = unsafe { load() };
+    let a = unsafe { bind(&lib) };
+    let (first_seen, _) = unsafe { run_replay_predicate_suite(&a, &db_path, &key) };
+    let first = first_seen.expect("run 2 never received a test case");
+    assert!(
+        first >= 1_000_000,
+        "expected replay of n>=1_000_000 as first test case after reload, got n={}",
         first
     );
 }

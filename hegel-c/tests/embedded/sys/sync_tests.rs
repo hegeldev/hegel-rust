@@ -65,6 +65,18 @@ fn many_threads_serialise_their_increments() {
 }
 
 #[test]
+fn a_panic_while_the_lock_is_held_releases_it() {
+    let mutex = Mutex::new(0);
+    let result = std::panic::catch_unwind(|| {
+        let mut held = mutex.lock();
+        *held = 3;
+        panic!("poisoned? no such thing");
+    });
+    assert!(result.is_err());
+    assert_eq!(*mutex.try_lock().unwrap(), 3);
+}
+
+#[test]
 fn debug_shows_the_value_or_that_it_is_locked() {
     let mutex = Mutex::new(41);
     assert_eq!(format!("{mutex:?}"), "Mutex { value: 41 }");

@@ -59,6 +59,15 @@ fn fs_create_dir_all_is_idempotent() {
 }
 
 #[test]
+fn fs_create_dir_all_of_an_existing_file_reports_success() {
+    let dir = TempDir::new().unwrap();
+    let file = temp_path(&dir, "file");
+    fs::write(&file, b"x").unwrap();
+    fs::create_dir_all(&file).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"x".to_vec());
+}
+
+#[test]
 fn fs_create_dir_all_fails_under_a_file() {
     let dir = TempDir::new().unwrap();
     let file = temp_path(&dir, "file");
@@ -227,6 +236,68 @@ fn retry_intr_passes_other_errors_through() {
 
 #[cfg(unix)]
 #[test]
+fn fill_all_resumes_after_short_and_interrupted_fills() {
+    let mut buf = [0u8; 6];
+    let mut calls = 0;
+    imp::fill_all(&mut buf, |chunk| {
+        calls += 1;
+        match calls {
+            1 => Err(rustix::io::Errno::INTR),
+            2 => {
+                chunk[..2].copy_from_slice(b"ab");
+                Ok(2)
+            }
+            _ => {
+                let len = chunk.len();
+                chunk.copy_from_slice(&b"cdef"[..len]);
+                Ok(len)
+            }
+        }
+    })
+    .unwrap();
+    assert_eq!(&buf, b"abcdef");
+    assert_eq!(calls, 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn fill_all_fails_on_zero_progress() {
+    let mut buf = [0u8; 4];
+    assert_eq!(imp::fill_all(&mut buf, |_| Ok(0)), Err(Error));
+}
+
+#[cfg(unix)]
+#[test]
+fn write_all_resumes_after_short_and_interrupted_writes() {
+    let mut written = alloc::vec::Vec::new();
+    let mut calls = 0;
+    imp::write_all(b"abcdef", |chunk| {
+        calls += 1;
+        match calls {
+            1 => Err(rustix::io::Errno::INTR),
+            2 => {
+                written.extend_from_slice(&chunk[..2]);
+                Ok(2)
+            }
+            _ => {
+                written.extend_from_slice(chunk);
+                Ok(chunk.len())
+            }
+        }
+    })
+    .unwrap();
+    assert_eq!(written, b"abcdef");
+    assert_eq!(calls, 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_all_fails_on_zero_progress() {
+    assert_eq!(imp::write_all(b"data", |_| Ok(0)), Err(Error));
+}
+
+#[cfg(unix)]
+#[test]
 fn read_exact_requires_enough_bytes() {
     let dir = TempDir::new().unwrap();
     let path = temp_path(&dir, "file");
@@ -254,6 +325,25 @@ fn env_var_of_unset_variable_is_none() {
 #[test]
 fn env_var_rejects_interior_nul() {
     assert_eq!(env_var("HEGEL\0SYS"), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn env_var_distinguishes_empty_from_unset() {
+    // SAFETY: the Win32 environment functions this exercises (and that
+    // `env_var` calls directly) serialise access internally, so setting a
+    // test-unique variable cannot race other tests' lookups.
+    unsafe { std::env::set_var("HEGEL_SYS_TEST_EMPTY", "") };
+    assert_eq!(env_var("HEGEL_SYS_TEST_EMPTY"), Some(String::new()));
+}
+
+#[cfg(windows)]
+#[test]
+fn env_var_reads_values_longer_than_its_first_buffer() {
+    let long = "x".repeat(4000);
+    // SAFETY: as in `env_var_distinguishes_empty_from_unset`.
+    unsafe { std::env::set_var("HEGEL_SYS_TEST_LONG", &long) };
+    assert_eq!(env_var("HEGEL_SYS_TEST_LONG"), Some(long));
 }
 
 #[test]

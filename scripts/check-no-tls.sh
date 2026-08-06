@@ -26,7 +26,7 @@ if [ -n "$bad" ]; then
     exit 1
 fi
 
-tls_segment=$(readelf -lW "$lib" | awk '$1 == "TLS"' || true)
+tls_segment=$(readelf -lW "$lib" | awk '$1 == "TLS"')
 
 if [ -n "$tls_segment" ]; then
     echo "error: $lib has a PT_TLS program header:" >&2
@@ -34,7 +34,12 @@ if [ -n "$tls_segment" ]; then
     exit 1
 fi
 
-stray_exports=$(echo "$symbols" | awk '$2 ~ /^[TtWwDdBb]$/ && $3 !~ /^hegel_/' || true)
+# A defined dynamic symbol has an address field, giving the line three
+# fields (address, type, name); undefined symbols ("U"/"w") have no
+# address. Flagging every defined symbol regardless of type letter fails
+# closed for the kinds a whitelist would miss (R/V/i/u — rodata, weak
+# objects, ifuncs, GNU-unique).
+stray_exports=$(echo "$symbols" | awk 'NF == 3 && $3 !~ /^hegel_/' || true)
 
 if [ -n "$stray_exports" ]; then
     echo "error: $lib exports dynamic symbols outside hegel_*:" >&2

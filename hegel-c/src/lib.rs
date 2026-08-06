@@ -2030,8 +2030,9 @@ pub unsafe extern "C" fn hegel_pool_generate(
 
 /// Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a
 /// no-op that returns `HEGEL_OK`), and safe at any point in any order
-/// relative to freeing the test case or the run. Each handle must be freed
-/// exactly once; freeing the same handle twice is undefined behaviour.
+/// relative to freeing the test case or the run, provided no pool operation
+/// is still in flight on another thread. Each handle must be freed exactly
+/// once; freeing the same handle twice is undefined behaviour.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_pool_free(
     ctx: *mut HegelContext,

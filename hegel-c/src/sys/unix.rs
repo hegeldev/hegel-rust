@@ -68,20 +68,47 @@ pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
     }
 }
 
-/// Read exactly `buf.len()` bytes from the start of the file at `path`.
-/// Fails if the file is shorter than the buffer.
-pub(super) fn read_exact(path: &str, buf: &mut [u8]) -> Result<(), Error> {
-    let fd =
-        retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
+/// Fill all of `buf` by calling `fill` on the unfilled tail until it is
+/// complete, retrying `EINTR` and resuming after short fills. Fails if
+/// `fill` ever succeeds with zero bytes of progress.
+pub(super) fn fill_all(
+    buf: &mut [u8],
+    mut fill: impl FnMut(&mut [u8]) -> Result<usize, rustix::io::Errno>,
+) -> Result<(), Error> {
     let mut filled = 0;
     while filled < buf.len() {
-        let n = retry_intr(|| rustix::io::read(&fd, &mut buf[filled..]))?;
+        let n = retry_intr(|| fill(&mut buf[filled..]))?;
         if n == 0 {
             return Err(Error);
         }
         filled += n;
     }
     Ok(())
+}
+
+/// Write all of `data` by calling `write` on the unwritten tail until it is
+/// consumed, retrying `EINTR` and resuming after short writes. Fails if
+/// `write` ever succeeds with zero bytes of progress.
+pub(super) fn write_all(
+    mut data: &[u8],
+    mut write: impl FnMut(&[u8]) -> Result<usize, rustix::io::Errno>,
+) -> Result<(), Error> {
+    while !data.is_empty() {
+        let n = retry_intr(|| write(data))?;
+        if n == 0 {
+            return Err(Error);
+        }
+        data = &data[n..];
+    }
+    Ok(())
+}
+
+/// Read exactly `buf.len()` bytes from the start of the file at `path`.
+/// Fails if the file is shorter than the buffer.
+pub(super) fn read_exact(path: &str, buf: &mut [u8]) -> Result<(), Error> {
+    let fd =
+        retry_intr(|| rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()))?;
+    fill_all(buf, |chunk| rustix::io::read(&fd, chunk))
 }
 
 /// Create (or truncate) the file at `path` and write `data` to it.
@@ -93,12 +120,7 @@ pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
             Mode::from_bits_truncate(0o666),
         )
     })?;
-    let mut remaining = data;
-    while !remaining.is_empty() {
-        let n = retry_intr(|| rustix::io::write(&fd, remaining))?;
-        remaining = &remaining[n..];
-    }
-    Ok(())
+    write_all(data, |chunk| rustix::io::write(&fd, chunk))
 }
 
 /// Create a single directory level at `path`.
@@ -145,8 +167,9 @@ pub(super) fn monotonic_nanos() -> Option<u64> {
 /// a `/dev/urandom` read elsewhere.
 #[cfg(target_os = "linux")]
 pub(super) fn entropy(buf: &mut [u8]) -> Result<(), Error> {
-    let n = rustix::rand::getrandom(&mut *buf, rustix::rand::GetRandomFlags::empty())?;
-    if n == buf.len() { Ok(()) } else { Err(Error) }
+    fill_all(buf, |chunk| {
+        rustix::rand::getrandom(chunk, rustix::rand::GetRandomFlags::empty())
+    })
 }
 
 /// Fill `buf` from the OS entropy source: the `getrandom` syscall on Linux,
