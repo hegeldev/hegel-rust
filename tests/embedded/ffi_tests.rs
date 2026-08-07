@@ -56,20 +56,20 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
 
         tc.start_span(hegel_c::hegel_label_t::HEGEL_LABEL_LIST as u64)
             .unwrap();
-        let cid = tc.new_collection(0, Some(3)).unwrap();
+        let collection = tc.new_collection(0, Some(3)).unwrap();
         loop {
-            if !tc.collection_more(cid)? {
+            if !tc.collection_more(&collection)? {
                 break;
             }
             if tc.generate_integer(0, 100)? == 0 {
-                tc.collection_reject(cid, Some("zero")).unwrap();
+                tc.collection_reject(&collection, Some("zero")).unwrap();
             }
         }
         tc.stop_span(false).unwrap();
 
         let pool = tc.new_pool().unwrap();
-        let added = tc.pool_add(pool).unwrap();
-        let drawn = tc.pool_generate(pool, false)?;
+        let added = tc.pool_add(&pool).unwrap();
+        let drawn = tc.pool_generate(&pool, false)?;
         assert_eq!(drawn, added, "non-consuming draw returns the added id");
 
         tc.target(0.0, "score").unwrap();
@@ -117,6 +117,30 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_PASSED);
     assert_eq!(result.failure_count(), 0);
     assert!(result.error().is_none());
+}
+
+/// The collection / pool / state-machine constructors surface libhegel's
+/// error code instead of a handle: on a completed test case each returns
+/// `HEGEL_E_ALREADY_COMPLETE`.
+#[test]
+fn ffi_object_constructors_error_on_a_completed_case() {
+    const ALREADY_COMPLETE: hegel_c::hegel_result_t =
+        hegel_c::hegel_result_t::HEGEL_E_ALREADY_COMPLETE;
+    let settings = test_settings(2);
+    let sh = SettingsHandle::build(&settings, None);
+    let run = RunHandle::start(&sh, None).unwrap();
+    while let Some(tc) = run.next_test_case() {
+        tc.mark_complete(VALID, None).unwrap();
+        assert!(matches!(
+            tc.new_collection(0, Some(3)),
+            Err(ALREADY_COMPLETE)
+        ));
+        assert!(matches!(tc.new_pool(), Err(ALREADY_COMPLETE)));
+        assert!(matches!(
+            tc.new_state_machine(&["only"], &[]),
+            Err(ALREADY_COMPLETE)
+        ));
+    }
 }
 
 #[test]

@@ -1,26 +1,28 @@
-use std::path::Path;
+use crate::backend::RunError;
+use alloc::format;
 
-pub(crate) fn is_running_in_antithesis() -> bool {
+pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
     #[cfg(not(windows))]
     // nocov start
-    if let Ok(output_dir) = std::env::var("ANTITHESIS_OUTPUT_DIR") {
+    if let Some(output_dir) = crate::sys::env_var("ANTITHESIS_OUTPUT_DIR") {
         return check_antithesis_output_dir(&output_dir);
     }
     // nocov end
-    false
+    Ok(false)
 }
 
 /// Validate the directory `ANTITHESIS_OUTPUT_DIR` points at. A missing
 /// directory is a configuration error in how the process was launched —
-/// reported as a plain panic, not an internal invariant. Split from the
-/// env read so it can be unit-tested without mutating the environment.
-fn check_antithesis_output_dir(output_dir: &str) -> bool {
-    if !Path::new(output_dir).exists() {
-        panic!(
+/// reported as a run-level [`RunError::UsageError`], not an internal
+/// invariant. Split from the env read so it can be unit-tested without
+/// mutating the environment.
+fn check_antithesis_output_dir(output_dir: &str) -> Result<bool, RunError> {
+    if !crate::sys::fs::exists(output_dir) {
+        return Err(RunError::UsageError(format!(
             "Expected ANTITHESIS_OUTPUT_DIR={output_dir} to exist when running inside of Antithesis"
-        );
+        )));
     }
-    true
+    Ok(true)
 }
 
 #[cfg(test)]

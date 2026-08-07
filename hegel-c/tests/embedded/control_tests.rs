@@ -1,28 +1,59 @@
 use super::*;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use alloc::format;
 
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default()
+fn assert_err<T: std::fmt::Debug>(result: Result<T, InternalError>) -> String {
+    result.unwrap_err().to_string()
 }
 
 #[test]
-fn raise_internal_error_panics_with_location_and_bug_report_framing() {
-    let payload = catch_unwind(|| raise_internal_error(format_args!("boom: {}", 7))).unwrap_err();
-    let msg = panic_message(payload);
+fn internal_error_carries_location_and_bug_report_framing() {
+    let e = InternalError::new(format_args!("boom: {}", 7));
+    let msg = e.to_string();
     assert!(msg.contains("Internal error in hegel at "), "{msg}");
+    assert!(msg.contains(file!()), "{msg}");
     assert!(msg.contains("boom: 7"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+    assert!(
+        msg.contains("https://github.com/hegeldev/hegel-rust/issues"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn internal_error_is_clonable_and_compares_equal_to_itself() {
+    let e = InternalError::new(format_args!("boom"));
+    assert_eq!(e.clone(), e);
+    assert!(format!("{e:?}").contains("boom"));
+}
+
+#[test]
+fn hegel_internal_error_returns_err_with_the_message() {
+    fn raise() -> Result<(), InternalError> {
+        hegel_internal_error!("kaboom {}", 3);
+    }
+    let msg = assert_err(raise());
+    assert!(msg.contains("kaboom 3"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
+}
+
+#[test]
+fn internal_unwrap_yields_the_value_and_raises_on_none() {
+    fn check(opt: Option<i32>) -> Result<i32, InternalError> {
+        Ok(hegel_internal_unwrap!(opt, "value missing {}", "here"))
+    }
+    assert_eq!(check(Some(3)).unwrap(), 3);
+    let msg = assert_err(check(None));
+    assert!(msg.contains("value missing here"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
 }
 
 #[test]
 fn internal_assert_includes_the_condition_when_it_fails() {
-    let value = 3;
-    let payload = catch_unwind(|| hegel_internal_assert!(value == 4)).unwrap_err();
-    let msg = panic_message(payload);
+    fn check(value: i32) -> Result<(), InternalError> {
+        hegel_internal_assert!(value == 4);
+        Ok(())
+    }
+    let msg = assert_err(check(3));
     assert!(
         msg.contains("internal assertion failed: value == 4"),
         "{msg}"
@@ -31,55 +62,63 @@ fn internal_assert_includes_the_condition_when_it_fails() {
 
 #[test]
 fn internal_assert_passes_silently() {
-    hegel_internal_assert!(1 + 1 == 2);
-    hegel_internal_assert!(1 + 1 == 2, "with a message {}", "argument");
+    fn check() -> Result<(), InternalError> {
+        hegel_internal_assert!(1 + 1 == 2);
+        hegel_internal_assert!(1 + 1 == 2, "with a message {}", "argument");
+        Ok(())
+    }
+    check().unwrap();
 }
 
 #[test]
 fn internal_assert_eq_reports_both_values() {
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_assert_eq!(2 + 2, 5);
-    }))
-    .unwrap_err();
-    let msg = panic_message(payload);
-    assert!(msg.contains("2 + 2 == 5"), "{msg}");
+    fn check(a: i32, b: i32) -> Result<(), InternalError> {
+        hegel_internal_assert_eq!(a + 2, b);
+        Ok(())
+    }
+    let msg = assert_err(check(2, 5));
+    assert!(msg.contains("a + 2 == b"), "{msg}");
     assert!(msg.contains("left: 4, right: 5"), "{msg}");
-    hegel_internal_assert_eq!(2 + 2, 4);
+    check(2, 4).unwrap();
 }
 
 #[test]
 fn internal_assert_ne_reports_the_shared_value() {
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        hegel_internal_assert_ne!(2 + 2, 4);
-    }))
-    .unwrap_err();
-    let msg = panic_message(payload);
-    assert!(msg.contains("2 + 2 != 4"), "{msg}");
+    fn check(a: i32, b: i32) -> Result<(), InternalError> {
+        hegel_internal_assert_ne!(a + 2, b);
+        Ok(())
+    }
+    let msg = assert_err(check(2, 4));
+    assert!(msg.contains("a + 2 != b"), "{msg}");
     assert!(msg.contains("both: 4"), "{msg}");
-    hegel_internal_assert_ne!(2 + 2, 5);
+    check(2, 5).unwrap();
 }
 
 #[test]
 fn internal_debug_asserts_follow_debug_assertions() {
-    let fired = catch_unwind(AssertUnwindSafe(|| {
+    fn check_assert() -> Result<(), InternalError> {
         hegel_internal_debug_assert!(false);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
+        Ok(())
+    }
+    assert_eq!(check_assert().is_err(), cfg!(debug_assertions));
 
-    let fired = catch_unwind(AssertUnwindSafe(|| {
+    fn check_eq() -> Result<(), InternalError> {
         hegel_internal_debug_assert_eq!(1, 2);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
+        Ok(())
+    }
+    assert_eq!(check_eq().is_err(), cfg!(debug_assertions));
 
-    let fired = catch_unwind(AssertUnwindSafe(|| {
+    fn check_ne() -> Result<(), InternalError> {
         hegel_internal_debug_assert_ne!(1, 1);
-    }))
-    .is_err();
-    assert_eq!(fired, cfg!(debug_assertions));
+        Ok(())
+    }
+    assert_eq!(check_ne().is_err(), cfg!(debug_assertions));
 
-    hegel_internal_debug_assert!(true);
-    hegel_internal_debug_assert_eq!(1, 1);
-    hegel_internal_debug_assert_ne!(1, 2);
+    fn check_passing() -> Result<(), InternalError> {
+        hegel_internal_debug_assert!(true);
+        hegel_internal_debug_assert_eq!(1, 1);
+        hegel_internal_debug_assert_ne!(1, 2);
+        Ok(())
+    }
+    check_passing().unwrap();
 }

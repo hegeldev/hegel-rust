@@ -1,6 +1,8 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
+use alloc::string::ToString;
+use alloc::vec;
 use tempfile::TempDir;
 
 fn fresh_db() -> (DirectoryTestCaseDatabase, TempDir) {
@@ -378,6 +380,65 @@ fn move_value_falls_back_to_delete_save_when_dst_dir_create_fails() {
     std::fs::set_permissions(dir.path(), perms).unwrap();
 }
 
+#[test]
+fn save_leaves_no_temporary_files_behind() {
+    let (db, _dir) = fresh_db();
+    db.save(b"key", b"value");
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert_eq!(names.len(), 1);
+    assert!(
+        !names[0].contains(".tmp."),
+        "the temporary file must be renamed away, not left in place"
+    );
+}
+
+#[test]
+fn temp_paths_are_distinct_and_pid_tagged() {
+    let a = temp_path("dir/value");
+    let b = temp_path("dir/value");
+    assert_ne!(a, b);
+    let prefix = format!("dir/value.tmp.{}.", crate::sys::pid());
+    assert!(a.starts_with(&prefix));
+    assert!(b.starts_with(&prefix));
+}
+
+#[test]
+fn parallel_saves_store_all_values_and_leave_no_temporaries() {
+    let (db, _dir) = fresh_db();
+    std::thread::scope(|scope| {
+        for i in 0..4u8 {
+            let db = &db;
+            scope.spawn(move || db.save(b"key", &[i]));
+        }
+    });
+    assert_eq!(db.fetch(b"key").len(), 4);
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert!(names.iter().all(|name| !name.contains(".tmp.")));
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_rename_fails() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let target = format!("{root}/occupied");
+    crate::sys::fs::create_dir_all(&target).unwrap();
+    atomic_write(&target, b"value");
+    let names = crate::sys::fs::read_dir(root).unwrap();
+    assert_eq!(
+        names,
+        vec!["occupied".to_string()],
+        "a failed rename must remove its temporary file"
+    );
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_write_fails() {
+    let dir = TempDir::new().unwrap();
+    let target = format!("{}/no-such-dir/value", dir.path().to_str().unwrap());
+    atomic_write(&target, b"value");
+    assert!(!crate::sys::fs::exists(&target));
+}
+
 fn clone_value(children: Vec<ChoiceValue>) -> ChoiceValue {
     ChoiceValue::Clone(std::sync::Arc::new(
         crate::native::core::CloneRecord::from_values(children),
@@ -401,14 +462,9 @@ fn serialize_roundtrips_clone_values() {
 
 #[test]
 fn serialize_clone_drops_realized_info_but_preserves_equality() {
-    use crate::native::core::choices::BooleanChoice;
-    use crate::native::core::{ChoiceKind, ChoiceNode, CloneRecord, Span, SpanEvent};
+    use crate::native::core::{ChoiceNode, CloneRecord, Span, SpanEvent};
     let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
-        vec![ChoiceNode::new(
-            ChoiceKind::Boolean(BooleanChoice),
-            ChoiceValue::Boolean(true),
-            false,
-        )],
+        vec![ChoiceNode::boolean(true, false)],
         vec![Span {
             start: 0,
             end: 1,
@@ -427,7 +483,7 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
         panic!("expected a clone value");
     };
     assert!(record.realized_nodes().is_none());
-    assert!(record.spans().is_empty());
+    assert!(record.realized().is_none());
 }
 
 #[test]

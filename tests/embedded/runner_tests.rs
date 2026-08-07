@@ -1,8 +1,6 @@
 use super::*;
 use crate::runner::Phase;
 
-static CI_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[test]
 fn test_settings_verbosity() {
     let _ = Settings::new().verbosity(Verbosity::Debug);
@@ -62,24 +60,15 @@ fn test_settings_has_phase() {
 }
 
 #[test]
-fn test_is_in_ci_some_expected_variant() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let ci = std::env::var_os("CI");
-    unsafe {
-        std::env::remove_var("CI");
-        std::env::set_var("TF_BUILD", "true");
-    }
-    let result = is_in_ci();
-    unsafe {
-        std::env::remove_var("TF_BUILD");
-        if let Some(val) = ci {
-            std::env::set_var("CI", val);
-        }
-    }
-    assert!(
-        result,
-        "TF_BUILD=true should be detected as a CI environment"
-    );
+fn test_is_in_ci_from_detects_presence_and_value_variables() {
+    assert!(!is_in_ci_from(|_| None));
+    assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
+    assert!(is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "true".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "false".to_string())
+    ));
 }
 
 #[test]
@@ -88,7 +77,22 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::generators as gs;
     use crate::runner::Database;
 
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if std::env::var_os("HEGEL_DOT_HEGEL_TEST_CHILD").is_some() {
+        let settings = Settings::new();
+        assert_eq!(settings.database, Database::Unset);
+        let result = std::panic::catch_unwind(|| {
+            Hegel::new(|tc| {
+                let _ = tc.draw(gs::booleans());
+                panic!("stored failure");
+            })
+            .__database_key("dot_hegel_child".to_string())
+            .settings(Settings::new().test_cases(1))
+            .run();
+        });
+        assert!(result.is_err());
+        assert!(std::path::Path::new(".hegel").is_dir());
+        return;
+    }
 
     const CI_VAR_NAMES: &[&str] = &[
         "CI",
@@ -103,53 +107,41 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
         "TEAMCITY_VERSION",
         "bamboo.buildKey",
     ];
-    let saved: Vec<(&str, Option<std::ffi::OsString>)> = CI_VAR_NAMES
-        .iter()
-        .map(|name| (*name, std::env::var_os(name)))
-        .collect();
-    unsafe {
-        for (name, _) in &saved {
-            std::env::remove_var(name);
-        }
-    }
     let tmp = tempfile::TempDir::new().unwrap();
-    let prev_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tmp.path()).unwrap();
-
-    let settings = Settings::new();
-    assert_eq!(settings.database, Database::Unset);
-    Hegel::new(|tc| {
-        let _ = tc.draw(gs::booleans());
-    })
-    .settings(settings.test_cases(1))
-    .run();
-
-    std::env::set_current_dir(&prev_cwd).unwrap();
-    unsafe {
-        for (name, val) in saved {
-            if let Some(v) = val {
-                std::env::set_var(name, v);
-            }
-        }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "runner::tests::test_native_engine_creates_default_dot_hegel_when_database_unset",
+        ])
+        .current_dir(tmp.path())
+        .env("HEGEL_DOT_HEGEL_TEST_CHILD", "1");
+    for name in CI_VAR_NAMES {
+        child.env_remove(name);
     }
+    let output = child.output().unwrap();
+    assert!(
+        output.status.success(),
+        "child test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
-fn test_settings_new_in_ci_disables_database() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let key = "TEAMCITY_VERSION";
-    let had_key = std::env::var_os(key).is_some();
-    unsafe {
-        std::env::set_var(key, "1");
-    }
-    let settings = Settings::new();
-    if !had_key {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
+fn test_settings_for_ci_disables_database_and_derandomizes() {
+    use crate::runner::Database;
+    let settings = Settings::for_ci(true);
     assert_eq!(settings.database, Database::Disabled);
     assert!(settings.derandomize);
+}
+
+#[test]
+fn test_settings_outside_ci_leave_database_unset_and_randomized() {
+    use crate::runner::Database;
+    let settings = Settings::for_ci(false);
+    assert_eq!(settings.database, Database::Unset);
+    assert!(!settings.derandomize);
 }
 
 #[test]

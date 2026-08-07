@@ -3,66 +3,63 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::{
-    BooleanChoice, BytesChoice, FloatChoice, IntegerChoice, StringChoice,
-};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(value, false)
 }
 
 fn float_node(value: f64) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    ChoiceNode::float(
+        FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(value),
+        },
+        value,
         false,
     )
 }
 
 fn bytes_node(value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::bytes(
+        BytesChoice {
             min_size: 0,
             max_size: 16,
-        }),
-        ChoiceValue::Bytes(value),
+        },
+        value,
         false,
     )
 }
 
 fn integer_node(value: i128, min_value: i128, max_value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(min_value),
             max_value: BigInt::from(max_value),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn string_node(value: Vec<u32>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::String(StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
+    ChoiceNode::string(
+        StringChoice {
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).unwrap().into(),
             min_size: 0,
             max_size: 16,
-        }),
-        ChoiceValue::String(value),
+        },
+        value,
         false,
     )
 }
@@ -83,7 +80,7 @@ fn shrink_duplicates_collapses_paired_booleans_to_false() {
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(true)]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
-        match n.value {
+        match n.value() {
             ChoiceValue::Boolean(b) => assert!(!b),
             _ => unreachable!(),
         }
@@ -95,7 +92,7 @@ fn shrink_duplicates_collapses_paired_floats_to_zero() {
     let mut shrinker = accepting_shrinker(vec![float_node(3.5), float_node(3.5)]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
-        match n.value {
+        match n.value() {
             ChoiceValue::Float(v) => assert_eq!(v, 0.0),
             _ => unreachable!(),
         }
@@ -108,7 +105,7 @@ fn shrink_duplicates_collapses_paired_bytes_to_empty() {
         accepting_shrinker(vec![bytes_node(vec![1, 2, 3]), bytes_node(vec![1, 2, 3])]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
-        match &n.value {
+        match &n.value() {
             ChoiceValue::Bytes(b) => assert!(b.is_empty()),
             _ => unreachable!(),
         }
@@ -123,7 +120,7 @@ fn shrink_duplicates_collapses_paired_strings_to_empty() {
     ]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
-        match &n.value {
+        match &n.value() {
             ChoiceValue::String(s) => assert!(s.is_empty()),
             _ => unreachable!(),
         }
@@ -135,15 +132,15 @@ fn shrink_duplicates_leaves_solo_nodes_alone() {
     let mut shrinker =
         accepting_shrinker(vec![bool_node(true), float_node(3.0), bytes_node(vec![5])]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Boolean(b) => assert!(b),
         _ => unreachable!(),
     }
-    match shrinker.current_nodes[1].value {
+    match shrinker.current_nodes[1].value() {
         ChoiceValue::Float(v) => assert_eq!(v, 3.0),
         _ => unreachable!(),
     }
-    match &shrinker.current_nodes[2].value {
+    match &shrinker.current_nodes[2].value() {
         ChoiceValue::Bytes(b) => assert_eq!(b, &vec![5]),
         _ => unreachable!(),
     }
@@ -154,7 +151,7 @@ fn shrink_duplicates_keeps_distinct_values_separate() {
     let mut shrinker = accepting_shrinker(vec![bool_node(true), bool_node(false), bool_node(true)]);
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
     for n in &shrinker.current_nodes {
-        match n.value {
+        match n.value() {
             ChoiceValue::Boolean(b) => assert!(!b),
             _ => unreachable!(),
         }
@@ -172,7 +169,7 @@ fn group_accepts_uniform_at_least(initial: Vec<ChoiceNode>, threshold: i128) -> 
             ShrinkRun::Full(nodes) => {
                 let int_vals: Vec<i128> = nodes
                     .iter()
-                    .filter_map(|n| match &n.value {
+                    .filter_map(|n| match &n.value() {
                         ChoiceValue::Integer(v) => Some(i128::try_from(v.clone()).unwrap()),
                         _ => None,
                     })
@@ -198,7 +195,7 @@ fn shrink_duplicates_positive_descent_is_log_log() {
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 
     for n in &shrinker.current_nodes {
-        match &n.value {
+        match &n.value() {
             ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v.clone()).unwrap(), 100),
             _ => unreachable!(),
         }
@@ -220,7 +217,7 @@ fn shrink_duplicates_negative_descent_is_log_log() {
             ShrinkRun::Full(nodes) => {
                 let int_vals: Vec<i128> = nodes
                     .iter()
-                    .filter_map(|n| match &n.value {
+                    .filter_map(|n| match &n.value() {
                         ChoiceValue::Integer(v) => Some(i128::try_from(v.clone()).unwrap()),
                         _ => None,
                     })
@@ -238,7 +235,7 @@ fn shrink_duplicates_negative_descent_is_log_log() {
     drive_no_yield(shrinker.shrink_duplicates()).unwrap();
 
     for n in &shrinker.current_nodes {
-        match &n.value {
+        match &n.value() {
             ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v.clone()).unwrap(), -100),
             _ => unreachable!(),
         }
@@ -292,7 +289,7 @@ fn shrink_duplicates_group_replace_short_circuits_when_truncated() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let n = match &nodes[0].value {
+                let n = match &nodes[0].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
                     _ => 0,
                 };
@@ -326,7 +323,7 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let head = match &nodes[0].value {
+                let head = match &nodes[0].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => 0,
                 };

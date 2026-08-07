@@ -1,9 +1,11 @@
+use alloc::format;
+use alloc::vec::Vec;
 use core::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::LazyLock;
 
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
+use crate::sys::sync::Lazy;
 
 use super::{LABEL_DATE, LABEL_DATETIME, LABEL_IP_ADDRESS, LABEL_TIME, LABEL_UUID, spanned};
 
@@ -344,21 +346,21 @@ struct V6Network {
     size_minus_1: u128,
 }
 
-static SPECIAL_IPV4_NETWORKS: LazyLock<Vec<V4Network>> = LazyLock::new(|| {
+static SPECIAL_IPV4_NETWORKS: Lazy<Result<Vec<V4Network>, InternalError>> = Lazy::new(|| {
     SPECIAL_IPV4_CIDRS
         .iter()
         .map(|s| parse_v4_cidr(s))
         .collect()
 });
 
-static SPECIAL_IPV6_NETWORKS: LazyLock<Vec<V6Network>> = LazyLock::new(|| {
+static SPECIAL_IPV6_NETWORKS: Lazy<Result<Vec<V6Network>, InternalError>> = Lazy::new(|| {
     SPECIAL_IPV6_CIDRS
         .iter()
         .map(|s| parse_v6_cidr(s))
         .collect()
 });
 
-fn parse_v4_cidr(s: &str) -> V4Network {
+fn parse_v4_cidr(s: &str) -> Result<V4Network, InternalError> {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv4Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
@@ -369,10 +371,10 @@ fn parse_v4_cidr(s: &str) -> V4Network {
     let mask = u32::MAX << (32 - prefix);
     let base = u32::from(addr) & mask;
     let size_minus_1 = !mask;
-    V4Network { base, size_minus_1 }
+    Ok(V4Network { base, size_minus_1 })
 }
 
-fn parse_v6_cidr(s: &str) -> V6Network {
+fn parse_v6_cidr(s: &str) -> Result<V6Network, InternalError> {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv6Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
@@ -387,7 +389,7 @@ fn parse_v6_cidr(s: &str) -> V6Network {
         size_minus_1 <= i128::MAX as u128,
         "IPv6 special range too wide to fit offset in i128: prefix /{prefix}"
     );
-    V6Network { base, size_minus_1 }
+    Ok(V6Network { base, size_minus_1 })
 }
 
 /// Draw an IPv4 address, wrapped in a span. Half the draws are uniform over
@@ -411,7 +413,7 @@ fn draw_ipv4(ntc: &mut NativeTestCase) -> Result<Ipv4Addr, EngineError> {
         let d = draw_i64(ntc, 0, 255)? as u32;
         (a << 24) | (b << 16) | (c << 8) | d
     } else {
-        let nets = &*SPECIAL_IPV4_NETWORKS;
+        let nets = SPECIAL_IPV4_NETWORKS.as_ref().map_err(Clone::clone)?;
         let idx = draw_i64(ntc, 0, nets.len() as i64 - 1)? as usize;
         let net = &nets[idx];
         let offset = draw_i64(ntc, 0, i64::from(net.size_minus_1))? as u32;
@@ -432,7 +434,7 @@ fn draw_ipv6(ntc: &mut NativeTestCase) -> Result<Ipv6Addr, EngineError> {
             .unwrap();
         (u128::from(hi) << 64) | u128::from(lo)
     } else {
-        let nets = &*SPECIAL_IPV6_NETWORKS;
+        let nets = SPECIAL_IPV6_NETWORKS.as_ref().map_err(Clone::clone)?;
         let idx = draw_i64(ntc, 0, nets.len() as i64 - 1)? as usize;
         let net = &nets[idx];
         let offset = ntc
