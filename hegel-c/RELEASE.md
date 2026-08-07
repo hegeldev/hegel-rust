@@ -1,8 +1,5 @@
 RELEASE_TYPE: patch
 
-This patch fixes the engine's novel-prefix exploration treating every
-recorded boolean draw as a fair coin, regardless of the probability it was
-actually drawn with. Stateful tests were most affected: the per-step stop
-decision is a very rare draw, but exploration flipped it about half the
-time, so roughly half of all generated stateful test cases were truncated
-well before their step target.
+This patch fixes a bias in data generation where some choices were made with the wrong probability.
+The most visible effect should be the stateful tests should run a full set of steps more often.
+Collection sizes may also be affected.
