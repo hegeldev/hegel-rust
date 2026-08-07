@@ -1,3 +1,7 @@
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 /// Health checks that can be suppressed during test execution.
 ///
 /// Health checks detect common issues with test configuration that would
@@ -89,10 +93,10 @@ pub struct Output {
 }
 
 /// A caller-supplied destination for engine output lines.
-type OutputSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+type OutputSink = alloc::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Output {
-    /// The default destination: each line goes to stderr via `eprintln!`.
+    /// The default destination: each line is written to stderr.
     pub fn stderr() -> Self {
         Output { sink: None }
     }
@@ -100,7 +104,7 @@ impl Output {
     /// Deliver each line to `sink` instead of stderr.
     pub fn callback(sink: impl Fn(&str) + Send + Sync + 'static) -> Self {
         Output {
-            sink: Some(std::sync::Arc::new(sink)),
+            sink: Some(alloc::sync::Arc::new(sink)),
         }
     }
 
@@ -108,13 +112,13 @@ impl Output {
     pub(crate) fn line(&self, line: &str) {
         match &self.sink {
             Some(sink) => sink(line),
-            None => eprintln!("{line}"),
+            None => crate::sys::stderr_line(line),
         }
     }
 }
 
-impl std::fmt::Debug for Output {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Output {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.sink {
             Some(_) => f.write_str("Output(callback)"),
             None => f.write_str("Output(stderr)"),
@@ -164,7 +168,10 @@ pub struct Settings {
 impl Settings {
     /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        let in_ci = is_in_ci();
+        Self::for_ci(is_in_ci())
+    }
+
+    fn for_ci(in_ci: bool) -> Self {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
@@ -176,7 +183,7 @@ impl Settings {
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
             phases: vec![
@@ -338,6 +345,10 @@ pub(crate) enum Database {
 }
 
 fn is_in_ci() -> bool {
+    is_in_ci_from(crate::sys::env_var)
+}
+
+fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
@@ -353,8 +364,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+        None => env(key).is_some(),
+        Some(expected) => env(key).as_deref() == Some(expected),
     })
 }
 

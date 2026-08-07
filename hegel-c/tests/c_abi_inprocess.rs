@@ -13,20 +13,22 @@ mod common;
 use common::{last_error, make_settings, next_case, ok, start, start_with_output};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelTestCase,
-    hegel_backend_t, hegel_collection_more, hegel_collection_reject, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
-    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
-    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool,
-    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_generate,
-    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
+    HEGEL_STATE_MACHINE_DONE, HegelCollection, HegelContext, HegelFailure, HegelPool, HegelRun,
+    HegelRunResult, HegelStateMachine, HegelTestCase, hegel_backend_t, hegel_collection_free,
+    hegel_collection_more, hegel_collection_reject, hegel_context_free, hegel_context_last_error,
+    hegel_context_new, hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
+    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
+    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_state_machine,
+    hegel_next_test_case, hegel_pool_add, hegel_pool_free, hegel_pool_generate, hegel_run_free,
+    hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
     hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
     hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
     hegel_settings_set_mode, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_next_rule, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob, hegel_version,
+    hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_rule, hegel_status_t,
+    hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -244,25 +246,33 @@ fn null_handles_are_rejected_without_crashing() {
         assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_INVALID_HANDLE);
         assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_E_INVALID_HANDLE);
         let mut id = 0i64;
+        let mut collection: *mut HegelCollection = ptr::null_mut();
         assert_eq!(
-            hegel_new_collection(ctx, tc, 0, u64::MAX, &mut id),
+            hegel_new_collection(ctx, tc, 0, u64::MAX, &mut collection),
             HEGEL_E_INVALID_HANDLE
         );
         let mut more = false;
         assert_eq!(
-            hegel_collection_more(ctx, tc, 0, &mut more),
+            hegel_collection_more(ctx, tc, ptr::null_mut(), &mut more),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_collection_reject(ctx, tc, 0, ptr::null()),
+            hegel_collection_reject(ctx, tc, ptr::null_mut(), ptr::null()),
             HEGEL_E_INVALID_HANDLE
         );
-        assert_eq!(hegel_new_pool(ctx, tc, &mut id), HEGEL_E_INVALID_HANDLE);
-        assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_INVALID_HANDLE);
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        assert_eq!(hegel_new_pool(ctx, tc, &mut pool), HEGEL_E_INVALID_HANDLE);
         assert_eq!(
-            hegel_pool_generate(ctx, tc, 0, false, &mut id),
+            hegel_pool_add(ctx, tc, ptr::null_mut(), &mut id),
             HEGEL_E_INVALID_HANDLE
         );
+        assert_eq!(
+            hegel_pool_generate(ctx, tc, ptr::null_mut(), false, &mut id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(hegel_collection_free(ctx, ptr::null_mut()), HEGEL_OK);
+        assert_eq!(hegel_pool_free(ctx, ptr::null_mut()), HEGEL_OK);
+        assert_eq!(hegel_state_machine_free(ctx, ptr::null_mut()), HEGEL_OK);
         assert_eq!(
             hegel_target(ctx, tc, 0.0, c"x".as_ptr()),
             HEGEL_E_INVALID_HANDLE
@@ -707,15 +717,16 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("min_value"));
 
-        let mut id = 0i64;
+        let mut collection: *mut HegelCollection = ptr::null_mut();
         assert_eq!(
             hegel_new_collection(ctx, tc, 0, u64::MAX, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_new_collection(ctx, tc, 5, 3, &mut id),
+            hegel_new_collection(ctx, tc, 5, 3, &mut collection),
             HEGEL_E_INVALID_ARG
         );
+        assert!(collection.is_null());
         assert!(last_error(ctx).contains("min_size <= max_size"));
         assert!(last_error(ctx).contains("[5, 3]"));
         assert_eq!(
@@ -723,23 +734,53 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
 
-        assert_eq!(hegel_new_collection(ctx, tc, 0, 3, &mut id), HEGEL_OK);
+        let mut null_more = false;
         assert_eq!(
-            hegel_collection_more(ctx, tc, id, ptr::null_mut()),
+            hegel_collection_more(ctx, tc, ptr::null_mut(), &mut null_more),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("collection handle is null"));
+        assert_eq!(
+            hegel_collection_reject(ctx, tc, ptr::null_mut(), ptr::null()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut var_id = 0i64;
+        assert_eq!(
+            hegel_pool_add(ctx, tc, ptr::null_mut(), &mut var_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("pool handle is null"));
+        assert_eq!(
+            hegel_pool_generate(ctx, tc, ptr::null_mut(), false, &mut var_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        assert_eq!(
+            hegel_new_collection(ctx, tc, 0, 3, &mut collection),
+            HEGEL_OK
+        );
+        assert!(!collection.is_null());
+        assert_eq!(
+            hegel_collection_more(ctx, tc, collection, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_collection_reject(ctx, tc, id, bad_utf8.as_ptr()),
+            hegel_collection_reject(ctx, tc, collection, bad_utf8.as_ptr()),
             HEGEL_E_INVALID_ARG
         );
         let mut more = false;
-        if hegel_collection_more(ctx, tc, id, &mut more) == HEGEL_OK && more {
+        if hegel_collection_more(ctx, tc, collection, &mut more) == HEGEL_OK && more {
             let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
-            assert_eq!(hegel_collection_reject(ctx, tc, id, ptr::null()), HEGEL_OK);
+            assert_eq!(
+                hegel_collection_reject(ctx, tc, collection, ptr::null()),
+                HEGEL_OK
+            );
         }
+        assert_eq!(hegel_collection_free(ctx, collection), HEGEL_OK);
 
-        let mut pool = 0i64;
+        let mut pool: *mut HegelPool = ptr::null_mut();
         assert_eq!(hegel_new_pool(ctx, tc, &mut pool), HEGEL_OK);
+        assert!(!pool.is_null());
         assert_eq!(
             hegel_pool_add(ctx, tc, pool, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -748,6 +789,11 @@ fn live_test_case_argument_validation() {
             hegel_pool_generate(ctx, tc, pool, false, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_pool_generate(ctx, tc, pool, false, &mut var_id),
+            HEGEL_E_ASSUME
+        );
+        assert_eq!(hegel_pool_free(ctx, pool), HEGEL_OK);
 
         assert_eq!(hegel_target(ctx, tc, 0.0, ptr::null()), HEGEL_E_INVALID_ARG);
         assert!(last_error(ctx).contains("label is null"));
@@ -984,6 +1030,23 @@ fn primitives_after_overrun_all_report_stop_test() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 0, 3, &mut collection));
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        ok(hegel_new_pool(ctx, tc, &mut pool));
+        let rule = CString::new("only").unwrap();
+        let rules = [rule.as_ptr()];
+        let mut machine: *mut HegelStateMachine = ptr::null_mut();
+        ok(hegel_new_state_machine(
+            ctx,
+            tc,
+            rules.as_ptr(),
+            1,
+            ptr::null(),
+            0,
+            &mut machine,
+        ));
+
         let mut value = 0i64;
         let mut overran = false;
         for _ in 0..1_000_000 {
@@ -1000,16 +1063,53 @@ fn primitives_after_overrun_all_report_stop_test() {
         );
         assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_E_STOP_TEST);
         let mut id = 0i64;
+        let mut post_overrun: *mut HegelCollection = ptr::null_mut();
         assert_eq!(
-            hegel_new_collection(ctx, tc, 0, 3, &mut id),
+            hegel_new_collection(ctx, tc, 0, 3, &mut post_overrun),
+            HEGEL_E_STOP_TEST
+        );
+        assert!(post_overrun.is_null());
+        let mut more = false;
+        assert_eq!(
+            hegel_collection_more(ctx, tc, collection, &mut more),
             HEGEL_E_STOP_TEST
         );
         assert_eq!(
-            hegel_collection_reject(ctx, tc, 0, ptr::null()),
+            hegel_collection_reject(ctx, tc, collection, ptr::null()),
             HEGEL_E_STOP_TEST
         );
-        assert_eq!(hegel_new_pool(ctx, tc, &mut id), HEGEL_E_STOP_TEST);
-        assert_eq!(hegel_pool_add(ctx, tc, 0, &mut id), HEGEL_E_STOP_TEST);
+        let mut post_overrun_pool: *mut HegelPool = ptr::null_mut();
+        assert_eq!(
+            hegel_new_pool(ctx, tc, &mut post_overrun_pool),
+            HEGEL_E_STOP_TEST
+        );
+        assert!(post_overrun_pool.is_null());
+        assert_eq!(hegel_pool_add(ctx, tc, pool, &mut id), HEGEL_E_STOP_TEST);
+        assert_eq!(
+            hegel_pool_generate(ctx, tc, pool, false, &mut id),
+            HEGEL_E_STOP_TEST
+        );
+        let mut post_overrun_machine: *mut HegelStateMachine = ptr::null_mut();
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                &mut post_overrun_machine
+            ),
+            HEGEL_E_STOP_TEST
+        );
+        assert!(post_overrun_machine.is_null());
+        assert_eq!(
+            hegel_state_machine_next_rule(ctx, tc, machine, &mut id),
+            HEGEL_E_STOP_TEST
+        );
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_pool_free(ctx, pool));
+        ok(hegel_state_machine_free(ctx, machine));
 
         ok(hegel_mark_complete(
             ctx,
@@ -1053,13 +1153,22 @@ fn state_machine_and_primitive_boolean_paths() {
         let null_tc: *mut HegelTestCase = ptr::null_mut();
         let rule_a = CString::new("a").unwrap();
         let rules: [*const c_char; 1] = [rule_a.as_ptr()];
+        let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_id = 0i64;
         assert_eq!(
-            hegel_new_state_machine(ctx, null_tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                null_tc,
+                rules.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                &mut machine
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, null_tc, 0, &mut out_id),
+            hegel_state_machine_next_rule(ctx, null_tc, ptr::null_mut(), &mut out_id),
             HEGEL_E_INVALID_HANDLE
         );
         let mut bv = false;
@@ -1082,47 +1191,70 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, ptr::null(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(ctx, tc, ptr::null(), 1, ptr::null(), 0, &mut machine),
             HEGEL_E_INVALID_ARG
         );
+        assert!(machine.is_null());
         assert!(last_error(ctx).contains("rule_names pointer is null"));
         let null_entry: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, null_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                null_entry.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                &mut machine
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names[0] is null"));
         let bad_entry: [*const c_char; 1] = [bad_utf8.as_ptr()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, bad_entry.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(ctx, tc, bad_entry.as_ptr(), 1, ptr::null(), 0, &mut machine),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad_inv: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, bad_inv.as_ptr(), 1, &mut out_id),
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                1,
+                bad_inv.as_ptr(),
+                1,
+                &mut machine
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invariant_names[0] is null"));
 
         assert_eq!(
-            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, &mut out_id),
+            hegel_new_state_machine(ctx, tc, rules.as_ptr(), 1, ptr::null(), 0, &mut machine),
             HEGEL_OK
         );
+        assert!(!machine.is_null());
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, tc, out_id, ptr::null_mut()),
+            hegel_state_machine_next_rule(ctx, tc, machine, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_state_machine_next_rule(ctx, tc, ptr::null_mut(), &mut out_id),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("state machine handle is null"));
         let mut rule_idx = -1i64;
         assert_eq!(
-            hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
+            hegel_state_machine_next_rule(ctx, tc, machine, &mut rule_idx),
             HEGEL_OK
         );
         assert_eq!(rule_idx, 0, "a single-rule machine always selects rule 0");
         let mut steps = 1;
         loop {
             assert_eq!(
-                hegel_state_machine_next_rule(ctx, tc, out_id, &mut rule_idx),
+                hegel_state_machine_next_rule(ctx, tc, machine, &mut rule_idx),
                 HEGEL_OK
             );
             if rule_idx == HEGEL_STATE_MACHINE_DONE {
@@ -1132,6 +1264,7 @@ fn state_machine_and_primitive_boolean_paths() {
             steps += 1;
             assert!(steps <= 50, "the engine's step cap never exceeds 50");
         }
+        assert_eq!(hegel_state_machine_free(ctx, machine), HEGEL_OK);
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),
@@ -1673,4 +1806,200 @@ fn from_blob_replay_trace_goes_to_the_output_callback() {
     }
     let lines = lines.into_inner().unwrap();
     assert_eq!(lines, ["replaying failure blob: choices = 2"]);
+}
+
+/// Collection, pool, and state-machine handles are independent of the test
+/// case and run they were created under: they outlive `hegel_test_case_free`
+/// and `hegel_run_free`, and the frees themselves are safe in any order —
+/// here the run and settings go first and the object handles are released
+/// last, in an order unrelated to creation order.
+#[test]
+fn object_handles_are_freed_safely_after_the_run() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 0, 3, &mut collection));
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        ok(hegel_new_pool(ctx, tc, &mut pool));
+        let mut var_id = 0i64;
+        ok(hegel_pool_add(ctx, tc, pool, &mut var_id));
+        let rule = CString::new("only").unwrap();
+        let rules = [rule.as_ptr()];
+        let mut machine: *mut HegelStateMachine = ptr::null_mut();
+        ok(hegel_new_state_machine(
+            ctx,
+            tc,
+            rules.as_ptr(),
+            1,
+            ptr::null(),
+            0,
+            &mut machine,
+        ));
+
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+
+        ok(hegel_state_machine_free(ctx, machine));
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_pool_free(ctx, pool));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A collection created through the root test-case handle is driven through
+/// a clone handle: the continue/stop decisions draw from the clone's stream
+/// and the collection still respects its size bounds.
+#[test]
+fn collection_created_on_the_root_is_driven_via_a_clone() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 7, true));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 1, 4, &mut collection));
+
+        let mut clone: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_clone(ctx, tc, &mut clone));
+        assert!(!clone.is_null());
+
+        let mut n = 0u64;
+        loop {
+            let mut more = false;
+            ok(hegel_collection_more(ctx, clone, collection, &mut more));
+            if !more {
+                break;
+            }
+            let mut value = false;
+            ok(hegel_generate_boolean(
+                ctx, clone, 0.5, false, false, &mut value,
+            ));
+            n += 1;
+        }
+        assert!((1..=4).contains(&n), "collection produced {n} elements");
+
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_test_case_free(ctx, clone));
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A raw pointer wrapper so test threads can share libhegel handles; sound
+/// here because pools serialize internally and each thread drives its own
+/// test-case clone.
+struct SendPtr<T>(*mut T);
+impl<T> Copy for SendPtr<T> {}
+impl<T> Clone for SendPtr<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+/// One pool shared between two clone handles driven from parallel threads:
+/// the pool's internal lock serializes concurrent `hegel_pool_add` /
+/// `hegel_pool_generate` calls, every drawn id is one that was added, and
+/// consumed ids are handed out exactly once.
+#[test]
+fn pool_is_shared_across_two_clone_threads() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 11, true));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        ok(hegel_new_pool(ctx, tc, &mut pool));
+
+        let mut clone_a: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_clone(ctx, tc, &mut clone_a));
+        let mut clone_b: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_clone(ctx, tc, &mut clone_b));
+
+        let pool = SendPtr(pool);
+        let consumed = Mutex::new(Vec::<i64>::new());
+        std::thread::scope(|scope| {
+            for clone in [SendPtr(clone_a), SendPtr(clone_b)] {
+                let consumed = &consumed;
+                scope.spawn(move || {
+                    let clone = clone;
+                    let pool = pool;
+                    let worker_ctx = hegel_context_new();
+                    let mut added = Vec::new();
+                    for _ in 0..8 {
+                        let mut var_id = 0i64;
+                        ok(hegel_pool_add(worker_ctx, clone.0, pool.0, &mut var_id));
+                        added.push(var_id);
+                    }
+                    for _ in 0..4 {
+                        let mut drawn = 0i64;
+                        ok(hegel_pool_generate(
+                            worker_ctx, clone.0, pool.0, true, &mut drawn,
+                        ));
+                        assert!(drawn >= 1, "drew an id that was never added: {drawn}");
+                        consumed.lock().unwrap().push(drawn);
+                    }
+                    ok(hegel_context_free(worker_ctx));
+                });
+            }
+        });
+        let mut consumed = consumed.into_inner().unwrap();
+        let n = consumed.len();
+        consumed.sort_unstable();
+        consumed.dedup();
+        assert_eq!(n, 8, "each consuming draw returns one variable");
+        assert_eq!(consumed.len(), 8, "no consumed variable is drawn twice");
+        assert!(consumed.iter().all(|id| (1..=16).contains(id)));
+
+        ok(hegel_test_case_free(ctx, clone_a));
+        ok(hegel_test_case_free(ctx, clone_b));
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_pool_free(ctx, pool.0));
+        ok(hegel_context_free(ctx));
+    }
 }

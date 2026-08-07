@@ -18,11 +18,13 @@
 //! the new shrink target (and is now reflected in `current`), `false`
 //! otherwise.
 
-use std::future::Future;
-use std::pin::Pin;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
 
 use super::ShrinkResult;
-use super::search::FindInteger;
+use super::search::{FindInteger, SearchStep};
 use crate::control::hegel_internal_debug_assert;
 
 /// The boxed future a [`PermutationJudge`] resolves to: whether the
@@ -45,7 +47,7 @@ where
     F: FnMut(&[usize]) -> ShrinkResult<bool>,
 {
     fn accept<'s>(&'s mut self, permutation: &'s [usize]) -> JudgeFuture<'s> {
-        Box::pin(std::future::ready(self(permutation)))
+        Box::pin(core::future::ready(self(permutation)))
     }
 }
 
@@ -93,27 +95,31 @@ where
         let len = snapshot.len();
         let mut best: Vec<usize> = Vec::new();
         let mut search = FindInteger::new();
-        while let Some(k) = search.probe() {
-            let ok = if i + k > len {
-                false
-            } else {
-                let mut region: Vec<usize> = snapshot[i..i + k].to_vec();
-                region.sort_by_key(|&j| keys(j));
-                let mut attempt = prefix.clone();
-                attempt.extend_from_slice(&region);
-                attempt.extend_from_slice(&snapshot[i + k..]);
-                if attempt == snapshot {
-                    true
-                } else if accept.accept(&attempt).await? {
-                    best = attempt;
-                    true
-                } else {
-                    false
+        let k = loop {
+            match search.step() {
+                SearchStep::Done(v) => break v,
+                SearchStep::Probe(k) => {
+                    let ok = if i + k > len {
+                        false
+                    } else {
+                        let mut region: Vec<usize> = snapshot[i..i + k].to_vec();
+                        region.sort_by_key(|&j| keys(j));
+                        let mut attempt = prefix.clone();
+                        attempt.extend_from_slice(&region);
+                        attempt.extend_from_slice(&snapshot[i + k..]);
+                        if attempt == snapshot {
+                            true
+                        } else if accept.accept(&attempt).await? {
+                            best = attempt;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    search.record(ok);
                 }
-            };
-            search.record(ok);
-        }
-        let k = search.result();
+            }
+        };
         if !best.is_empty() {
             current = best;
         }
@@ -133,23 +139,27 @@ where
         let snapshot_r = current.clone();
         let i_fixed = i;
         let mut search = FindInteger::new();
-        while let Some(k) = search.probe() {
-            let ok = if right + k > snapshot_r.len() {
-                false
-            } else {
-                try_sort_around(
-                    &snapshot_r,
-                    left,
-                    right + k,
-                    i_fixed,
-                    &mut keys,
-                    &mut accept,
-                )
-                .await?
-            };
-            search.record(ok);
-        }
-        right += search.result();
+        right += loop {
+            match search.step() {
+                SearchStep::Done(v) => break v,
+                SearchStep::Probe(k) => {
+                    let ok = if right + k > snapshot_r.len() {
+                        false
+                    } else {
+                        try_sort_around(
+                            &snapshot_r,
+                            left,
+                            right + k,
+                            i_fixed,
+                            &mut keys,
+                            &mut accept,
+                        )
+                        .await?
+                    };
+                    search.record(ok);
+                }
+            }
+        };
         let snapshot_l = current.clone();
         let mut search = FindInteger::new();
         while let Some(k) = search.probe() {

@@ -636,57 +636,71 @@ impl CTestCase {
         &self,
         min_size: u64,
         max_size: Option<u64>,
-    ) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
+    ) -> Result<CollectionHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelCollection = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_collection(
                 ctx,
                 self.raw,
                 min_size,
                 max_size.unwrap_or(u64::MAX),
-                &mut id,
+                &mut raw,
             )
         });
-        rc_to_value(rc, id)
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(CollectionHandle { raw })
     }
 
-    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, hegel_result_t> {
+    pub(crate) fn collection_more(
+        &self,
+        collection: &CollectionHandle,
+    ) -> Result<bool, hegel_result_t> {
         let mut more = false;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_collection_more(ctx, self.raw, collection_id, &mut more)
+            hegel_c::hegel_collection_more(ctx, self.raw, collection.raw, &mut more)
         });
         rc_to_value(rc, more)
     }
 
     pub(crate) fn collection_reject(
         &self,
-        collection_id: i64,
+        collection: &CollectionHandle,
         why: Option<&str>,
     ) -> Result<(), hegel_result_t> {
         let c_why = why.map(cstring_lossy);
         let why_ptr = c_why.as_ref().map_or(ptr::null(), |c| c.as_ptr());
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_collection_reject(ctx, self.raw, collection_id, why_ptr)
+            hegel_c::hegel_collection_reject(ctx, self.raw, collection.raw, why_ptr)
         }))
     }
 
-    pub(crate) fn new_pool(&self) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
-        let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut id) });
-        rc_to_value(rc, id)
+    pub(crate) fn new_pool(&self) -> Result<PoolHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelPool = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut raw) });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(PoolHandle { raw })
     }
 
-    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_pool_add(ctx, self.raw, pool_id, &mut id) });
-        rc_to_value(rc, id)
-    }
-
-    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, hegel_result_t> {
+    pub(crate) fn pool_add(&self, pool: &PoolHandle) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_pool_generate(ctx, self.raw, pool_id, consume, &mut id)
+            hegel_c::hegel_pool_add(ctx, self.raw, pool.raw, &mut id)
+        });
+        rc_to_value(rc, id)
+    }
+
+    pub(crate) fn pool_generate(
+        &self,
+        pool: &PoolHandle,
+        consume: bool,
+    ) -> Result<i64, hegel_result_t> {
+        let mut id: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_pool_generate(ctx, self.raw, pool.raw, consume, &mut id)
         });
         rc_to_value(rc, id)
     }
@@ -695,14 +709,14 @@ impl CTestCase {
         &self,
         rule_names: &[&str],
         invariant_names: &[&str],
-    ) -> Result<i64, hegel_result_t> {
+    ) -> Result<StateMachineHandle, hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
         let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
-        let mut id: i64 = 0;
+        let mut raw: *mut hegel_c::HegelStateMachine = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
                 ctx,
@@ -711,21 +725,24 @@ impl CTestCase {
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
-                &mut id,
+                &mut raw,
             )
         });
-        rc_to_value(rc, id)
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(StateMachineHandle { raw })
     }
 
     /// Ask the engine for the next rule to run; `None` once the engine has
     /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
     pub(crate) fn state_machine_next_rule(
         &self,
-        state_machine_id: i64,
+        state_machine: &StateMachineHandle,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
+            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine.raw, &mut out)
         });
         let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
             None
@@ -763,6 +780,82 @@ impl Drop for CTestCase {
         // frontend created (from_blob, next_test_case, or clone_handle) and is
         // freed exactly once here, dropping its reference to the test case.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel collection handle (`hegel_collection_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_collection`] and driven through
+/// [`CTestCase::collection_more`] / [`CTestCase::collection_reject`] with any
+/// handle of the same test-case family. The handle is independent of the test
+/// case and run it was created under, so dropping it is safe in any order.
+pub(crate) struct CollectionHandle {
+    raw: *mut hegel_c::HegelCollection,
+}
+
+// SAFETY: libhegel guards the collection's state with its own lock (rejecting
+// concurrent use with `HEGEL_E_CONCURRENT_USE`), so moving or sharing the
+// handle across threads is sound.
+unsafe impl Send for CollectionHandle {}
+unsafe impl Sync for CollectionHandle {}
+
+impl Drop for CollectionHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_collection call and
+        // is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_collection_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel variable-pool handle (`hegel_pool_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_pool`] and driven through
+/// [`CTestCase::pool_add`] / [`CTestCase::pool_generate`] with any handle of
+/// the same test-case family. The pool serializes concurrent use internally,
+/// so it may be shared between clone handles on parallel threads; it is
+/// independent of the test case and run it was created under, so dropping it
+/// is safe in any order.
+pub(crate) struct PoolHandle {
+    raw: *mut hegel_c::HegelPool,
+}
+
+// SAFETY: libhegel guards the pool's state with its own lock (serializing
+// concurrent operations), so moving or sharing the handle across threads is
+// sound.
+unsafe impl Send for PoolHandle {}
+unsafe impl Sync for PoolHandle {}
+
+impl Drop for PoolHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_pool call and is
+        // freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_pool_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel state-machine handle (`hegel_state_machine_t`), freed on
+/// drop.
+///
+/// Built by [`CTestCase::new_state_machine`] and driven through
+/// [`CTestCase::state_machine_next_rule`] with any handle of the same
+/// test-case family. The machine serializes concurrent use internally; it is
+/// independent of the test case and run it was created under, so dropping it
+/// is safe in any order.
+pub(crate) struct StateMachineHandle {
+    raw: *mut hegel_c::HegelStateMachine,
+}
+
+// SAFETY: libhegel guards the machine's state with its own lock (serializing
+// concurrent operations), so moving or sharing the handle across threads is
+// sound.
+unsafe impl Send for StateMachineHandle {}
+unsafe impl Sync for StateMachineHandle {}
+
+impl Drop for StateMachineHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_state_machine call
+        // and is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_state_machine_free(ctx, self.raw) });
     }
 }
 

@@ -1,7 +1,12 @@
 use crate::native::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::fmt::Debug;
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
 
 use rand::{Rng, RngExt};
 
@@ -9,20 +14,22 @@ use crate::native::rng::EngineRng;
 
 use super::MAX_CLONE_DEPTH;
 use super::choices::{
-    BooleanChoice, BytesChoice, ChoiceKind, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind,
-    ChoiceValue, CloneRecord, EngineError, FloatChoice, IntegerChoice, InterestingOrigin, Status,
+    BooleanChoice, BytesChoice, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind, ChoiceValue,
+    EngineError, FloatChoice, IntegerChoice, InterestingOrigin, RealizedStream, Status,
     StringChoice,
 };
 use super::float_index::index_to_float;
-use super::state_machine::NativeStateMachine;
 use super::{BOUNDARY_PROBABILITY, BUFFER_SIZE};
-use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
+use crate::control::{
+    InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
+};
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
 use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
 };
+use crate::sys::sync::{Lazy, Mutex};
 
 /// State for a variable-length collection.
 pub struct ManyState {
@@ -69,7 +76,7 @@ pub(crate) fn length_p_continue(min_size: usize, max_size: Option<usize>) -> f64
 /// Interesting integer constants: powers of 2 (2^16..2^65), powers of 10
 /// (10^5..10^19), factorials (9!..20!), primorials — plus their ±1
 /// neighbours and negations.
-static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
+static GLOBAL_CONSTANTS_INTEGERS: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut base: Vec<i128> = Vec::new();
     for n in 16u32..66 {
         base.push(1i128 << n);
@@ -110,15 +117,19 @@ static GLOBAL_CONSTANTS_INTEGERS: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// Drawing length uniformly from `[min_size, max_size]` produces huge
 /// values when `max_size` is large; instead, the size follows a geometric
 /// variate with stop probability derived from [`length_p_continue`].
-fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> usize {
+fn many_draw_length(
+    rng: &mut EngineRng,
+    min_size: usize,
+    max_size: usize,
+) -> Result<usize, InternalError> {
     if min_size == max_size {
-        return min_size;
+        return Ok(min_size);
     }
     let p_continue = length_p_continue(min_size, Some(max_size));
     let u: f64 = rng.random();
     let extra = libm::floor(libm::log(u) / libm::log(p_continue));
     hegel_internal_assert!(extra >= 0.0);
-    min_size.saturating_add(extra as usize).min(max_size)
+    Ok(min_size.saturating_add(extra as usize).min(max_size))
 }
 
 /// The shared integer distribution used by [`biased_integer_sample`] as
@@ -132,9 +143,9 @@ fn many_draw_length(rng: &mut EngineRng, min_size: usize, max_size: usize) -> us
 /// Statically constructed because the constructor evaluates `Γ` and CDF
 /// integrals at the switchover; recomputing it per draw would dominate
 /// runtime.
-static INTEGERS_DISTRIBUTION: LazyLock<
-    PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>,
-> = LazyLock::new(|| {
+static INTEGERS_DISTRIBUTION: Lazy<
+    Result<PiecewiseDistribution<UniformDistribution, LogStudentTDistribution>, InternalError>,
+> = Lazy::new(|| {
     PiecewiseDistribution::new(
         UniformDistribution::new(256.0),
         LogStudentTDistribution::new(13.0, 2),
@@ -149,15 +160,19 @@ static INTEGERS_DISTRIBUTION: LazyLock<
 /// requested range is too narrow for inverse-CDF sampling to be stable.
 /// Callers must ensure `min_value < max_value`; the `min == max` early
 /// return is handled at the [`biased_integer_sample`] call site.
-fn integer_sample_from_distribution(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
-    let dist = &*INTEGERS_DISTRIBUTION;
-    let lo = dist.cdf(min_value as f64 - 0.5);
-    let hi = dist.cdf(max_value as f64 + 0.5);
+fn integer_sample_from_distribution(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut EngineRng,
+) -> Result<i128, InternalError> {
+    let dist = INTEGERS_DISTRIBUTION.as_ref().map_err(Clone::clone)?;
+    let lo = dist.cdf(min_value as f64 - 0.5)?;
+    let hi = dist.cdf(max_value as f64 + 0.5)?;
     if hi - lo < 1e-13 {
-        return rng.random_range(min_value..=max_value);
+        return Ok(rng.random_range(min_value..=max_value));
     }
     let p = (lo + rng.random::<f64>() * (hi - lo)).max(f64::MIN_POSITIVE);
-    (libm::round(dist.inverse_cdf(p)) as i128).clamp(min_value, max_value)
+    Ok((libm::round(dist.inverse_cdf(p)?) as i128).clamp(min_value, max_value))
 }
 
 /// Hand-picked "interesting" boundary values: powers of two and their
@@ -225,7 +240,7 @@ static INTERESTING_INTEGERS: &[i128] = &[
 /// [`GLOBAL_CONSTANTS_INTEGERS`]. Used by [`biased_integer_sample`] to find
 /// the in-range boundary candidates via two `partition_point` calls instead
 /// of an O(n²) per-call dedup loop.
-static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
+static SORTED_NASTY_POOL: Lazy<Vec<i128>> = Lazy::new(|| {
     let mut all: Vec<i128> = INTERESTING_INTEGERS
         .iter()
         .copied()
@@ -247,18 +262,25 @@ static SORTED_NASTY_POOL: LazyLock<Vec<i128>> = LazyLock::new(|| {
 /// distribution — and re-widens the result into the choice's concrete type.
 /// Otherwise (a `BigInt` choice, or a `u128` range past `i128::MAX`) it falls
 /// back to [`biguint_sample_in_range`].
-pub(crate) fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
-    match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
-        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)),
+pub(crate) fn biased_integer_sample(
+    ic: &IntegerChoice,
+    rng: &mut EngineRng,
+) -> Result<BigInt, InternalError> {
+    Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
+        (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng)?),
         _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng),
-    }
+    })
 }
 
 /// The original i128 nasty-pool + distribution sampler, returning a value in
 /// `[min_value, max_value]`.
-fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> i128 {
+fn biased_i128_sample(
+    min_value: i128,
+    max_value: i128,
+    rng: &mut EngineRng,
+) -> Result<i128, InternalError> {
     if min_value == max_value {
-        return min_value;
+        return Ok(min_value);
     }
     let pool = &*SORTED_NASTY_POOL;
     let lo = pool.partition_point(|&v| v < min_value);
@@ -270,13 +292,13 @@ fn biased_i128_sample(min_value: i128, max_value: i128, rng: &mut EngineRng) -> 
     let threshold = (count as f64 * BOUNDARY_PROBABILITY).min(0.5);
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
-        if need_min && idx == 0 {
+        Ok(if need_min && idx == 0 {
             min_value
         } else if need_max && idx == count - 1 {
             max_value
         } else {
             static_slice[idx - need_min as usize]
-        }
+        })
     } else {
         integer_sample_from_distribution(min_value, max_value, rng)
     }
@@ -353,7 +375,10 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
 /// otherwise. Shared with the data-tree walk so novel-prefix exploration
 /// hits the same boundary distribution as fresh draws.
-pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
+pub(crate) fn biased_float_sample(
+    fc: &FloatChoice,
+    rng: &mut EngineRng,
+) -> Result<f64, InternalError> {
     const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
     let candidates = [
         fc.min_value,
@@ -383,16 +408,15 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
 
     if rng.random::<f64>() < nasty_threshold {
         let idx = rng.random_range(0..valid_count);
-        let mut skip = idx;
-        for &v in candidates.iter() {
-            if fc.validate(v) {
-                if skip == 0 {
-                    return v;
-                }
-                skip -= 1;
-            }
-        }
-        unreachable!("valid_count agrees with the second validate pass");
+        let picked = candidates
+            .iter()
+            .copied()
+            .filter(|&v| fc.validate(v))
+            .nth(idx);
+        return Ok(hegel_internal_unwrap!(
+            picked,
+            "the second validate pass found fewer candidates than valid_count"
+        ));
     }
     let mag = index_to_float(rng.random::<u64>());
     let raw = if rng.random::<u64>() & 1 == 1 {
@@ -405,7 +429,7 @@ pub(crate) fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 
     } else {
         float_clamp(fc, raw)
     };
-    if fc.validate(f) { f } else { fc.simplest() }
+    if fc.validate(f) { Ok(f) } else { fc.simplest() }
 }
 
 /// Port of Hypothesis's `make_float_clamper`: remap an out-of-range draw
@@ -436,7 +460,10 @@ fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
 /// probability proportional to `BOUNDARY_PROBABILITY × |nasty|`, falling
 /// back to a length drawn from [`many_draw_length`] with uniformly random
 /// byte values.
-pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<u8> {
+pub(crate) fn biased_bytes_sample(
+    bc: &BytesChoice,
+    rng: &mut EngineRng,
+) -> Result<Vec<u8>, InternalError> {
     let want_zero = bc.min_size == 0 && bc.max_size > 0;
     let want_ff = bc.min_size <= 1 && bc.max_size >= 1;
     let count = 1 + want_zero as usize + want_ff as usize;
@@ -444,20 +471,20 @@ pub(crate) fn biased_bytes_sample(bc: &BytesChoice, rng: &mut EngineRng) -> Vec<
     if rng.random::<f64>() < nasty_threshold {
         let mut slot = rng.random_range(0..count);
         if slot == 0 {
-            return bc.simplest();
+            return Ok(bc.simplest());
         }
         slot -= 1;
         if want_zero {
             if slot == 0 {
-                return vec![0u8];
+                return Ok(vec![0u8]);
             }
             slot -= 1;
         }
         hegel_internal_debug_assert!(want_ff && slot == 0);
-        return vec![0xffu8];
+        return Ok(vec![0xffu8]);
     }
-    let len = many_draw_length(rng, bc.min_size, bc.max_size);
-    (0..len).map(|_| rng.random::<u8>()).collect()
+    let len = many_draw_length(rng, bc.min_size, bc.max_size)?;
+    Ok((0..len).map(|_| rng.random::<u8>()).collect())
 }
 
 /// Sample a boolean that is `true` with probability `p`, spending exactly one
@@ -503,7 +530,7 @@ pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bo
 /// Interesting string constants: logic keywords, numeric edge cases,
 /// common Unicode stress strings. Stored as codepoint vectors so they can
 /// be validated against and inserted into the draw_string nasty pool.
-static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
+static GLOBAL_CONSTANTS_STRINGS: Lazy<Vec<Vec<u32>>> = Lazy::new(|| {
     let strings: &[&str] = &[
         "undefined",
         "null",
@@ -594,13 +621,11 @@ static GLOBAL_CONSTANTS_STRINGS: LazyLock<Vec<Vec<u32>>> = LazyLock::new(|| {
 /// identity check, so an address reused after a drop cannot serve a stale
 /// mask — it recomputes and overwrites its slot.
 fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
-    use std::sync::OnceLock;
-    type Cache = Mutex<HashMap<usize, (std::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
+    type Cache = Mutex<HashMap<usize, (alloc::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
+    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
     let key = Arc::as_ptr(intervals) as usize;
     {
-        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = CACHE.lock();
         if let Some((weak, mask)) = guard.get(&key) {
             if weak
                 .upgrade()
@@ -614,16 +639,18 @@ fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
         .iter()
         .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
         .collect();
-    cache
+    CACHE
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
         .insert(key, (Arc::downgrade(intervals), Arc::clone(&mask)));
     mask
 }
 
-pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Vec<u32> {
+pub(crate) fn biased_string_sample(
+    sc: &StringChoice,
+    rng: &mut EngineRng,
+) -> Result<Vec<u32>, InternalError> {
     if sc.intervals.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let want_empty = sc.min_size == 0 && sc.max_size > 0;
     let want_one = sc.min_size <= 1 && sc.max_size >= 1;
@@ -642,7 +669,7 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
     if rng.random::<f64>() < threshold {
         let idx = rng.random_range(0..count);
         if idx < small_count {
-            let simplest_cp = sc.simplest_codepoint();
+            let simplest_cp = sc.simplest_codepoint()?;
             let mut slot = idx;
             if slot == 0 {
                 return sc.simplest();
@@ -650,29 +677,29 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
             slot -= 1;
             if want_empty {
                 if slot == 0 {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 }
                 slot -= 1;
             }
             if want_one {
                 if slot == 0 {
-                    return vec![simplest_cp];
+                    return Ok(vec![simplest_cp]);
                 }
                 slot -= 1;
             }
             hegel_internal_debug_assert!(want_two && slot == 0);
-            return vec![simplest_cp, simplest_cp];
+            return Ok(vec![simplest_cp, simplest_cp]);
         }
-        let mut skip = idx - small_count;
-        for (cps, &m) in global_pool.iter().zip(contained.iter()) {
-            if m && size_ok(cps) {
-                if skip == 0 {
-                    return cps.clone();
-                }
-                skip -= 1;
-            }
-        }
-        unreachable!("valid_global_count agrees with the second validate pass");
+        let picked = global_pool
+            .iter()
+            .zip(contained.iter())
+            .filter(|(cps, m)| **m && size_ok(cps))
+            .nth(idx - small_count);
+        let (cps, _) = hegel_internal_unwrap!(
+            picked,
+            "the second validate pass found fewer candidates than valid_global_count"
+        );
+        return Ok(cps.clone());
     }
 
     let alpha = sc.intervals.len();
@@ -695,10 +722,10 @@ pub(crate) fn biased_string_sample(sc: &StringChoice, rng: &mut EngineRng) -> Ve
         sub_alphabet.push(cp);
     }
 
-    let len = many_draw_length(rng, sc.min_size, sc.max_size);
-    (0..len)
+    let len = many_draw_length(rng, sc.min_size, sc.max_size)?;
+    Ok((0..len)
         .map(|_| sub_alphabet[rng.random_range(0..sub_alphabet.len())])
-        .collect()
+        .collect())
 }
 
 /// Convert a codepoint sequence to a Rust `String`, dropping any surrogate
@@ -800,15 +827,15 @@ pub struct CoverageTag {
     pub label: u64,
 }
 
-static STRUCTURAL_COVERAGE_CACHE: LazyLock<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    LazyLock::new(|| Mutex::new(HashMap::default()));
+static STRUCTURAL_COVERAGE_CACHE: Lazy<Mutex<HashMap<u64, &'static CoverageTag>>> =
+    Lazy::new(|| Mutex::new(HashMap::default()));
 
 /// Look up (or insert) the [`CoverageTag`] for `label`.
 ///
 /// Repeated calls with the same `label` return the same `&'static`
 /// reference.
 pub fn structural_coverage(label: u64) -> &'static CoverageTag {
-    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock().unwrap();
+    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock();
     cache
         .entry(label)
         .or_insert_with(|| Box::leak(Box::new(CoverageTag { label })))
@@ -861,17 +888,20 @@ impl Spans {
     /// its kind's simplest value.  A forced choice can't be lowered further,
     /// so it counts as trivial for this purpose.  Out-of-range `span_idx`
     /// returns `false`.
-    pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> bool {
+    pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> Result<bool, InternalError> {
         let Some(span) = self.inner.get(span_idx) else {
-            return false;
+            return Ok(false);
         };
         let end = span.end.min(nodes.len());
         if span.start > end {
-            return false;
+            return Ok(false);
         }
-        nodes[span.start..end]
-            .iter()
-            .all(|n| n.was_forced || n.value == n.kind.simplest())
+        for n in &nodes[span.start..end] {
+            if !(n.was_forced || n.data.is_simplest()?) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// View as a slice, for code that wants raw indexing.
@@ -891,7 +921,7 @@ impl From<Vec<Span>> for Spans {
     }
 }
 
-impl std::ops::Deref for Spans {
+impl core::ops::Deref for Spans {
     type Target = [Span];
     fn deref(&self) -> &[Span] {
         &self.inner
@@ -900,13 +930,13 @@ impl std::ops::Deref for Spans {
 
 impl<'a> IntoIterator for &'a Spans {
     type Item = &'a Span;
-    type IntoIter = std::slice::Iter<'a, Span>;
+    type IntoIter = core::slice::Iter<'a, Span>;
     fn into_iter(self) -> Self::IntoIter {
         self.inner.iter()
     }
 }
 
-impl std::ops::Index<usize> for Spans {
+impl core::ops::Index<usize> for Spans {
     type Output = Span;
     fn index(&self, i: usize) -> &Span {
         &self.inner[i]
@@ -942,10 +972,9 @@ const STATUS_UNSET: u8 = u8::MAX;
 /// A family concludes exactly once: the first stream to conclude wins, and
 /// every other stream's subsequent draws fail fast with the family's
 /// verdict. The draw budget and `tc.target()` observations are likewise
-/// family-wide. Collections, variable pools, and state machines are shared
-/// across streams so ids remain valid on any clone; they are shared mutable
-/// state, so when several clones use one concurrently the interleaving (and
-/// therefore replay of the affected values) is scheduling-dependent.
+/// family-wide. Collections, variable pools, and state machines live in
+/// caller-owned handles rather than here; any stream of the family can
+/// drive one, drawing from its own choice sequence.
 pub struct FamilyCore {
     /// The family's write-once conclusion, with the interesting origin for
     /// an `Interesting` verdict.
@@ -962,15 +991,6 @@ pub struct FamilyCore {
     /// `tc.target()` observations, keyed by label. Family-wide so the
     /// once-per-test-case label uniqueness holds across clones.
     pub(crate) target_observations: Mutex<HashMap<String, f64>>,
-    /// Variable-length collection state, keyed by collection id.
-    pub(crate) collections: Mutex<HashMap<i64, ManyState>>,
-    next_collection_id: AtomicI64,
-    /// Variable pools for stateful testing, indexed by pool id.
-    pub(crate) variable_pools: Mutex<Vec<NativeVariables>>,
-    /// State machines, indexed by machine id. Each machine sits behind its
-    /// own lock so two clones drawing rules concurrently serialize on the
-    /// machine while drawing from their own streams.
-    pub(crate) state_machines: Mutex<Vec<Arc<Mutex<NativeStateMachine>>>>,
     /// When set, state machines draw no step cap and never report their
     /// rule sequence as done. Set for single-test-case runs, which explore
     /// one unbounded test case instead of many capped ones.
@@ -990,10 +1010,6 @@ impl FamilyCore {
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
-            collections: Mutex::new(HashMap::default()),
-            next_collection_id: AtomicI64::new(0),
-            variable_pools: Mutex::new(Vec::new()),
-            state_machines: Mutex::new(Vec::new()),
             state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
         }
@@ -1037,7 +1053,7 @@ impl FamilyCore {
     /// Claim the family-wide conclusion. First caller wins; later calls are
     /// no-ops.
     pub fn conclude(&self, status: Status, origin: Option<InterestingOrigin>) {
-        let mut guard = self.conclusion.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.conclusion.lock();
         if guard.is_none() {
             *guard = Some((status, origin));
             self.concluded_status.store(status as u8, Ordering::Release);
@@ -1046,10 +1062,7 @@ impl FamilyCore {
 
     /// The full conclusion (status plus origin), or `None` while running.
     pub fn conclusion(&self) -> Option<(Status, Option<InterestingOrigin>)> {
-        self.conclusion
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.conclusion.lock().clone()
     }
 
     /// Reserve one draw against the family budget. Returns `false` when the
@@ -1060,11 +1073,6 @@ impl FamilyCore {
 
     fn set_budget(&self, budget: usize) {
         self.budget.store(budget, Ordering::Relaxed);
-    }
-
-    /// Allocate the next collection id.
-    pub(crate) fn next_collection_id(&self) -> i64 {
-        self.next_collection_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -1213,14 +1221,14 @@ impl NativeTestCase {
     /// `kind.simplest()` of the requested choice kind. A deterministic
     /// all-simplest probe of the choice tree's "left leaf" before random
     /// sampling begins.
-    pub fn for_simplest(max_size: usize) -> Self {
-        Self::for_choices_and_template(
+    pub fn for_simplest(max_size: usize) -> Result<Self, InternalError> {
+        Ok(Self::for_choices_and_template(
             &[],
             None,
-            Some(ChoiceTemplate::simplest(None)),
+            Some(ChoiceTemplate::simplest(None)?),
             max_size,
             None,
-        )
+        ))
     }
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
@@ -1281,7 +1289,7 @@ impl NativeTestCase {
         let idx = self.nodes.len();
         let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
             Some(ChoiceValue::Clone(record)) => (
-                record.values().cloned().collect::<Vec<_>>(),
+                record.owned_values(),
                 record.realized_nodes().map(<[ChoiceNode]>::to_vec),
             ),
             _ => (Vec::new(), None),
@@ -1311,9 +1319,8 @@ impl NativeTestCase {
             child_id,
         );
         let handle = Arc::new(Mutex::new(child));
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Clone,
-            ChoiceValue::Clone(Arc::new(CloneRecord::empty())),
+        self.nodes.push(ChoiceNode::clone_stream(
+            Arc::new(RealizedStream::empty()),
             false,
         ));
         self.clone_children.push((idx, Arc::clone(&handle)));
@@ -1332,16 +1339,17 @@ impl NativeTestCase {
         if self.family.status().is_none() {
             return;
         }
-        for (idx, handle) in std::mem::take(&mut self.clone_children) {
-            let mut child = handle.lock().unwrap_or_else(|e| e.into_inner());
+        for (idx, handle) in core::mem::take(&mut self.clone_children) {
+            let mut child = handle.lock();
             child.freeze();
             child.reassemble();
-            let record = CloneRecord::from_run(
+            let stream = RealizedStream::new(
                 child.nodes.clone(),
                 child.spans.clone().into_vec(),
                 child.span_events.clone(),
             );
-            self.nodes[idx].value = ChoiceValue::Clone(Arc::new(record));
+            let was_forced = self.nodes[idx].was_forced;
+            self.nodes[idx] = ChoiceNode::clone_stream(Arc::new(stream), was_forced);
         }
     }
 
@@ -1455,17 +1463,6 @@ impl NativeTestCase {
         self.family.status()
     }
 
-    /// Allocate a new collection ID and store the given state.
-    pub fn new_collection(&mut self, state: ManyState) -> i64 {
-        let id = self.family.next_collection_id();
-        self.family
-            .collections
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, state);
-        id
-    }
-
     /// Draw a random integer in `[min_value, max_value]`.
     ///
     /// The type parameter `T` determines the input and output type.
@@ -1489,30 +1486,27 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Integer(kind.simplest()),
-            || ChoiceValue::Integer(kind.unit()),
-            |v| matches!(v, ChoiceValue::Integer(n) if kind.validate(n)),
-            |rng| ChoiceValue::Integer(biased_integer_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || Ok(kind.simplest()),
+            || Ok(kind.unit()),
+            |v| match v {
+                ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
+                _ => None,
+            },
+            |rng| biased_integer_sample(&kind, rng),
         )?;
-
-        let ChoiceValue::Integer(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_integer(&v, was_forced);
         }
 
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Integer(kind),
-            ChoiceValue::Integer(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::integer(kind, v.clone(), was_forced));
 
-        Ok(T::try_from(v)
-            .ok()
-            .expect("validated value fits the requested width"))
+        Ok(hegel_internal_unwrap!(
+            T::try_from(v).ok(),
+            "draw_integer: validated value does not fit the requested width"
+        ))
     }
 
     /// Record a forced integer draw in `[min_value, max_value]`.
@@ -1545,11 +1539,7 @@ impl NativeTestCase {
             obs.draw_integer(&v, true);
         }
 
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Integer(kind),
-            ChoiceValue::Integer(v),
-            true,
-        ));
+        self.nodes.push(ChoiceNode::integer(kind, v, true));
 
         Ok(())
     }
@@ -1575,22 +1565,17 @@ impl NativeTestCase {
             smallest_nonzero_magnitude,
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Float(kind.simplest()),
-            || ChoiceValue::Float(kind.unit()),
-            |v| matches!(v, ChoiceValue::Float(f) if kind.validate(*f)),
-            |rng| ChoiceValue::Float(biased_float_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::Float(f) if kind.validate(*f) => Some(*f),
+                _ => None,
+            },
+            |rng| biased_float_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::Float(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Float(kind),
-            ChoiceValue::Float(v),
-            was_forced,
-        ));
+        self.nodes.push(ChoiceNode::float(kind, v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
@@ -1607,22 +1592,18 @@ impl NativeTestCase {
         );
         let kind = BytesChoice { min_size, max_size };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::Bytes(kind.simplest()),
-            || ChoiceValue::Bytes(kind.unit()),
-            |v| matches!(v, ChoiceValue::Bytes(b) if kind.validate(b)),
-            |rng| ChoiceValue::Bytes(biased_bytes_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || Ok(kind.simplest()),
+            || Ok(kind.unit()),
+            |v| match v {
+                ChoiceValue::Bytes(b) if kind.validate(b) => Some(b.clone()),
+                _ => None,
+            },
+            |rng| biased_bytes_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::Bytes(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Bytes(kind),
-            ChoiceValue::Bytes(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::bytes(kind, v.clone(), was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_bytes(&v, was_forced);
@@ -1651,22 +1632,18 @@ impl NativeTestCase {
             max_size,
         };
 
-        let (value, was_forced) = self.resolve_choice(
-            || ChoiceValue::String(kind.simplest()),
-            || ChoiceValue::String(kind.unit()),
-            |v| matches!(v, ChoiceValue::String(s) if kind.validate(s)),
-            |rng| ChoiceValue::String(biased_string_sample(&kind, rng)),
+        let (v, was_forced) = self.resolve_choice(
+            || kind.simplest(),
+            || kind.unit(),
+            |v| match v {
+                ChoiceValue::String(s) if kind.validate(s) => Some(s.clone()),
+                _ => None,
+            },
+            |rng| biased_string_sample(&kind, rng),
         )?;
 
-        let ChoiceValue::String(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::String(kind),
-            ChoiceValue::String(v.clone()),
-            was_forced,
-        ));
+        self.nodes
+            .push(ChoiceNode::string(kind, v.clone(), was_forced));
 
         let s = codepoints_to_string(&v);
         if let Some(ref mut obs) = self.observer {
@@ -1707,27 +1684,22 @@ impl NativeTestCase {
             None
         });
 
-        let (value, was_forced) = if let Some(f) = forced_value {
+        let (v, was_forced) = if let Some(f) = forced_value {
             self.pre_choice()?;
-            (ChoiceValue::Boolean(f), true)
+            (f, true)
         } else {
             self.resolve_choice(
-                || ChoiceValue::Boolean(kind.simplest()),
-                || ChoiceValue::Boolean(kind.unit()),
-                |v| matches!(v, ChoiceValue::Boolean(_)),
-                |rng| ChoiceValue::Boolean(sample(p, rng)),
+                || Ok(kind.simplest()),
+                || Ok(kind.unit()),
+                |v| match v {
+                    ChoiceValue::Boolean(b) => Some(*b),
+                    _ => None,
+                },
+                |rng| Ok(sample(p, rng)),
             )?
         };
 
-        let ChoiceValue::Boolean(v) = value else {
-            unreachable!("kind/value invariant violated: outer match guaranteed this variant")
-        };
-
-        self.nodes.push(ChoiceNode::new(
-            ChoiceKind::Boolean(kind),
-            ChoiceValue::Boolean(v),
-            was_forced,
-        ));
+        self.nodes.push(ChoiceNode::boolean(v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);
@@ -1749,32 +1721,35 @@ impl NativeTestCase {
         Ok(())
     }
 
-    /// Resolve a choice value from forced, prefix, or random.
+    /// Resolve a typed choice value from forced, prefix, or random.
     ///
-    /// Implements punning logic for replaying choice sequences whose
-    /// choice kinds have shifted across runs.
-    fn resolve_choice(
+    /// `from_prefix` both validates a replayed prefix value against the
+    /// draw's constraint and extracts the typed payload, so a successful
+    /// replay hands back a value proven to fit the draw. A prefix value
+    /// that doesn't fit puns exactly as before: to the draw's `simplest()`
+    /// when the stale value was its original kind's simplest, and to
+    /// `unit()` otherwise.
+    fn resolve_choice<V>(
         &mut self,
-        simplest: impl FnOnce() -> ChoiceValue,
-        unit: impl FnOnce() -> ChoiceValue,
-        validate: impl FnOnce(&ChoiceValue) -> bool,
-        random: impl FnOnce(&mut EngineRng) -> ChoiceValue,
-    ) -> Result<(ChoiceValue, bool), EngineError> {
+        simplest: impl FnOnce() -> Result<V, InternalError>,
+        unit: impl FnOnce() -> Result<V, InternalError>,
+        from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
+        random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
+    ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
 
         if idx < self.prefix.len() {
             let prefix_value = &self.prefix[idx];
-            if validate(prefix_value) {
-                return Ok((prefix_value.clone(), false));
+            if let Some(v) = from_prefix(prefix_value) {
+                return Ok((v, false));
             }
-            let is_simplest = self
-                .prefix_nodes
-                .as_ref()
-                .and_then(|pn| pn.get(idx))
-                .is_some_and(|pn| *prefix_value == pn.kind.simplest());
-            return Ok((if is_simplest { simplest() } else { unit() }, false));
+            let is_simplest = match self.prefix_nodes.as_ref().and_then(|pn| pn.get(idx)) {
+                Some(pn) => *prefix_value == pn.data.simplest_value()?,
+                None => false,
+            };
+            return Ok((if is_simplest { simplest()? } else { unit()? }, false));
         }
 
         if let Some(template) = self.trailing_template.as_mut() {
@@ -1783,7 +1758,7 @@ impl NativeTestCase {
                 return Err(EngineError::Overrun);
             }
             let value = match template.kind {
-                ChoiceTemplateKind::Simplest => simplest(),
+                ChoiceTemplateKind::Simplest => simplest()?,
             };
             if let Some(c) = template.count.as_mut() {
                 *c -= 1;
@@ -1791,11 +1766,11 @@ impl NativeTestCase {
             return Ok((value, false));
         }
 
-        let rng = self
-            .rng
-            .as_mut()
-            .expect("No RNG available for random generation");
-        Ok((random(rng), false))
+        let rng = hegel_internal_unwrap!(
+            self.rng.as_mut(),
+            "resolve_choice: no RNG available for random generation"
+        );
+        Ok((random(rng)?, false))
     }
 }
 

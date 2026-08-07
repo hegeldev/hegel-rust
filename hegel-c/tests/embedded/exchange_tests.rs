@@ -1,6 +1,7 @@
 //! Embedded tests for `src/exchange.rs`.
 
 use super::*;
+use alloc::string::ToString;
 
 use crate::backend::TestCaseResult;
 use crate::native::core::NativeTestCase;
@@ -42,16 +43,21 @@ fn offer_resumes_only_after_the_driver_polls_again() {
     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
     assert!(fut.as_mut().poll(&mut cx).is_pending());
     assert!(!resumed.get());
-    let ds = exchange.take();
+    let ds = exchange.take().unwrap();
     ds.mark_complete(&TestCaseResult::Valid);
     assert!(fut.as_mut().poll(&mut cx).is_ready());
     assert!(resumed.get());
 }
 
 #[test]
-#[should_panic(expected = "engine suspended without offering a test case")]
-fn take_panics_when_nothing_was_offered() {
-    CaseExchange::new().take();
+fn take_errors_when_nothing_was_offered() {
+    let err = CaseExchange::new().take().err().unwrap();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("suspended without offering a test case"),
+        "{msg}"
+    );
+    assert!(msg.contains("bug in hegel"), "{msg}");
 }
 
 #[test]

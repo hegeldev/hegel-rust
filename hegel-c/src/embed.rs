@@ -16,6 +16,8 @@
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
+use alloc::boxed::Box;
+use alloc::format;
 
 /// Synchronous driver for [`run_native_async`], retained for tests: runs the
 /// whole exploration on the calling thread, invoking `run_case` once per
@@ -61,7 +63,7 @@ pub(crate) async fn run_native_async(
 ) -> Result<TestRunResult, RunError> {
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
+            crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
         });

@@ -106,14 +106,14 @@ impl<M> Rule<M> {
 /// value is recorded in the failing-test replay and the choice shrinks like any
 /// other draw.
 pub struct Pool<T> {
-    pool_id: i64,
+    pool: crate::ffi::PoolHandle,
     tc: TestCase,
     values: HashMap<i64, T>,
 }
 
-/// Ask the engine for a variable id from `pool_id`, consuming it if `consume`.
-fn pool_generate(tc: &TestCase, pool_id: i64, consume: bool) -> i64 {
-    match tc.with_ctc(|ctc| ctc.pool_generate(pool_id, consume)) {
+/// Ask the engine for a variable id from `pool`, consuming it if `consume`.
+fn pool_generate(tc: &TestCase, pool: &crate::ffi::PoolHandle, consume: bool) -> i64 {
+    match tc.with_ctc(|ctc| ctc.pool_generate(pool, consume)) {
         Ok(id) => id,
         Err(rc) => raise_for_rc(rc),
     }
@@ -132,7 +132,7 @@ impl<T> Pool<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(&self.pool)) {
             Ok(id) => id,
             Err(rc) => raise_for_rc(rc), // nocov
         };
@@ -149,7 +149,7 @@ impl<T> Pool<T> {
     /// `assume(false)`) when the pool is empty.
     pub fn values_reusable(&self) -> ValuesReusable<'_, T> {
         ValuesReusable {
-            pool_id: self.pool_id,
+            pool: &self.pool,
             values: &self.values,
         }
     }
@@ -161,7 +161,7 @@ impl<T> Pool<T> {
     /// current test case (as if by `assume(false)`) when the pool is empty.
     pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
         ValuesConsumed {
-            pool_id: self.pool_id,
+            pool: &self.pool,
             values: RefCell::new(&mut self.values),
         }
     }
@@ -172,14 +172,14 @@ impl<T> Pool<T> {
 /// Returned by [`Pool::values_reusable`]. Borrows the pool, so the references it
 /// produces stay valid for as long as the generator is alive.
 pub struct ValuesReusable<'a, T> {
-    pool_id: i64,
+    pool: &'a crate::ffi::PoolHandle,
     values: &'a HashMap<i64, T>,
 }
 
 impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> &'a T {
         tc.assume(!self.values.is_empty());
-        let variable_id = pool_generate(tc, self.pool_id, false);
+        let variable_id = pool_generate(tc, self.pool, false);
         self.values.get(&variable_id).unwrap()
     }
 }
@@ -191,26 +191,26 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
 /// [`RefCell`] is what lets it remove a value during a draw, which only has
 /// shared access to the generator.
 pub struct ValuesConsumed<'a, T> {
-    pool_id: i64,
+    pool: &'a crate::ffi::PoolHandle,
     values: RefCell<&'a mut HashMap<i64, T>>,
 }
 
 impl<T> Generator<T> for ValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         tc.assume(!self.values.borrow().is_empty());
-        let variable_id = pool_generate(tc, self.pool_id, true);
+        let variable_id = pool_generate(tc, self.pool, true);
         self.values.borrow_mut().remove(&variable_id).unwrap()
     }
 }
 
 /// Create a new value pool for stateful tests.
 pub fn pool<T>(tc: &TestCase) -> Pool<T> {
-    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
-        Ok(id) => id,
+    let pool = match tc.with_ctc(|ctc| ctc.new_pool()) {
+        Ok(handle) => handle,
         Err(rc) => raise_for_rc(rc), // nocov
     };
     Pool {
-        pool_id,
+        pool,
         tc: tc.clone(),
         values: HashMap::new(),
     }
@@ -241,8 +241,8 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
-    let machine_id = match tc.with_ctc(|ctc| ctc.new_state_machine(&rule_names, &invariant_names)) {
-        Ok(id) => id,
+    let machine = match tc.with_ctc(|ctc| ctc.new_state_machine(&rule_names, &invariant_names)) {
+        Ok(handle) => handle,
         Err(rc) => raise_for_rc(rc),
     };
 
@@ -253,7 +253,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
 
     loop {
         tc.start_span(labels::STATEFUL_RULE);
-        let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id)) {
+        let rule_index = match tc.with_ctc(|ctc| ctc.state_machine_next_rule(&machine)) {
             Ok(Some(i)) => i,
             Ok(None) => break,
             Err(rc) => raise_for_rc(rc),

@@ -1,8 +1,13 @@
 use crate::native::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use alloc::format;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
+use crate::control::InternalError;
 use crate::native::core::EngineError;
 use crate::native::intervalsets::IntervalSet;
+use crate::sys::sync::{Lazy, Mutex};
 use crate::unicodedata;
 
 /// Character-alphabet constraints for a text draw, as accepted at the
@@ -112,27 +117,26 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
         }
     }
 
-    let base = range_minus_surrogates(cp_min, cp_max);
+    let base = range_minus_surrogates(cp_min, cp_max)?;
 
     let mut intervals = if let Some(cats) = categories {
         if cats.is_empty() {
-            IntervalSet::new(Vec::new())
+            IntervalSet::new(Vec::new())?
         } else {
-            let cat_union = categories_union(cats);
-            base.intersection(&cat_union)
+            let cat_union = categories_union(cats)?;
+            base.intersection(&cat_union)?
         }
     } else if let Some(excl_cats) = exclude_categories {
         if excl_cats.iter().all(|c| c == "Cs") {
             base
         } else {
-            let cat_union = categories_union(
-                &excl_cats
-                    .iter()
-                    .filter(|c| c.as_str() != "Cs")
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-            base.difference(&cat_union)
+            let non_cs: Vec<String> = excl_cats
+                .iter()
+                .filter(|c| c.as_str() != "Cs")
+                .cloned()
+                .collect();
+            let cat_union = categories_union(&non_cs)?;
+            base.difference(&cat_union)?
         }
     } else {
         base
@@ -140,15 +144,15 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
 
     if let Some(ref excl) = exclude_chars {
         if !excl.is_empty() {
-            let excl_set = chars_to_intervals(excl);
-            intervals = intervals.difference(&excl_set);
+            let excl_set = chars_to_intervals(excl)?;
+            intervals = intervals.difference(&excl_set)?;
         }
     }
 
     if let Some(ref incl) = include_chars {
         if !incl.is_empty() {
-            let incl_set = chars_to_intervals(incl);
-            intervals = intervals.union(&incl_set);
+            let incl_set = chars_to_intervals(incl)?;
+            intervals = intervals.union(&incl_set)?;
         }
     }
 
@@ -157,7 +161,7 @@ pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineErr
 
 /// Build an [`IntervalSet`] containing `[min, max]` with the surrogate block
 /// `[0xD800, 0xDFFF]` removed.
-fn range_minus_surrogates(min: u32, max: u32) -> IntervalSet {
+fn range_minus_surrogates(min: u32, max: u32) -> Result<IntervalSet, InternalError> {
     if min > max {
         return IntervalSet::new(Vec::new());
     }
@@ -177,7 +181,7 @@ fn range_minus_surrogates(min: u32, max: u32) -> IntervalSet {
 
 /// Collapse a list of (potentially duplicated, unsorted) chars into an
 /// [`IntervalSet`].
-fn chars_to_intervals(chars: &[char]) -> IntervalSet {
+fn chars_to_intervals(chars: &[char]) -> Result<IntervalSet, InternalError> {
     let mut cps: Vec<u32> = chars.iter().map(|c| *c as u32).collect();
     cps.sort_unstable();
     cps.dedup();
@@ -195,37 +199,40 @@ fn chars_to_intervals(chars: &[char]) -> IntervalSet {
 /// whole codespace `0..=0x10FFFF`, matching Hypothesis's charmap (which is
 /// built over `range(sys.maxunicode + 1)`). Cached per category: the scan
 /// runs once per process per category name.
-fn categories_union(cats: &[String]) -> IntervalSet {
-    static CACHE: OnceLock<Mutex<HashMap<String, Arc<IntervalSet>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::default()));
+fn categories_union(cats: &[String]) -> Result<IntervalSet, InternalError> {
+    static CACHE: Lazy<Mutex<HashMap<String, Arc<IntervalSet>>>> =
+        Lazy::new(|| Mutex::new(HashMap::default()));
 
     let mut union: Option<IntervalSet> = None;
     for cat in cats {
         let cached = {
-            let map = cache.lock().unwrap();
+            let map = CACHE.lock();
             map.get(cat).map(Arc::clone)
         };
         let single = match cached {
             Some(s) => s,
             None => {
-                let s = Arc::new(category_intervalset(cat));
-                cache.lock().unwrap().insert(cat.clone(), Arc::clone(&s));
+                let s = Arc::new(category_intervalset(cat)?);
+                CACHE.lock().insert(cat.clone(), Arc::clone(&s));
                 s
             }
         };
         union = Some(match union {
-            Some(u) => u.union(&single),
+            Some(u) => u.union(&single)?,
             None => (*single).clone(),
         });
     }
-    union.unwrap_or_else(|| IntervalSet::new(Vec::new()))
+    match union {
+        Some(u) => Ok(u),
+        None => IntervalSet::new(Vec::new()),
+    }
 }
 
 /// Build the `IntervalSet` of codepoints (over the full codespace,
 /// surrogates excepted) whose `unicodedata.category` matches `cat` (or
 /// whose category starts with `cat` when `cat` is a single-letter major
 /// class).
-fn category_intervalset(cat: &str) -> IntervalSet {
+fn category_intervalset(cat: &str) -> Result<IntervalSet, InternalError> {
     let mut ranges: Vec<(u32, u32)> = Vec::new();
     let mut run_start: Option<u32> = None;
     for cp in 0u32..=0x10FFFF {
@@ -235,7 +242,7 @@ fn category_intervalset(cat: &str) -> IntervalSet {
             }
             continue;
         }
-        if unicodedata::is_in_group(cp, cat) {
+        if unicodedata::is_in_group(cp, cat)? {
             if run_start.is_none() {
                 run_start = Some(cp);
             }

@@ -9,23 +9,26 @@
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn int_node_st(value: i128, min: i128, max: i128, shrink_towards: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(min),
             max_value: BigInt::from(max),
             shrink_towards: BigInt::from(shrink_towards),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match &node.value {
+    match &node.value() {
         ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
         _ => unreachable!(),
     }
