@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.3 - 2026-08-07
+
+This release updates the `hegeltest-c` dependency to 0.32.1.
+
 ## 0.29.2 - 2026-08-07
 
 This patch improves rule generation for stateful tests. Rules that reject via `assume()` no longer cause test cases to run fewer steps than they should.

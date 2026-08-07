@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.32.1 - 2026-08-07
+
+This patch fixes a bias in data generation where some choices were made with the wrong probability.
+The most visible effect should be the stateful tests should run a full set of steps more often.
+Collection sizes may also be affected.
+
 ## 0.32.0 - 2026-08-07
 
 This release adds `hegel_state_machine_rule_rejected(ctx, tc, state_machine)`. Frontends are now responsible for calling this when the rule most recently returned by `hegel_state_machine_next_rule` was rejected before it completed.
