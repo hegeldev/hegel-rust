@@ -115,9 +115,20 @@ impl IntegerChoice {
     }
 }
 
-/// A boolean choice. Simplest value is `false`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BooleanChoice;
+/// A boolean choice drawn with probability `p` of `true`. Simplest value is
+/// `false`.
+#[derive(Clone, Debug)]
+pub struct BooleanChoice {
+    pub p: f64,
+}
+
+impl PartialEq for BooleanChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.p.to_bits() == other.p.to_bits()
+    }
+}
+
+impl Eq for BooleanChoice {}
 
 impl BooleanChoice {
     pub fn simplest(&self) -> bool {
@@ -1214,7 +1225,9 @@ impl ChoiceKind {
             (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) if ic.validate(v) => {
                 Some(ChoiceData::Integer(Arc::clone(ic), v.clone()))
             }
-            (ChoiceKind::Boolean(_), ChoiceValue::Boolean(v)) => Some(ChoiceData::Boolean(*v)),
+            (ChoiceKind::Boolean(bc), ChoiceValue::Boolean(v)) => {
+                Some(ChoiceData::Boolean(bc.clone(), *v))
+            }
             (ChoiceKind::Float(fc), ChoiceValue::Float(v)) if fc.validate(*v) => {
                 Some(ChoiceData::Float(fc.clone(), *v))
             }
@@ -1282,9 +1295,13 @@ impl ChoiceKind {
             ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
                 crate::native::core::state::biased_integer_sample(ic, rng)?,
             )),
-            ChoiceKind::Boolean(_) => Some(ChoiceValue::Boolean(
-                crate::native::core::state::weighted_boolean_sample(0.5, rng),
-            )),
+            ChoiceKind::Boolean(bc) => Some(ChoiceValue::Boolean(if bc.p <= 0.0 {
+                false
+            } else if bc.p >= 1.0 {
+                true
+            } else {
+                crate::native::core::state::weighted_boolean_sample_precise(bc.p, rng)
+            })),
             ChoiceKind::Float(fc) => Some(ChoiceValue::Float(
                 crate::native::core::state::biased_float_sample(fc, rng)?,
             )),
@@ -1353,7 +1370,7 @@ impl ChoiceKind {
 #[derive(Clone, Debug)]
 pub enum ChoiceData {
     Integer(Arc<IntegerChoice>, BigInt),
-    Boolean(bool),
+    Boolean(BooleanChoice, bool),
     Float(FloatChoice, f64),
     Bytes(BytesChoice, Vec<u8>),
     String(StringChoice, Vec<u32>),
@@ -1364,7 +1381,7 @@ impl PartialEq for ChoiceData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ChoiceData::Integer(ac, av), ChoiceData::Integer(bc, bv)) => ac == bc && av == bv,
-            (ChoiceData::Boolean(a), ChoiceData::Boolean(b)) => a == b,
+            (ChoiceData::Boolean(ac, av), ChoiceData::Boolean(bc, bv)) => ac == bc && av == bv,
             (ChoiceData::Float(ac, av), ChoiceData::Float(bc, bv)) => {
                 ac == bc && av.to_bits() == bv.to_bits()
             }
@@ -1387,7 +1404,7 @@ impl ChoiceData {
     pub fn kind(&self) -> ChoiceKind {
         match self {
             ChoiceData::Integer(ic, _) => ChoiceKind::Integer(Arc::clone(ic)),
-            ChoiceData::Boolean(_) => ChoiceKind::Boolean(BooleanChoice),
+            ChoiceData::Boolean(bc, _) => ChoiceKind::Boolean(bc.clone()),
             ChoiceData::Float(fc, _) => ChoiceKind::Float(fc.clone()),
             ChoiceData::Bytes(bc, _) => ChoiceKind::Bytes(bc.clone()),
             ChoiceData::String(sc, _) => ChoiceKind::String(sc.clone()),
@@ -1401,7 +1418,7 @@ impl ChoiceData {
     pub fn value(&self) -> ChoiceValue {
         match self {
             ChoiceData::Integer(_, v) => ChoiceValue::Integer(v.clone()),
-            ChoiceData::Boolean(v) => ChoiceValue::Boolean(*v),
+            ChoiceData::Boolean(_, v) => ChoiceValue::Boolean(*v),
             ChoiceData::Float(_, v) => ChoiceValue::Float(*v),
             ChoiceData::Bytes(_, v) => ChoiceValue::Bytes(v.clone()),
             ChoiceData::String(_, v) => ChoiceValue::String(v.clone()),
@@ -1415,7 +1432,7 @@ impl ChoiceData {
     pub fn value_ref(&self) -> ChoiceValueRef<'_> {
         match self {
             ChoiceData::Integer(_, v) => ChoiceValueRef::Integer(v),
-            ChoiceData::Boolean(v) => ChoiceValueRef::Boolean(*v),
+            ChoiceData::Boolean(_, v) => ChoiceValueRef::Boolean(*v),
             ChoiceData::Float(_, v) => ChoiceValueRef::Float(*v),
             ChoiceData::Bytes(_, v) => ChoiceValueRef::Bytes(v),
             ChoiceData::String(_, v) => ChoiceValueRef::String(v),
@@ -1435,7 +1452,7 @@ impl ChoiceData {
     pub fn is_simplest(&self) -> Result<bool, InternalError> {
         Ok(match self {
             ChoiceData::Integer(ic, v) => *v == ic.simplest(),
-            ChoiceData::Boolean(v) => !v,
+            ChoiceData::Boolean(_, v) => !v,
             ChoiceData::Float(fc, v) => v.to_bits() == fc.simplest()?.to_bits(),
             ChoiceData::Bytes(bc, v) => *v == bc.simplest(),
             ChoiceData::String(sc, v) => *v == sc.simplest()?,
@@ -1447,7 +1464,7 @@ impl ChoiceData {
     pub fn with_simplest(&self) -> Result<ChoiceData, InternalError> {
         Ok(match self {
             ChoiceData::Integer(ic, _) => ChoiceData::Integer(Arc::clone(ic), ic.simplest()),
-            ChoiceData::Boolean(_) => ChoiceData::Boolean(false),
+            ChoiceData::Boolean(bc, _) => ChoiceData::Boolean(bc.clone(), false),
             ChoiceData::Float(fc, _) => ChoiceData::Float(fc.clone(), fc.simplest()?),
             ChoiceData::Bytes(bc, _) => ChoiceData::Bytes(bc.clone(), bc.simplest()),
             ChoiceData::String(sc, _) => ChoiceData::String(sc.clone(), sc.simplest()?),
@@ -1473,7 +1490,7 @@ impl ChoiceData {
     pub fn to_index(&self) -> Result<Option<crate::native::bignum::BigUint>, InternalError> {
         Ok(match self {
             ChoiceData::Integer(ic, v) => Some(ic.to_index(v)),
-            ChoiceData::Boolean(v) => Some(BooleanChoice.to_index(*v)),
+            ChoiceData::Boolean(bc, v) => Some(bc.to_index(*v)),
             ChoiceData::Float(fc, v) => Some(fc.to_index(*v)?),
             ChoiceData::Bytes(bc, v) => Some(bc.to_index(v)),
             ChoiceData::String(sc, v) => Some(sc.to_index(v)),
@@ -1592,8 +1609,8 @@ impl ChoiceNode {
     }
 
     /// A boolean node.
-    pub fn boolean(value: bool, was_forced: bool) -> Self {
-        Self::new(ChoiceData::Boolean(value), was_forced)
+    pub fn boolean(constraint: BooleanChoice, value: bool, was_forced: bool) -> Self {
+        Self::new(ChoiceData::Boolean(constraint, value), was_forced)
     }
 
     /// A float node.
@@ -1768,7 +1785,9 @@ impl ChoiceNode {
                 let (mag, neg) = ic.sort_key(v);
                 NodeSortKeyRef::Scalar(mag, neg)
             }
-            ChoiceData::Boolean(v) => NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false),
+            ChoiceData::Boolean(_, v) => {
+                NodeSortKeyRef::Scalar(BigUint::from(u32::from(*v)), false)
+            }
             ChoiceData::Float(fc, v) => {
                 let (mag, neg) = fc.sort_key(*v);
                 NodeSortKeyRef::Scalar(BigUint::from(mag), neg)

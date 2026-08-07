@@ -2,6 +2,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -113,7 +114,7 @@ fn lower_common_node_offset_handles_negative_shrink_target() {
 #[test]
 fn lower_common_node_offset_skips_non_integer_nodes() {
     use crate::native::core::choices::FloatChoice;
-    let bool_node = ChoiceNode::boolean(true, false);
+    let bool_node = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
     let float_node = ChoiceNode::float(
         FloatChoice {
             min_value: f64::NEG_INFINITY,
@@ -136,7 +137,7 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
     );
     drive_no_yield(shrinker.consider(&[
         int_node(3, 0),
-        ChoiceNode::boolean(false, false),
+        ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false),
         ChoiceNode::float(
             FloatChoice {
                 min_value: f64::NEG_INFINITY,

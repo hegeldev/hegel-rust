@@ -4,6 +4,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice};
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -38,7 +39,7 @@ fn float_node(value: f64, was_forced: bool) -> ChoiceNode {
 }
 
 fn bool_node(value: bool, was_forced: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, was_forced)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, was_forced)
 }
 
 fn bytes_node(value: Vec<u8>, was_forced: bool) -> ChoiceNode {

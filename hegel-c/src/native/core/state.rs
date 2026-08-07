@@ -1674,7 +1674,7 @@ impl NativeTestCase {
         forced: Option<bool>,
         sample: impl Fn(f64, &mut EngineRng) -> bool,
     ) -> Result<bool, EngineError> {
-        let kind = BooleanChoice;
+        let kind = BooleanChoice { p };
 
         let forced_value = forced.or(if p <= 0.0 {
             Some(false)
@@ -1699,7 +1699,7 @@ impl NativeTestCase {
             )?
         };
 
-        self.nodes.push(ChoiceNode::boolean(v, was_forced));
+        self.nodes.push(ChoiceNode::boolean(kind, v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);

@@ -3,6 +3,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::StringChoice;
 use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
@@ -146,7 +147,7 @@ fn normalize_unicode_chars_handles_string_truncated_by_closure() {
 
 #[test]
 fn normalize_unicode_chars_does_nothing_on_non_string() {
-    let initial = vec![ChoiceNode::boolean(true, false)];
+    let initial = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),

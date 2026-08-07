@@ -22,11 +22,11 @@ fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn forced_bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, true)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, true)
 }
 
 #[test]
@@ -127,6 +127,38 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     assert!(prefix.is_empty());
 }
 
+/// The novel-prefix walk must sample boolean proposals from the recorded
+/// draw's `p`, not a fair coin: while the common branch is unexhausted, a
+/// rare branch like the `p = 2^-16` stateful stop signal must stay rare.
+#[test]
+fn novel_prefix_respects_boolean_probability() {
+    let mut root = DataTreeNode::default();
+    for x in 0..100 {
+        record_tree(
+            &mut root,
+            &[
+                ChoiceNode::boolean(BooleanChoice { p: 1.0 / 65536.0 }, false, false),
+                int_node(0, 1_000_000, x),
+            ],
+            Status::Valid,
+            &[],
+        );
+    }
+    let mut rng = EngineRng::seeded(0);
+    let mut rare_first = 0;
+    for _ in 0..200 {
+        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        if prefix.first() == Some(&ChoiceValue::Boolean(true)) {
+            rare_first += 1;
+        }
+    }
+    assert!(
+        rare_first <= 5,
+        "the p = 2^-16 branch was proposed {rare_first}/200 times; the \
+         novel-prefix walk should sample from the recorded p, not 50/50"
+    );
+}
+
 #[test]
 fn simulate_unseen_on_empty_tree() {
     let root = DataTreeNode::default();
@@ -197,7 +229,7 @@ fn simulate_returns_interesting_conclusion() {
 
 #[test]
 fn simulate_follows_forced_value_ignoring_prefix() {
-    let forced_true = ChoiceNode::boolean(true, true);
+    let forced_true = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, true);
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[forced_true], Status::Valid, &[]);
 
@@ -330,7 +362,10 @@ fn record_and_simulate_roundtrip_with_clone_nodes() {
     };
     let realized = record.realized_nodes().unwrap();
     assert_eq!(realized.len(), 2);
-    assert_eq!(realized[0].kind(), ChoiceKind::Boolean(BooleanChoice));
+    assert_eq!(
+        realized[0].kind(),
+        ChoiceKind::Boolean(BooleanChoice { p: 0.5 })
+    );
     assert_eq!(realized[1].value(), ChoiceValue::Integer(BigInt::from(2)));
 
     let values_only: Vec<ChoiceValue> = vec![

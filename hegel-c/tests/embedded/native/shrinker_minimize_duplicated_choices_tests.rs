@@ -3,6 +3,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::intervalsets::IntervalSet;
@@ -12,7 +13,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn float_node(value: f64) -> ChoiceNode {

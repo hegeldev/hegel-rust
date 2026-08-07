@@ -33,7 +33,9 @@ impl<'a> Shrinker<'a> {
                         ChoiceData::Integer(ic, v) if *v != ic.simplest() => ic
                             .value_from_bigint(&(v.clone() - 1))
                             .map(|nv| ChoiceData::Integer(alloc::sync::Arc::clone(ic), nv)),
-                        ChoiceData::Boolean(true) => Some(ChoiceData::Boolean(false)),
+                        ChoiceData::Boolean(bc, true) => {
+                            Some(ChoiceData::Boolean(bc.clone(), false))
+                        }
                         _ => None,
                     };
                     if let Some(new_data) = decremented {

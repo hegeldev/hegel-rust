@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::choices::BooleanChoice;
 use alloc::string::ToString;
 
 #[test]
@@ -139,7 +140,7 @@ fn integer_full_i128_range_is_two_pow_128() {
 
 #[test]
 fn max_children_saturating_boolean() {
-    let kind = ChoiceKind::Boolean(BooleanChoice);
+    let kind = ChoiceKind::Boolean(BooleanChoice { p: 0.5 });
     assert_eq!(kind.max_children_saturating(1), 1);
     assert_eq!(kind.max_children_saturating(10), 2);
 }
@@ -344,7 +345,7 @@ fn integer_choice_index_round_trip_shrink_towards_clamped_outside_range() {
 #[test]
 fn boolean_is_always_two() {
     assert_eq!(
-        ChoiceKind::Boolean(BooleanChoice).max_children(),
+        ChoiceKind::Boolean(BooleanChoice { p: 0.5 }).max_children(),
         Some(bu(2))
     );
 }
@@ -915,8 +916,10 @@ fn choice_kind_unit_dispatches_to_each_sub_kind() {
     );
 
     assert_eq!(
-        ChoiceKind::Boolean(BooleanChoice).unit().unwrap(),
-        ChoiceValue::Boolean(BooleanChoice.unit())
+        ChoiceKind::Boolean(BooleanChoice { p: 0.5 })
+            .unit()
+            .unwrap(),
+        ChoiceValue::Boolean(BooleanChoice { p: 0.5 }.unit())
     );
 
     let fch = fc(0.0, 10.0, false, false);
@@ -1046,28 +1049,51 @@ fn string_to_index_via_dispatch() {
     assert_eq!(data.to_index().unwrap(), Some(bu(0)));
 }
 
-/// An unbiased boolean drawn via `random_value` must spend exactly one byte of
-/// entropy (it routes through `weighted_boolean_sample(0.5, …)`), not a whole
-/// `u32`. The urandom backend feeds every byte from the fuzzer, so a one-bit
-/// decision must cost one byte. Regression for a bare `rng.random::<bool>()`.
+/// A boolean drawn via `random_value` must sample from the kind's recorded
+/// `p`; a hardcoded 0.5 used to flip every recorded boolean half the time.
 #[test]
-fn random_value_boolean_consumes_exactly_one_byte() {
+fn random_value_boolean_respects_p() {
     use crate::native::rng::EngineRng;
-    use rand::Rng;
 
-    let kind = ChoiceKind::Boolean(BooleanChoice);
-    let mut a = EngineRng::seeded(2024);
-    let mut b = EngineRng::seeded(2024);
+    let rare = ChoiceKind::Boolean(BooleanChoice { p: 0.01 });
+    let mut rng = EngineRng::seeded(2024);
+    let mut trues = 0;
+    for _ in 0..1000 {
+        if rare.random_value(&mut rng).unwrap().unwrap() == ChoiceValue::Boolean(true) {
+            trues += 1;
+        }
+    }
+    assert!(trues < 50, "p = 0.01 produced {trues}/1000 trues");
 
-    let value = kind.random_value(&mut a).unwrap().unwrap();
-    let ChoiceValue::Boolean(got) = value else {
-        panic!("expected a boolean choice value");
-    };
+    let common = ChoiceKind::Boolean(BooleanChoice { p: 0.99 });
+    let mut trues = 0;
+    for _ in 0..1000 {
+        if common.random_value(&mut rng).unwrap().unwrap() == ChoiceValue::Boolean(true) {
+            trues += 1;
+        }
+    }
+    assert!(trues > 950, "p = 0.99 produced only {trues}/1000 trues");
+}
 
-    let mut byte = [0u8; 1];
-    b.fill_bytes(&mut byte);
-    assert_eq!(got, u32::from(byte[0]) >= 128);
-    assert_eq!(a.next_u64(), b.next_u64());
+/// `p <= 0` and `p >= 1` must resolve deterministically rather than reach
+/// the precise sampler, which panics outside `(0, 1)`.
+#[test]
+fn random_value_boolean_degenerate_p_is_deterministic() {
+    use crate::native::rng::EngineRng;
+
+    let mut rng = EngineRng::seeded(1);
+    let never = ChoiceKind::Boolean(BooleanChoice { p: 0.0 });
+    let always = ChoiceKind::Boolean(BooleanChoice { p: 1.0 });
+    for _ in 0..20 {
+        assert_eq!(
+            never.random_value(&mut rng).unwrap().unwrap(),
+            ChoiceValue::Boolean(false)
+        );
+        assert_eq!(
+            always.random_value(&mut rng).unwrap().unwrap(),
+            ChoiceValue::Boolean(true)
+        );
+    }
 }
 
 #[test]
@@ -1120,7 +1146,7 @@ fn string_choice_simplest_on_empty_alphabet_is_an_internal_error() {
 }
 
 fn boolean_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
@@ -1396,7 +1422,10 @@ fn clone_kind_random_value_is_none() {
 fn choice_data_equality_compares_constraint_and_value() {
     let pairs = [
         (integer_node(0, 10, 3).data, integer_node(0, 10, 4).data),
-        (ChoiceData::Boolean(false), ChoiceData::Boolean(true)),
+        (
+            ChoiceData::Boolean(BooleanChoice { p: 0.5 }, false),
+            ChoiceData::Boolean(BooleanChoice { p: 0.5 }, true),
+        ),
         (
             ChoiceNode::float(fc(0.0, 1.0, false, false), 0.25, false).data,
             ChoiceNode::float(fc(0.0, 1.0, false, false), 0.5, false).data,

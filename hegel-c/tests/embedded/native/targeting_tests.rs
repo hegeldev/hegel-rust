@@ -1,5 +1,6 @@
 use super::*;
 use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{BytesChoice, FloatChoice};
 use alloc::string::ToString;
@@ -105,7 +106,7 @@ fn schedule_for_small_max_examples_never_fires_in_range() {
 fn is_climbable_accepts_integer_float_boolean_bytes() {
     let int_node = integer_node(0, 0, 10);
     let float_node = float_node(0.0);
-    let bool_node = ChoiceNode::boolean(true, false);
+    let bool_node = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
     let bytes_node = bytes_node(vec![0], 0, 8);
     for node in [&int_node, &float_node, &bool_node, &bytes_node] {
         assert!(is_climbable(&node.data), "expected climbable: {node:?}");
@@ -156,7 +157,7 @@ fn step_choice_float_adds_delta_as_f64() {
 
 #[test]
 fn step_choice_boolean_only_steps_by_one() {
-    let node = ChoiceNode::boolean(false, false);
+    let node = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false);
     assert_eq!(step_choice(&node, 1), Some(ChoiceValue::Boolean(true)));
     assert_eq!(step_choice(&node, -1), Some(ChoiceValue::Boolean(false)));
     assert_eq!(step_choice(&node, 0), Some(ChoiceValue::Boolean(false)));

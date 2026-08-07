@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, RealizedStream, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -22,7 +23,7 @@ fn int_node(value: i128) -> ChoiceNode {
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
