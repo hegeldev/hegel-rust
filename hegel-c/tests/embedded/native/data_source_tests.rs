@@ -224,6 +224,23 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
 }
 
 #[test]
+fn state_machine_rule_rejected_reports_the_outstanding_rule() {
+    let (ds, _handle) = random_source();
+    let mut machine = ds
+        .new_state_machine(vec!["a".into(), "b".into()], vec![])
+        .unwrap();
+    let without_draw = ds.state_machine_rule_rejected(&mut machine).unwrap_err();
+    assert!(
+        matches!(&without_draw, DataSourceError::InvalidArgument(m) if m.contains("no outstanding rule")),
+        "{without_draw:?}"
+    );
+    assert!(!ds.test_aborted());
+    assert!(ds.state_machine_next_rule(&mut machine).unwrap().is_some());
+    ds.state_machine_rule_rejected(&mut machine).unwrap();
+    assert!(ds.state_machine_rule_rejected(&mut machine).is_err());
+}
+
+#[test]
 fn generate_integer_round_trips() {
     let (ds, _handle) = random_source();
     let value = ds

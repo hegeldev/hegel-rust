@@ -280,6 +280,13 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| machine.next_rule(ntc))
     }
 
+    fn state_machine_rule_rejected(
+        &self,
+        machine: &mut NativeStateMachine,
+    ) -> Result<(), DataSourceError> {
+        self.with_ntc(|_ntc| machine.rule_rejected())
+    }
+
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }

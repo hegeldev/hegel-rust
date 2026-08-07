@@ -276,6 +276,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
                 check_invariants(&mut m, &invariants, &tc);
             }
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
+                if let Err(rc) = tc.with_ctc(|ctc| ctc.state_machine_rule_rejected(&machine)) {
+                    raise_for_rc(rc);
+                }
                 tc.stop_span(true);
                 tc.note("Rule stopped early due to violated assumption.");
             }

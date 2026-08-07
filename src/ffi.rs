@@ -752,6 +752,18 @@ impl CTestCase {
         rc_to_value(rc, index)
     }
 
+    /// Report that the most recently drawn rule was rejected (a violated
+    /// assumption), so the engine does not count it toward the step budget.
+    pub(crate) fn state_machine_rule_rejected(
+        &self,
+        state_machine: &StateMachineHandle,
+    ) -> Result<(), hegel_result_t> {
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_rule_rejected(ctx, self.raw, state_machine.raw)
+        });
+        rc_to_value(rc, ())
+    }
+
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
         let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {

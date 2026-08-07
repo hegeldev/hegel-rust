@@ -1,5 +1,5 @@
 use crate::native::HashSet;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -13,6 +13,16 @@ use crate::native::bignum::{BigInt, ToPrimitive};
 /// [`NativeStateMachine::next_rule`] halts a stateful test case, when the
 /// engine is free to choose (2^-16).
 const P_STOP: f64 = 1.0 / 65536.0;
+
+/// Multiplier on `stateful_step_count` bounding the total rules handed out
+/// (including rejected ones), so a machine whose rules mostly fail their
+/// assumptions cannot retry indefinitely.
+const ATTEMPT_MULTIPLIER: i64 = 10;
+
+/// Minimum attempt budget for a machine that has not completed a single
+/// rule yet, so machines with very selective assumptions still get a real
+/// chance to make progress under a small step count.
+const MIN_ATTEMPTS_WITHOUT_SUCCESS: i64 = 1000;
 
 /// Draw a uniform index in `[0, n)`.
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
@@ -81,8 +91,14 @@ pub struct NativeStateMachine {
     #[allow(dead_code)]
     invariant_names: Vec<String>,
     flags: Option<FeatureFlags>,
-    /// Number of rules handed out so far.
+    /// Number of rules handed out so far, including rejected ones.
     steps_drawn: i64,
+    /// Number of handed-out rules reported back as rejected via
+    /// [`Self::rule_rejected`].
+    steps_rejected: i64,
+    /// Whether the most recently handed-out rule has already been reported
+    /// as rejected.
+    current_rule_rejected: bool,
 }
 
 impl NativeStateMachine {
@@ -100,6 +116,8 @@ impl NativeStateMachine {
             invariant_names,
             flags: None,
             steps_drawn: 0,
+            steps_rejected: 0,
+            current_rule_rejected: false,
         })
     }
 
@@ -107,13 +125,27 @@ impl NativeStateMachine {
     /// `None` once the test case decides to stop.
     ///
     /// Each call first makes a per-step stop decision: a boolean draw with
-    /// probability [`P_STOP`] of halting. Every test case runs at least one step
-    /// and at most `stateful_step_count`. Families marked as unbounded
-    /// (single-test-case runs) never force a stop.
+    /// probability [`P_STOP`] of halting. Every test case runs at least one
+    /// step and at most `stateful_step_count` successful steps — rules
+    /// reported as rejected ([`Self::rule_rejected`]) do not count. Total
+    /// attempts including rejected rules are bounded by
+    /// [`ATTEMPT_MULTIPLIER`] times the step count, or
+    /// [`MIN_ATTEMPTS_WITHOUT_SUCCESS`] while no rule has succeeded.
+    /// Families marked as unbounded (single-test-case runs) never force a
+    /// stop.
     pub fn next_rule(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
+        let successful_steps = self.steps_drawn - self.steps_rejected;
+        let step_count = ntc.family().stateful_step_count();
+        let attempt_cap = if successful_steps == 0 {
+            step_count
+                .saturating_mul(ATTEMPT_MULTIPLIER)
+                .max(MIN_ATTEMPTS_WITHOUT_SUCCESS)
+        } else {
+            step_count.saturating_mul(ATTEMPT_MULTIPLIER)
+        };
         let forced = if ntc.family().state_machine_steps_unbounded() {
             Some(false)
-        } else if self.steps_drawn >= ntc.family().stateful_step_count() {
+        } else if successful_steps >= step_count || self.steps_drawn >= attempt_cap {
             Some(true)
         } else if self.steps_drawn == 0 {
             Some(false)
@@ -125,7 +157,25 @@ impl NativeStateMachine {
         }
         let index = self.select_rule(ntc)?;
         self.steps_drawn += 1;
+        self.current_rule_rejected = false;
         Ok(Some(index))
+    }
+
+    /// Record that the most recently handed-out rule was rejected before it
+    /// completed (a violated assumption), so it does not count toward the
+    /// test case's successful-step budget.
+    ///
+    /// Errors with `InvalidArgument` when no rule is outstanding: either no
+    /// rule has been drawn yet, or the current rule was already rejected.
+    pub fn rule_rejected(&mut self) -> Result<(), EngineError> {
+        if self.steps_drawn == 0 || self.current_rule_rejected {
+            return Err(EngineError::InvalidArgument(
+                "rule_rejected called with no outstanding rule".to_string(),
+            ));
+        }
+        self.current_rule_rejected = true;
+        self.steps_rejected += 1;
+        Ok(())
     }
 
     /// Select the next rule's index, in `[0, num_rules)`.

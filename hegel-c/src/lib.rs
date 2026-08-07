@@ -2238,6 +2238,38 @@ pub unsafe extern "C" fn hegel_state_machine_next_rule(
     }
 }
 
+/// Report that the rule most recently returned by
+/// `hegel_state_machine_next_rule` was rejected: an assumption failed
+/// before the rule completed, so it should not count toward libhegel's
+/// step budget for the test case.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the state machine has
+/// no outstanding rule — no rule has been returned yet, or the current rule
+/// was already reported as rejected.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    state_machine: *mut HegelStateMachine,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_state_machine_rule_rejected", tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let state_machine =
+        match unsafe { state_machine_ref(ctx, "hegel_state_machine_rule_rejected", state_machine) }
+        {
+            Ok(m) => m,
+            Err(rc) => return rc,
+        };
+    let mut machine = state_machine.machine.lock();
+    match tc.stream.state_machine_rule_rejected(&mut machine) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
 /// Release a state-machine handle from `hegel_new_state_machine`. Safe to
 /// call with NULL (a no-op that returns `HEGEL_OK`), and safe at any point
 /// in any order relative to freeing the test case or the run. Each handle
