@@ -27,7 +27,7 @@ impl<'a> Shrinker<'a> {
     }
 
     pub(super) async fn sort_values_booleans(&mut self) -> ShrinkResult<()> {
-        self.try_sort_group(|d| matches!(d, ChoiceData::Boolean(_)))
+        self.try_sort_group(|d| matches!(d, ChoiceData::Boolean(..)))
             .await
     }
 

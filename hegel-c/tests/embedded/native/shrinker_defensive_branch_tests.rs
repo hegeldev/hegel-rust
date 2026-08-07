@@ -8,6 +8,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::exchange::drive_no_yield;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -124,7 +125,7 @@ fn lower_integers_together_skips_kind_punning() {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
                 if out.len() >= 2 {
-                    out[1] = ChoiceNode::boolean(true, false);
+                    out[1] = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
                 }
                 (true, out, Spans::new())
             }
@@ -142,7 +143,7 @@ fn lower_integers_together_survives_accepted_same_length_kind_pun() {
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
-                out[0] = ChoiceNode::boolean(false, false);
+                out[0] = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false);
                 (true, out, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -227,7 +228,7 @@ fn try_shortening_via_increment_skips_a_node_punned_mid_candidates() {
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut out: Vec<ChoiceNode> = nodes.to_vec();
-                out[0] = ChoiceNode::boolean(false, false);
+                out[0] = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false);
                 (true, out, Spans::new())
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -238,6 +239,6 @@ fn try_shortening_via_increment_skips_a_node_punned_mid_candidates() {
     drive_no_yield(shrinker.try_shortening_via_increment()).unwrap();
     assert!(matches!(
         shrinker.current_nodes[0].data,
-        ChoiceData::Boolean(false)
+        ChoiceData::Boolean(_, false)
     ));
 }

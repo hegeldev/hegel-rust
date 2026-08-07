@@ -13,6 +13,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::exchange::drive_no_yield;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::search::FindInteger;
@@ -31,7 +32,7 @@ fn int_node(value: i128) -> ChoiceNode {
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 #[test]

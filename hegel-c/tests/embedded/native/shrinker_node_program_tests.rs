@@ -2,6 +2,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -231,9 +232,9 @@ fn initial_node_count() -> usize {
 #[test]
 fn node_program_adaptively_deletes_long_false_run() {
     let mut initial: Vec<ChoiceNode> = (0..1000)
-        .map(|_| ChoiceNode::boolean(false, false))
+        .map(|_| ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false))
         .collect();
-    initial.push(ChoiceNode::boolean(true, false));
+    initial.push(ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false));
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {

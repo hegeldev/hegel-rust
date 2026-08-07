@@ -61,7 +61,7 @@ impl From<&ChoiceData> for ChoiceValueKey {
     fn from(d: &ChoiceData) -> Self {
         match d {
             ChoiceData::Integer(_, n) => ChoiceValueKey::Integer(n.clone()),
-            ChoiceData::Boolean(b) => ChoiceValueKey::Boolean(*b),
+            ChoiceData::Boolean(_, b) => ChoiceValueKey::Boolean(*b),
             ChoiceData::Float(_, f) => ChoiceValueKey::Float(f.to_bits()),
             ChoiceData::Bytes(_, b) => ChoiceValueKey::Bytes(b.clone()),
             ChoiceData::String(_, s) => ChoiceValueKey::String(s.clone()),

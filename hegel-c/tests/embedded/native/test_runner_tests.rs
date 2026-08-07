@@ -10,6 +10,7 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
@@ -153,7 +154,7 @@ fn run_main_sync(
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::boolean(value, false)
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 #[test]

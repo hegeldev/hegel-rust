@@ -304,7 +304,7 @@ pub(crate) fn is_climbable(data: &ChoiceData) -> bool {
         data,
         ChoiceData::Integer(..)
             | ChoiceData::Float(..)
-            | ChoiceData::Boolean(_)
+            | ChoiceData::Boolean(..)
             | ChoiceData::Bytes(..)
     )
 }
@@ -327,7 +327,7 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
             }
             Some(ChoiceValue::Float(new))
         }
-        ChoiceData::Boolean(b) => {
+        ChoiceData::Boolean(_, b) => {
             if delta.saturating_abs() > 1 {
                 return None;
             }

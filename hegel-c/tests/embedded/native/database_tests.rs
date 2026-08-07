@@ -1,6 +1,7 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
+use crate::native::core::choices::BooleanChoice;
 use alloc::string::ToString;
 use alloc::vec;
 use tempfile::TempDir;
@@ -464,7 +465,7 @@ fn serialize_roundtrips_clone_values() {
 fn serialize_clone_drops_realized_info_but_preserves_equality() {
     use crate::native::core::{ChoiceNode, CloneRecord, Span, SpanEvent};
     let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
-        vec![ChoiceNode::boolean(true, false)],
+        vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)],
         vec![Span {
             start: 0,
             end: 1,

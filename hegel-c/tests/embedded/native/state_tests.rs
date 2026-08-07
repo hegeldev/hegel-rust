@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::rng::EngineRng;
 
 #[test]
@@ -26,9 +27,9 @@ fn spans_get_mut_returns_none_out_of_bounds() {
 #[test]
 fn spans_trivial_handles_simplest_forced_and_oob() {
     use crate::native::core::choices::ChoiceNode;
-    let simplest = ChoiceNode::boolean(false, false);
-    let interesting = ChoiceNode::boolean(true, false);
-    let forced_interesting = ChoiceNode::boolean(true, true);
+    let simplest = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false);
+    let interesting = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
+    let forced_interesting = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, true);
 
     let mut spans = Spans::new();
     spans.push(Span {
@@ -617,7 +618,7 @@ fn template_concrete_prefix_then_template() {
 #[test]
 fn template_concrete_prefix_with_punning_then_template() {
     let prefix = vec![ChoiceValue::Boolean(true)];
-    let prefix_nodes = vec![ChoiceNode::boolean(true, false)];
+    let prefix_nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         Some(&prefix_nodes),
