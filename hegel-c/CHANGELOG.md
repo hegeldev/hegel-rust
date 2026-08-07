@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.0 - 2026-08-07
+
+This release adds `hegel_state_machine_rule_rejected(ctx, tc, state_machine)`. Frontends are now responsible for calling this when the rule most recently returned by `hegel_state_machine_next_rule` was rejected before it completed.
+
 ## 0.31.0 - 2026-08-07
 
 This release replaces the `int64_t` ids for collections, variable pools, and state machines with opaque caller-owned handles, matching how every other libhegel object works. This is a breaking change to the C ABI.

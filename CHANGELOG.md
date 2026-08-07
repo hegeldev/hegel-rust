@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.2 - 2026-08-07
+
+This patch improves rule generation for stateful tests. Rules that reject via `assume()` no longer cause test cases to run fewer steps than they should.
+
 ## 0.29.1 - 2026-08-07
 
 This patch updates the native engine as part of making libhegel safe to unload and portable beyond std platforms. Two of the engine changes are visible from hegel-rust:
