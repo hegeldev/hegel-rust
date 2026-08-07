@@ -106,7 +106,7 @@ fn free_stop_decision_can_halt_before_the_cap() {
 
 #[test]
 fn unbounded_families_never_halt() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(2);
     for _ in 0..100 {
@@ -116,7 +116,7 @@ fn unbounded_families_never_halt() {
 
 #[test]
 fn p_disabled_is_drawn_on_first_next_rule_only() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let mut sm = machine(3);
     sm.next_rule(&mut ntc).unwrap();
     sm.next_rule(&mut ntc).unwrap();
@@ -298,7 +298,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
 #[test]
 fn all_selected_rules_are_in_range() {
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         ntc.family().set_state_machine_steps_unbounded();
         let mut sm = machine(5);
         for _ in 0..30 {

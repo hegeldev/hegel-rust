@@ -8,7 +8,7 @@ fn draw(ntc: &mut NativeTestCase) -> i128 {
 
 #[test]
 fn clone_stream_records_a_clone_node_and_hands_out_a_child() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(3));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     draw(&mut parent);
@@ -25,7 +25,7 @@ fn clone_stream_records_a_clone_node_and_hands_out_a_child() {
 
 #[test]
 fn clone_ids_count_per_stream_and_nest() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(3));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
     assert!(parent.clone_id.is_empty());
     let first = parent.clone_stream().unwrap();
     let second = parent.clone_stream().unwrap();
@@ -38,7 +38,7 @@ fn clone_ids_count_per_stream_and_nest() {
 #[test]
 fn clone_streams_are_deterministic_per_seed() {
     let run = |seed: u64| -> (Vec<i128>, Vec<i128>) {
-        let mut parent = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut parent = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut parent_vals = vec![draw(&mut parent)];
         let child = parent.clone_stream().unwrap();
         let mut child_guard = child.lock();
@@ -53,7 +53,7 @@ fn clone_streams_are_deterministic_per_seed() {
 #[test]
 fn child_draws_do_not_perturb_the_parents_stream() {
     let run = |child_draws: usize| -> Vec<i128> {
-        let mut parent = NativeTestCase::new_random(EngineRng::seeded(21));
+        let mut parent = NativeTestCase::new_random(EngineRng::seeded(21)).unwrap();
         let first = draw(&mut parent);
         let child = parent.clone_stream().unwrap();
         for _ in 0..child_draws {
@@ -66,7 +66,7 @@ fn child_draws_do_not_perturb_the_parents_stream() {
 
 #[test]
 fn reassemble_embeds_child_records_recursively() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(11));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(11)).unwrap();
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     {
@@ -103,7 +103,7 @@ fn reassemble_embeds_child_records_recursively() {
 
 #[test]
 fn replaying_a_reassembled_sequence_reproduces_every_stream() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(17));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(17)).unwrap();
     let p0 = draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     let (c0, c1) = {
@@ -132,7 +132,7 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
 
 #[test]
 fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(29));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(29)).unwrap();
     let child = parent.clone_stream().unwrap();
     draw(&mut child.lock());
     parent.conclude(Status::Valid, None);
@@ -166,7 +166,8 @@ fn probe_replay_extends_a_punned_child_randomly() {
         &[ChoiceValue::Integer(BigInt::from(5))],
         EngineRng::seeded(1),
         BUFFER_SIZE,
-    );
+    )
+    .unwrap();
     let child = replay.clone_stream().unwrap();
     draw(&mut child.lock());
     assert_eq!(replay.status(), None);
@@ -174,7 +175,7 @@ fn probe_replay_extends_a_punned_child_randomly() {
 
 #[test]
 fn family_conclusion_stops_every_stream() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(5));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(5)).unwrap();
     let child = parent.clone_stream().unwrap();
     child.lock().conclude(Status::Invalid, None);
     assert!(matches!(
@@ -187,7 +188,7 @@ fn family_conclusion_stops_every_stream() {
 
 #[test]
 fn conclusion_is_write_once_across_streams() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(5));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(5)).unwrap();
     let child = parent.clone_stream().unwrap();
     parent.conclude(
         Status::Interesting,
@@ -201,7 +202,7 @@ fn conclusion_is_write_once_across_streams() {
 
 #[test]
 fn family_budget_caps_total_draws_across_streams() {
-    let mut parent = NativeTestCase::for_probe(&[], EngineRng::seeded(13), 4);
+    let mut parent = NativeTestCase::for_probe(&[], EngineRng::seeded(13), 4).unwrap();
     draw(&mut parent);
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
@@ -216,7 +217,7 @@ fn family_budget_caps_total_draws_across_streams() {
 
 #[test]
 fn clone_nesting_beyond_max_depth_is_invalid() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(7));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
     let mut handles = Vec::new();
     let mut current = parent.clone_stream().unwrap();
     for _ in 1..MAX_CLONE_DEPTH {
@@ -231,14 +232,14 @@ fn clone_nesting_beyond_max_depth_is_invalid() {
 
 #[test]
 fn clone_stream_fails_after_the_family_has_concluded() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(7));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
     parent.conclude(Status::Valid, None);
     assert!(matches!(parent.clone_stream(), Err(EngineError::Overrun)));
 }
 
 #[test]
 fn clone_node_consumes_a_slot_in_the_stream_budget() {
-    let mut parent = NativeTestCase::for_probe(&[], EngineRng::seeded(13), 1);
+    let mut parent = NativeTestCase::for_probe(&[], EngineRng::seeded(13), 1).unwrap();
     parent.clone_stream().unwrap();
     assert!(matches!(
         parent.draw_integer::<i128>(0, 10),
@@ -257,7 +258,7 @@ fn simplest_template_children_resolve_to_simplest_values() {
 
 #[test]
 fn reassembled_values_flow_through_probe_prefixes() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(41));
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(41)).unwrap();
     let p0 = draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     let c0 = draw(&mut child.lock());
@@ -265,7 +266,7 @@ fn reassembled_values_flow_through_probe_prefixes() {
     parent.reassemble();
     let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
-    let mut probe = NativeTestCase::for_probe(&choices, EngineRng::seeded(2), BUFFER_SIZE);
+    let mut probe = NativeTestCase::for_probe(&choices, EngineRng::seeded(2), BUFFER_SIZE).unwrap();
     assert_eq!(draw(&mut probe), p0);
     let probe_child = probe.clone_stream().unwrap();
     {
@@ -280,7 +281,7 @@ fn reassembled_values_flow_through_probe_prefixes() {
 #[test]
 fn concurrent_draws_on_separate_streams_are_deterministic() {
     let run = || -> (Vec<i128>, Vec<i128>) {
-        let mut parent = NativeTestCase::new_random(EngineRng::seeded(1234));
+        let mut parent = NativeTestCase::new_random(EngineRng::seeded(1234)).unwrap();
         let child = parent.clone_stream().unwrap();
         let worker = std::thread::spawn(move || {
             let mut vals = Vec::new();

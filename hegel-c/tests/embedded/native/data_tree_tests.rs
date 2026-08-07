@@ -1,7 +1,9 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Status};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, GenerationParameters, Status,
+};
 use crate::native::rng::EngineRng;
 
 fn int_kind(min: i128, max: i128) -> ChoiceKind {
@@ -47,7 +49,8 @@ fn generate_novel_prefix_replays_forced_values_and_descends() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(
             prefix,
             vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
@@ -91,7 +94,8 @@ fn record_tree_kill_depths_marks_inner_nodes_exhausted() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert!(
             prefix.is_empty()
                 || prefix.first() != Some(&ChoiceValue::Integer(BigInt::from(0)))
@@ -113,7 +117,11 @@ fn generate_novel_prefix_returns_empty_for_exhausted_root() {
     record_tree(&mut root, &[], Status::Valid, &[0]);
     assert!(root.is_exhausted);
     let mut rng = EngineRng::seeded(0);
-    assert!(generate_novel_prefix(&root, &mut rng).unwrap().is_empty());
+    assert!(
+        generate_novel_prefix(&root, &mut rng, GenerationParameters::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -123,7 +131,7 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     record_tree(&mut root, &[bool_node(true)], Status::Invalid, &[]);
 
     let mut rng = EngineRng::seeded(0);
-    let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+    let prefix = generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
     assert!(prefix.is_empty());
 }
 
@@ -289,7 +297,8 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     record_tree(&mut root, &nodes, Status::Valid, &[]);
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(prefix[0], ChoiceValue::Integer(BigInt::from(42)));
         assert_eq!(prefix[1], ChoiceValue::Float(2.5));
         assert_eq!(prefix[2], ChoiceValue::Bytes(vec![7, 8]));
@@ -470,7 +479,8 @@ fn novel_prefix_explores_inside_clone_subtrees() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(
             prefix,
             vec![clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
@@ -499,7 +509,8 @@ fn novel_prefix_descends_recorded_continuations_or_recurses() {
     let mut seen_inside = false;
     let mut seen_continuation = false;
     for _ in 0..100 {
-        let prefix = generate_novel_prefix(&root, &mut rng).unwrap();
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         if prefix == inside {
             seen_inside = true;
         } else if prefix == continuation {
@@ -529,7 +540,11 @@ fn novel_prefix_stops_before_a_fully_explored_clone_node() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        assert!(generate_novel_prefix(&root, &mut rng).unwrap().is_empty());
+        assert!(
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default())
+                .unwrap()
+                .is_empty()
+        );
     }
     assert!(!root.is_exhausted);
 }
@@ -671,7 +686,13 @@ fn pick_non_exhausted_value_returns_none_for_a_clone_kind() {
     let mut rng = EngineRng::seeded(0);
     let children = HashMap::default();
     assert_eq!(
-        pick_non_exhausted_value(&ChoiceKind::Clone, &children, &mut rng).unwrap(),
+        pick_non_exhausted_value(
+            &ChoiceKind::Clone,
+            &children,
+            &mut rng,
+            GenerationParameters::default()
+        )
+        .unwrap(),
         None
     );
 }
