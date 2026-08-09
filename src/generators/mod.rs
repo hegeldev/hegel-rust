@@ -15,6 +15,7 @@ mod deferred;
 mod generators;
 mod misc;
 mod numeric;
+mod recursive;
 mod strings;
 mod time;
 mod tuples;
@@ -39,6 +40,7 @@ pub use deferred::{DeferredGeneratorDefinition, deferred};
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
+pub use recursive::{RecursiveGenerator, recursive};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
     DomainGenerator, EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator,
