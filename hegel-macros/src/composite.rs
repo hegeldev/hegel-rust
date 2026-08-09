@@ -4,6 +4,21 @@ use syn::{FnArg, ItemFn, Pat, ReturnType, Type, parse_quote};
 
 use crate::utils::snake_to_pascal;
 
+/// Replaces any elided lifetimes with the given lifetime
+struct ElidedLifetimeRewriter {
+    lifetime: syn::Lifetime,
+    used: bool,
+}
+impl syn::visit_mut::VisitMut for ElidedLifetimeRewriter {
+    fn visit_type_reference_mut(&mut self, node: &mut syn::TypeReference) {
+        if node.lifetime.is_none() {
+            node.lifetime = Some(self.lifetime.clone());
+            self.used = true;
+        }
+        syn::visit_mut::visit_type_reference_mut(self, node);
+    }
+}
+
 pub fn expand_composite(f: ItemFn) -> TokenStream {
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
@@ -52,7 +67,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
         let ident = match arg {
             FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => {
-                    field_types.push(typed.ty.as_ref());
+                    field_types.push(typed.ty.as_ref().clone());
                     pat.ident.clone()
                 }
                 _ => {
@@ -77,7 +92,25 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
     let struct_name = format_ident!("{pascal_name}CompositeGenerator", span = fn_name.span());
     let struct_doc = format!("Generator returned by [`{fn_name}()`].");
 
-    let generics = &f.sig.generics;
+    let mut generics = f.sig.generics.clone();
+    let mut body_parameters: Vec<FnArg> = passthrough.to_vec();
+    {
+        let mut rewriter = ElidedLifetimeRewriter {
+            lifetime: syn::Lifetime::new("'__hegel_composite", fn_name.span()),
+            used: false,
+        };
+        for ty in &mut field_types {
+            syn::visit_mut::VisitMut::visit_type_mut(&mut rewriter, ty);
+        }
+        for arg in &mut body_parameters {
+            syn::visit_mut::VisitMut::visit_fn_arg_mut(&mut rewriter, arg);
+        }
+        if rewriter.used {
+            let lifetime = rewriter.lifetime;
+            generics.params.insert(0, parse_quote! { #lifetime });
+        }
+    }
+
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let lifetimes: Vec<_> = generics.lifetimes().map(|l| &l.lifetime).collect();
     let type_params: Vec<_> = generics.type_params().map(|t| &t.ident).collect();
@@ -132,7 +165,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
         }
 
         impl #impl_generics #struct_name #ty_generics #where_clause {
-            fn __hegel_body(#tc_arg, #(#passthrough),*) -> #return_type #body_block
+            fn __hegel_body(#tc_arg, #(#body_parameters),*) -> #return_type #body_block
         }
 
         impl #impl_generics ::core::clone::Clone for #struct_name #ty_generics #generator_where {
