@@ -731,6 +731,120 @@ mod stateful {
         );
     }
 
+    /// Records the schedule of rule executions (`R`) and invariant
+    /// executions (`I`) per test case.
+    struct ScheduleRecorderMachine {
+        logs: Arc<Mutex<Vec<String>>>,
+        fail_when_count_reaches: Option<u64>,
+        count: u64,
+    }
+
+    impl ScheduleRecorderMachine {
+        fn record(&self, kind: char) {
+            self.logs.lock().unwrap().last_mut().unwrap().push(kind);
+        }
+    }
+
+    impl StateMachine for ScheduleRecorderMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("bump", |m: &mut ScheduleRecorderMachine, _tc| {
+                m.record('R');
+                m.count += 1;
+            })]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new(
+                "check",
+                |m: &mut ScheduleRecorderMachine, _tc| {
+                    m.record('I');
+                    if let Some(limit) = m.fail_when_count_reaches {
+                        assert!(m.count < limit, "count reached {limit}");
+                    }
+                },
+            )]
+        }
+    }
+
+    fn run_schedule_recorder(fail_when_count_reaches: Option<u64>) -> Vec<String> {
+        let logs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let logs_in_test = Arc::clone(&logs);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Hegel::new(move |tc: TestCase| {
+                logs_in_test.lock().unwrap().push(String::new());
+                let m = ScheduleRecorderMachine {
+                    logs: Arc::clone(&logs_in_test),
+                    fail_when_count_reaches,
+                    count: 0,
+                };
+                hegel::stateful::run(m, tc);
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(50)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        }));
+        assert_eq!(result.is_err(), fail_when_count_reaches.is_some());
+        let logs = logs.lock().unwrap();
+        logs.clone()
+    }
+
+    /// Invariants run once on the initial state, once after the final step,
+    /// and only occasionally (with probability `1 / stateful_step_count`)
+    /// between steps — not after every step.
+    #[test]
+    fn test_invariants_are_guaranteed_at_the_ends_and_sampled_between_steps() {
+        let logs = run_schedule_recorder(None);
+        let mut total_steps = 0;
+        let mut total_interior_checks = 0;
+        for log in &logs {
+            assert!(
+                log.starts_with('I'),
+                "invariants must run on the initial state: {log:?}"
+            );
+            assert!(
+                log.ends_with('I'),
+                "invariants must run at the end of the run: {log:?}"
+            );
+            total_steps += log.matches('R').count();
+            total_interior_checks += log[1..log.len() - 1].matches('I').count();
+        }
+        assert!(
+            total_steps >= 1000,
+            "expected many steps, got {total_steps}"
+        );
+        assert!(
+            total_interior_checks < total_steps / 5,
+            "interior invariant checks should be sampled, not run after every \
+             step: {total_interior_checks} checks for {total_steps} steps"
+        );
+        assert!(
+            total_interior_checks > 0,
+            "interior invariant checks must still happen occasionally"
+        );
+    }
+
+    /// The per-step invariant decision shrinks toward *running* the
+    /// invariant, so a shrunk counterexample checks invariants after every
+    /// step and fails at the earliest step that violates them.
+    #[test]
+    fn test_shrunk_failures_check_invariants_after_every_step() {
+        let logs = run_schedule_recorder(Some(3));
+        let replay = logs.last().unwrap();
+        assert_eq!(
+            replay.matches('R').count(),
+            3,
+            "the minimal failure is exactly three steps: {replay:?}"
+        );
+        assert!(
+            !replay.contains("RR"),
+            "the shrunk schedule should check invariants after every step: {replay:?}"
+        );
+        assert!(replay.starts_with('I') && replay.ends_with('I'));
+    }
+
     /// Counts per test case how many times its single rule ran.
     struct StepRecorderMachine {
         counts: Arc<Mutex<Vec<u64>>>,

@@ -97,6 +97,9 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
 
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
+    /// The run's `stateful_step_count` setting, threaded through so the
+    /// stateful runner can derive its per-step invariant probability.
+    stateful_step_count: i64,
     /// Sink for [`TestCase::event`] / [`TestCase::event_value`] observations,
     /// shared across every clone of the test case. `None` (statistics
     /// disabled, or a replay that should not be counted) makes both methods
@@ -357,6 +360,7 @@ impl TestCase {
         mode: Mode,
         sink: Option<OutputSink>,
         events: Option<Arc<Mutex<crate::statistics::CaseEvents>>>,
+        stateful_step_count: i64,
     ) -> Self {
         let on_draw: OutputSink = match sink {
             Some(sink) if emit => sink,
@@ -366,6 +370,7 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
+                stateful_step_count,
                 events,
                 emit,
                 draw_state: Mutex::new(DrawState {
@@ -799,6 +804,10 @@ impl TestCase {
     /// own handle and lock.
     pub(crate) fn with_ctc<R>(&self, f: impl FnOnce(&CTestCase) -> R) -> R {
         f(&self.handle)
+    }
+
+    pub(crate) fn stateful_step_count(&self) -> i64 {
+        self.global.stateful_step_count
     }
 
     #[doc(hidden)]

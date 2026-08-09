@@ -290,8 +290,7 @@ mod reproduce {
                 c_tc,
                 &mut test_fn,
                 false,
-                Mode::TestRun,
-                Verbosity::Quiet,
+                &settings,
                 &crate::test_case::RunOutput::resolve(),
                 None,
             );

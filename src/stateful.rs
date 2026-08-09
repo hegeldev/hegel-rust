@@ -2,8 +2,14 @@
 //!
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
-//! methods annotated with `#[invariant]` become invariants (checked after each successful rule
-//! application). Both take a [`TestCase`] parameter and borrow the state machine: rules
+//! methods annotated with `#[invariant]` become invariants. Invariants are checked on the
+//! initial state, once after the final step, and occasionally between steps (after each
+//! successful rule application with probability `1 / stateful_step_count`, so roughly once
+//! per run) — a violation is always detected by the end of the run, without paying for a
+//! full invariant check after every step. When a failure shrinks, the schedule shrinks
+//! toward checking after every step, so the minimal counterexample fails at the earliest
+//! violating step. Both kinds of method take a [`TestCase`] parameter and borrow the state
+//! machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
@@ -224,7 +230,8 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
 pub trait StateMachine {
     /// The rules (actions) that can be applied to this state machine.
     fn rules(&self) -> Vec<Rule<Self>>;
-    /// Invariants checked after each successful rule application.
+    /// Invariants checked on the initial state, at the end of the run, and
+    /// probabilistically between steps (see the module docs).
     fn invariants(&self) -> Vec<Rule<Self>>;
 }
 
@@ -249,6 +256,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &invariants, &tc);
 
+    let skip_probability = 1.0 - 1.0 / (tc.stateful_step_count() as f64);
     let mut steps_attempted: i64 = 0;
 
     loop {
@@ -273,7 +281,15 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         match result {
             Ok(()) => {
                 tc.stop_span(false);
-                check_invariants(&mut m, &invariants, &tc);
+                // Invariants are sampled between steps with probability
+                // 1 / stateful_step_count (they are guaranteed to run once
+                // the run ends, below). The draw is inverted — false means
+                // "check" — so that shrinking, which moves booleans toward
+                // false, moves failing schedules toward checking invariants
+                // after every step and so toward the earliest violating step.
+                if !invariants.is_empty() && !tc.generate_boolean(skip_probability) {
+                    check_invariants(&mut m, &invariants, &tc);
+                }
             }
             Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
                 if let Err(rc) = tc.with_ctc(|ctc| ctc.state_machine_rule_rejected(&machine)) {
@@ -291,4 +307,6 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
             }
         };
     }
+
+    check_invariants(&mut m, &invariants, &tc);
 }

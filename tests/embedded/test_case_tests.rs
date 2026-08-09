@@ -25,6 +25,7 @@ fn emitting_test_case() -> (RunHandle, TestCase) {
         Mode::TestRun,
         current_output_sink(),
         None,
+        50,
     );
     (run, tc)
 }

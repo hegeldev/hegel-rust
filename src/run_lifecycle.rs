@@ -235,8 +235,7 @@ pub(crate) fn run_test_case(
     c_tc: CTestCase,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
-    mode: Mode,
-    verbosity: Verbosity,
+    settings: &Settings,
     output: &RunOutput,
     stats: Option<&parking_lot::Mutex<RunStats>>,
 ) -> (
@@ -244,6 +243,7 @@ pub(crate) fn run_test_case(
     Option<Box<dyn std::any::Any + Send>>,
     Option<String>,
 ) {
+    let verbosity = settings.verbosity;
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
     let should_emit = (is_final && !quiet) || verbose;
@@ -258,9 +258,10 @@ pub(crate) fn run_test_case(
     let tc = TestCase::new(
         Arc::clone(&c_tc),
         should_emit,
-        mode,
+        settings.mode,
         output.sink().cloned(),
         case_events.clone(),
+        settings.stateful_step_count,
     );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
@@ -469,7 +470,7 @@ pub(crate) fn drive<F>(
     };
 
     if mode == Mode::SingleTestCase {
-        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
+        drive_single_case(&run, &mut test_fn, settings, test_location, &output);
         return;
     }
 
@@ -477,15 +478,7 @@ pub(crate) fn drive<F>(
         .statistics
         .then(|| parking_lot::Mutex::new(RunStats::default()));
     while let Some(c_tc) = run.next_test_case() {
-        run_test_case(
-            c_tc,
-            &mut test_fn,
-            false,
-            mode,
-            verbosity,
-            &output,
-            stats.as_ref(),
-        );
+        run_test_case(c_tc, &mut test_fn, false, settings, &output, stats.as_ref());
     }
 
     if let Some(stats) = &stats {
@@ -527,7 +520,7 @@ pub(crate) fn drive<F>(
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output, None);
+                    run_test_case(c_tc, &mut test_fn, true, settings, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -562,22 +555,14 @@ pub(crate) fn drive<F>(
 fn drive_single_case(
     run: &RunHandle,
     test_fn: &mut dyn FnMut(TestCase),
-    verbosity: Verbosity,
+    settings: &Settings,
     test_location: Option<&TestLocation>,
     output: &RunOutput,
 ) {
     let c_tc = run
         .next_test_case()
         .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
-        test_fn,
-        true,
-        Mode::SingleTestCase,
-        verbosity,
-        output,
-        None,
-    );
+    let (result, payload, diagnostic) = run_test_case(c_tc, test_fn, true, settings, output, None);
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
         if let Some(diagnostic) = diagnostic {
@@ -615,15 +600,8 @@ pub(crate) fn drive_blob_replay<F>(
         Ok(c_tc) => c_tc,
         Err(message) => panic!("{message}"),
     };
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
-        &mut test_fn,
-        true,
-        settings.mode,
-        settings.verbosity,
-        &output,
-        None,
-    );
+    let (result, payload, diagnostic) =
+        run_test_case(c_tc, &mut test_fn, true, settings, &output, None);
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);
     }
