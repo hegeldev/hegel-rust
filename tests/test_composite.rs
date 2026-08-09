@@ -312,3 +312,17 @@ mod composite_borrowed_data {
         assert!((5..=10).contains(&object.x));
     }
 }
+
+#[deny(clippy::items_after_statements)]
+#[allow(unused)]
+mod item_after_statement_lint {
+    use super::*;
+
+    #[hegel::composite]
+    fn link_metric(tc: &TestCase) -> u32 {
+        const MAX_METRIC: u32 = 1000;
+
+        let x = tc.draw(gs::integers().max_value(MAX_METRIC));
+        x + 1
+    }
+}

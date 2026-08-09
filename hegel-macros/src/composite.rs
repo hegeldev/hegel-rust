@@ -138,13 +138,11 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
     };
 
     let label_source = f.block.to_token_stream().to_string();
-    let mut body_block = *f.block;
-    body_block.stmts.insert(
-        0,
-        parse_quote! {
-            ::hegel::__assert_is_test_case::< #tc_inner_type >();
-        },
-    );
+    let inner_block = f.block;
+    let body_block: syn::Block = parse_quote! {{
+        ::hegel::__assert_is_test_case::< #tc_inner_type >();
+        #inner_block
+    }};
 
     let attributes = &f.attrs;
     let visibility = &f.vis;
