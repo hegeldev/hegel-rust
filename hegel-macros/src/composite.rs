@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
+use syn::spanned::Spanned;
 use syn::{FnArg, ItemFn, Pat, ReturnType, Type, parse_quote};
 
 use crate::utils::snake_to_pascal;
@@ -20,71 +21,91 @@ impl syn::visit_mut::VisitMut for ElidedLifetimeRewriter {
 }
 
 pub fn expand_composite(f: ItemFn) -> TokenStream {
+    let mut errors: Vec<syn::Error> = Vec::new();
+
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
-    let Some((FnArg::Typed(tc_arg), passthrough)) = input_parameters.split_first() else {
-        return syn::Error::new_spanned(
-            &f.sig,
-            "A #[composite] generator must define a first parameter of type &TestCase. When \
-            drawing from a #[composite] generator with tc.draw(my_composite_gen), the test \
-            case will be automatically passed to my_composite_gen as the first argument.",
-        )
-        .to_compile_error();
+    let (tc_arg, passthrough) = match input_parameters.split_first() {
+        Some((FnArg::Typed(tc_arg), passthrough)) => (Some(tc_arg), passthrough),
+        _ => {
+            errors.push(syn::Error::new_spanned(
+                &f.sig,
+                "A #[composite] generator must define a first parameter of type &TestCase. When \
+                    drawing from a #[composite] generator with tc.draw(my_composite_gen), the test \
+                    case will be automatically passed to my_composite_gen as the first argument.",
+            ));
+            (None, [].as_slice())
+        }
     };
 
-    let tc_inner_type = match tc_arg.ty.as_ref() {
-        Type::Reference(reference) if reference.mutability.is_none() => reference.elem.clone(),
-        Type::Reference(reference) => {
-            return syn::Error::new_spanned(
+    let (tc_inner_type, tc_type_is_valid) = match tc_arg.map(|arg| arg.ty.as_ref()) {
+        Some(Type::Reference(reference)) if reference.mutability.is_none() => {
+            (reference.elem.as_ref().clone(), true)
+        }
+        Some(Type::Reference(reference)) => {
+            errors.push(syn::Error::new_spanned(
                 reference,
                 "A #[composite] generator borrows its TestCase through a shared reference: \
                 change `&mut TestCase` to `&TestCase`. All TestCase methods take `&self`.",
-            )
-            .to_compile_error();
+            ));
+            (parse_quote! { ::hegel::TestCase }, false)
         }
-        _ => {
-            return syn::Error::new_spanned(
-                &tc_arg.ty,
+        Some(arg) => {
+            errors.push(syn::Error::new_spanned(
+                arg,
                 "#[composite] generators receive the test case by reference: change \
                 `tc: TestCase` to `tc: &TestCase`. (Earlier versions took the TestCase by \
                 value; the body of the generator rarely needs any other change.)",
-            )
-            .to_compile_error();
+            ));
+            (parse_quote! { ::hegel::TestCase }, false)
         }
+        None => (parse_quote! { ::hegel::TestCase }, false),
     };
 
-    let ReturnType::Type(_, return_type) = &f.sig.output else {
-        return syn::Error::new_spanned(
+    let tc_arg: FnArg = match tc_arg {
+        Some(arg) if tc_type_is_valid => FnArg::Typed(arg.clone()),
+        Some(arg) => {
+            let pattern = arg.pat.as_ref();
+            parse_quote! { #pattern: &::hegel::TestCase }
+        }
+        None => parse_quote! { __hegel_tc: &::hegel::TestCase },
+    };
+
+    let return_type = if let ReturnType::Type(_, ty) = f.sig.output {
+        ty
+    } else {
+        errors.push(syn::Error::new_spanned(
             &f.sig,
             "#[composite] generators must explicitly declare a return type.",
-        )
-        .to_compile_error();
+        ));
+        parse_quote! { () }
     };
 
     let mut field_idents = Vec::new();
     let mut field_types = Vec::new();
-    for arg in passthrough {
-        let ident = match arg {
-            FnArg::Typed(typed) => match typed.pat.as_ref() {
-                Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => {
-                    field_types.push(typed.ty.as_ref().clone());
-                    pat.ident.clone()
-                }
-                _ => {
-                    return syn::Error::new_spanned(
-                        &typed.pat,
-                        "parameters of a #[composite] generator (after the TestCase) must be \
-                        plain identifiers, so they can be stored on the generated generator \
-                        struct.",
-                    )
-                    .to_compile_error();
-                }
-            },
-            FnArg::Receiver(_) => {
-                unreachable!("syn only parses a receiver as the first parameter")
-            }
+    let mut body_parameters: Vec<FnArg> = Vec::new();
+    for (index, arg) in passthrough.iter().enumerate() {
+        let FnArg::Typed(typed) = arg else {
+            unreachable!("syn only parses a receiver as the first parameter")
         };
-        field_idents.push(ident);
+        field_types.push(typed.ty.as_ref().clone());
+        match typed.pat.as_ref() {
+            Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => {
+                field_idents.push(pat.ident.clone());
+                body_parameters.push(arg.clone());
+            }
+            pattern => {
+                errors.push(syn::Error::new_spanned(
+                    pattern,
+                    "parameters of a #[composite] generator (after the TestCase) must be plain \
+                    identifiers, so they can be stored on the generated generator struct.",
+                ));
+                let ident = format_ident!("__hegel_arg{index}", span = pattern.span());
+                let ty = typed.ty.as_ref();
+                body_parameters.push(parse_quote! { #ident: #ty });
+                field_idents.push(ident);
+            }
+        }
     }
 
     let fn_name = &f.sig.ident;
@@ -93,7 +114,6 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
     let struct_doc = format!("Generator returned by [`{fn_name}()`].");
 
     let mut generics = f.sig.generics.clone();
-    let mut body_parameters: Vec<FnArg> = passthrough.to_vec();
     {
         let mut rewriter = ElidedLifetimeRewriter {
             lifetime: syn::Lifetime::new("'__hegel_composite", fn_name.span()),
@@ -146,8 +166,11 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
 
     let attributes = &f.attrs;
     let visibility = &f.vis;
+    let errors = errors.into_iter().map(|e| e.to_compile_error());
 
     quote! {
+        #(#errors)*
+
         #[doc = #struct_doc]
         #visibility struct #struct_name #generics #where_clause {
             #(#field_idents: #field_types,)*
