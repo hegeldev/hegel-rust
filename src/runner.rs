@@ -228,6 +228,11 @@ impl Settings {
     }
 
     /// Set the database path for storing failing examples, or `None` to disable.
+    ///
+    /// The `HEGEL_DATABASE` environment variable, when set and non-empty,
+    /// overrides this value at runtime: the literal value `disabled` turns
+    /// the database off (matching the `--database` CLI flag's keyword), and
+    /// any other value is used as the database path.
     pub fn database(mut self, database: Option<String>) -> Self {
         self.database = match database {
             None => Database::Disabled,
@@ -305,6 +310,15 @@ impl Settings {
                     Ok(n) if n > 0 => self.test_cases = n,
                     _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
                 }
+            }
+        }
+        if let Some(value) = env("HEGEL_DATABASE") {
+            if !value.is_empty() {
+                self.database = if value == "disabled" {
+                    Database::Disabled
+                } else {
+                    Database::Path(value)
+                };
             }
         }
         self

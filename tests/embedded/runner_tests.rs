@@ -98,6 +98,33 @@ fn test_env_override_test_cases_zero_is_a_usage_error() {
 }
 
 #[test]
+fn test_env_override_database_disabled_keyword() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(Some("custom".to_string()))
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(|| "disabled".to_string()));
+    assert_eq!(s.database, Database::Disabled);
+}
+
+#[test]
+fn test_env_override_database_path() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(None)
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(|| "my-db".to_string()));
+    assert_eq!(s.database, Database::Path("my-db".to_string()));
+}
+
+#[test]
+fn test_env_override_database_empty_is_ignored() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(Some("custom".to_string()))
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(String::new));
+    assert_eq!(s.database, Database::Path("custom".to_string()));
+}
+
+#[test]
 fn test_is_in_ci_from_detects_presence_and_value_variables() {
     assert!(!is_in_ci_from(|_| None));
     assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
