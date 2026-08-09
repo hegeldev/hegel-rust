@@ -60,6 +60,44 @@ fn test_settings_has_phase() {
 }
 
 #[test]
+fn test_env_override_replaces_test_cases() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "17".to_string()));
+    assert_eq!(s.test_cases, 17);
+}
+
+#[test]
+fn test_env_override_test_cases_absent_is_ignored() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|_| None);
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+fn test_env_override_test_cases_empty_is_ignored() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(String::new));
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_TEST_CASES must be a positive integer, got \"lots\"")]
+fn test_env_override_test_cases_non_numeric_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "lots".to_string()));
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_TEST_CASES must be a positive integer, got \"0\"")]
+fn test_env_override_test_cases_zero_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "0".to_string()));
+}
+
+#[test]
 fn test_is_in_ci_from_detects_presence_and_value_variables() {
     assert!(!is_in_ci_from(|_| None));
     assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
