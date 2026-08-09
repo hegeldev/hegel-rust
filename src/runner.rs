@@ -133,6 +133,7 @@ pub struct Settings {
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
     pub(crate) print_blob: bool,
+    pub(crate) statistics: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -168,6 +169,7 @@ impl Settings {
             ],
             report_multiple_failures: false,
             print_blob: false,
+            statistics: false,
             backend: None,
         }
     }
@@ -258,6 +260,21 @@ impl Settings {
         self
     }
 
+    /// Report run statistics — test-case outcomes plus any observations
+    /// recorded with [`TestCase::event`](crate::TestCase::event) and
+    /// [`TestCase::event_value`](crate::TestCase::event_value) — when the
+    /// run finishes. Defaults to `false`.
+    ///
+    /// The `HEGEL_STATISTICS` environment variable, when set and non-empty,
+    /// overrides this at runtime: `0` or `false` disables the report, any
+    /// other value enables it.
+    ///
+    /// This setting is an observability prototype and may change shape.
+    pub fn statistics(mut self, statistics: bool) -> Self {
+        self.statistics = statistics;
+        self
+    }
+
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
     /// counterexample when a test fails. Defaults to `false`.
     ///
@@ -319,6 +336,11 @@ impl Settings {
                 } else {
                     Database::Path(value)
                 };
+            }
+        }
+        if let Some(value) = env("HEGEL_STATISTICS") {
+            if !value.is_empty() {
+                self.statistics = !matches!(value.as_str(), "0" | "false");
             }
         }
         self

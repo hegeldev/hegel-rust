@@ -24,6 +24,7 @@ use crate::control::{
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
+use crate::statistics::{CaseEvents, RunStats};
 use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -237,6 +238,7 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
+    stats: Option<&parking_lot::Mutex<RunStats>>,
 ) -> (
     TestCaseResult,
     Option<Box<dyn std::any::Any + Send>>,
@@ -251,8 +253,15 @@ pub(crate) fn run_test_case(
     // that skips the hook via resume_unwind must not inherit it.
     take_panic_info();
 
+    let case_events = stats.map(|_| Arc::new(parking_lot::Mutex::new(CaseEvents::default())));
     let c_tc = Arc::new(c_tc);
-    let tc = TestCase::new(Arc::clone(&c_tc), should_emit, mode, output.sink().cloned());
+    let tc = TestCase::new(
+        Arc::clone(&c_tc),
+        should_emit,
+        mode,
+        output.sink().cloned(),
+        case_events.clone(),
+    );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
 
     let (tc_result, payload, diagnostic) = match result {
@@ -303,6 +312,11 @@ pub(crate) fn run_test_case(
 
     if verbose {
         emit_verbose_stop_reason(&tc_result, output);
+    }
+
+    if let (Some(stats), Some(events)) = (stats, case_events) {
+        let events = std::mem::take(&mut *events.lock());
+        stats.lock().record_case(&tc_result, events);
     }
 
     report_outcome(&c_tc, &tc_result);
@@ -459,8 +473,23 @@ pub(crate) fn drive<F>(
         return;
     }
 
+    let stats = settings
+        .statistics
+        .then(|| parking_lot::Mutex::new(RunStats::default()));
     while let Some(c_tc) = run.next_test_case() {
-        run_test_case(c_tc, &mut test_fn, false, mode, verbosity, &output);
+        run_test_case(
+            c_tc,
+            &mut test_fn,
+            false,
+            mode,
+            verbosity,
+            &output,
+            stats.as_ref(),
+        );
+    }
+
+    if let Some(stats) = &stats {
+        output.block(&stats.lock().render(database_key));
     }
 
     let result = run.result();
@@ -498,7 +527,7 @@ pub(crate) fn drive<F>(
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output);
+                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -540,8 +569,15 @@ fn drive_single_case(
     let c_tc = run
         .next_test_case()
         .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) =
-        run_test_case(c_tc, test_fn, true, Mode::SingleTestCase, verbosity, output);
+    let (result, payload, diagnostic) = run_test_case(
+        c_tc,
+        test_fn,
+        true,
+        Mode::SingleTestCase,
+        verbosity,
+        output,
+        None,
+    );
     if matches!(result, TestCaseResult::Interesting(_)) {
         emit_antithesis_assertion(true, test_location);
         if let Some(diagnostic) = diagnostic {
@@ -586,6 +622,7 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
+        None,
     );
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);

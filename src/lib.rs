@@ -238,6 +238,7 @@ pub mod generators;
 pub mod run_lifecycle;
 pub(crate) mod runner;
 pub mod stateful;
+pub(crate) mod statistics;
 mod test_case;
 #[doc(hidden)]
 pub use control::currently_in_test_context;

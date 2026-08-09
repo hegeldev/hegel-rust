@@ -125,6 +125,25 @@ fn test_env_override_database_empty_is_ignored() {
 }
 
 #[test]
+fn test_env_override_statistics_enables_and_disables() {
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "1".to_string()));
+    assert!(s.statistics);
+    let s = Settings::new()
+        .statistics(true)
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "0".to_string()));
+    assert!(!s.statistics);
+    let s = Settings::new()
+        .statistics(true)
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "false".to_string()));
+    assert!(!s.statistics);
+    let s = Settings::new()
+        .statistics(true)
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(String::new));
+    assert!(s.statistics);
+}
+
+#[test]
 fn test_is_in_ci_from_detects_presence_and_value_variables() {
     assert!(!is_in_ci_from(|_| None));
     assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
@@ -274,6 +293,7 @@ mod reproduce {
                 Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
+                None,
             );
         }
         let result = run.result();

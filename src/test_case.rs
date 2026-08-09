@@ -97,6 +97,11 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
 
 pub(crate) struct TestCaseGlobalData {
     mode: Mode,
+    /// Sink for [`TestCase::event`] / [`TestCase::event_value`] observations,
+    /// shared across every clone of the test case. `None` (statistics
+    /// disabled, or a replay that should not be counted) makes both methods
+    /// no-ops.
+    events: Option<Arc<Mutex<crate::statistics::CaseEvents>>>,
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
     /// verbose output is on).
@@ -351,6 +356,7 @@ impl TestCase {
         emit: bool,
         mode: Mode,
         sink: Option<OutputSink>,
+        events: Option<Arc<Mutex<crate::statistics::CaseEvents>>>,
     ) -> Self {
         let on_draw: OutputSink = match sink {
             Some(sink) if emit => sink,
@@ -360,6 +366,7 @@ impl TestCase {
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
+                events,
                 emit,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
@@ -505,6 +512,63 @@ impl TestCase {
         let local = self.local.borrow();
         let indent = local.indent;
         (local.on_draw)(&format!("{:indent$}{}", "", message, indent = indent));
+    }
+
+    /// Record that a named event occurred in this test case.
+    ///
+    /// When statistics are enabled — via
+    /// [`Settings::statistics`](crate::Settings::statistics) or the
+    /// `HEGEL_STATISTICS` environment variable — the run reports, per label,
+    /// how many times the event occurred and in what fraction of test cases,
+    /// making it easy to check that the test is exercising what you think it
+    /// is. When statistics are disabled this is a cheap no-op.
+    ///
+    /// This API is an observability prototype and may change shape.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let n: i32 = tc.draw(gs::integers());
+    ///     if n % 2 == 0 {
+    ///         tc.event("n is even");
+    ///     }
+    /// }
+    /// ```
+    pub fn event(&self, label: &str) {
+        if let Some(events) = &self.global.events {
+            events.lock().counters.push(label.to_string());
+        }
+    }
+
+    /// Record a numeric observation under a label.
+    ///
+    /// When statistics are enabled (see [`event`](Self::event)), the run
+    /// reports the distribution of each label's observations — count, min,
+    /// percentiles, max, and mean — so you can see the shape of what your
+    /// generators produce (input sizes, sequence lengths, …) rather than
+    /// guessing. When statistics are disabled this is a cheap no-op.
+    ///
+    /// This API is an observability prototype and may change shape.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let xs: Vec<i32> = tc.draw(gs::vecs(gs::integers()));
+    ///     tc.event_value("input length", xs.len() as f64);
+    /// }
+    /// ```
+    pub fn event_value(&self, label: &str, value: f64) {
+        if let Some(events) = &self.global.events {
+            events.lock().values.push((label.to_string(), value));
+        }
     }
 
     /// Record a targeting observation to help the engine find extreme inputs.
