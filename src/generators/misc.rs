@@ -23,16 +23,23 @@ pub fn just<T: Clone + Send + Sync>(value: T) -> JustGenerator<T> {
     JustGenerator { value }
 }
 
-/// Generator for boolean values. Created by [`booleans()`].
-pub struct BoolGenerator;
+/// Generator for boolean values. Created by [`booleans()`] and [`weighted_booleans()`].
+pub struct BoolGenerator {
+    p: f64,
+}
 
 impl Generator<bool> for BoolGenerator {
     fn do_draw(&self, tc: &TestCase) -> bool {
-        tc.generate_boolean(0.5)
+        tc.generate_boolean(self.p)
     }
 }
 
 /// Generate boolean values.
 pub fn booleans() -> BoolGenerator {
-    BoolGenerator
+    BoolGenerator { p: 0.5 }
+}
+
+/// Generate boolean values with probability p of true.
+pub fn weighted_booleans(p: f64) -> BoolGenerator {
+    BoolGenerator { p }
 }
