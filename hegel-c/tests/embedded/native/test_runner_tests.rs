@@ -386,6 +386,44 @@ fn span_mutation_stops_when_example_budget_is_full() {
 }
 
 #[test]
+fn span_mutation_extends_diverged_proposals_with_random_draws() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..4 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 2), span(1, 2)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert!(
+                ctx.valid_test_cases >= 1,
+                "a mutated sequence that runs out of data should be completed \
+                 with fresh random draws instead of being discarded, got {} \
+                 valid cases from {} calls",
+                ctx.valid_test_cases,
+                ctx.calls
+            );
+        },
+    );
+}
+
+#[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
     assert!(matches!(
