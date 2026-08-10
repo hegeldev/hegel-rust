@@ -21,7 +21,7 @@ fn test_duplicate_containment() {
     let (ls, i) = FindAny::new(list_and_int(), |(ls, i): &(Vec<i64>, i64)| {
         ls.iter().filter(|&&x| x == *i).count() > 1
     })
-    .seed(1)
+    .seed(2)
     .run();
     assert!(ls.iter().filter(|&&x| x == i).count() > 1);
 }

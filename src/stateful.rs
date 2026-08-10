@@ -78,10 +78,10 @@ use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, hegel_internal_assert,
     raise_control, with_test_context,
 };
+use crate::ffi::{PoolHandle, StateMachineHandle};
 use crate::generators::Generator;
 use crate::run_lifecycle::{self, PanicInfo};
-use crate::runner::Mode;
-use crate::test_case::raise_for_rc;
+use crate::test_case::{labels, raise_for_rc};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -142,14 +142,14 @@ impl<M> Rule<M> {
 /// value is recorded in the failing-test replay and the choice shrinks like any
 /// other draw.
 pub struct Pool<T> {
-    pool_id: i64,
+    pool: crate::ffi::PoolHandle,
     tc: TestCase,
     values: HashMap<i64, T>,
 }
 
-/// Ask the engine for a variable id from `pool_id`, consuming it if `consume`.
-fn pool_generate(tc: &TestCase, pool_id: i64, consume: bool) -> i64 {
-    match tc.with_ctc(|ctc| ctc.pool_generate(pool_id, consume)) {
+/// Ask the engine for a variable id from `pool`, consuming it if `consume`.
+fn pool_generate(tc: &TestCase, pool: &crate::ffi::PoolHandle, consume: bool) -> i64 {
+    match tc.with_ctc(|ctc| ctc.pool_generate(pool, consume)) {
         Ok(id) => id,
         Err(rc) => raise_for_rc(rc),
     }
@@ -168,7 +168,7 @@ impl<T> Pool<T> {
 
     /// Add a value to the pool.
     pub fn add(&mut self, v: T) {
-        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
+        let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(&self.pool)) {
             Ok(id) => id,
             Err(rc) => raise_for_rc(rc), // nocov
         };
@@ -185,7 +185,7 @@ impl<T> Pool<T> {
     /// `assume(false)`) when the pool is empty.
     pub fn values_reusable(&self) -> ValuesReusable<'_, T> {
         ValuesReusable {
-            pool_id: self.pool_id,
+            pool: &self.pool,
             values: &self.values,
         }
     }
@@ -197,7 +197,7 @@ impl<T> Pool<T> {
     /// current test case (as if by `assume(false)`) when the pool is empty.
     pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
         ValuesConsumed {
-            pool_id: self.pool_id,
+            pool: &self.pool,
             values: RefCell::new(&mut self.values),
         }
     }
@@ -208,14 +208,14 @@ impl<T> Pool<T> {
 /// Returned by [`Pool::values_reusable`]. Borrows the pool, so the references it
 /// produces stay valid for as long as the generator is alive.
 pub struct ValuesReusable<'a, T> {
-    pool_id: i64,
+    pool: &'a crate::ffi::PoolHandle,
     values: &'a HashMap<i64, T>,
 }
 
 impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> &'a T {
         tc.assume(!self.values.is_empty());
-        let variable_id = pool_generate(tc, self.pool_id, false);
+        let variable_id = pool_generate(tc, self.pool, false);
         self.values.get(&variable_id).unwrap()
     }
 }
@@ -227,26 +227,26 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
 /// [`RefCell`] is what lets it remove a value during a draw, which only has
 /// shared access to the generator.
 pub struct ValuesConsumed<'a, T> {
-    pool_id: i64,
+    pool: &'a crate::ffi::PoolHandle,
     values: RefCell<&'a mut HashMap<i64, T>>,
 }
 
 impl<T> Generator<T> for ValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         tc.assume(!self.values.borrow().is_empty());
-        let variable_id = pool_generate(tc, self.pool_id, true);
+        let variable_id = pool_generate(tc, self.pool, true);
         self.values.borrow_mut().remove(&variable_id).unwrap()
     }
 }
 
 /// Create a new value pool for stateful tests.
 pub fn pool<T>(tc: &TestCase) -> Pool<T> {
-    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
-        Ok(id) => id,
+    let pool = match tc.with_ctc(|ctc| ctc.new_pool()) {
+        Ok(handle) => handle,
         Err(rc) => raise_for_rc(rc), // nocov
     };
     Pool {
-        pool_id,
+        pool,
         tc: tc.clone(),
         values: HashMap::new(),
     }
@@ -272,7 +272,7 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
 /// meantime. In a nondeterministic run — the only place concurrency > 1
 /// exists — nothing downstream depends on that independence anyway.
 pub struct ConcurrentPool<T> {
-    pool_id: i64,
+    handle: PoolHandle,
     values: Mutex<HashMap<i64, T>>,
 }
 
@@ -308,7 +308,7 @@ impl<T> ConcurrentPool<T> {
     /// variable id whose value hasn't been inserted yet.
     pub fn add(&self, tc: &TestCase, v: T) {
         let mut values = self.lock();
-        match tc.with_ctc(|ctc| ctc.pool_add(self.pool_id)) {
+        match tc.with_ctc(|ctc| ctc.pool_add(&self.handle)) {
             Ok(variable_id) => {
                 let previous = values.insert(variable_id, v);
                 hegel_internal_assert!(previous.is_none(), "unexpected variable id in map");
@@ -351,7 +351,7 @@ pub struct ConcurrentValuesReusable<'a, T> {
 impl<T: Clone> Generator<T> for ConcurrentValuesReusable<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         let values = self.pool.lock();
-        match tc.with_ctc(|ctc| ctc.pool_generate(self.pool.pool_id, false)) {
+        match tc.with_ctc(|ctc| ctc.pool_generate(&self.pool.handle, false)) {
             Ok(variable_id) => values.get(&variable_id).unwrap().clone(),
             Err(rc) => {
                 drop(values);
@@ -370,7 +370,7 @@ pub struct ConcurrentValuesConsumed<'a, T> {
 impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         let mut values = self.pool.lock();
-        match tc.with_ctc(|ctc| ctc.pool_generate(self.pool.pool_id, true)) {
+        match tc.with_ctc(|ctc| ctc.pool_generate(&self.pool.handle, true)) {
             Ok(variable_id) => values.remove(&variable_id).unwrap(),
             Err(rc) => {
                 drop(values);
@@ -383,12 +383,12 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
 /// Create a new value pool for concurrent stateful tests. See
 /// [`ConcurrentPool`].
 pub fn concurrent_pool<T>(tc: &TestCase) -> ConcurrentPool<T> {
-    let pool_id = match tc.with_ctc(|ctc| ctc.new_pool()) {
-        Ok(id) => id,
+    let handle = match tc.with_ctc(|ctc| ctc.new_pool()) {
+        Ok(handle) => handle,
         Err(rc) => raise_for_rc(rc),
     };
     ConcurrentPool {
-        pool_id,
+        handle,
         values: Mutex::new(HashMap::new()),
     }
 }
@@ -421,8 +421,8 @@ fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &Tes
 /// it), and the first call is also what draws the test case's round cap.
 /// Since the cap is at least 1, the first call of a fresh machine always
 /// starts a round; `None` only ever follows earlier rounds.
-fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
-    match tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id)) {
+fn machine_next_group(tc: &TestCase, machine: &StateMachineHandle) -> Option<usize> {
+    match tc.with_ctc(|ctc| ctc.state_machine_next_group(machine)) {
         Ok(group) => group.map(|g| g as usize),
         Err(rc) => raise_for_rc(rc),
     }
@@ -430,10 +430,23 @@ fn machine_next_group(tc: &TestCase, machine_id: i64) -> Option<usize> {
 
 /// Ask the engine for the next rule worker `worker_index` should run this round;
 /// `None` once the thread's round budget is exhausted (the join point).
-fn machine_next_rule(tc: &TestCase, machine_id: i64, worker_index: i64) -> Option<i64> {
-    match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine_id, worker_index)) {
+fn machine_next_rule(
+    tc: &TestCase,
+    machine: &StateMachineHandle,
+    worker_index: i64,
+) -> Option<i64> {
+    match tc.with_ctc(|ctc| ctc.state_machine_next_rule(machine, worker_index)) {
         Ok(next) => next,
         Err(rc) => raise_for_rc(rc),
+    }
+}
+
+/// Report that the rule most recently handed to worker `worker_index` was
+/// rejected (a violated assumption), so the engine does not count it toward
+/// the test case's budget.
+fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_index: i64) {
+    if let Err(rc) = tc.with_ctc(|ctc| ctc.state_machine_rule_rejected(machine, worker_index)) {
+        raise_for_rc(rc);
     }
 }
 
@@ -452,25 +465,29 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rule_groups = vec![0i64; rules.len()];
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
-    let machine_id = match tc
+    let machine = match tc
         .with_ctc(|ctc| ctc.new_state_machine(&rule_names, &rule_groups, &invariant_names, 1, 1))
     {
-        Ok((id, _)) => id,
+        Ok((handle, _)) => handle,
         Err(rc) => raise_for_rc(rc),
     };
 
     tc.note("Initial invariant check.");
     check_invariants(&mut m, &invariants, &tc);
 
-    let is_single = tc.mode() == Mode::SingleTestCase;
-
     let mut steps_attempted: i64 = 0;
 
-    while (is_single || steps_attempted < 1000) && machine_next_group(&tc, machine_id).is_some() {
+    loop {
+        tc.start_span(labels::STATEFUL_RULE);
+        if machine_next_group(&tc, &machine).is_none() {
+            tc.stop_span(false);
+            break;
+        }
         // The engine hands out one rule per round at concurrency 1, but
         // that is engine policy, not protocol: pull rules until the join
         // point.
-        while let Some(rule_index) = machine_next_rule(&tc, machine_id, 0) {
+        let mut round_rejected = false;
+        while let Some(rule_index) = machine_next_rule(&tc, &machine, 0) {
             hegel_internal_assert!(
                 (0..rules.len() as i64).contains(&rule_index),
                 "state_machine_next_rule returned out-of-range rule index {rule_index}"
@@ -486,15 +503,21 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
             match result {
                 Ok(()) => {}
                 Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
+                    machine_rule_rejected(&tc, &machine, 0);
+                    round_rejected = true;
                     tc.note("Rule stopped early due to violated assumption.");
                 }
                 // Everything else — including StopTest, so an out-of-data
                 // case is reported as an overrun instead of returning
                 // normally with a half-applied rule — unwinds through the
                 // caller.
-                Err(e) => resume_unwind(e),
+                Err(e) => {
+                    tc.stop_span(false);
+                    resume_unwind(e)
+                }
             };
         }
+        tc.stop_span(round_rejected);
 
         check_invariants(&mut m, &invariants, &tc);
     }
@@ -649,11 +672,11 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
     tc: &TestCase,
     m: &M,
     rules: &[ConcurrentRule<M>],
-    machine_id: i64,
+    machine: &StateMachineHandle,
 ) -> WorkerEvent {
     loop {
         let next = catch_unwind(AssertUnwindSafe(|| {
-            let next = machine_next_rule(tc, machine_id, worker as i64);
+            let next = machine_next_rule(tc, machine, worker as i64);
             if let Some(rule_index) = next {
                 hegel_internal_assert!(
                     (0..rules.len() as i64).contains(&rule_index),
@@ -676,6 +699,12 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
             Ok(()) => {}
             Err(e) => match classify_worker_unwind(e) {
                 WorkerEvent::Invalid => {
+                    let rejected = catch_unwind(AssertUnwindSafe(|| {
+                        machine_rule_rejected(tc, machine, worker as i64);
+                    }));
+                    if let Err(e) = rejected {
+                        return classify_worker_unwind(e);
+                    }
                     tc.note("Rule stopped early due to violated assumption.");
                 }
                 event => return event,
@@ -701,7 +730,7 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     tc: TestCase,
     m: &M,
     rules: &[ConcurrentRule<M>],
-    machine_id: i64,
+    machine: &StateMachineHandle,
     capture_backtraces: bool,
     rounds: mpsc::Receiver<()>,
     events: mpsc::Sender<WorkerEvent>,
@@ -710,7 +739,7 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
         while rounds.recv().is_ok() {
-            let event = run_worker_round(worker, &tc, m, rules, machine_id);
+            let event = run_worker_round(worker, &tc, m, rules, machine);
             if events.send(event).is_err() {
                 break;
             }
@@ -840,7 +869,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
         rule_groups.push(index as i64);
     }
 
-    let (machine_id, concurrency) = match tc.with_ctc(|ctc| {
+    let (machine, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
             &rule_names,
             &rule_groups,
@@ -861,6 +890,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     let concurrency = concurrency as usize;
     let m = &m;
     let rules = &rules;
+    let machine = &machine;
 
     std::thread::scope(|scope| {
         let mut round_txs: Vec<mpsc::Sender<()>> = Vec::with_capacity(concurrency);
@@ -877,7 +907,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
                     worker_tc,
                     m,
                     rules,
-                    machine_id,
+                    machine,
                     capture_backtraces,
                     round_rx,
                     event_tx,
@@ -886,7 +916,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
         }
 
         let mut round = 0u64;
-        while let Some(group) = machine_next_group(&tc, machine_id) {
+        while let Some(group) = machine_next_group(&tc, machine) {
             hegel_internal_assert!(
                 group < group_names.len(),
                 "state_machine_next_group returned unknown group id {group}"

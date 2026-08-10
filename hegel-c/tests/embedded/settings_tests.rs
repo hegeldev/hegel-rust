@@ -1,6 +1,6 @@
 use super::*;
-
-static CI_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use alloc::format;
+use alloc::string::ToString;
 
 #[test]
 fn default_is_new() {
@@ -33,18 +33,8 @@ fn suppress_health_check_replaces() {
 }
 
 #[test]
-fn new_disables_database_in_ci() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let key = "TEAMCITY_VERSION";
-    let had_key = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, "1");
-    }
-    let settings = Settings::new();
-    match had_key {
-        Some(v) => unsafe { std::env::set_var(key, v) },
-        None => unsafe { std::env::remove_var(key) },
-    }
+fn settings_in_ci_disable_the_database_and_derandomize() {
+    let settings = Settings::for_ci(true);
     assert!(matches!(settings.database, Database::Disabled));
     assert!(settings.derandomize);
 }
@@ -54,6 +44,37 @@ fn nondeterministic_defaults_off_and_is_settable() {
     let settings = Settings::new();
     assert!(!settings.nondeterministic);
     assert!(settings.nondeterministic(true).nondeterministic);
+}
+
+#[test]
+fn settings_outside_ci_leave_the_database_unset_and_randomized() {
+    let settings = Settings::for_ci(false);
+    assert!(matches!(settings.database, Database::Unset));
+    assert!(!settings.derandomize);
+}
+
+#[test]
+fn is_in_ci_from_is_false_when_no_variable_is_set() {
+    assert!(!is_in_ci_from(|_| None));
+}
+
+#[test]
+fn is_in_ci_from_detects_presence_variables_even_when_empty() {
+    assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
+    assert!(is_in_ci_from(|key| (key == "GITLAB_CI").then(String::new)));
+}
+
+#[test]
+fn is_in_ci_from_requires_the_expected_value_for_value_variables() {
+    assert!(is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "true".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "false".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "GITHUB_ACTIONS").then(String::new)
+    ));
 }
 
 #[test]

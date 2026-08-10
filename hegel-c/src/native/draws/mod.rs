@@ -9,7 +9,12 @@ use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
-use std::sync::Arc;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 pub use text::TextAlphabet;
 
@@ -362,7 +367,7 @@ pub(crate) fn many_reject(
     hegel_internal_assert!(state.count > 0);
     state.count -= 1;
     state.rejections += 1;
-    if state.rejections > std::cmp::max(3, 2 * state.count) {
+    if state.rejections > core::cmp::max(3, 2 * state.count) {
         if state.count < state.min_size {
             ntc.conclude(Status::Invalid, None);
             return Err(EngineError::InvalidTestCase);

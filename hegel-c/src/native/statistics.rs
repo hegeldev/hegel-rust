@@ -1,20 +1,20 @@
-use crate::control::hegel_internal_assert;
-use std::f64::consts::PI;
+use crate::control::{InternalError, hegel_internal_assert};
+use core::f64::consts::PI;
 
 /// Student's t CDF for integer `df >= 1`, evaluated at `t`.
 ///
 /// Closed-form finite sum from Abramowitz & Stegun 26.7.7-8. Port of
 /// `hypothesis.internal.statistics.stdtr`.
-pub fn stdtr(df: i32, t: f64) -> f64 {
+pub fn stdtr(df: i32, t: f64) -> Result<f64, InternalError> {
     hegel_internal_assert!(df >= 1, "stdtr requires integer df >= 1, got {df}");
     if t == 0.0 {
-        return 0.5;
+        return Ok(0.5);
     }
     let abs_t = t.abs();
     let z = 1.0 + abs_t * abs_t / df as f64;
     let p = if df % 2 == 1 {
-        let u = abs_t / (df as f64).sqrt();
-        let mut p = u.atan();
+        let u = abs_t / libm::sqrt(df as f64);
+        let mut p = libm::atan(u);
         if df > 1 {
             let mut f = 1.0_f64;
             let mut tz = 1.0_f64;
@@ -36,13 +36,13 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
             f += tz;
             j += 2;
         }
-        f * abs_t / (z * df as f64).sqrt()
+        f * abs_t / libm::sqrt(z * df as f64)
     };
-    if t < 0.0 {
+    Ok(if t < 0.0 {
         0.5 - 0.5 * p
     } else {
         0.5 + 0.5 * p
-    }
+    })
 }
 
 /// Inverse Student's t CDF (quantile) for integer `df >= 1`.
@@ -51,21 +51,21 @@ pub fn stdtr(df: i32, t: f64) -> f64 {
 /// * `df >= 3`: bracketed Newton iteration on [`stdtr`].
 ///
 /// Port of `hypothesis.internal.statistics.stdtrit`.
-pub fn stdtrit(df: i32, p: f64) -> f64 {
+pub fn stdtrit(df: i32, p: f64) -> Result<f64, InternalError> {
     hegel_internal_assert!(df >= 1, "stdtrit requires integer df >= 1, got {df}");
     if p == 0.5 {
-        return 0.0;
+        return Ok(0.0);
     }
     hegel_internal_assert!(p > 0.0 && p < 1.0, "stdtrit requires 0 < p < 1, got {p}");
     if df == 1 {
-        return if p > 0.5 {
-            (PI * (1.0 - p)).cos() / (PI * (1.0 - p)).sin()
+        return Ok(if p > 0.5 {
+            libm::cos(PI * (1.0 - p)) / libm::sin(PI * (1.0 - p))
         } else {
-            -(PI * p).cos() / (PI * p).sin()
-        };
+            -libm::cos(PI * p) / libm::sin(PI * p)
+        });
     }
     if df == 2 {
-        return (2.0 * p - 1.0) / (2.0 * p * (1.0 - p)).sqrt();
+        return Ok((2.0 * p - 1.0) / libm::sqrt(2.0 * p * (1.0 - p)));
     }
 
     let sign = if p > 0.5 { 1.0 } else { -1.0 };
@@ -73,23 +73,24 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
 
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    while stdtr(df, hi) < q {
+    while stdtr(df, hi)? < q {
         hi *= 2.0;
     }
 
-    let log_norm =
-        ln_gamma(0.5 * (df as f64 + 1.0)) - 0.5 * (df as f64 * PI).ln() - ln_gamma(0.5 * df as f64);
+    let log_norm = ln_gamma(0.5 * (df as f64 + 1.0))
+        - 0.5 * libm::log(df as f64 * PI)
+        - ln_gamma(0.5 * df as f64);
     let mut t = 0.5 * (lo + hi);
     let eps = 1e-10;
     for _ in 0..50 {
-        let f_val = stdtr(df, t);
+        let f_val = stdtr(df, t)?;
         if f_val < q {
             lo = t;
         } else {
             hi = t;
         }
-        let log_f = log_norm - 0.5 * (df as f64 + 1.0) * (t * t / df as f64).ln_1p();
-        let f = log_f.exp();
+        let log_f = log_norm - 0.5 * (df as f64 + 1.0) * libm::log1p(t * t / df as f64);
+        let f = libm::exp(log_f);
         let t_newton = t - (f_val - q) / f;
         t = if lo <= t_newton && t_newton <= hi {
             t_newton
@@ -100,7 +101,7 @@ pub fn stdtrit(df: i32, p: f64) -> f64 {
             break;
         }
     }
-    sign * t
+    Ok(sign * t)
 }
 
 /// `ln(Γ(x))` for `x >= 0.5`. Rust stdlib doesn't expose this and the
@@ -129,14 +130,14 @@ fn ln_gamma(x: f64) -> f64 {
         sum += c / (z + i as f64);
     }
     let t = z + 7.5;
-    0.5 * (2.0 * PI).ln() + (z + 0.5) * t.ln() - t + sum.ln()
+    0.5 * libm::log(2.0 * PI) + (z + 0.5) * libm::log(t) - t + libm::log(sum)
 }
 
 /// `Γ(x)`. Same Lanczos series as [`ln_gamma`], exponentiated. Kept
 /// separate so the [`LogStudentTDistribution`] coefficient cache reads
 /// naturally as `Γ((df+1)/2) / (√(df π) · Γ(df/2))`.
 fn gamma(x: f64) -> f64 {
-    ln_gamma(x).exp()
+    libm::exp(ln_gamma(x))
 }
 
 /// Common interface for the primitive distributions composed by
@@ -145,8 +146,8 @@ fn gamma(x: f64) -> f64 {
 /// All concrete implementations in this module are symmetric around zero,
 /// so `inverse_cdf(0.5) == 0`. The piecewise splice relies on that.
 pub trait Distribution {
-    fn cdf(&self, x: f64) -> f64;
-    fn inverse_cdf(&self, u: f64) -> f64;
+    fn cdf(&self, x: f64) -> Result<f64, InternalError>;
+    fn inverse_cdf(&self, u: f64) -> Result<f64, InternalError>;
     fn pdf(&self, x: f64) -> f64;
 }
 
@@ -162,18 +163,18 @@ impl UniformDistribution {
 }
 
 impl Distribution for UniformDistribution {
-    fn cdf(&self, x: f64) -> f64 {
+    fn cdf(&self, x: f64) -> Result<f64, InternalError> {
         if x < -self.half_width {
-            return 0.0;
+            return Ok(0.0);
         }
         if x > self.half_width {
-            return 1.0;
+            return Ok(1.0);
         }
-        (x + self.half_width) / (2.0 * self.half_width)
+        Ok((x + self.half_width) / (2.0 * self.half_width))
     }
 
-    fn inverse_cdf(&self, u: f64) -> f64 {
-        -self.half_width + 2.0 * self.half_width * u
+    fn inverse_cdf(&self, u: f64) -> Result<f64, InternalError> {
+        Ok(-self.half_width + 2.0 * self.half_width * u)
     }
 
     fn pdf(&self, x: f64) -> f64 {
@@ -200,7 +201,7 @@ pub struct LogStudentTDistribution {
 impl LogStudentTDistribution {
     pub fn new(scale_bits: f64, df: i32) -> Self {
         let t_coef =
-            gamma((df as f64 + 1.0) / 2.0) / ((df as f64 * PI).sqrt() * gamma(df as f64 / 2.0));
+            gamma((df as f64 + 1.0) / 2.0) / (libm::sqrt(df as f64 * PI) * gamma(df as f64 / 2.0));
         Self {
             scale_bits,
             df,
@@ -209,24 +210,27 @@ impl LogStudentTDistribution {
     }
 }
 
-const LN_2: f64 = std::f64::consts::LN_2;
+const LN_2: f64 = core::f64::consts::LN_2;
 
 impl Distribution for LogStudentTDistribution {
-    fn cdf(&self, x: f64) -> f64 {
-        let y = (1.0 + x.abs()).log2().copysign(x) / self.scale_bits;
+    fn cdf(&self, x: f64) -> Result<f64, InternalError> {
+        let y = libm::copysign(libm::log2(1.0 + x.abs()), x) / self.scale_bits;
         stdtr(self.df, y)
     }
 
-    fn inverse_cdf(&self, u: f64) -> f64 {
-        let mut y = self.scale_bits * stdtrit(self.df, u);
+    fn inverse_cdf(&self, u: f64) -> Result<f64, InternalError> {
+        let mut y = self.scale_bits * stdtrit(self.df, u)?;
         y = y.clamp(-1023.0, 1023.0);
-        (y.abs() * LN_2).exp_m1().copysign(y)
+        Ok(libm::copysign(libm::expm1(y.abs() * LN_2), y))
     }
 
     fn pdf(&self, x: f64) -> f64 {
-        let y = (1.0 + x.abs()).log2().copysign(x) / self.scale_bits;
-        let f_t =
-            self.t_coef * (1.0 + y * y / self.df as f64).powf(-((self.df as f64 + 1.0) / 2.0));
+        let y = libm::copysign(libm::log2(1.0 + x.abs()), x) / self.scale_bits;
+        let f_t = self.t_coef
+            * libm::pow(
+                1.0 + y * y / self.df as f64,
+                -((self.df as f64 + 1.0) / 2.0),
+            );
         f_t / (self.scale_bits * (1.0 + x.abs()) * LN_2)
     }
 }
@@ -250,11 +254,11 @@ pub struct PiecewiseDistribution<I: Distribution, O: Distribution> {
 }
 
 impl<I: Distribution, O: Distribution> PiecewiseDistribution<I, O> {
-    pub fn new(inner: I, outer: O, switchover: f64) -> Self {
-        let inner_g_neg = inner.cdf(-switchover);
-        let inner_g_pos = inner.cdf(switchover);
-        let outer_g_neg = outer.cdf(-switchover);
-        let outer_g_pos = outer.cdf(switchover);
+    pub fn new(inner: I, outer: O, switchover: f64) -> Result<Self, InternalError> {
+        let inner_g_neg = inner.cdf(-switchover)?;
+        let inner_g_pos = inner.cdf(switchover)?;
+        let outer_g_neg = outer.cdf(-switchover)?;
+        let outer_g_pos = outer.cdf(switchover)?;
         let outer_outer_mass = 1.0 - (outer_g_pos - outer_g_neg);
         let inner_inner_mass = inner_g_pos - inner_g_neg;
         let inner_pdf = inner.pdf(switchover);
@@ -267,7 +271,7 @@ impl<I: Distribution, O: Distribution> PiecewiseDistribution<I, O> {
         let beta = alpha * outer_pdf / inner_pdf;
         let inner_mass = beta * inner_inner_mass;
         let left_mass = alpha * outer_g_neg;
-        Self {
+        Ok(Self {
             inner,
             outer,
             switchover,
@@ -277,22 +281,24 @@ impl<I: Distribution, O: Distribution> PiecewiseDistribution<I, O> {
             outer_g_pos,
             inner_mass,
             left_mass,
-        }
+        })
     }
 }
 
 impl<I: Distribution, O: Distribution> Distribution for PiecewiseDistribution<I, O> {
-    fn cdf(&self, x: f64) -> f64 {
+    fn cdf(&self, x: f64) -> Result<f64, InternalError> {
         if x <= -self.switchover {
-            self.alpha * self.outer.cdf(x)
+            Ok(self.alpha * self.outer.cdf(x)?)
         } else if x < self.switchover {
-            self.left_mass + self.beta * (self.inner.cdf(x) - self.inner_g_neg)
+            Ok(self.left_mass + self.beta * (self.inner.cdf(x)? - self.inner_g_neg))
         } else {
-            self.left_mass + self.inner_mass + self.alpha * (self.outer.cdf(x) - self.outer_g_pos)
+            Ok(self.left_mass
+                + self.inner_mass
+                + self.alpha * (self.outer.cdf(x)? - self.outer_g_pos))
         }
     }
 
-    fn inverse_cdf(&self, u: f64) -> f64 {
+    fn inverse_cdf(&self, u: f64) -> Result<f64, InternalError> {
         if u <= self.left_mass {
             self.outer.inverse_cdf(u / self.alpha)
         } else if u < self.left_mass + self.inner_mass {

@@ -2,6 +2,9 @@ use super::*;
 use crate::backend::TestCaseResult;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Database, Settings};
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn quiet_settings(test_cases: u64) -> Settings {
@@ -21,6 +24,31 @@ fn run_native_invokes_callback_and_returns_passing_result() {
     assert!(result.failures.is_empty());
     assert!(result.failures.is_empty());
     assert!(calls.load(Ordering::SeqCst) >= 1);
+}
+
+/// A driver that never calls `mark_complete` violates the run contract;
+/// the run reports a usage error instead of panicking.
+#[test]
+fn run_native_reports_a_usage_error_when_mark_complete_is_skipped() {
+    let err = run_native(&quiet_settings(5), None, |ds| {
+        ds.generate_boolean(0.5, None).unwrap();
+    })
+    .unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
+    let msg = err.to_string();
+    assert!(msg.contains("never marked complete"), "{msg}");
+}
+
+/// The same contract violation during a `SingleTestCase` run surfaces
+/// through `run_single_case`'s own outcome read.
+#[test]
+fn run_native_single_test_case_reports_a_usage_error_when_unconcluded() {
+    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
+    let err = run_native(&settings, None, |ds| {
+        ds.generate_boolean(0.5, None).unwrap();
+    })
+    .unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
 }
 
 /// Reproduces hegel-go report #2: persists a failing example on the first
@@ -131,7 +159,7 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
             hits += 1;
         }
     }
-    eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
+    std::eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
     assert!(
         hits >= 25,
         "shrinker reached the boundary only {}/50 times; shrunk values: {:?}",

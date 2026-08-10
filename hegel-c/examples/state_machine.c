@@ -59,7 +59,7 @@ int main(void) {
         HEGEL_CHECK(hegel_next_test_case, ctx, run, &tc);
         if (tc == NULL) break;
 
-        int64_t machine;
+        hegel_state_machine_t *machine;
         int64_t concurrency;
         if (hegel_new_state_machine(ctx, tc,
                                     RULES, RULE_GROUPS, NUM_RULES,
@@ -100,6 +100,10 @@ int main(void) {
              * counter never goes negative. */
             if (counter < 0) { bad = true; break; }
         }
+
+        /* The state-machine handle is caller-owned and freed independently
+         * of the test case. */
+        HEGEL_CHECK(hegel_state_machine_free, ctx, machine);
 
         if (bad) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING,

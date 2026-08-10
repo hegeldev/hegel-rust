@@ -1,6 +1,10 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
+use crate::native::core::{ManyState, NativeStateMachine, NativeVariables};
 use crate::native::draws::special::{Date, DateTime, Time};
 use crate::native::draws::{FloatSpec, StringSpec};
 
@@ -24,20 +28,31 @@ pub enum DataSourceError {
     /// the message exposed via `hegel_context_last_error`. Carries a
     /// human-readable diagnostic.
     InvalidArgument(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected during a draw. libhegel maps it to `HEGEL_E_INTERNAL` with
+    /// the bug-report diagnostic exposed via `hegel_context_last_error`.
+    Internal(crate::control::InternalError),
 }
 
-impl std::fmt::Display for DataSourceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl From<crate::control::InternalError> for DataSourceError {
+    fn from(e: crate::control::InternalError) -> Self {
+        DataSourceError::Internal(e)
+    }
+}
+
+impl core::fmt::Display for DataSourceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             DataSourceError::StopTest => {
                 write!(f, "Backend ran out of data for this test case (StopTest)")
             }
             DataSourceError::Assume => write!(f, "Backend rejected the current draw (Assume)"),
             DataSourceError::InvalidArgument(msg) => write!(f, "{}", msg),
+            DataSourceError::Internal(e) => write!(f, "{e}"),
         }
     }
 }
-impl std::error::Error for DataSourceError {}
+impl core::error::Error for DataSourceError {}
 
 /// Data source for test case generation.
 ///
@@ -112,16 +127,24 @@ pub trait DataSource: Send + Sync {
     /// family-wide.
     fn clone_stream(&self) -> Result<Box<dyn DataSource + Send + Sync>, DataSourceError>;
 
-    /// Create a new collection. Returns an opaque handle.
-    fn new_collection(&self, min_size: u64, max_size: Option<u64>) -> Result<i64, DataSourceError>;
+    /// Create the sizing state for a new engine-managed collection. The
+    /// caller owns the returned [`ManyState`] and passes it back to
+    /// [`Self::collection_more`] / [`Self::collection_reject`]; any stream
+    /// of the same family may drive it.
+    fn new_collection(
+        &self,
+        min_size: u64,
+        max_size: Option<u64>,
+    ) -> Result<ManyState, DataSourceError>;
 
-    /// Ask whether the collection should produce another element.
-    fn collection_more(&self, collection_id: i64) -> Result<bool, DataSourceError>;
+    /// Ask whether the collection should produce another element, drawing
+    /// the continue/stop decision from this stream.
+    fn collection_more(&self, state: &mut ManyState) -> Result<bool, DataSourceError>;
 
     /// Reject the last element drawn from a collection.
     fn collection_reject(
         &self,
-        collection_id: i64,
+        state: &mut ManyState,
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
 
@@ -133,8 +156,12 @@ pub trait DataSource: Send + Sync {
     /// concurrency level in
     /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
     /// (concurrency bugs need concurrency); `min == max` fixes the level
-    /// without consuming entropy. Returns the opaque state-machine id and
-    /// the drawn level. Errors with `InvalidArgument` if `rule_names` is
+    /// without consuming entropy. The caller owns the returned
+    /// [`NativeStateMachine`] and passes it back to
+    /// [`Self::state_machine_next_group`] /
+    /// [`Self::state_machine_next_rule`] /
+    /// [`Self::state_machine_rule_rejected`]; any stream of the same family
+    /// may drive it. Errors with `InvalidArgument` if `rule_names` is
     /// empty, `rule_groups` is not parallel to `rule_names`,
     /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
     fn new_state_machine(
@@ -144,28 +171,40 @@ pub trait DataSource: Send + Sync {
         invariant_names: Vec<String>,
         min_concurrency: i64,
         max_concurrency: i64,
-    ) -> Result<(i64, i64), DataSourceError>;
+    ) -> Result<NativeStateMachine, DataSourceError>;
 
-    /// Start the machine's next round, drawing which concurrency group is
-    /// current for it. Returns that group's id (a value of `rule_groups`),
-    /// or `None` once the test case has run enough rounds. Must be called
-    /// (from the root stream) at every join point, including before the
-    /// first `state_machine_next_rule` call.
+    /// Start the machine's next round, drawing the stop decision and which
+    /// concurrency group is current for it from this stream. Returns that
+    /// group's id (a value of `rule_groups`), or `None` once the test case
+    /// has run enough rounds. Must be called (from the root stream) at
+    /// every join point, including before the first
+    /// [`Self::state_machine_next_rule`] call.
     fn state_machine_next_group(
         &self,
-        state_machine_id: i64,
+        machine: &mut NativeStateMachine,
     ) -> Result<Option<i64>, DataSourceError>;
 
     /// Draw the index of the next rule for `worker_index` to run — always a
     /// rule belonging to the current group, in `[0, num_rules)` — or `None`
-    /// once the worker's round budget is exhausted and it should wait for
-    /// the next join point. Consults only per-worker and per-stream state,
-    /// so draws on one worker never affect draws on another.
+    /// once the worker's round is over and it should wait for the next join
+    /// point. Consults only per-worker and per-stream state, so draws on
+    /// one worker never affect draws on another.
     fn state_machine_next_rule(
         &self,
-        state_machine_id: i64,
+        machine: &mut NativeStateMachine,
         worker_index: i64,
     ) -> Result<Option<i64>, DataSourceError>;
+
+    /// Report that the rule most recently returned by
+    /// [`Self::state_machine_next_rule`] to `worker_index` was rejected —
+    /// an assumption failed before it completed — so it does not count
+    /// toward the test case's budget. Errors with `InvalidArgument` if the
+    /// worker has no outstanding rule.
+    fn state_machine_rule_rejected(
+        &self,
+        machine: &mut NativeStateMachine,
+        worker_index: i64,
+    ) -> Result<(), DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.
     ///
@@ -174,15 +213,21 @@ pub trait DataSource: Send + Sync {
     /// consumed.
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
 
-    /// Create a new variable pool. Returns an opaque pool id.
-    fn new_pool(&self) -> Result<i64, DataSourceError>;
+    /// Create a new variable pool. The caller owns the returned
+    /// [`NativeVariables`] and passes it back to [`Self::pool_add`] /
+    /// [`Self::pool_generate`]; any stream of the same family may drive it.
+    fn new_pool(&self) -> Result<NativeVariables, DataSourceError>;
 
     /// Register a new variable in the pool. Returns the variable id.
-    fn pool_add(&self, pool_id: i64) -> Result<i64, DataSourceError>;
+    fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError>;
 
-    /// Draw a variable id from the pool.
-    /// If `consume` is true, the variable is removed from the pool.
-    fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, DataSourceError>;
+    /// Draw a variable id from the pool, with the choice drawn from this
+    /// stream. If `consume` is true, the variable is removed from the pool.
+    fn pool_generate(
+        &self,
+        pool: &mut NativeVariables,
+        consume: bool,
+    ) -> Result<i64, DataSourceError>;
 
     /// Record a targeting observation for the current test case.
     ///
@@ -243,7 +288,7 @@ pub enum TestCaseResult {
 /// These are returned as `Err` from the engine's exploration and surface at
 /// the API boundary — the panic API panics with the message; libhegel reports
 /// it through its error channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
     /// LargeInitialTestCase).
@@ -252,19 +297,38 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// The client misused Hegel at run scope — violated the driving
+    /// contract (e.g. never reported a test case's outcome before the run
+    /// resumed) or launched the process with an invalid configuration. Not
+    /// a bug in Hegel: the diagnostic tells the client what to fix.
+    UsageError(String),
+    /// A violated internal invariant of Hegel itself (a bug in Hegel)
+    /// detected while the engine explored — generation, mutation, or
+    /// shrinking. The diagnostic carries the bug-report framing.
+    Internal(crate::control::InternalError),
 }
 
-impl std::fmt::Display for RunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl From<crate::control::InternalError> for RunError {
+    fn from(e: crate::control::InternalError) -> Self {
+        RunError::Internal(e)
+    }
+}
+
+impl core::fmt::Display for RunError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            RunError::HealthCheck(msg) | RunError::Flaky(msg) | RunError::NonDeterministic(msg) => {
+            RunError::HealthCheck(msg)
+            | RunError::Flaky(msg)
+            | RunError::NonDeterministic(msg)
+            | RunError::UsageError(msg) => {
                 write!(f, "{}", msg)
             }
+            RunError::Internal(e) => write!(f, "{e}"),
         }
     }
 }
 
-impl std::error::Error for RunError {}
+impl core::error::Error for RunError {}
 
 /// Result of a full test run: the run's outcome once generation and
 /// shrinking are done.

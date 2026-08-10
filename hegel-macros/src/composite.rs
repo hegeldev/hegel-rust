@@ -1,23 +1,42 @@
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::punctuated::Punctuated;
-use syn::token::Comma;
-use syn::{FnArg, ItemFn, ReturnType, parse_quote, parse2};
+use quote::{ToTokens, format_ident, quote};
+use syn::{FnArg, ItemFn, Pat, ReturnType, Type, parse_quote};
 
-pub fn expand_composite(mut f: ItemFn) -> TokenStream {
+use crate::utils::snake_to_pascal;
+
+pub fn expand_composite(f: ItemFn) -> TokenStream {
     let input_parameters: Vec<FnArg> = f.sig.inputs.iter().cloned().collect();
 
     let Some((FnArg::Typed(tc_arg), passthrough)) = input_parameters.split_first() else {
         return syn::Error::new_spanned(
             &f.sig,
-            "A #[composite] generator must define a first parameter of type TestCase. When \
-            drawing from a #[composite] generator with tc.draw(my_composite_gen), `tc` will \
-            be automatically passed to my_composite_gen as the first argument.",
+            "A #[composite] generator must define a first parameter of type &TestCase. When \
+            drawing from a #[composite] generator with tc.draw(my_composite_gen), the test \
+            case will be automatically passed to my_composite_gen as the first argument.",
         )
         .to_compile_error();
     };
-    let tc_pattern = &tc_arg.pat;
-    let tc_type = &tc_arg.ty;
+
+    let tc_inner_type = match tc_arg.ty.as_ref() {
+        Type::Reference(reference) if reference.mutability.is_none() => reference.elem.clone(),
+        Type::Reference(reference) => {
+            return syn::Error::new_spanned(
+                reference,
+                "A #[composite] generator borrows its TestCase through a shared reference: \
+                change `&mut TestCase` to `&TestCase`. All TestCase methods take `&self`.",
+            )
+            .to_compile_error();
+        }
+        _ => {
+            return syn::Error::new_spanned(
+                &tc_arg.ty,
+                "#[composite] generators receive the test case by reference: change \
+                `tc: TestCase` to `tc: &TestCase`. (Earlier versions took the TestCase by \
+                value; the body of the generator rarely needs any other change.)",
+            )
+            .to_compile_error();
+        }
+    };
 
     let ReturnType::Type(_, return_type) = &f.sig.output else {
         return syn::Error::new_spanned(
@@ -27,31 +46,118 @@ pub fn expand_composite(mut f: ItemFn) -> TokenStream {
         .to_compile_error();
     };
 
-    let composed_generator_type = quote! {
-        -> ::hegel::generators::ComposedGenerator<#return_type, impl Fn(::hegel::TestCase) -> #return_type>
+    let mut field_idents = Vec::new();
+    let mut field_types = Vec::new();
+    for arg in passthrough {
+        let ident = match arg {
+            FnArg::Typed(typed) => match typed.pat.as_ref() {
+                Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => {
+                    field_types.push(typed.ty.as_ref());
+                    pat.ident.clone()
+                }
+                _ => {
+                    return syn::Error::new_spanned(
+                        &typed.pat,
+                        "parameters of a #[composite] generator (after the TestCase) must be \
+                        plain identifiers, so they can be stored on the generated generator \
+                        struct.",
+                    )
+                    .to_compile_error();
+                }
+            },
+            FnArg::Receiver(_) => {
+                unreachable!("syn only parses a receiver as the first parameter")
+            }
+        };
+        field_idents.push(ident);
+    }
+
+    let fn_name = &f.sig.ident;
+    let pascal_name = snake_to_pascal(fn_name.to_string().trim_start_matches("r#"));
+    let struct_name = format_ident!("{pascal_name}CompositeGenerator", span = fn_name.span());
+    let struct_doc = format!("Generator returned by [`{fn_name}()`].");
+
+    let generics = &f.sig.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let lifetimes: Vec<_> = generics.lifetimes().map(|l| &l.lifetime).collect();
+    let type_params: Vec<_> = generics.type_params().map(|t| &t.ident).collect();
+    let has_marker = !lifetimes.is_empty() || !type_params.is_empty();
+    let marker_field = has_marker.then(|| {
+        quote! {
+            __hegel_phantom: ::core::marker::PhantomData<(#(&#lifetimes (),)* fn() -> (#(#type_params,)*))>,
+        }
+    });
+    let marker_init = has_marker.then(|| quote! { __hegel_phantom: ::core::marker::PhantomData, });
+
+    let user_predicates: Vec<_> = generics
+        .where_clause
+        .as_ref()
+        .map(|w| w.predicates.iter().collect())
+        .unwrap_or_default();
+    let clone_bounds: Vec<_> = field_types
+        .iter()
+        .map(|ty| quote! { #ty: ::core::clone::Clone })
+        .collect();
+    let generator_where = if clone_bounds.is_empty() && user_predicates.is_empty() {
+        quote! {}
+    } else {
+        quote! { where #(#clone_bounds,)* #(#user_predicates,)* }
     };
 
-    let mut signature = f.sig;
-    signature.output = parse2(composed_generator_type).unwrap();
-    signature.inputs = passthrough
-        .iter()
-        .cloned()
-        .collect::<Punctuated<FnArg, Comma>>();
-
-    f.block.stmts.insert(
+    let label_source = f.block.to_token_stream().to_string();
+    let mut body_block = *f.block;
+    body_block.stmts.insert(
         0,
         parse_quote! {
-            ::hegel::__assert_is_test_case::< #tc_type >();
+            ::hegel::__assert_is_test_case::< #tc_inner_type >();
         },
     );
 
-    let body = &f.block;
     let attributes = &f.attrs;
     let visibility = &f.vis;
 
     quote! {
+        #[doc = #struct_doc]
+        #visibility struct #struct_name #generics #where_clause {
+            #(#field_idents: #field_types,)*
+            #marker_field
+        }
+
         #(#attributes)*
-        #visibility #signature
-        { ::hegel::compose!(|#tc_pattern| #body) }
+        #visibility fn #fn_name #generics (#(#field_idents: #field_types),*) -> #struct_name #ty_generics #where_clause {
+            #struct_name {
+                #(#field_idents,)*
+                #marker_init
+            }
+        }
+
+        impl #impl_generics #struct_name #ty_generics #where_clause {
+            fn __hegel_body(#tc_arg, #(#passthrough),*) -> #return_type #body_block
+        }
+
+        impl #impl_generics ::core::clone::Clone for #struct_name #ty_generics #generator_where {
+            fn clone(&self) -> Self {
+                Self {
+                    #(#field_idents: ::core::clone::Clone::clone(&self.#field_idents),)*
+                    #marker_init
+                }
+            }
+        }
+
+        impl #impl_generics ::hegel::generators::Generator<#return_type> for #struct_name #ty_generics #generator_where {
+            fn do_draw(&self, tc: &::hegel::TestCase) -> #return_type {
+                const __HEGEL_COMPOSITE_LABEL: u64 =
+                    ::hegel::generators::fnv1a_hash(#label_source.as_bytes());
+                tc.start_span(__HEGEL_COMPOSITE_LABEL);
+                let __hegel_result =
+                    Self::__hegel_body(tc, #(::core::clone::Clone::clone(&self.#field_idents)),*);
+                tc.stop_span(false);
+                __hegel_result
+            }
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/composite_tests.rs"]
+mod tests;

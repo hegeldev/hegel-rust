@@ -124,6 +124,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
@@ -142,17 +143,21 @@ pub struct Settings {
 impl Settings {
     /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        let in_ci = is_in_ci();
+        Self::for_ci(is_in_ci())
+    }
+
+    fn for_ci(in_ci: bool) -> Self {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             seed: None,
             derandomize: in_ci,
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
             phases: vec![
@@ -188,6 +193,15 @@ impl Settings {
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set the target number of steps run per stateful test case (default:
+    /// 50). Each stateful case runs at least one step and at most this many.
+    /// Has no effect on non-stateful tests. `n` must be at least 1; a smaller
+    /// value makes the run fail with a usage error.
+    pub fn stateful_step_count(mut self, n: i64) -> Self {
+        self.stateful_step_count = n;
         self
     }
 
@@ -334,6 +348,10 @@ where
 }
 
 fn is_in_ci() -> bool {
+    is_in_ci_from(|key| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned()))
+}
+
+fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
@@ -349,8 +367,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+        None => env(key).is_some(),
+        Some(expected) => env(key).as_deref() == Some(expected),
     })
 }
 

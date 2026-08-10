@@ -125,7 +125,7 @@ fn test_flat_map_drawn_on_a_clone_shrinks_through_the_binding() {
 fn test_clone_inside_compose_shrinks_each_component() {
     let result = minimal(
         hegel::compose!(|tc| {
-            let a = small_int(&tc);
+            let a = small_int(tc);
             let b = small_int(&tc.clone());
             (a, b)
         }),

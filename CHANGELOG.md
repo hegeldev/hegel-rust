@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.29.4 - 2026-08-10
+
+This patch improves random generation for tests with repeated structure (recursive generators, collections, state machines). The engine proposes new test cases by splicing the choices of one span over another with the same label; a spliced sequence that diverged from its donor's path was previously discarded, and is now completed with fresh random draws instead, so every such proposal becomes a real test case seeded with the mutation.
+
+## 0.29.3 - 2026-08-07
+
+This release updates the `hegeltest-c` dependency to 0.32.1.
+
+## 0.29.2 - 2026-08-07
+
+This patch improves rule generation for stateful tests. Rules that reject via `assume()` no longer cause test cases to run fewer steps than they should.
+
+## 0.29.1 - 2026-08-07
+
+This patch updates the native engine as part of making libhegel safe to unload and portable beyond std platforms. Two of the engine changes are visible from hegel-rust:
+
+- Bugs in hegel itself now surface as run-level errors carrying a bug-report diagnostic instead of panics raised inside the engine. A panic that escapes that reporting — which would indicate a further bug in hegel — now aborts the process at the engine boundary instead of being converted into a run-level error.
+- Engine diagnostics are written directly to the stderr file descriptor, so the Rust test harness's output capture no longer intercepts them.
+
+## 0.29.0 - 2026-08-06
+
+This release changes `#[hegel::composite]` generators and `hegel::compose!` closures to receive the `TestCase` by reference instead of by value:
+
+```rust
+# before
+#[hegel::composite]
+fn sorted_vec(tc: TestCase, min_len: usize) -> Vec<i32> { ... }
+
+# after
+#[hegel::composite]
+fn sorted_vec(tc: &TestCase, min_len: usize) -> Vec<i32> { ... }
+```
+
+Since all `TestCase` methods take `&self`, the body of a composite rarely needs any change beyond the signature; code that moved the owned `TestCase` elsewhere (for example into a spawned thread) should call `tc.clone()` to get an independent handle, which was already the supported way to drive a test case from another thread.
+
+The motivation is that `#[composite]` now expands to a named generator struct (`sorted_vec` above gets a `SortedVecCompositeGenerator`) instead of a function returning an opaque `impl`-typed generator. This makes composite generators much more capable:
+
+- A composite can now recursively draw from itself, directly or through combinators like `one_of!`, which previously failed to compile. Recursive generators for tree-shaped data can now be written as ordinary recursive composites.
+- The generator returned by a composite has a nameable type, so it can be stored in structs, returned from functions, and passed as an argument to other composites.
+- Composite generators implement `Clone`.
+
+Arguments to a composite (the parameters after the `TestCase`) are now stored on the generated struct and cloned into each draw, so they must implement `Clone`. Most argument types already do; to pass a non-`Clone` generator as an argument, box it first with `.boxed()`.
+
+This release also fixes a bug where an explicit `return` inside a composite or `compose!` body left the generator's span open, unbalancing the span tree the shrinker uses and degrading shrinking for such generators.
+
+## 0.28.8 - 2026-08-04
+
+This patch adds a `stateful_step_count` setting controlling how many steps a stateful (`#[state_machine]`) test case runs. It defaults to 50, and each case now runs at least one step and at most `stateful_step_count`.
+
+```rust
+Settings::new().stateful_step_count(20)
+```
+
+## 0.28.7 - 2026-08-04
+
+This release updates the `hegeltest-c` dependency to 0.30.4.
+
 ## 0.28.6 - 2026-07-29
 
 This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.

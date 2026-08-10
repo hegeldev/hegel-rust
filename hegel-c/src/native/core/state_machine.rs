@@ -1,5 +1,8 @@
-use std::cmp::min;
-use std::collections::HashSet;
+use crate::native::HashSet;
+use alloc::format;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use super::choices::EngineError;
 use super::state::NativeTestCase;
@@ -8,21 +11,27 @@ use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
 
-/// Upper bound on the round cap drawn by [`NativeStateMachine::next_group`]
-/// at concurrency 1, where each round hands out exactly one rule — so a
-/// sequential test gets roughly the same total number of steps as the
-/// pre-concurrency engine's per-test-case step cap.
-const MAX_SEQUENTIAL_ROUND_CAP: i64 = 50;
+/// Probability that the per-round stop decision in
+/// [`NativeStateMachine::next_group`] halts a stateful test case, when the
+/// engine is free to choose (2^-16).
+const P_STOP: f64 = 1.0 / 65536.0;
 
-/// Upper bound on the round cap drawn by [`NativeStateMachine::next_group`]
-/// at concurrency > 1. Together with [`MAX_ROUND_STEP_CAP`] this keeps each
-/// worker's total step budget per test case comparable to a
-/// sequential test's ([`MAX_SEQUENTIAL_ROUND_CAP`]).
-const MAX_CONCURRENT_ROUND_CAP: i64 = 10;
+/// Multiplier bounding attempts against successful work: on rounds
+/// (relative to `stateful_step_count`) so a sequential machine whose rules
+/// mostly fail their assumptions cannot retry indefinitely, and on each
+/// worker's per-round rule attempts (relative to [`MAX_ROUND_RULES`]) so a
+/// worker whose rules keep rejecting cannot stall its round forever.
+const ATTEMPT_MULTIPLIER: i64 = 10;
 
-/// Upper bound on the per-worker step cap drawn each round by
-/// [`NativeStateMachine::next_rule`] at concurrency > 1.
-const MAX_ROUND_STEP_CAP: i64 = 5;
+/// Minimum round-attempt budget for a machine that has not completed a
+/// single rule yet, so machines with very selective assumptions still get a
+/// real chance to make progress under a small step count.
+const MIN_ATTEMPTS_WITHOUT_SUCCESS: i64 = 1000;
+
+/// Upper bound on the rules each worker runs per round at concurrency > 1.
+/// The count is uniform in `[1, MAX_ROUND_RULES]`, decided one boolean draw
+/// at a time (see [`NativeStateMachine::next_rule`]).
+const MAX_ROUND_RULES: i64 = 5;
 
 /// Probability that [`draw_concurrency`] draws `max_value` outright rather
 /// than a uniform level in `[min_value, max_value]`.
@@ -56,14 +65,6 @@ fn draw_concurrency(
 fn draw_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
     let i = ntc.draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?;
     Ok(i.to_i128().unwrap() as usize)
-}
-
-/// Draw a cap in `[1, max_cap]`: an integer in `[1, i64::MAX]` truncated to
-/// `max_cap` (so usually exactly `max_cap`, but shrinkable all the way down
-/// to 1).
-fn draw_cap(ntc: &mut NativeTestCase, max_cap: i64) -> Result<i64, EngineError> {
-    let raw = draws::generate_integer(ntc, &BigInt::from(1), &BigInt::from(i64::MAX))?;
-    Ok(min(raw.to_i128().unwrap() as i64, max_cap))
 }
 
 /// Per-worker feature flags over rule indices, deciding which rules are
@@ -129,24 +130,34 @@ impl FeatureFlags {
     }
 }
 
-/// Per-worker state, fully constructed at machine creation and
-/// refreshed in place at every join point — so `next_rule` only ever reads
-/// state that already exists.
+/// Per-worker state, fully constructed at machine creation and refreshed in
+/// place at every join point — so `next_rule` only ever reads state that
+/// already exists.
 ///
-/// The flags' disabling probability and the per-round step caps are drawn
-/// from the *creating* handle's stream (at machine creation and in
-/// `next_group` respectively), both quiescent moments, so draws on one
-/// worker never affect draws on another; the per-rule enable decisions
-/// inside [`FeatureFlags`] stay lazy and are drawn from the querying
-/// worker's own stream.
+/// The flags' disabling probability is drawn from the *creating* handle's
+/// stream (a quiescent moment), so draws on one worker never affect draws
+/// on another; the per-rule enable decisions inside [`FeatureFlags`] and
+/// the per-round continue/stop decisions stay lazy and are drawn from the
+/// querying worker's own stream.
 struct WorkerState {
     /// Swarm feature flags, persisting for the whole test case.
     flags: FeatureFlags,
-    /// This round's step cap, written by `next_group` at every join point
-    /// (always 1 at concurrency 1; drawn at concurrency > 1).
-    step_cap: i64,
-    /// Rules handed to this worker so far this round; reset by `next_group`.
+    /// Rules handed to this worker so far this round, including rejected
+    /// ones; reset by `next_group`.
     steps_drawn: i64,
+    /// Handed-out rules reported back as rejected this round via
+    /// [`NativeStateMachine::rule_rejected`]; reset by `next_group`.
+    steps_rejected: i64,
+    /// Whether this worker has a handed-out rule that has been neither
+    /// implicitly completed (by the worker's next `next_rule` call) nor
+    /// reported as rejected. Cleared at every join point.
+    rule_outstanding: bool,
+    /// Whether this worker's most recent hand-out was rejected, so the next
+    /// `next_rule` call is a retry: it skips the continue/stop decision
+    /// (recording a forced continue) rather than re-drawing it, keeping
+    /// exactly one random stop decision per completed rule. Cleared on the
+    /// next hand-out and at every join point.
+    retry_pending: bool,
 }
 
 /// Engine-side driver for a single stateful (rule-based) test case,
@@ -154,14 +165,15 @@ struct WorkerState {
 ///
 /// The test body registers a fixed set of rules — each belonging to exactly
 /// one concurrency group — plus the invariants and the concurrency bounds
-/// (the level itself is drawn at creation), and drives execution in rounds: the root handle asks [`Self::next_group`]
-/// whether to run another round (and which group is current), then each
-/// worker pulls rules for that round via [`Self::next_rule`] until it
-/// returns `None`. Rules in the same group may run concurrently; rules in
-/// different groups never overlap, because only the current group's rules
-/// are handed out and the group changes only at the join points between
-/// rounds. A sequential machine is the special case of one group and
-/// concurrency 1, where each round hands out exactly one rule.
+/// (the level itself is drawn at creation), and drives execution in rounds:
+/// the root handle asks [`Self::next_group`] whether to run another round
+/// (and which group is current), then each worker pulls rules for that
+/// round via [`Self::next_rule`] until it returns `None`. Rules in the same
+/// group may run concurrently; rules in different groups never overlap,
+/// because only the current group's rules are handed out and the group
+/// changes only at the join points between rounds. A sequential machine is
+/// the special case of one group and concurrency 1, where each round hands
+/// out exactly one rule.
 pub struct NativeStateMachine {
     /// Per group: the global indices of its member rules, in registration
     /// order. Selection draws range over the current group's list only, so
@@ -177,22 +189,25 @@ pub struct NativeStateMachine {
     /// `next_group` call. Meaningful only once `rounds_started > 0`;
     /// `next_rule` rejects calls made before the first round.
     current_group: usize,
-    /// Per-test-case cap on the number of rounds, drawn at machine creation
-    /// from the creating handle's stream. Zero — and never consulted — for
-    /// families marked as unbounded at creation.
-    round_cap: i64,
+    /// Number of rounds started so far, including rejected ones.
     rounds_started: i64,
+    /// Rounds whose rule was reported as rejected via
+    /// [`Self::rule_rejected`]. Only tracked at concurrency 1 — where each
+    /// round is exactly one rule, so a rejected rule is a rejected round —
+    /// to preserve the sequential budget semantics: rejected rules do not
+    /// count toward `stateful_step_count`. At concurrency > 1 every started
+    /// round counts and rejections refund only the worker's within-round
+    /// budget.
+    rounds_rejected: i64,
     workers: Vec<WorkerState>,
 }
 
 impl NativeStateMachine {
     /// Create a machine, fully constructed: the concurrency level (in
     /// `[min_concurrency, max_concurrency]`, weighted toward the maximum —
-    /// see [`draw_concurrency`]), the round cap, and every worker's swarm
-    /// disabling probability are drawn here, from the creating handle's
-    /// stream, so no per-worker state is ever pending. For families marked
-    /// as unbounded (single-test-case runs) no round cap is drawn: rounds
-    /// continue forever.
+    /// see [`draw_concurrency`]) and every worker's swarm disabling
+    /// probability are drawn here, from the creating handle's stream, so no
+    /// per-worker state is ever pending.
     pub fn new(
         ntc: &mut NativeTestCase,
         rule_groups: Vec<i64>,
@@ -220,22 +235,14 @@ impl NativeStateMachine {
         }
 
         let concurrency = draw_concurrency(ntc, min_concurrency, max_concurrency)?;
-        let round_cap = if ntc.family().state_machine_steps_unbounded() {
-            0
-        } else {
-            let max_cap = if concurrency == 1 {
-                MAX_SEQUENTIAL_ROUND_CAP
-            } else {
-                MAX_CONCURRENT_ROUND_CAP
-            };
-            draw_cap(ntc, max_cap)?
-        };
         let workers = (0..concurrency)
             .map(|_| {
                 Ok(WorkerState {
                     flags: FeatureFlags::new(ntc, &groups, rule_groups.len())?,
-                    step_cap: 0,
                     steps_drawn: 0,
+                    steps_rejected: 0,
+                    rule_outstanding: false,
+                    retry_pending: false,
                 })
             })
             .collect::<Result<Vec<WorkerState>, EngineError>>()?;
@@ -244,8 +251,8 @@ impl NativeStateMachine {
             group_ids,
             concurrency,
             current_group: 0,
-            round_cap,
             rounds_started: 0,
+            rounds_rejected: 0,
             workers,
         })
     }
@@ -257,16 +264,44 @@ impl NativeStateMachine {
     }
 
     /// Start the next round: draw whether another round should run at all
-    /// and, if so, which concurrency group is current for it and each
-    /// worker's step budget. Returns the current group's caller-supplied
-    /// id, or `None` once the test case has run enough rounds.
+    /// and, if so, which concurrency group is current for it. Returns the
+    /// current group's caller-supplied id, or `None` once the test case has
+    /// run enough rounds.
+    ///
+    /// Each call first makes a per-round stop decision: a boolean draw with
+    /// probability [`P_STOP`] of halting, recorded in the choice sequence
+    /// so the shrinker can truncate the round sequence at any boundary.
+    /// Every test case runs at least one round and at most
+    /// `stateful_step_count` counted rounds — at concurrency 1 a round
+    /// whose rule was rejected ([`Self::rule_rejected`]) does not count,
+    /// and total rounds including rejected ones are then bounded by
+    /// [`ATTEMPT_MULTIPLIER`] times the step count, or
+    /// [`MIN_ATTEMPTS_WITHOUT_SUCCESS`] while no rule has succeeded.
     ///
     /// Must be called from the root handle at each join point, including
-    /// before the first `next_rule` call. Families marked as unbounded at
-    /// creation (single-test-case runs) never return `None`: rounds
-    /// continue forever.
+    /// before the first `next_rule` call. Families marked as unbounded
+    /// (single-test-case runs) never return `None`: rounds continue
+    /// forever.
     pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
-        if !ntc.family().state_machine_steps_unbounded() && self.rounds_started >= self.round_cap {
+        let counted_rounds = self.rounds_started - self.rounds_rejected;
+        let step_count = ntc.family().stateful_step_count();
+        let attempt_cap = if counted_rounds == 0 {
+            step_count
+                .saturating_mul(ATTEMPT_MULTIPLIER)
+                .max(MIN_ATTEMPTS_WITHOUT_SUCCESS)
+        } else {
+            step_count.saturating_mul(ATTEMPT_MULTIPLIER)
+        };
+        let forced = if ntc.family().state_machine_steps_unbounded() {
+            Some(false)
+        } else if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
+            Some(true)
+        } else if self.rounds_started == 0 {
+            Some(false)
+        } else {
+            None
+        };
+        if ntc.weighted_precise(P_STOP, forced)? {
             return Ok(None);
         }
         let group = if self.groups.len() == 1 {
@@ -275,12 +310,10 @@ impl NativeStateMachine {
             draw_index(ntc, self.groups.len())?
         };
         for worker in &mut self.workers {
-            worker.step_cap = if self.concurrency == 1 {
-                1
-            } else {
-                draw_cap(ntc, MAX_ROUND_STEP_CAP)?
-            };
             worker.steps_drawn = 0;
+            worker.steps_rejected = 0;
+            worker.rule_outstanding = false;
+            worker.retry_pending = false;
         }
         self.current_group = group;
         self.rounds_started += 1;
@@ -288,20 +321,93 @@ impl NativeStateMachine {
     }
 
     /// Draw the index of the next rule for `worker_index` to run this round
-    /// — always a rule belonging to the current group, in
-    /// `[0, num_rules)` — or `None` once the worker's round budget is
-    /// exhausted and it should wait for the next join point.
+    /// — always a rule belonging to the current group, in `[0, num_rules)`
+    /// — or `None` once the worker's round is over and it should wait for
+    /// the next join point.
+    ///
+    /// At concurrency 1 every round is exactly one rule, so a join point
+    /// follows each rule and the per-round stop decision in
+    /// [`Self::next_group`] carries the whole step budget. At higher
+    /// concurrency each worker runs between one and [`MAX_ROUND_RULES`]
+    /// rules per round, distributed uniformly: each call past the first
+    /// makes a continue/stop decision as a boolean draw from the worker's
+    /// own stream (hazard `1/(MAX_ROUND_RULES - completed + 1)`), so the
+    /// shrinker can shorten any worker's round at any boundary. Rules
+    /// reported as rejected ([`Self::rule_rejected`]) do not advance that
+    /// decision, and total hand-outs per worker per round are bounded by
+    /// [`ATTEMPT_MULTIPLIER`] times [`MAX_ROUND_RULES`].
     ///
     /// Consults only per-worker state (plus the machine's current group), so
-    /// draws on one worker never affect draws on another. At concurrency 1
-    /// every round's budget is exactly one rule, so a join point follows
-    /// each rule.
+    /// draws on one worker never affect draws on another.
     pub fn next_rule(
         &mut self,
         ntc: &mut NativeTestCase,
         worker_index: i64,
     ) -> Result<Option<i64>, EngineError> {
-        let worker_idx = usize::try_from(worker_index)
+        let worker_idx = self.checked_worker(worker_index)?;
+        if self.rounds_started == 0 {
+            return Err(EngineError::InvalidArgument(
+                "state machine rule requested before the first next_group call".to_string(),
+            ));
+        }
+
+        if self.concurrency == 1 {
+            if self.workers[worker_idx].steps_drawn >= 1 {
+                return Ok(None);
+            }
+        } else {
+            let worker = &self.workers[worker_idx];
+            let completed = worker.steps_drawn - worker.steps_rejected;
+            let attempt_cap = MAX_ROUND_RULES.saturating_mul(ATTEMPT_MULTIPLIER);
+            let p_stop = if worker.steps_drawn >= attempt_cap || completed >= MAX_ROUND_RULES {
+                1.0
+            } else if worker.retry_pending || completed == 0 {
+                0.0
+            } else {
+                1.0 / (MAX_ROUND_RULES - completed + 1) as f64
+            };
+            if ntc.weighted(p_stop, None)? {
+                return Ok(None);
+            }
+        }
+        let index = self.select_rule(ntc, worker_idx, self.current_group)?;
+        self.workers[worker_idx].steps_drawn += 1;
+        self.workers[worker_idx].rule_outstanding = true;
+        self.workers[worker_idx].retry_pending = false;
+        Ok(Some(index))
+    }
+
+    /// Record that `worker_index`'s most recently handed-out rule was
+    /// rejected before it completed (a violated assumption), so it does not
+    /// count toward the test case's budget: at concurrency 1 the round does
+    /// not count toward `stateful_step_count`, and at concurrency > 1 the
+    /// rule does not advance the worker's per-round continue/stop decision.
+    ///
+    /// Errors with `InvalidArgument` when the worker has no outstanding
+    /// rule: no rule has been handed to it this round, its current rule was
+    /// already rejected, or it has already pulled another rule (implicitly
+    /// completing the previous one).
+    pub fn rule_rejected(&mut self, worker_index: i64) -> Result<(), EngineError> {
+        let worker_idx = self.checked_worker(worker_index)?;
+        let worker = &mut self.workers[worker_idx];
+        if !worker.rule_outstanding {
+            return Err(EngineError::InvalidArgument(
+                "rule_rejected called with no outstanding rule".to_string(),
+            ));
+        }
+        worker.rule_outstanding = false;
+        worker.steps_rejected += 1;
+        worker.retry_pending = true;
+        if self.concurrency == 1 {
+            self.rounds_rejected += 1;
+        }
+        Ok(())
+    }
+
+    /// Validate a caller-supplied worker index against the drawn
+    /// concurrency level.
+    fn checked_worker(&self, worker_index: i64) -> Result<usize, EngineError> {
+        usize::try_from(worker_index)
             .ok()
             .filter(|&w| w < self.workers.len())
             .ok_or_else(|| {
@@ -309,19 +415,7 @@ impl NativeStateMachine {
                     "worker_index must be in [0, {}), got {worker_index}",
                     self.concurrency
                 ))
-            })?;
-        if self.rounds_started == 0 {
-            return Err(EngineError::InvalidArgument(
-                "state machine rule requested before the first next_group call".to_string(),
-            ));
-        }
-
-        if self.workers[worker_idx].steps_drawn >= self.workers[worker_idx].step_cap {
-            return Ok(None);
-        }
-        let index = self.select_rule(ntc, worker_idx, self.current_group)?;
-        self.workers[worker_idx].steps_drawn += 1;
-        Ok(Some(index))
+            })
     }
 
     /// Select the next rule's global index from the current group's member
@@ -341,7 +435,7 @@ impl NativeStateMachine {
         let n = members.len();
         let flags = &mut self.workers[worker_idx].flags;
 
-        let mut known_bad: HashSet<usize> = HashSet::new();
+        let mut known_bad: HashSet<usize> = HashSet::default();
         for _ in 0..3 {
             let k = draw_index(ntc, n)?;
             if !known_bad.contains(&k) {

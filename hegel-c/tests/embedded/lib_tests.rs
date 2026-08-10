@@ -59,7 +59,7 @@ unsafe fn finish(
 
 /// A single handle held by one thread rejects draw primitives from another.
 /// We stand in for "another thread is mid-draw" by holding the handle's own
-/// `local` lock on this thread: `parking_lot::Mutex` is not reentrant, so
+/// `local` lock on this thread: the engine's mutex is not reentrant, so
 /// `try_lock` observes contention identically to a real second thread — but
 /// deterministically, with no race to lose.
 #[test]
@@ -144,6 +144,51 @@ fn completion_is_reported_before_concurrent_use() {
     }
 }
 
+/// A collection used from two threads at once reports
+/// `HEGEL_E_CONCURRENT_USE`. As in
+/// [`concurrent_use_of_one_handle_is_rejected`], "another thread is
+/// mid-operation" is stood in for by holding the collection's own state lock
+/// on this thread — the two test-case handles are distinct clones, so the
+/// contention observed is the collection's, not the test case's.
+#[test]
+fn concurrent_use_of_one_collection_is_rejected() {
+    unsafe {
+        let (ctx, s, run, tc) = start_run_and_first_case();
+
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 0, 3, &mut collection));
+        let mut clone: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_test_case_clone(ctx, tc, &mut clone));
+
+        let held = (&*collection).state.try_lock().unwrap();
+        let mut more = false;
+        assert_eq!(
+            hegel_collection_more(ctx, clone, collection, &mut more),
+            HEGEL_E_CONCURRENT_USE
+        );
+        assert_eq!(
+            hegel_collection_reject(ctx, clone, collection, ptr::null()),
+            HEGEL_E_CONCURRENT_USE
+        );
+        drop(held);
+
+        loop {
+            ok(hegel_collection_more(ctx, clone, collection, &mut more));
+            if !more {
+                break;
+            }
+            let mut value = false;
+            ok(hegel_generate_boolean(
+                ctx, clone, 0.5, false, false, &mut value,
+            ));
+        }
+
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_test_case_free(ctx, clone));
+        finish(ctx, s, run, tc);
+    }
+}
+
 #[test]
 fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
     assert_eq!(size_arg(0), 0);
@@ -156,17 +201,16 @@ fn size_arg_is_lossless_within_usize_and_saturates_beyond() {
     );
 }
 
-/// A panic inside an engine poll must not unwind into the C caller:
-/// `hegel_next_test_case` catches it, finishes the run with a run-level
-/// error carrying the panic message, and later calls see an ordinary
-/// finished run. The engine is deliberately panic-free on any input the
-/// C ABI accepts, so the panicking future is injected directly.
+/// An engine future that suspends without storing a case in the exchange
+/// violates the alternation protocol. `hegel_next_test_case` finishes the
+/// run with a run-level error instead of panicking; the protocol makes this
+/// unreachable for the real engine, so the misbehaving future is injected
+/// directly.
 #[test]
-fn engine_panic_during_poll_becomes_a_run_error() {
-    install_engine_panic_hook();
+fn engine_suspending_without_an_offer_becomes_a_run_error() {
     let ctx = hegel_context_new();
     let exchange = Arc::new(CaseExchange::new());
-    let engine: EngineFuture = Box::pin(async { panic!("engine invariant violated") });
+    let engine: EngineFuture = Box::pin(std::future::pending());
     let run = Box::into_raw(Box::new(HegelRun {
         engine: Some(engine),
         exchange,
@@ -177,7 +221,7 @@ fn engine_panic_during_poll_becomes_a_run_error() {
     unsafe {
         let mut tc: *mut HegelTestCase = ptr::null_mut();
         ok(hegel_next_test_case(ctx, run, &mut tc));
-        assert!(tc.is_null(), "a panicked run offers no test case");
+        assert!(tc.is_null(), "a protocol-violating run offers no test case");
 
         let mut result: *mut HegelRunResult = ptr::null_mut();
         ok(hegel_run_result(ctx, run, &mut result));
@@ -187,11 +231,97 @@ fn engine_panic_during_poll_becomes_a_run_error() {
         let mut message: *const c_char = ptr::null();
         ok(hegel_run_result_error(ctx, result, &mut message));
         let message = CStr::from_ptr(message).to_str().unwrap();
-        assert_eq!(message, "Engine panic: engine invariant violated");
+        assert!(
+            message.contains("suspended without offering a test case"),
+            "{message}"
+        );
+        assert!(message.contains("bug in hegel"), "{message}");
 
+        ok(hegel_run_result_free(ctx, result));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn translate_ds_error_maps_internal_to_hegel_e_internal_with_diagnostic() {
+    let ctx = hegel_context_new();
+    let e = crate::control::InternalError::new(format_args!("draw invariant violated"));
+    let rc = translate_ds_error(ctx, DataSourceError::Internal(e));
+    assert_eq!(rc, HEGEL_E_INTERNAL);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("draw invariant violated"), "{msg}");
+        assert!(msg.contains("bug in hegel"), "{msg}");
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn translate_construct_error_distinguishes_internal_from_invalid_argument() {
+    let ctx = hegel_context_new();
+    let e = crate::control::InternalError::new(format_args!("constructor invariant"));
+    let rc = translate_construct_error(ctx, crate::native::core::EngineError::Internal(e));
+    assert_eq!(rc, HEGEL_E_INTERNAL);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("constructor invariant"), "{msg}");
+    }
+    let rc = translate_construct_error(
+        ctx,
+        crate::native::core::EngineError::InvalidArgument("bad bound".to_string()),
+    );
+    assert_eq!(rc, HEGEL_E_INVALID_ARG);
+    unsafe {
+        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
+            .to_str()
+            .unwrap();
+        assert!(msg.contains("bad bound"), "{msg}");
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// An internal error raised inside the engine's exploration surfaces as a
+/// run-level error through `hegel_run_result_error`, exactly where a caught
+/// panic's message goes.
+#[test]
+fn internal_run_error_surfaces_through_run_result_error() {
+    let ctx = hegel_context_new();
+    let exchange = Arc::new(CaseExchange::new());
+    let engine: EngineFuture = Box::pin(async {
+        Err(crate::backend::RunError::Internal(
+            crate::control::InternalError::new(format_args!("exploration invariant violated")),
+        ))
+    });
+    let run = Box::into_raw(Box::new(HegelRun {
+        engine: Some(engine),
+        exchange,
+        current_family: None,
+        result: None,
+    }));
+
+    unsafe {
         let mut tc: *mut HegelTestCase = ptr::null_mut();
         ok(hegel_next_test_case(ctx, run, &mut tc));
-        assert!(tc.is_null(), "a panicked run stays finished");
+        assert!(tc.is_null(), "an errored run offers no test case");
+
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        ok(hegel_run_result(ctx, run, &mut result));
+        let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
+        ok(hegel_run_result_status(ctx, result, &mut status));
+        assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
+        let mut message: *const c_char = ptr::null();
+        ok(hegel_run_result_error(ctx, result, &mut message));
+        let message = CStr::from_ptr(message).to_str().unwrap();
+        assert!(
+            message.contains("exploration invariant violated"),
+            "{message}"
+        );
+        assert!(message.contains("bug in hegel"), "{message}");
 
         ok(hegel_run_result_free(ctx, result));
         ok(hegel_run_free(ctx, run));

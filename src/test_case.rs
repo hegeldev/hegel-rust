@@ -196,9 +196,9 @@ pub(crate) struct TestCaseLocalData {
 /// run, and such failures may not reproduce or shrink well.
 ///
 /// Variable pools and engine-managed collections are shared across clones
-/// (an id from one clone works on any other). Using one such object from
-/// two threads *at the same time* makes the affected draws depend on
-/// scheduling order, which brings back the same replay caveat.
+/// (one created through any clone works on any other). Using one such
+/// object from two threads *at the same time* makes the affected draws
+/// depend on scheduling order, which brings back the same replay caveat.
 ///
 /// ## Panics inside spawned threads
 ///
@@ -392,10 +392,6 @@ impl TestCase {
             }),
             handle,
         }
-    }
-
-    pub(crate) fn mode(&self) -> Mode {
-        self.global.mode
     }
 
     /// Whether the run was declared nondeterministic
@@ -904,7 +900,7 @@ pub struct Collection<'a> {
     tc: &'a TestCase,
     min_size: usize,
     max_size: Option<usize>,
-    handle: Option<i64>,
+    handle: Option<crate::ffi::CollectionHandle>,
     finished: bool,
 }
 
@@ -920,18 +916,17 @@ impl<'a> Collection<'a> {
         }
     }
 
-    fn ensure_initialized(&mut self) -> i64 {
+    fn ensure_initialized(&mut self) {
         if self.handle.is_none() {
             let result = self.tc.with_ctc(|ctc| {
                 ctc.new_collection(self.min_size as u64, self.max_size.map(|m| m as u64))
             });
-            let id = match result {
-                Ok(id) => id,
+            let handle = match result {
+                Ok(handle) => handle,
                 Err(rc) => raise_for_rc(rc), // nocov
             };
-            self.handle = Some(id);
+            self.handle = Some(handle);
         }
-        self.handle.unwrap()
     }
 
     /// Ask the backend whether to produce another element.
@@ -939,7 +934,8 @@ impl<'a> Collection<'a> {
         if self.finished {
             return false;
         }
-        let handle = self.ensure_initialized();
+        self.ensure_initialized();
+        let handle = self.handle.as_ref().unwrap();
         let result = match self.tc.with_ctc(|ctc| ctc.collection_more(handle)) {
             Ok(b) => b,
             Err(rc) => {
@@ -958,7 +954,8 @@ impl<'a> Collection<'a> {
         if self.finished {
             return;
         }
-        let handle = self.ensure_initialized();
+        self.ensure_initialized();
+        let handle = self.handle.as_ref().unwrap();
         let _ = self.tc.with_ctc(|ctc| ctc.collection_reject(handle, why));
     }
 }
@@ -983,6 +980,7 @@ pub mod labels {
     pub const SAMPLED_FROM: u64 = hegel_label_t::HEGEL_LABEL_SAMPLED_FROM as u64;
     pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
     pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
+    pub const STATEFUL_RULE: u64 = hegel_label_t::HEGEL_LABEL_STATEFUL_RULE as u64;
 }
 
 #[cfg(test)]

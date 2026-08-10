@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::rng::EngineRng;
 
 #[test]
@@ -25,11 +26,10 @@ fn spans_get_mut_returns_none_out_of_bounds() {
 
 #[test]
 fn spans_trivial_handles_simplest_forced_and_oob() {
-    use crate::native::core::choices::{BooleanChoice, ChoiceKind, ChoiceNode, ChoiceValue};
-    let kind = ChoiceKind::Boolean(BooleanChoice);
-    let simplest = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(false), false);
-    let interesting = ChoiceNode::new(kind.clone(), ChoiceValue::Boolean(true), false);
-    let forced_interesting = ChoiceNode::new(kind, ChoiceValue::Boolean(true), true);
+    use crate::native::core::choices::ChoiceNode;
+    let simplest = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false);
+    let interesting = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
+    let forced_interesting = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, true);
 
     let mut spans = Spans::new();
     spans.push(Span {
@@ -42,17 +42,17 @@ fn spans_trivial_handles_simplest_forced_and_oob() {
     });
 
     let nodes = vec![simplest.clone(), simplest.clone()];
-    assert!(spans.trivial(0, &nodes));
+    assert!(spans.trivial(0, &nodes).unwrap());
 
     let nodes = vec![simplest.clone(), interesting.clone()];
-    assert!(!spans.trivial(0, &nodes));
+    assert!(!spans.trivial(0, &nodes).unwrap());
 
     let nodes = vec![simplest, forced_interesting];
-    assert!(spans.trivial(0, &nodes));
+    assert!(spans.trivial(0, &nodes).unwrap());
 
     let other = Spans::new();
     let empty: Vec<ChoiceNode> = Vec::new();
-    assert!(!other.trivial(7, &empty));
+    assert!(!other.trivial(7, &empty).unwrap());
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         4,
         None,
     );
@@ -148,7 +148,7 @@ fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
         .unwrap();
     assert_eq!(tc.nodes.len(), 1);
     assert!(tc.nodes[0].was_forced);
-    assert_eq!(tc.nodes[0].value, ChoiceValue::Integer(BigInt::from(7)));
+    assert_eq!(tc.nodes[0].value(), ChoiceValue::Integer(BigInt::from(7)));
     assert_eq!(tc.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
 }
 
@@ -183,10 +183,14 @@ fn draw_integer_forced_errors_on_an_exhausted_test_case() {
 }
 
 #[test]
-#[should_panic(expected = "outside")]
 fn draw_integer_forced_rejects_out_of_range_values() {
     let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, None);
-    let _ = tc.draw_integer_forced(0i64, 5i64, 6i64);
+    let msg = tc
+        .draw_integer_forced(0i64, 5i64, 6i64)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("outside"), "{msg}");
+    assert!(msg.contains("bug in hegel"), "{msg}");
 }
 
 #[test]
@@ -449,7 +453,8 @@ fn draw_string_notifies_observer() {
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
     let intervals =
-        crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)]);
+        crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)])
+            .unwrap();
     let s = tc.draw_string(intervals.into(), 0, 10).ok().unwrap();
     assert_eq!(s, "abc");
     let recorded = captured.lock().unwrap().take();
@@ -492,28 +497,28 @@ fn draw_float_half_bounded_below_explores_finite_range() {
 
 #[test]
 fn for_simplest_draws_integer_at_shrink_target_when_in_range() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     assert_eq!(v, 0);
 }
 
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_below() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc.draw_integer::<i128>(5, 100).ok().unwrap();
     assert_eq!(v, 5);
 }
 
 #[test]
 fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc.draw_integer::<i128>(-100, -1).ok().unwrap();
     assert_eq!(v, -1);
 }
 
 #[test]
 fn for_simplest_propagates_across_many_draws() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     for _ in 0..10 {
         assert_eq!(tc.draw_integer::<i128>(0, 99).ok().unwrap(), 0);
     }
@@ -521,7 +526,7 @@ fn for_simplest_propagates_across_many_draws() {
 
 #[test]
 fn for_simplest_draws_float_at_zero() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc
         .draw_float(-10.0, 10.0, false, false, 5e-324)
         .ok()
@@ -532,22 +537,22 @@ fn for_simplest_draws_float_at_zero() {
 
 #[test]
 fn for_simplest_draws_weighted_at_false() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc.weighted(0.5, None).ok().unwrap();
     assert!(!v, "weighted draw in simplest mode should be false");
 }
 
 #[test]
 fn for_simplest_draws_bytes_at_min_size_all_zero() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc.draw_bytes(2, 5).ok().unwrap();
     assert_eq!(v, vec![0u8; 2], "expected min-sized all-zero buffer");
 }
 
 #[test]
 fn for_simplest_is_independent_of_seed() {
-    let mut a = NativeTestCase::for_simplest(BUFFER_SIZE);
-    let mut b = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut a = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
+    let mut b = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     for _ in 0..5 {
         let va = a.draw_integer::<i128>(0, 1000).ok().unwrap();
         let vb = b.draw_integer::<i128>(0, 1000).ok().unwrap();
@@ -558,7 +563,7 @@ fn for_simplest_is_independent_of_seed() {
 
 #[test]
 fn for_simplest_records_choice_nodes() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let _ = tc.draw_integer::<i128>(0, 23).ok().unwrap();
     let _ = tc.weighted(0.5, None).ok().unwrap();
     assert_eq!(tc.nodes.len(), 2);
@@ -569,7 +574,7 @@ fn template_simplest_infinite_resolves_every_draw_to_simplest() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
     );
@@ -584,7 +589,7 @@ fn template_simplest_finite_count_n_produces_exactly_n_values() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(Some(3))),
+        Some(ChoiceTemplate::simplest(Some(3)).unwrap()),
         100,
         None,
     );
@@ -601,7 +606,7 @@ fn template_concrete_prefix_then_template() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
     );
@@ -613,15 +618,11 @@ fn template_concrete_prefix_then_template() {
 #[test]
 fn template_concrete_prefix_with_punning_then_template() {
     let prefix = vec![ChoiceValue::Boolean(true)];
-    let prefix_nodes = vec![ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    )];
+    let prefix_nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
         Some(&prefix_nodes),
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
     );
@@ -639,18 +640,21 @@ fn template_concrete_prefix_with_punning_then_template() {
 }
 
 #[test]
-#[should_panic(expected = "ChoiceTemplate count must be positive")]
-fn template_count_zero_panics_at_construction() {
-    let _ = ChoiceTemplate::simplest(Some(0));
+fn template_count_zero_errors_at_construction() {
+    let msg = ChoiceTemplate::simplest(Some(0)).unwrap_err().to_string();
+    assert!(
+        msg.contains("ChoiceTemplate count must be positive"),
+        "{msg}"
+    );
 }
 
 #[test]
 fn for_simplest_wrapper_matches_template_with_count_none() {
-    let mut a = NativeTestCase::for_simplest(5);
+    let mut a = NativeTestCase::for_simplest(5).unwrap();
     let mut b = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(None)),
+        Some(ChoiceTemplate::simplest(None).unwrap()),
         5,
         None,
     );
@@ -667,7 +671,7 @@ fn template_overrun_status_matches_max_size_overrun() {
     let mut tc_count = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(Some(2))),
+        Some(ChoiceTemplate::simplest(Some(2)).unwrap()),
         100,
         None,
     );
@@ -682,7 +686,7 @@ fn template_count_decrements_on_each_draw() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
         None,
-        Some(ChoiceTemplate::simplest(Some(3))),
+        Some(ChoiceTemplate::simplest(Some(3)).unwrap()),
         100,
         None,
     );
@@ -698,7 +702,7 @@ fn template_count_decrements_on_each_draw() {
 fn biased_integer_sample_stays_in_range_for_small_bounds() {
     let mut rng = EngineRng::seeded(1);
     for _ in 0..1000 {
-        let v = biased_i128_sample(0, 100, &mut rng);
+        let v = biased_i128_sample(0, 100, &mut rng).unwrap();
         assert!((0..=100).contains(&v), "out of range: {v}");
     }
 }
@@ -707,7 +711,7 @@ fn biased_integer_sample_stays_in_range_for_small_bounds() {
 fn biased_integer_sample_stays_in_range_for_wide_bounds() {
     let mut rng = EngineRng::seeded(2);
     for _ in 0..2000 {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
         assert!(
             (i64::MIN as i128..=i64::MAX as i128).contains(&v),
             "out of range: {v}"
@@ -719,7 +723,7 @@ fn biased_integer_sample_stays_in_range_for_wide_bounds() {
 fn biased_integer_sample_stays_in_range_for_full_i128() {
     let mut rng = EngineRng::seeded(3);
     for _ in 0..1000 {
-        let _ = biased_i128_sample(i128::MIN, i128::MAX, &mut rng);
+        biased_i128_sample(i128::MIN, i128::MAX, &mut rng).unwrap();
     }
 }
 
@@ -727,16 +731,16 @@ fn biased_integer_sample_stays_in_range_for_full_i128() {
 fn biased_integer_sample_collapses_when_min_equals_max() {
     let mut rng = EngineRng::seeded(4);
     for _ in 0..100 {
-        assert_eq!(biased_i128_sample(42, 42, &mut rng), 42);
+        assert_eq!(biased_i128_sample(42, 42, &mut rng).unwrap(), 42);
     }
 }
 
 #[test]
 fn biased_integer_sample_produces_diverse_magnitudes_unbounded() {
     let mut rng = EngineRng::seeded(5);
-    let mut magnitudes: HashSet<i32> = HashSet::new();
+    let mut magnitudes: HashSet<i32> = HashSet::default();
     for _ in 0..2000 {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
         let mag = if v == 0 {
             0
         } else {
@@ -757,7 +761,7 @@ fn biased_integer_sample_concentrates_around_zero_when_unbounded() {
     let mut in_inner = 0;
     let total = 2000;
     for _ in 0..total {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
         if v.unsigned_abs() <= 256 {
             in_inner += 1;
         }
@@ -776,7 +780,7 @@ fn biased_integer_sample_wide_range_still_draws_from_distribution() {
     let total = 2000;
     let mut outside_pool = 0;
     for _ in 0..total {
-        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng);
+        let v = biased_i128_sample(i64::MIN as i128, i64::MAX as i128, &mut rng).unwrap();
         if pool.binary_search(&v).is_err() {
             outside_pool += 1;
         }
@@ -792,7 +796,7 @@ fn biased_integer_sample_wide_range_still_draws_from_distribution() {
 fn biased_integer_sample_log_skewed_bounded_range_favours_smaller_magnitudes() {
     let mut rng = EngineRng::seeded(11);
     let mut samples: Vec<i128> = (0..2000)
-        .map(|_| biased_i128_sample(10_000, 10_000_000, &mut rng))
+        .map(|_| biased_i128_sample(10_000, 10_000_000, &mut rng).unwrap())
         .collect();
     samples.sort();
     let median = samples[samples.len() / 2];
@@ -809,6 +813,7 @@ fn biased_string_sample_caps_constant_pool_probability() {
             (0, 0xD7FF),
             (0xE000, 0x10FFFF),
         ])
+        .unwrap()
         .into(),
         min_size: 0,
         max_size: 100,
@@ -818,7 +823,7 @@ fn biased_string_sample_caps_constant_pool_probability() {
     let total = 2000;
     let mut from_pool = 0;
     for _ in 0..total {
-        let v = biased_string_sample(&sc, &mut rng);
+        let v = biased_string_sample(&sc, &mut rng).unwrap();
         if pool.contains(&v) {
             from_pool += 1;
         }
@@ -833,13 +838,18 @@ fn biased_string_sample_caps_constant_pool_probability() {
 #[test]
 fn biased_string_sample_empty_alphabet_returns_empty_string() {
     let sc = StringChoice {
-        intervals: crate::native::intervalsets::IntervalSet::new(vec![]).into(),
+        intervals: crate::native::intervalsets::IntervalSet::new(vec![])
+            .unwrap()
+            .into(),
         min_size: 0,
         max_size: 0,
     };
     let mut rng = EngineRng::seeded(7);
     for _ in 0..200 {
-        assert_eq!(biased_string_sample(&sc, &mut rng), Vec::<u32>::new());
+        assert_eq!(
+            biased_string_sample(&sc, &mut rng).unwrap(),
+            Vec::<u32>::new()
+        );
     }
 }
 
@@ -857,7 +867,7 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let mut at_max = 0;
     let mut integral = 0;
     for _ in 0..total {
-        let v = biased_float_sample(&fc, &mut rng);
+        let v = biased_float_sample(&fc, &mut rng).unwrap();
         assert!(v.is_finite(), "drew non-finite {v}");
         if v.abs() == f64::MAX {
             at_max += 1;
@@ -884,7 +894,7 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     let mut seen_zero = false;
     let mut seen_one = false;
     for _ in 0..200 {
-        let v = biased_i128_sample(0, 1, &mut rng);
+        let v = biased_i128_sample(0, 1, &mut rng).unwrap();
         assert!((0..=1).contains(&v), "out of range: {v}");
         match v {
             0 => seen_zero = true,
@@ -909,7 +919,7 @@ fn biased_integer_sample_erased_small_width_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(21);
     for _ in 0..500 {
-        let v = biased_integer_sample(&kind, &mut rng);
+        let v = biased_integer_sample(&kind, &mut rng).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
 }
@@ -927,7 +937,7 @@ fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(22);
     for _ in 0..500 {
-        let v = biased_integer_sample(&kind, &mut rng);
+        let v = biased_integer_sample(&kind, &mut rng).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
 }
@@ -939,7 +949,7 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
     let max = i128::MAX;
     let mut all_endpoints = true;
     for _ in 0..50 {
-        let v = integer_sample_from_distribution(min, max, &mut rng);
+        let v = integer_sample_from_distribution(min, max, &mut rng).unwrap();
         assert!(v >= min && v <= max, "out of range: {v}");
         if v != min && v != max {
             all_endpoints = false;
@@ -963,7 +973,10 @@ fn biased_integer_sample_erased_bigint_single_value() {
     };
     let mut rng = EngineRng::seeded(23);
     for _ in 0..20 {
-        assert_eq!(biased_integer_sample(&kind, &mut rng), fixed.clone());
+        assert_eq!(
+            biased_integer_sample(&kind, &mut rng).unwrap(),
+            fixed.clone()
+        );
     }
 }
 
@@ -1028,12 +1041,11 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
 #[test]
 fn draw_string_with_inverted_sizes_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
-    let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]);
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tc.draw_string(intervals.into(), 5, 4)
-    }))
-    .unwrap_err();
-    let msg = payload.downcast_ref::<String>().unwrap();
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]).unwrap();
+    let msg = tc
+        .draw_string(intervals.into(), 5, 4)
+        .unwrap_err()
+        .to_string();
     assert!(msg.contains("min_size <= max_size"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
 }
@@ -1042,7 +1054,7 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
 fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
     let choices = vec![ChoiceValue::String(Vec::new())];
     let mut tc = NativeTestCase::for_choices(&choices, None, None);
-    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
     let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
     assert_eq!(s, "");
 }
@@ -1051,7 +1063,7 @@ fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
 fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
     let choices = vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(5))];
     let mut tc = NativeTestCase::for_choices(&choices, None, None);
-    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
     let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
     assert_eq!(s, "");
 }
@@ -1059,12 +1071,11 @@ fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
 #[test]
 fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
-    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]);
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tc.draw_string(intervals.into(), 0, 4)
-    }))
-    .unwrap_err();
-    let msg = payload.downcast_ref::<String>().unwrap();
+    let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
+    let msg = tc
+        .draw_string(intervals.into(), 0, 4)
+        .unwrap_err()
+        .to_string();
     assert!(msg.contains("empty alphabet"), "{msg}");
     assert!(msg.contains("bug in hegel"), "{msg}");
 }
@@ -1091,7 +1102,7 @@ fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
         discarded: false,
     });
     assert!(
-        !spans.trivial(0, &[]),
+        !spans.trivial(0, &[]).unwrap(),
         "a span past the end of the nodes must not count as trivial"
     );
 }

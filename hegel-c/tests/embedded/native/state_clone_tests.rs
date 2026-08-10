@@ -12,12 +12,15 @@ fn clone_stream_records_a_clone_node_and_hands_out_a_child() {
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     draw(&mut parent);
-    draw(&mut child.lock().unwrap());
+    draw(&mut child.lock());
 
     assert_eq!(parent.nodes.len(), 3);
-    assert_eq!(*parent.nodes[1].kind, ChoiceKind::Clone);
+    assert_eq!(
+        parent.nodes[1].kind(),
+        crate::native::core::ChoiceKind::Clone
+    );
     assert!(!parent.nodes[1].was_forced);
-    assert_eq!(child.lock().unwrap().nodes.len(), 1);
+    assert_eq!(child.lock().nodes.len(), 1);
 }
 
 #[test]
@@ -26,10 +29,10 @@ fn clone_ids_count_per_stream_and_nest() {
     assert!(parent.clone_id.is_empty());
     let first = parent.clone_stream().unwrap();
     let second = parent.clone_stream().unwrap();
-    let nested = first.lock().unwrap().clone_stream().unwrap();
-    assert_eq!(first.lock().unwrap().clone_id, vec![0]);
-    assert_eq!(second.lock().unwrap().clone_id, vec![1]);
-    assert_eq!(nested.lock().unwrap().clone_id, vec![0, 0]);
+    let nested = first.lock().clone_stream().unwrap();
+    assert_eq!(first.lock().clone_id, vec![0]);
+    assert_eq!(second.lock().clone_id, vec![1]);
+    assert_eq!(nested.lock().clone_id, vec![0, 0]);
 }
 
 #[test]
@@ -38,7 +41,7 @@ fn clone_streams_are_deterministic_per_seed() {
         let mut parent = NativeTestCase::new_random(EngineRng::seeded(seed));
         let mut parent_vals = vec![draw(&mut parent)];
         let child = parent.clone_stream().unwrap();
-        let mut child_guard = child.lock().unwrap();
+        let mut child_guard = child.lock();
         let child_vals = vec![draw(&mut child_guard), draw(&mut child_guard)];
         drop(child_guard);
         parent_vals.push(draw(&mut parent));
@@ -54,7 +57,7 @@ fn child_draws_do_not_perturb_the_parents_stream() {
         let first = draw(&mut parent);
         let child = parent.clone_stream().unwrap();
         for _ in 0..child_draws {
-            draw(&mut child.lock().unwrap());
+            draw(&mut child.lock());
         }
         vec![first, draw(&mut parent), draw(&mut parent)]
     };
@@ -67,32 +70,35 @@ fn reassemble_embeds_child_records_recursively() {
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     {
-        let mut c = child.lock().unwrap();
+        let mut c = child.lock();
         c.start_span(42);
         draw(&mut c);
         let grandchild = c.clone_stream().unwrap();
-        draw(&mut grandchild.lock().unwrap());
+        draw(&mut grandchild.lock());
         c.stop_span(false);
     }
     draw(&mut parent);
     parent.conclude(Status::Valid, None);
     parent.reassemble();
 
-    let ChoiceValue::Clone(record) = &parent.nodes[1].value else {
+    let Some(stream) = parent.nodes[1].data.as_clone() else {
         panic!("clone node was not realized");
     };
-    let child_nodes = record.realized_nodes().unwrap();
+    let child_nodes = stream.nodes();
     assert_eq!(child_nodes.len(), 2);
-    assert_eq!(*child_nodes[1].kind, ChoiceKind::Clone);
-    let ChoiceValue::Clone(inner) = &child_nodes[1].value else {
+    assert_eq!(
+        child_nodes[1].kind(),
+        crate::native::core::ChoiceKind::Clone
+    );
+    let Some(inner) = child_nodes[1].data.as_clone() else {
         panic!("nested clone node was not realized");
     };
-    assert_eq!(inner.realized_nodes().unwrap().len(), 1);
-    assert_eq!(record.spans().len(), 1);
-    assert_eq!(record.spans()[0].label, "42");
-    assert_eq!(record.spans()[0].start, 0);
-    assert_eq!(record.spans()[0].end, 2);
-    assert_eq!(record.span_events().len(), 2);
+    assert_eq!(inner.nodes().len(), 1);
+    assert_eq!(stream.spans().len(), 1);
+    assert_eq!(stream.spans()[0].label, "42");
+    assert_eq!(stream.spans()[0].start, 0);
+    assert_eq!(stream.spans()[0].end, 2);
+    assert_eq!(stream.span_events().len(), 2);
 }
 
 #[test]
@@ -101,26 +107,26 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
     let p0 = draw(&mut parent);
     let child = parent.clone_stream().unwrap();
     let (c0, c1) = {
-        let mut c = child.lock().unwrap();
+        let mut c = child.lock();
         (draw(&mut c), draw(&mut c))
     };
     let p1 = draw(&mut parent);
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut replay = NativeTestCase::for_choices(&choices, None, None);
     assert_eq!(draw(&mut replay), p0);
     let replay_child = replay.clone_stream().unwrap();
     {
-        let mut c = replay_child.lock().unwrap();
+        let mut c = replay_child.lock();
         assert_eq!(draw(&mut c), c0);
         assert_eq!(draw(&mut c), c1);
     }
     assert_eq!(draw(&mut replay), p1);
     replay.conclude(Status::Valid, None);
     replay.reassemble();
-    let replayed: Vec<ChoiceValue> = replay.nodes.iter().map(|n| n.value.clone()).collect();
+    let replayed: Vec<ChoiceValue> = replay.nodes.iter().map(|n| n.value().clone()).collect();
     assert_eq!(replayed, choices);
 }
 
@@ -128,14 +134,14 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
 fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
     let mut parent = NativeTestCase::new_random(EngineRng::seeded(29));
     let child = parent.clone_stream().unwrap();
-    draw(&mut child.lock().unwrap());
+    draw(&mut child.lock());
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut replay = NativeTestCase::for_choices(&choices, None, None);
     let replay_child = replay.clone_stream().unwrap();
-    let mut c = replay_child.lock().unwrap();
+    let mut c = replay_child.lock();
     draw(&mut c);
     assert!(matches!(
         c.draw_integer::<i128>(0, 10),
@@ -149,7 +155,7 @@ fn clone_at_a_non_clone_prefix_position_puns_to_an_empty_child() {
     let mut replay =
         NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(5))], None, None);
     let child = replay.clone_stream().unwrap();
-    let result = child.lock().unwrap().draw_integer::<i128>(0, 10);
+    let result = child.lock().draw_integer::<i128>(0, 10);
     assert!(matches!(result, Err(EngineError::Overrun)));
     assert_eq!(replay.status(), Some(Status::EarlyStop));
 }
@@ -162,7 +168,7 @@ fn probe_replay_extends_a_punned_child_randomly() {
         BUFFER_SIZE,
     );
     let child = replay.clone_stream().unwrap();
-    draw(&mut child.lock().unwrap());
+    draw(&mut child.lock());
     assert_eq!(replay.status(), None);
 }
 
@@ -170,13 +176,13 @@ fn probe_replay_extends_a_punned_child_randomly() {
 fn family_conclusion_stops_every_stream() {
     let mut parent = NativeTestCase::new_random(EngineRng::seeded(5));
     let child = parent.clone_stream().unwrap();
-    child.lock().unwrap().conclude(Status::Invalid, None);
+    child.lock().conclude(Status::Invalid, None);
     assert!(matches!(
         parent.draw_integer::<i128>(0, 10),
         Err(EngineError::InvalidTestCase)
     ));
     assert_eq!(parent.status(), Some(Status::Invalid));
-    assert_eq!(child.lock().unwrap().status(), Some(Status::Invalid));
+    assert_eq!(child.lock().status(), Some(Status::Invalid));
 }
 
 #[test]
@@ -187,7 +193,7 @@ fn conclusion_is_write_once_across_streams() {
         Status::Interesting,
         Some(InterestingOrigin("first".to_string())),
     );
-    child.lock().unwrap().conclude(Status::Valid, None);
+    child.lock().conclude(Status::Valid, None);
     assert_eq!(parent.status(), Some(Status::Interesting));
     let (_, origin) = parent.family().conclusion().unwrap();
     assert_eq!(origin, Some(InterestingOrigin("first".to_string())));
@@ -199,7 +205,7 @@ fn family_budget_caps_total_draws_across_streams() {
     draw(&mut parent);
     draw(&mut parent);
     let child = parent.clone_stream().unwrap();
-    let mut c = child.lock().unwrap();
+    let mut c = child.lock();
     draw(&mut c);
     assert!(matches!(
         c.draw_integer::<i128>(0, 10),
@@ -214,11 +220,11 @@ fn clone_nesting_beyond_max_depth_is_invalid() {
     let mut handles = Vec::new();
     let mut current = parent.clone_stream().unwrap();
     for _ in 1..MAX_CLONE_DEPTH {
-        let next = current.lock().unwrap().clone_stream().unwrap();
+        let next = current.lock().clone_stream().unwrap();
         handles.push(current);
         current = next;
     }
-    let too_deep = current.lock().unwrap().clone_stream();
+    let too_deep = current.lock().clone_stream();
     assert!(matches!(too_deep, Err(EngineError::InvalidTestCase)));
     assert_eq!(parent.status(), Some(Status::Invalid));
 }
@@ -242,10 +248,10 @@ fn clone_node_consumes_a_slot_in_the_stream_budget() {
 
 #[test]
 fn simplest_template_children_resolve_to_simplest_values() {
-    let mut parent = NativeTestCase::for_simplest(BUFFER_SIZE);
+    let mut parent = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     assert_eq!(draw(&mut parent), 0);
     let child = parent.clone_stream().unwrap();
-    assert_eq!(draw(&mut child.lock().unwrap()), 0);
+    assert_eq!(draw(&mut child.lock()), 0);
     assert_eq!(draw(&mut parent), 0);
 }
 
@@ -254,16 +260,16 @@ fn reassembled_values_flow_through_probe_prefixes() {
     let mut parent = NativeTestCase::new_random(EngineRng::seeded(41));
     let p0 = draw(&mut parent);
     let child = parent.clone_stream().unwrap();
-    let c0 = draw(&mut child.lock().unwrap());
+    let c0 = draw(&mut child.lock());
     parent.conclude(Status::Valid, None);
     parent.reassemble();
-    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value.clone()).collect();
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
     let mut probe = NativeTestCase::for_probe(&choices, EngineRng::seeded(2), BUFFER_SIZE);
     assert_eq!(draw(&mut probe), p0);
     let probe_child = probe.clone_stream().unwrap();
     {
-        let mut c = probe_child.lock().unwrap();
+        let mut c = probe_child.lock();
         assert_eq!(draw(&mut c), c0);
         draw(&mut c);
     }
@@ -279,7 +285,7 @@ fn concurrent_draws_on_separate_streams_are_deterministic() {
         let worker = std::thread::spawn(move || {
             let mut vals = Vec::new();
             for _ in 0..100 {
-                vals.push(draw(&mut child.lock().unwrap()));
+                vals.push(draw(&mut child.lock()));
             }
             vals
         });

@@ -1,4 +1,5 @@
 use super::*;
+use crate::Mode;
 use crate::ffi::{RunHandle, SettingsHandle};
 use crate::generators as gs;
 use crate::runner::Settings;
@@ -30,14 +31,14 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 }
 
 /// Register a single-group, concurrency-`concurrency` machine over `rules`
-/// on `tc` and return its id.
-fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> i64 {
+/// on `tc` and return its handle.
+fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> StateMachineHandle {
     let rule_groups = vec![0i64; rules.len()];
-    let (id, level) = tc
+    let (machine, level) = tc
         .with_ctc(|ctc| ctc.new_state_machine(rules, &rule_groups, &[], concurrency, concurrency))
         .unwrap();
     assert_eq!(level, concurrency);
-    id
+    machine
 }
 
 fn string_panic(message: &str) -> Box<dyn std::any::Any + Send> {
@@ -205,13 +206,13 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
         hits: AtomicI64::new(0),
     };
     let rules = m.rules();
-    let machine_id = register_machine(&tc, &["hit"], 1);
+    let machine = register_machine(&tc, &["hit"], 1);
     assert!(
-        tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
+        tc.with_ctc(|ctc| ctc.state_machine_next_group(&machine))
             .unwrap()
             .is_some()
     );
-    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
+    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, &machine));
     assert!(matches!(event, WorkerEvent::RoundDone));
     assert_eq!(m.hits.load(Ordering::SeqCst), 1);
     assert!(
@@ -229,13 +230,13 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     let (_run, tc, _lines) = capturing_test_case();
     let m = AlwaysPanics;
     let rules = m.rules();
-    let machine_id = register_machine(&tc, &["boom"], 1);
+    let machine = register_machine(&tc, &["boom"], 1);
     assert!(
-        tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
+        tc.with_ctc(|ctc| ctc.state_machine_next_group(&machine))
             .unwrap()
             .is_some()
     );
-    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
+    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, &machine));
     let WorkerEvent::Panicked { payload, info } = event else {
         panic!("expected a ferried panic");
     };
@@ -251,9 +252,9 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
         hits: AtomicI64::new(0),
     };
     let rules = m.rules();
-    let machine_id = register_machine(&tc, &["hit"], 1);
+    let machine = register_machine(&tc, &["hit"], 1);
     assert!(
-        tc.with_ctc(|ctc| ctc.state_machine_next_group(machine_id))
+        tc.with_ctc(|ctc| ctc.state_machine_next_group(&machine))
             .unwrap()
             .is_some()
     );
@@ -266,14 +267,14 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
     })
     .expect_err("the family budget is finite");
     assert!(exhausted.downcast_ref::<StopTest>().is_some());
-    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, machine_id));
+    let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, &machine));
     assert!(matches!(event, WorkerEvent::Overrun));
 }
 
 #[test]
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
-    let (machine_id, _) = tc
+    let (machine, _) = tc
         .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], 1, 1))
         .unwrap();
     let exhausted = with_test_context(|| {
@@ -285,7 +286,7 @@ fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     })
     .expect_err("the family budget is finite");
     assert!(exhausted.downcast_ref::<StopTest>().is_some());
-    let unwound = catch_unwind(AssertUnwindSafe(|| machine_next_group(&tc, machine_id)))
+    let unwound = catch_unwind(AssertUnwindSafe(|| machine_next_group(&tc, &machine)))
         .expect_err("the group draw must observe the exhausted budget");
     assert!(unwound.downcast_ref::<StopTest>().is_some());
 }
@@ -297,7 +298,7 @@ fn worker_loop_exits_when_the_event_channel_is_gone() {
         hits: AtomicI64::new(0),
     };
     let rules = m.rules();
-    let machine_id = register_machine(&tc, &["hit"], 1);
+    let machine = register_machine(&tc, &["hit"], 1);
     let (round_tx, round_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     drop(event_rx);
@@ -305,6 +306,7 @@ fn worker_loop_exits_when_the_event_channel_is_gone() {
     std::thread::scope(|scope| {
         let m = &m;
         let rules = &rules;
-        scope.spawn(move || worker_loop(0, tc, m, rules, machine_id, false, round_rx, event_tx));
+        let machine = &machine;
+        scope.spawn(move || worker_loop(0, tc, m, rules, machine, false, round_rx, event_tx));
     });
 }

@@ -1985,3 +1985,30 @@ fn err_surrogate_u_escape() {
         assert!(err.msg.contains("surrogate"), "{}: {}", pat, err.msg);
     }
 }
+
+#[test]
+fn internal_error_converts_to_parse_error_with_bug_report_framing() {
+    let internal = crate::control::InternalError::new(format_args!("boom"));
+    let err: ParseError = internal.into();
+    assert!(err.msg.contains("boom"), "{}", err.msg);
+    assert!(err.msg.contains("bug in hegel"), "{}", err.msg);
+    assert_eq!(err.pos, 0);
+}
+
+#[test]
+fn into_subpattern_extracts_only_subpattern_ops() {
+    let p = SubPattern {
+        data: vec![lit(97)],
+    };
+    assert_eq!(
+        OpCode::Subpattern {
+            group: None,
+            add_flags: 0,
+            del_flags: 0,
+            p: p.clone()
+        }
+        .into_subpattern(),
+        Some(p)
+    );
+    assert_eq!(lit(97).into_subpattern(), None);
+}
