@@ -426,7 +426,15 @@ enum DebugNode {
 struct DebugRepr {
     chars: Vec<char>,
     pos: usize,
+    depth: usize,
 }
+
+/// How deeply groups may nest before [`DebugRepr::parse`] gives up. The
+/// parser, the emitter, and the parsed tree's destructor all recurse
+/// per nesting level, so an unbounded representation would overflow the
+/// stack during failure reporting; past this depth the representation is
+/// emitted verbatim instead.
+const MAX_DEBUG_DEPTH: usize = 64;
 
 impl DebugRepr {
     fn parse(repr: &str) -> Option<Vec<DebugNode>> {
@@ -436,6 +444,7 @@ impl DebugRepr {
         let mut parser = DebugRepr {
             chars: repr.chars().collect(),
             pos: 0,
+            depth: 0,
         };
         let nodes = parser.parse_item()?;
         if parser.pos != parser.chars.len() {
@@ -490,6 +499,10 @@ impl DebugRepr {
 
     /// Parse a delimited group whose open delimiter is the current char.
     fn parse_group(&mut self, prefix: String) -> Option<DebugNode> {
+        if self.depth == MAX_DEBUG_DEPTH {
+            return None;
+        }
+        self.depth += 1;
         let delimiter = self.bump()?;
         let close = match delimiter {
             '[' => ']',
@@ -524,6 +537,7 @@ impl DebugRepr {
                 }
             }
         }
+        self.depth -= 1;
         Some(DebugNode::Group {
             prefix,
             delimiter,
