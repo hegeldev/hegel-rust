@@ -331,8 +331,11 @@ impl NativeStateMachine {
     /// concurrency each worker runs between one and [`MAX_ROUND_RULES`]
     /// rules per round, distributed uniformly: each call past the first
     /// makes a continue/stop decision as a boolean draw from the worker's
-    /// own stream (hazard `1/(MAX_ROUND_RULES - completed + 1)`), so the
-    /// shrinker can shorten any worker's round at any boundary. Rules
+    /// own stream, drawn as a *continue* probability
+    /// (`(MAX_ROUND_RULES - completed) / (MAX_ROUND_RULES - completed + 1)`)
+    /// so that the simplest value stops the round — the shrinker shortens a
+    /// worker's round by simplifying any boundary's draw, and the forced
+    /// simplest test case runs exactly one rule per worker per round. Rules
     /// reported as rejected ([`Self::rule_rejected`]) do not advance that
     /// decision, and total hand-outs per worker per round are bounded by
     /// [`ATTEMPT_MULTIPLIER`] times [`MAX_ROUND_RULES`].
@@ -359,14 +362,14 @@ impl NativeStateMachine {
             let worker = &self.workers[worker_idx];
             let completed = worker.steps_drawn - worker.steps_rejected;
             let attempt_cap = MAX_ROUND_RULES.saturating_mul(ATTEMPT_MULTIPLIER);
-            let p_stop = if worker.steps_drawn >= attempt_cap || completed >= MAX_ROUND_RULES {
-                1.0
-            } else if worker.retry_pending || completed == 0 {
+            let p_continue = if worker.steps_drawn >= attempt_cap || completed >= MAX_ROUND_RULES {
                 0.0
+            } else if worker.retry_pending || completed == 0 {
+                1.0
             } else {
-                1.0 / (MAX_ROUND_RULES - completed + 1) as f64
+                (MAX_ROUND_RULES - completed) as f64 / (MAX_ROUND_RULES - completed + 1) as f64
             };
-            if ntc.weighted(p_stop, None)? {
+            if !ntc.weighted(p_continue, None)? {
                 return Ok(None);
             }
         }

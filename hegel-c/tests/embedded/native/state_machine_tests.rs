@@ -332,13 +332,9 @@ fn concurrent_workers_have_their_own_flags_and_round_budgets() {
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert_eq!(count_draws_with_max(&ntc, 254), 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
-    for _ in 0..MAX_ROUND_RULES {
-        assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-    }
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-    for _ in 0..MAX_ROUND_RULES {
-        assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), Some(0));
-    }
+    assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 1).unwrap(), None);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
@@ -346,25 +342,52 @@ fn concurrent_workers_have_their_own_flags_and_round_budgets() {
 }
 
 #[test]
-fn concurrent_worker_stop_decision_is_a_recorded_hazard_boolean() {
+fn simplest_template_runs_one_rule_per_worker_per_round() {
+    let mut ntc = simplest_after(&[], 4096);
+    ntc.family().set_stateful_step_count(2);
+    let mut sm = machine_concurrent(&mut ntc, 2, 3);
+    for _ in 0..2 {
+        assert!(sm.next_group(&mut ntc).unwrap().is_some());
+        for worker in 0..3 {
+            assert_eq!(sm.next_rule(&mut ntc, worker).unwrap(), Some(0));
+            assert_eq!(sm.next_rule(&mut ntc, worker).unwrap(), None);
+        }
+    }
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
+}
+
+#[test]
+fn concurrent_worker_continue_decision_is_a_recorded_hazard_boolean() {
     let prefix = [
         int(0),
         int(0),
         go(),
-        go(),
+        ChoiceValue::Boolean(true),
         int(0),
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(true),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
     ];
     let mut ntc = replay(&prefix, 16);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-    assert!(ntc.nodes[3].was_forced);
-    assert_eq!(ntc.nodes[3].value(), ChoiceValue::Boolean(false));
-    assert!(!ntc.nodes[6].was_forced);
+    assert!(
+        ntc.nodes[3].was_forced,
+        "the first rule is a forced continue"
+    );
+    assert_eq!(ntc.nodes[3].value(), ChoiceValue::Boolean(true));
+    assert!(
+        !ntc.nodes[6].was_forced,
+        "mid-round continues are free draws"
+    );
     assert_eq!(ntc.nodes[6].value(), ChoiceValue::Boolean(true));
+    assert!(!ntc.nodes[9].was_forced, "the stop is the simplest value");
+    assert_eq!(ntc.nodes[9].value(), ChoiceValue::Boolean(false));
 }
 
 #[test]
@@ -383,11 +406,11 @@ fn concurrent_rejections_refund_the_worker_round_budget() {
     let mut ntc = simplest_after(&[], 4096);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
-    for _ in 0..MAX_ROUND_RULES {
+    for _ in 0..10 {
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
         sm.rule_rejected(0).unwrap();
-        assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     }
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
 }
 
