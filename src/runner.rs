@@ -189,6 +189,12 @@ impl Settings {
     }
 
     /// Set the number of test cases to run (default: 100).
+    ///
+    /// The `HEGEL_TEST_CASES` environment variable, when set and non-empty,
+    /// overrides this value at runtime — including a value set explicitly
+    /// here or via `#[hegel::test(test_cases = ...)]`. This makes it easy to
+    /// scale a whole test suite up (a nightly deep run) or down (a quick
+    /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
         self
@@ -222,6 +228,11 @@ impl Settings {
     }
 
     /// Set the database path for storing failing examples, or `None` to disable.
+    ///
+    /// The `HEGEL_DATABASE` environment variable, when set and non-empty,
+    /// overrides this value at runtime: the literal value `disabled` turns
+    /// the database off (matching the `--database` CLI flag's keyword), and
+    /// any other value is used as the database path.
     pub fn database(mut self, database: Option<String>) -> Self {
         self.database = match database {
             None => Database::Disabled,
@@ -285,6 +296,34 @@ impl Settings {
         self.phases.contains(&phase)
     }
 
+    /// Apply environment-variable overrides to these settings. Called once
+    /// per run, after all builder configuration, so the environment wins
+    /// over values set in source.
+    pub(crate) fn with_env_overrides(self) -> Self {
+        self.with_env_overrides_from(env_var)
+    }
+
+    fn with_env_overrides_from(mut self, env: impl Fn(&str) -> Option<String>) -> Self {
+        if let Some(value) = env("HEGEL_TEST_CASES") {
+            if !value.is_empty() {
+                match value.parse::<u64>() {
+                    Ok(n) if n > 0 => self.test_cases = n,
+                    _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
+                }
+            }
+        }
+        if let Some(value) = env("HEGEL_DATABASE") {
+            if !value.is_empty() {
+                self.database = if value == "disabled" {
+                    Database::Disabled
+                } else {
+                    Database::Path(value)
+                };
+            }
+        }
+        self
+    }
+
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
@@ -322,8 +361,12 @@ where
     Hegel::new(test_fn).run();
 }
 
+fn env_var(key: &str) -> Option<String> {
+    std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
+}
+
 fn is_in_ci() -> bool {
-    is_in_ci_from(|key| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned()))
+    is_in_ci_from(env_var)
 }
 
 fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
@@ -413,10 +456,11 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
+        let settings = self.settings.with_env_overrides();
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
-                &self.settings,
+                &settings,
                 self.database_key.as_deref(),
                 &blob,
                 self.test_location.as_ref(),
@@ -426,7 +470,7 @@ where
 
         crate::run_lifecycle::drive(
             self.test_fn,
-            &self.settings,
+            &settings,
             self.database_key.as_deref(),
             self.test_location.as_ref(),
         );

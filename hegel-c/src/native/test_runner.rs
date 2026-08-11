@@ -1090,34 +1090,33 @@ impl<'a> Engine<'a> {
     /// interesting-origin filter) is applied by the caller, so replay and
     /// matching are not entangled.
     ///
-    /// With `extend == 0` the realised path is known up front, so a path the
-    /// lossless tree already records is served by [`data_tree::simulate_full`]
-    /// with its full outcome — nodes, spans, status, origin, observations —
-    /// without running the body, for *any* status (interesting included). With
-    /// `extend > 0` the random continuation isn't known ahead of time, so it
-    /// always executes. A genuine miss (a novel or undetermined path) runs
-    /// through [`Self::test_function`], which records the run into the tree so a
-    /// later replay of the same path is served. There is no separate result
-    /// cache: the tree is the single source of truth.
+    /// A path the lossless tree already records completely is served by
+    /// [`data_tree::simulate_full`] with its full outcome — nodes, spans,
+    /// status, origin, observations — without running the body, for *any*
+    /// status (interesting included). That holds for any `extend`: a
+    /// tree-determined path concludes within `choices`, so the continuation
+    /// budget is irrelevant to it. A genuine miss (a novel path, or one whose
+    /// recorded prefix runs out of `choices` before concluding) runs through
+    /// [`Self::test_function`] — bare when `extend == 0`, with up to `extend`
+    /// random draws past the end of `choices` otherwise — which records the
+    /// run into the tree so a later replay of the same path is served. There
+    /// is no separate result cache: the tree is the single source of truth.
     async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if extend == 0 {
-            if let Some(out) =
-                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
-            {
-                return Ok(RunResult {
-                    status: out.status,
-                    nodes: out.nodes,
-                    spans: out.spans,
-                    origin: out.origin,
-                    target_observations: out.target_observations,
-                    span_events: Vec::new(),
-                });
-            }
+        if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
+        {
+            return Ok(RunResult {
+                status: out.status,
+                nodes: out.nodes,
+                spans: out.spans,
+                origin: out.origin,
+                target_observations: out.target_observations,
+                span_events: Vec::new(),
+            });
         }
         let ntc = if extend == 0 {
             NativeTestCase::for_choices(choices, nodes, None)
@@ -1182,6 +1181,12 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
 /// so it counts toward the same budgets as a freshly generated example and a
 /// later identical proposal is served from the tree; tree-served probes are not
 /// re-recorded, exactly as Hypothesis's cache hits cost nothing.
+///
+/// A mutated sequence often diverges from the path its donor took and would
+/// run out of data as a bare replay. Rather than discarding such a proposal
+/// (Hypothesis's behavior), every probe allows random draws past the end of
+/// the spliced choices, so a diverged attempt becomes a complete test case
+/// seeded with the mutation instead of an overrun.
 impl<'a> Engine<'a> {
     async fn try_span_mutation(
         &mut self,
@@ -1256,7 +1261,9 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let run = self.cached_test_function(&attempt, None, 0).await?;
+            let extend =
+                BUFFER_SIZE.saturating_sub(crate::native::core::flattened_values_len(&attempt));
+            let run = self.cached_test_function(&attempt, None, extend).await?;
             if run.status == Status::Interesting {
                 return Ok(());
             }
