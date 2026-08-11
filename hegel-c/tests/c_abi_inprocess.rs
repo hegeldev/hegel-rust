@@ -145,6 +145,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_c::hegel_settings_set_max_open_test_cases(ctx, ptr::null_mut(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
@@ -648,6 +652,12 @@ fn out_of_range_enum_values_are_invalid_arguments() {
             hegel_c::hegel_settings_set_stateful_step_count(ctx, s, -3),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 0),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("max_open must be at least 1"));
+        ok(hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 3));
 
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));

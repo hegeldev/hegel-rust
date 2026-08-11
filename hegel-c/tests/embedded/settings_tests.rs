@@ -95,3 +95,12 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
     let s = Settings::new().output(Output::callback(|_| {}));
     assert_eq!(format!("{:?}", s.output), "Output(callback)");
 }
+
+#[test]
+fn max_open_test_cases_defaults_to_one_and_is_settable() {
+    assert_eq!(Settings::new().max_open_test_cases, 1);
+    assert_eq!(
+        Settings::new().max_open_test_cases(4).max_open_test_cases,
+        4
+    );
+}

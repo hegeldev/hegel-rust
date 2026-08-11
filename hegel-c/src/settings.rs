@@ -150,6 +150,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) max_open_test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) output: Output,
@@ -175,6 +176,7 @@ impl Settings {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            max_open_test_cases: 1,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
@@ -230,6 +232,15 @@ impl Settings {
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set the maximum number of test cases the engine keeps open at once
+    /// (default: 1, which preserves strict alternation with the driver).
+    /// During generation the engine offers up to this many cases before
+    /// waiting for completions; all other phases stay sequential.
+    pub fn max_open_test_cases(mut self, n: u64) -> Self {
+        self.max_open_test_cases = n;
         self
     }
 

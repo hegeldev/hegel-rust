@@ -774,6 +774,22 @@ hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_setting
 
 /*
  Parameters:
+ `max_open`: Maximum number of test cases that may be open (taken via
+   `hegel_next_test_case` but not yet marked complete) at once. The
+   default is 1, which preserves the strict-alternation contract exactly.
+   Values above 1 let the caller run that many test-case bodies
+   concurrently during generation; `hegel_next_test_case` then returns
+   `HEGEL_E_PENDING` when the engine is waiting for one of the open cases
+   to be marked complete. `max_open` must be at least 1.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for `max_open` of 0.
+ */
+hegel_result_t hegel_settings_set_max_open_test_cases(hegel_context_t *ctx,
+                                                      hegel_settings_t *s,
+                                                      uint64_t max_open);
+
+/*
+ Parameters:
  `n`: Target number of steps to run per stateful test case. Each stateful
    case runs at least one step and at most `n`. The default is 50. `n`
    must be at least 1.
