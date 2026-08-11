@@ -8,6 +8,7 @@ pub use choices::{
     StringChoice, flattened_len, flattened_values_len, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
+pub(crate) use state::float_clamp;
 pub use state::{
     ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Spans,
 };
