@@ -24,6 +24,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use hashbrown::hash_map::Entry;
 
@@ -32,8 +33,8 @@ use rand::RngExt;
 use crate::backend::{Failure, RunError, TestCaseResult};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
-    Spans, Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase,
+    NativeTestCaseHandle, Span, SpanEvent, Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::data_tree::generate_novel_prefix;
@@ -282,6 +283,7 @@ impl<'a> Engine<'a> {
             log_phase("Generate", "Start");
         }
 
+        let generation_started = crate::sys::Instant::now();
         if settings.phases.contains(&Phase::Generate)
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
@@ -305,6 +307,7 @@ impl<'a> Engine<'a> {
             }
         }
 
+        let window = settings.max_open_test_cases.max(1);
         while settings.phases.contains(&Phase::Generate)
             && !found_in_reuse
             && !self.test_is_trivial
@@ -339,93 +342,102 @@ impl<'a> Engine<'a> {
                     break;
                 }
 
-                let case_rng = self.rng.spawn();
-                let tree_root = &self.tree_root;
-                let prefix = generate_novel_prefix(tree_root, &mut self.rng)?;
-                let ntc = if prefix.is_empty() {
-                    NativeTestCase::new_random(case_rng)
-                } else {
-                    NativeTestCase::for_probe(&prefix, case_rng, BUFFER_SIZE)
-                };
-                if verbosity == Verbosity::Verbose {
-                    output.line("Running test case");
+                while (self.in_flight.len() as u64) < window
+                    && self.valid_test_cases + (self.in_flight.len() as u64) < max_test_cases
+                {
+                    let case_rng = self.rng.spawn();
+                    let tree_root = &self.tree_root;
+                    let prefix = generate_novel_prefix(tree_root, &mut self.rng)?;
+                    let ntc = if prefix.is_empty() {
+                        NativeTestCase::new_random(case_rng)
+                    } else {
+                        NativeTestCase::for_probe(&prefix, case_rng, BUFFER_SIZE)
+                    };
+                    if verbosity == Verbosity::Verbose {
+                        output.line("Running test case");
+                    }
+                    self.spawn_case(ntc);
                 }
 
-                let (run, mismatch) = self.test_function(ntc).await?;
-                if let Some(msg) = mismatch {
-                    return Err(RunError::NonDeterministic(msg));
-                }
+                for (run, mismatch) in self.await_completions().await? {
+                    if let Some(msg) = mismatch {
+                        return Err(RunError::NonDeterministic(msg));
+                    }
 
-                if verbosity == Verbosity::Debug {
-                    output.line(&format!(
-                        "test case #{}: status = {:?}, choices = {}",
-                        self.calls,
-                        run.status,
-                        crate::native::core::flattened_len(&run.nodes)
-                    ));
-                }
+                    if verbosity == Verbosity::Debug {
+                        output.line(&format!(
+                            "test case #{}: status = {:?}, choices = {}",
+                            self.calls,
+                            run.status,
+                            crate::native::core::flattened_len(&run.nodes)
+                        ));
+                    }
 
-                if self.interesting.is_empty() {
-                    if run.status == Status::Invalid
-                        && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
-                        && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
-                        && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
-                    {
-                        return Err(RunError::HealthCheck(format!(
-                            "FailedHealthCheck: FilterTooMuch — it looks like this \
+                    if self.interesting.is_empty() {
+                        if run.status == Status::Invalid
+                            && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
+                            && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
+                            && !settings
+                                .suppress_health_check
+                                .contains(&HealthCheck::FilterTooMuch)
+                        {
+                            return Err(RunError::HealthCheck(format!(
+                                "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {} inputs were filtered out by assume() \
                          while only {} valid inputs were \
                          generated. If this is expected, suppress the check with \
                          suppress_health_check = [HealthCheck::FilterTooMuch].",
-                            self.invalid_test_cases, self.valid_test_cases
-                        )));
-                    }
-                    if let Some(msg) = too_large_check(
-                        self.valid_test_cases,
-                        self.overrun_test_cases,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TestCasesTooLarge),
-                    ) {
-                        return Err(RunError::HealthCheck(msg));
+                                self.invalid_test_cases, self.valid_test_cases
+                            )));
+                        }
+                        if let Some(msg) = too_large_check(
+                            self.valid_test_cases,
+                            self.overrun_test_cases,
+                            settings
+                                .suppress_health_check
+                                .contains(&HealthCheck::TestCasesTooLarge),
+                        ) {
+                            return Err(RunError::HealthCheck(msg));
+                        }
+
+                        if let Some(msg) = too_slow_check(
+                            self.valid_test_cases,
+                            generation_started
+                                .map_or(core::time::Duration::ZERO, |start| start.elapsed()),
+                            too_slow_threshold,
+                            settings
+                                .suppress_health_check
+                                .contains(&HealthCheck::TooSlow),
+                        ) {
+                            return Err(RunError::HealthCheck(msg));
+                        }
                     }
 
-                    if let Some(msg) = too_slow_check(
-                        self.valid_test_cases,
-                        self.total_test_time,
-                        too_slow_threshold,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TooSlow),
-                    ) {
-                        return Err(RunError::HealthCheck(msg));
+                    if target_enabled
+                        && self.interesting.is_empty()
+                        && !self.targeting.is_empty()
+                        && target_schedule.should_fire(self.valid_test_cases)
+                    {
+                        self.drain_in_flight().await?;
+                        let mut optimiser = crate::native::targeting::Optimiser {
+                            engine: &mut *self,
+                            max_valid: max_test_cases,
+                            max_calls: max_test_cases * 10,
+                        };
+                        optimiser.optimise_targets().await?;
                     }
-                }
 
-                if target_enabled
-                    && self.interesting.is_empty()
-                    && !self.targeting.is_empty()
-                    && target_schedule.should_fire(self.valid_test_cases)
-                {
-                    let mut optimiser = crate::native::targeting::Optimiser {
-                        engine: &mut *self,
-                        max_valid: max_test_cases,
-                        max_calls: max_test_cases * 10,
-                    };
-                    optimiser.optimise_targets().await?;
-                }
-
-                if run.status == Status::Valid
-                    && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
-                        || !self.interesting.is_empty())
-                {
-                    self.try_span_mutation(&run.nodes, &run.spans).await?;
+                    if run.status == Status::Valid
+                        && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
+                            || !self.interesting.is_empty())
+                    {
+                        self.try_span_mutation(&run.nodes, &run.spans).await?;
+                    }
                 }
             }
         }
+        self.drain_in_flight().await?;
 
         if self.tree_root.is_exhausted
             && self.valid_test_cases == 0
@@ -927,11 +939,19 @@ pub(crate) struct Engine<'a> {
     pub(crate) valid_test_cases: u64,
     pub(crate) invalid_test_cases: u64,
     pub(crate) overrun_test_cases: u64,
-    pub(crate) total_test_time: core::time::Duration,
     pub(crate) test_is_trivial: bool,
     pub(crate) first_bug_at: Option<u64>,
     pub(crate) last_bug_at: Option<u64>,
     pub(crate) first_bug_time: Option<crate::sys::Instant>,
+    /// Handles of cases offered to the driver whose conclusion
+    /// [`Self::harvest`] has not yet seen. Bounded by
+    /// `settings.max_open_test_cases` during generation; every logically
+    /// sequential path keeps it at one via [`Self::await_case`].
+    in_flight: Vec<NativeTestCaseHandle>,
+    /// Concluded, recorded cases not yet consumed by their awaiter — the
+    /// buffer between [`Self::harvest`] (which records every conclusion the
+    /// moment it is seen) and the callers that process specific results.
+    harvested: Vec<(NativeTestCaseHandle, RunResult, Option<String>)>,
 }
 
 impl<'a> Engine<'a> {
@@ -958,11 +978,12 @@ impl<'a> Engine<'a> {
             valid_test_cases: 0,
             invalid_test_cases: 0,
             overrun_test_cases: 0,
-            total_test_time: core::time::Duration::ZERO,
             test_is_trivial: false,
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
+            in_flight: Vec::new(),
+            harvested: Vec::new(),
         })
     }
 
@@ -978,32 +999,163 @@ impl<'a> Engine<'a> {
     }
 
     /// Execute one test case and record everything about its outcome —
-    /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
-    /// the choice-tree non-determinism diagnostic, if recording the run's
-    /// path contradicted an earlier run. `Err` means the driver violated
-    /// the run contract (see [`NativeDataSource::take_outcome`]).
+    /// Hypothesis's `ConjectureRunner.test_function`. Composed of
+    /// [`Self::spawn_case`] and [`Self::await_case`], so it is logically
+    /// sequential no matter how many other cases are in flight around it.
+    /// Returns the run plus the choice-tree non-determinism diagnostic, if
+    /// recording the run's path contradicted an earlier run. `Err` means the
+    /// driver violated the run contract (see
+    /// [`NativeDataSource::take_outcome`]).
     pub(crate) async fn test_function(
         &mut self,
         ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
+        let handle = self.spawn_case(ntc);
+        self.await_case(&handle).await
+    }
+
+    /// Offer one test case to the driver without waiting for its outcome,
+    /// tracking it as in flight until [`Self::harvest`] sees its conclusion.
+    fn spawn_case(&mut self, ntc: NativeTestCase) -> NativeTestCaseHandle {
         ntc.family()
             .set_stateful_step_count(self.settings.stateful_step_count);
-        let tc_start = crate::sys::Instant::now();
-        let run = self.execute(ntc).await?;
-        let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
-        let mismatch = self.record_run(&run, elapsed);
-        Ok((run, mismatch))
+        let (data_source, handle) = NativeDataSource::new(ntc);
+        self.exchange.offer_nowait(Box::new(data_source));
+        self.in_flight.push(Arc::clone(&handle));
+        handle
+    }
+
+    /// Move every concluded in-flight case into the harvested buffer,
+    /// recording each through [`Self::record_run`] the moment its conclusion
+    /// is seen. Recording is order-independent — the tree records path by
+    /// path, `interesting` keeps the shortlex minimum per origin, the
+    /// persister is per-origin monotone, targeting keeps maxima, and the
+    /// counters are sums — so which of several open cases concludes first
+    /// does not change what a run's results mean.
+    fn harvest(&mut self) {
+        let mut i = 0;
+        while i < self.in_flight.len() {
+            let Some(tc_result) = NativeDataSource::try_conclusion(&self.in_flight[i]) else {
+                i += 1;
+                continue;
+            };
+            let handle = self.in_flight.remove(i);
+            let nodes = NativeDataSource::take_nodes(&handle);
+            let spans = NativeDataSource::take_spans(&handle);
+            let span_events = NativeDataSource::take_span_events(&handle);
+            let target_observations = NativeDataSource::take_target_observations(&handle);
+            let (status, origin) = match tc_result {
+                TestCaseResult::Valid => (Status::Valid, None),
+                TestCaseResult::Invalid => (Status::Invalid, None),
+                TestCaseResult::Overrun => (Status::EarlyStop, None),
+                TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
+            };
+            let run = RunResult {
+                status,
+                nodes,
+                spans,
+                origin,
+                target_observations,
+                span_events,
+            };
+            let mismatch = self.record_run(&run);
+            self.harvested.push((handle, run, mismatch));
+        }
+    }
+
+    /// Remove `handle`'s harvested result, if it has one.
+    fn take_harvested(
+        &mut self,
+        handle: &NativeTestCaseHandle,
+    ) -> Option<(RunResult, Option<String>)> {
+        let idx = self
+            .harvested
+            .iter()
+            .position(|(h, _, _)| Arc::ptr_eq(h, handle))?;
+        let (_, run, mismatch) = self.harvested.remove(idx);
+        Some((run, mismatch))
+    }
+
+    /// Suspend until `handle`'s case concludes and return its recorded
+    /// result, harvesting every other case that concludes in the meantime.
+    /// Under strict alternation (`max_open_test_cases == 1`) a resume
+    /// without a conclusion is the driver violating the run contract,
+    /// surfaced exactly as [`NativeDataSource::take_outcome`] reports it;
+    /// with a wider window it is an ordinary poll and the engine just
+    /// suspends again.
+    async fn await_case(
+        &mut self,
+        handle: &NativeTestCaseHandle,
+    ) -> Result<(RunResult, Option<String>), RunError> {
+        let mut resumed = false;
+        loop {
+            self.harvest();
+            if let Some(found) = self.take_harvested(handle) {
+                return Ok(found);
+            }
+            if resumed && self.settings.max_open_test_cases <= 1 {
+                NativeDataSource::take_outcome(handle)?;
+            }
+            self.exchange.suspend().await;
+            resumed = true;
+        }
+    }
+
+    /// Wait until at least one in-flight case has concluded and return every
+    /// harvested result. Returns an empty vector only when nothing is in
+    /// flight. The strict-alternation contract violation is surfaced as in
+    /// [`Self::await_case`].
+    async fn await_completions(&mut self) -> Result<Vec<(RunResult, Option<String>)>, RunError> {
+        let mut resumed = false;
+        loop {
+            self.harvest();
+            if !self.harvested.is_empty() {
+                let runs = self
+                    .harvested
+                    .drain(..)
+                    .map(|(_, run, mismatch)| (run, mismatch))
+                    .collect();
+                return Ok(runs);
+            }
+            let Some(first) = self.in_flight.first() else {
+                return Ok(Vec::new());
+            };
+            if resumed && self.settings.max_open_test_cases <= 1 {
+                NativeDataSource::take_outcome(first)?;
+            }
+            self.exchange.suspend().await;
+            resumed = true;
+        }
+    }
+
+    /// Harvest until no case is in flight, surfacing any nondeterminism the
+    /// drained cases recorded. Called at phase boundaries — before targeting
+    /// fires and after the generation loop exits — so `interesting` and the
+    /// counters are final before the logically sequential phases read them.
+    async fn drain_in_flight(&mut self) -> Result<(), RunError> {
+        loop {
+            self.harvest();
+            for (_, _, mismatch) in self.harvested.drain(..) {
+                if let Some(msg) = mismatch {
+                    return Err(RunError::NonDeterministic(msg));
+                }
+            }
+            if self.in_flight.is_empty() {
+                return Ok(());
+            }
+            self.exchange.suspend().await;
+        }
     }
 
     /// Record one executed test case: the choice tree (losslessly — nodes,
-    /// span events, and the full conclusion), counters, test time, triviality,
+    /// span events, and the full conclusion), counters, triviality,
     /// the targeting observations, the per-origin interesting map (with its
     /// incremental database save), and the bug-window markers.
     ///
     /// Every execution feeds the tree, so a later replay of the same path is
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
-    fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
+    fn record_run(&mut self, run: &RunResult) -> Option<String> {
         let mismatch = crate::native::data_tree::record_tree_full(
             &mut self.tree_root,
             &run.nodes,
@@ -1014,7 +1166,6 @@ impl<'a> Engine<'a> {
             &[],
         );
         self.calls += 1;
-        self.total_test_time += elapsed;
         if run.nodes.is_empty() && run.status >= Status::Invalid {
             self.test_is_trivial = true;
         }
@@ -1048,39 +1199,6 @@ impl<'a> Engine<'a> {
             self.valid_test_cases,
             budget,
         )
-    }
-
-    /// Execute one test case by offering it through the exchange, recording
-    /// the trie and returning a [`RunResult`] populated from the outcome
-    /// reported by the data source's `mark_complete` plus the
-    /// [`NativeTestCase`]'s realized choice nodes. Always a non-final
-    /// execution. `Err` means the driver violated the run contract by
-    /// resuming the engine without concluding the offered case (see
-    /// [`NativeDataSource::take_outcome`]).
-    async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
-        let (data_source, handle) = NativeDataSource::new(ntc);
-        self.exchange.offer(Box::new(data_source)).await;
-        let nodes = NativeDataSource::take_nodes(&handle);
-        let spans = NativeDataSource::take_spans(&handle);
-        let span_events = NativeDataSource::take_span_events(&handle);
-        let target_observations = NativeDataSource::take_target_observations(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle)?;
-
-        let (status, origin) = match tc_result {
-            TestCaseResult::Valid => (Status::Valid, None),
-            TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => (Status::EarlyStop, None),
-            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
-        };
-
-        Ok(RunResult {
-            status,
-            nodes,
-            spans,
-            origin,
-            target_observations,
-            span_events,
-        })
     }
 
     /// The single replay chokepoint — Hypothesis's `cached_test_function` —
