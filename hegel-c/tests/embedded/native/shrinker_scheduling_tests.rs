@@ -143,6 +143,60 @@ fn max_stall_grows_after_shrink() {
 }
 
 #[test]
+fn consider_adopts_early_exit_nodes_from_a_longer_candidate() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.fetch_add(1, Ordering::Relaxed);
+                (true, nodes[..1].to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    let adopted = drive_no_yield(shrinker.consider(&[int_node(3), int_node(9)])).unwrap();
+    assert!(adopted);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(shrinker.current_nodes.len(), 1);
+    match &shrinker.current_nodes[0].value() {
+        ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 3),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn consider_rejects_a_longer_candidate_whose_prefix_is_larger_without_running() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.fetch_add(1, Ordering::Relaxed);
+                (true, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(2)],
+        Spans::new(),
+    );
+    let adopted = drive_no_yield(shrinker.consider(&[int_node(7), int_node(0)])).unwrap();
+    assert!(!adopted);
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(shrinker.current_nodes.len(), 1);
+    match &shrinker.current_nodes[0].value() {
+        ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 2),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn shrink_terminates_when_stalled() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
