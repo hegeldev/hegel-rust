@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.29.6 - 2026-08-11
+
+This patch brings various minor improvements to the `#[composite]` macro.
+
+- Adds support for passing parameters by reference without an explicit lifetime, if the lifetime is not used in the return type.
+- Stops the items_after_statements clippy lint from firing if constants/ functions are defined in the function body.
+- Tries to output generator even if errors are found as to not raise errors elsewhere
+
 ## 0.29.5 - 2026-08-11
 
 This patch adds two environment variables that override settings at runtime, so a whole test suite's behavior can be adjusted without editing source:
