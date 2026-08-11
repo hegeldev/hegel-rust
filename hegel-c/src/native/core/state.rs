@@ -380,15 +380,13 @@ impl GenerationParameters {
     /// Draw a fresh set of parameters for one test case from the Dirichlet over
     /// the four value categories.
     pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
-        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet4(
-            [
-                DIRICHLET_ALPHA_ENDPOINT,
-                DIRICHLET_ALPHA_INTERESTING,
-                DIRICHLET_ALPHA_DIFFUSE,
-                DIRICHLET_ALPHA_MIDDLE,
-            ],
-            rng,
-        )?;
+        let alphas = [
+            DIRICHLET_ALPHA_ENDPOINT,
+            DIRICHLET_ALPHA_INTERESTING,
+            DIRICHLET_ALPHA_DIFFUSE,
+            DIRICHLET_ALPHA_MIDDLE,
+        ];
+        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet4(alphas, rng)?;
         Ok(GenerationParameters {
             endpoint_probability: endpoint,
             interesting_probability: interesting,
