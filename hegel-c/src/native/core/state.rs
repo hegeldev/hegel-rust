@@ -508,12 +508,8 @@ pub(crate) fn biased_float_sample(
 /// into `[min_value, max_value]`, using its mantissa bits as a fraction of
 /// the range so that distinct raw draws keep producing distinct in-range
 /// values, and re-routing around the `smallest_nonzero_magnitude` band.
-fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
-    let (min_value, max_value) = if fc.allow_infinity {
-        (fc.min_value, fc.max_value)
-    } else {
-        (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX))
-    };
+pub(crate) fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
+    let (min_value, max_value) = (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX));
     const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
     let range_size = (max_value - min_value).min(f64::MAX);
     let mant = raw.abs().to_bits() & MANTISSA_MASK;

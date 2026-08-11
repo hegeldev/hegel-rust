@@ -1111,6 +1111,24 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
 }
 
 #[test]
+fn float_clamp_with_infinite_bounds_stays_finite() {
+    let fc = FloatChoice {
+        min_value: f64::NEG_INFINITY,
+        max_value: f64::INFINITY,
+        allow_nan: true,
+        allow_infinity: true,
+        smallest_nonzero_magnitude: f64::from(f32::from_bits(1)),
+    };
+    for raw in [5e-324, 1e-100, -3e-320, f64::from_bits(12345)] {
+        let clamped = float_clamp(&fc, raw);
+        assert!(
+            clamped.is_finite(),
+            "float_clamp({raw:e}) produced {clamped}"
+        );
+    }
+}
+
+#[test]
 fn draw_string_with_inverted_sizes_is_an_internal_error() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]).unwrap();
