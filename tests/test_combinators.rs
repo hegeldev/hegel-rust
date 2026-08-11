@@ -1097,6 +1097,27 @@ mod one_of_named_types {
         .settings(Settings::new().database(None))
         .run();
     }
+
+    struct BoxedHolder {
+        generator: gs::OneOfGenerator<'static, i64>,
+    }
+
+    #[test]
+    fn test_the_unqualified_one_of_generator_type_is_the_printable_form() {
+        use hegel::PrintableGenerator;
+
+        let holder = BoxedHolder {
+            generator: gs::one_of(vec![
+                gs::integers::<i64>().boxed_printable(),
+                gs::just(7_i64).boxed_printable(),
+            ]),
+        };
+        Hegel::new(move |tc| {
+            let _: i64 = tc.draw(&holder.generator);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
 }
 
 fn _one_of_generator_is_covariant_in_its_lifetime<'a>(
