@@ -1095,12 +1095,16 @@ impl<'a> Engine<'a> {
     /// status, origin, observations — without running the body, for *any*
     /// status (interesting included). That holds for any `extend`: a
     /// tree-determined path concludes within `choices`, so the continuation
-    /// budget is irrelevant to it. A genuine miss (a novel path, or one whose
-    /// recorded prefix runs out of `choices` before concluding) runs through
-    /// [`Self::test_function`] — bare when `extend == 0`, with up to `extend`
-    /// random draws past the end of `choices` otherwise — which records the
-    /// run into the tree so a later replay of the same path is served. There
-    /// is no separate result cache: the tree is the single source of truth.
+    /// budget is irrelevant to it. A *predicted overrun* — `choices` runs out
+    /// on recorded territory where the tree still expects a draw — is served
+    /// as `EarlyStop` when `extend == 0` (the bare replay would conclude
+    /// exactly that without the body learning anything new); with a random
+    /// continuation budget it is not predictive, so the run executes. A
+    /// genuine miss (a novel path) runs through [`Self::test_function`] —
+    /// bare when `extend == 0`, with up to `extend` random draws past the end
+    /// of `choices` otherwise — which records the run into the tree so a
+    /// later replay of the same path is served. There is no separate result
+    /// cache: the tree is the single source of truth.
     async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
@@ -1109,14 +1113,16 @@ impl<'a> Engine<'a> {
     ) -> Result<RunResult, RunError> {
         if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
         {
-            return Ok(RunResult {
-                status: out.status,
-                nodes: out.nodes,
-                spans: out.spans,
-                origin: out.origin,
-                target_observations: out.target_observations,
-                span_events: Vec::new(),
-            });
+            if out.status != Status::EarlyStop || extend == 0 {
+                return Ok(RunResult {
+                    status: out.status,
+                    nodes: out.nodes,
+                    spans: out.spans,
+                    origin: out.origin,
+                    target_observations: out.target_observations,
+                    span_events: Vec::new(),
+                });
+            }
         }
         let ntc = if extend == 0 {
             NativeTestCase::for_choices(choices, nodes, None)

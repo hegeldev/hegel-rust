@@ -204,6 +204,66 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
 }
 
 #[test]
+fn cached_test_function_predicts_overrun_for_truncated_known_path() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            let first = ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(first.status, Status::Valid);
+            assert_eq!(count.get(), 1);
+
+            let truncated = [ChoiceValue::Boolean(false)];
+            let predicted = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(predicted.status, Status::EarlyStop);
+            assert_eq!(count.get(), 1, "a predicted overrun must not run the body");
+            assert_eq!(predicted.nodes.len(), 1);
+
+            let again = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(again.status, Status::EarlyStop);
+            assert_eq!(count.get(), 1);
+        },
+    );
+}
+
+#[test]
+fn cached_test_function_probe_executes_past_a_predicted_overrun() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1);
+
+            let prefix = [ChoiceValue::Boolean(false)];
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert_eq!(
+                count.get(),
+                2,
+                "a probe must execute the body to draw its continuation"
+            );
+        },
+    );
+}
+
+#[test]
 fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
     with_counting_ctx(
         |ds| {
