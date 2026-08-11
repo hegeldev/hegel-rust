@@ -387,6 +387,12 @@ mod debug_repr {
     }
 
     #[test]
+    fn absurdly_nested_debug_reprs_fall_back_to_verbatim() {
+        let repr = format!("{}0{}", "(".repeat(5000), ")".repeat(5000));
+        assert_eq!(render_debug(&repr, 79), repr);
+    }
+
+    #[test]
     fn unparseable_debug_output_is_emitted_verbatim() {
         for repr in [
             "unbalanced [100, 200",
