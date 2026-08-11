@@ -822,6 +822,44 @@ mod stateful {
         );
     }
 
+    struct LongCounterMachine {
+        counter: u64,
+    }
+
+    impl StateMachine for LongCounterMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("increment", |m: &mut LongCounterMachine, _tc| {
+                m.counter += 1;
+                assert!(m.counter <= 60, "counter exceeded threshold");
+            })]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    /// Regression test for #396: the failing case is replayed from its
+    /// reproduce blob, and that replay respects the stateful step count
+    #[test]
+    fn test_long_counterexample_replays_under_the_configured_step_count() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: TestCase| {
+                    hegel::stateful::run(LongCounterMachine { counter: 0 }, tc);
+                })
+                .settings(
+                    Settings::new()
+                        .test_cases(100)
+                        .database(None)
+                        .derandomize(true)
+                        .stateful_step_count(100),
+                )
+                .run();
+            },
+            "counter exceeded threshold",
+        );
+    }
+
     /// Counts per test case how many times its single rule completed; the
     /// rule fails its assumption on every other attempt.
     struct AlternatingMachine {
