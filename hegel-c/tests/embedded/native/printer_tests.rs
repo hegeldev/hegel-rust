@@ -317,15 +317,13 @@ fn resolve_without_outstanding_deferreds_is_an_error() {
 }
 
 #[test]
-fn a_new_session_can_start_after_resolve() {
+fn resolve_seals_the_document_against_new_sessions() {
     let mut p = printer(79);
     let first = p.deferred(M).unwrap();
     p.text(Target::Slot(first), "a").unwrap();
     p.resolve().unwrap();
-    let second = p.deferred(M).unwrap();
-    p.text(Target::Slot(second), "b").unwrap();
-    p.resolve().unwrap();
-    assert_eq!(p.value().unwrap(), "ab");
+    assert_eq!(p.deferred(M), Err(PrinterError::DeadSlot));
+    assert_eq!(p.value().unwrap(), "a");
 }
 
 #[test]
@@ -346,11 +344,49 @@ fn value_with_unresolved_deferred_is_an_error() {
 }
 
 #[test]
-fn resolve_and_value_require_main_speculation_to_be_closed() {
+fn value_aborts_open_main_speculations_and_seals_the_document() {
+    let mut p = printer(79);
+    p.text(M, "kept").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, " uncommitted").unwrap();
+    assert_eq!(p.value().unwrap(), "kept");
+    assert_eq!(p.text(M, "late"), Err(PrinterError::DeadSlot));
+    assert_eq!(p.commit_speculative(M), Err(PrinterError::DeadSlot));
+    assert_eq!(p.abort_speculative(M), Err(PrinterError::DeadSlot));
+    assert_eq!(p.begin_speculative(M), Err(PrinterError::DeadSlot));
+    assert_eq!(p.deferred(M), Err(PrinterError::DeadSlot));
+    assert_eq!(p.value().unwrap(), "kept");
+}
+
+#[test]
+fn slots_killed_by_an_aborted_speculation_reject_slot_operations() {
     let mut p = printer(79);
     p.begin_speculative(M).unwrap();
-    assert_eq!(p.resolve(), Err(PrinterError::OpenSpeculation));
-    assert_eq!(p.value(), Err(PrinterError::OpenSpeculation));
+    let slot = p.deferred(M).unwrap();
+    p.abort_speculative(M).unwrap();
+    let dead = Target::Slot(slot);
+    assert_eq!(p.deferred(dead), Err(PrinterError::DeadSlot));
+    assert_eq!(p.begin_speculative(dead), Err(PrinterError::DeadSlot));
+    assert_eq!(p.commit_speculative(dead), Err(PrinterError::DeadSlot));
+    assert_eq!(p.abort_speculative(dead), Err(PrinterError::DeadSlot));
+}
+
+#[test]
+fn resolve_aborts_open_main_speculations_and_seals_the_document() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    let slot = p.deferred(M).unwrap();
+    p.text(Target::Slot(slot), "b").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "uncommitted").unwrap();
+    let nested = p.deferred(M).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "ab");
+    assert_eq!(p.text(M, "late"), Err(PrinterError::DeadSlot));
+    assert_eq!(
+        p.text(Target::Slot(nested), "x"),
+        Err(PrinterError::DeadSlot)
+    );
 }
 
 #[test]
@@ -591,13 +627,13 @@ fn nested_speculation_commits_are_not_validated_until_the_outer_commit() {
 }
 
 #[test]
-fn value_can_be_read_repeatedly_and_interleaved_with_writes() {
+fn value_can_be_read_repeatedly_but_seals_against_writes() {
     let mut p = printer(79);
     p.text(M, "a").unwrap();
     assert_eq!(p.value().unwrap(), "a");
     assert_eq!(p.value().unwrap(), "a");
-    p.text(M, "b").unwrap();
-    assert_eq!(p.value().unwrap(), "ab");
+    assert_eq!(p.text(M, "b"), Err(PrinterError::DeadSlot));
+    assert_eq!(p.value().unwrap(), "a");
 }
 
 // gofmt-style layout: opening brace followed by a breakable, a trailing
@@ -896,7 +932,7 @@ fn comment_on_a_dead_slot_is_an_error() {
 fn errors_have_readable_messages() {
     assert_eq!(
         PrinterError::DeadSlot.to_string(),
-        "deferred slot used after its printing session ended"
+        "print region used after its printing session ended"
     );
     assert_eq!(
         PrinterError::UnbalancedGroup.to_string(),
@@ -905,10 +941,6 @@ fn errors_have_readable_messages() {
     assert_eq!(
         PrinterError::NoSpeculation.to_string(),
         "commit or abort without an open speculative region"
-    );
-    assert_eq!(
-        PrinterError::OpenSpeculation.to_string(),
-        "operation requires all speculative regions to be closed"
     );
     assert_eq!(
         PrinterError::UnresolvedDeferred.to_string(),
