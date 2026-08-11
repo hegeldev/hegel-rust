@@ -643,6 +643,22 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
 /// types, either `#[derive(PrettyPrintable)]` or — to reuse an existing
 /// `Debug` representation without writing anything —
 /// [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+///
+/// `HashMap` and `HashSet` print as `HashMap::from([…])` /
+/// `HashSet::from([…])`, expressions that only construct the default-hasher
+/// types, so maps and sets with a custom hasher are deliberately not
+/// printable — print those through
+/// [`print_as_debug`](crate::generators::Generator::print_as_debug) or
+/// [`print_with`](crate::generators::Generator::print_with) instead:
+///
+/// ```compile_fail,E0277
+/// use std::collections::{HashMap, HashSet};
+/// use std::hash::{BuildHasherDefault, DefaultHasher};
+///
+/// fn assert_printable<T: hegel::PrettyPrintable>() {}
+/// assert_printable::<HashSet<i32, BuildHasherDefault<DefaultHasher>>>();
+/// assert_printable::<HashMap<i32, bool, BuildHasherDefault<DefaultHasher>>>();
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no printed representation",
     label = "`{Self}` does not implement `PrettyPrintable`",
@@ -874,7 +890,7 @@ impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
     }
 }
 
-impl<T: PrettyPrintable, S> PrettyPrintable for std::collections::HashSet<T, S> {
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::HashSet<T> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_seq(printer, "HashSet::from([", "])", self.iter());
     }
@@ -911,9 +927,7 @@ fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
     printer.end_group("])");
 }
 
-impl<K: PrettyPrintable, V: PrettyPrintable, S> PrettyPrintable
-    for std::collections::HashMap<K, V, S>
-{
+impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::HashMap<K, V> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_map(printer, "HashMap::from([", self.iter());
     }
