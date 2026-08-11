@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.3 - 2026-08-11
+
+This patch fixes `hegel_test_case_from_blob` ignoring the `stateful_step_count` setting ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). A stateful counterexample that needed more than 50 steps did not reproduce.
+
 ## 0.32.2 - 2026-08-10
 
 This patch improves the generation phase's span mutation. A mutated choice sequence that diverges from its donor's path previously ran out of data and was discarded as an overrun; mutation probes now draw randomly past the end of the spliced choices, so a diverged proposal becomes a complete test case seeded with the mutation. On recursive-generator workloads this turns a substantial fraction of previously wasted probes into productive test cases.

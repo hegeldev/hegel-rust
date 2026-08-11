@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.7 - 2026-08-11
+
+This patch fixes the replay of stateful counterexamples that need more than 50 steps ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). Previously, the replay of the shrunk counterexample stopped at 50 steps and incorrectly triggered a flaky test error.
+
 ## 0.29.6 - 2026-08-11
 
 This patch brings various minor improvements to the `#[composite]` macro.
