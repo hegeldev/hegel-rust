@@ -404,3 +404,52 @@ fn clone_stream_on_an_exhausted_source_stops_the_test() {
     let (ds, _handle) = exhausted_source();
     assert!(matches!(ds.clone_stream(), Err(DataSourceError::StopTest)));
 }
+
+#[test]
+fn try_conclusion_is_none_for_an_unconcluded_family() {
+    let (ds, handle) = random_source();
+    ds.generate_boolean(0.5, None).unwrap();
+    assert!(NativeDataSource::try_conclusion(&handle).is_none());
+}
+
+#[test]
+fn try_conclusion_reports_each_status() {
+    for reported in [
+        TestCaseResult::Valid,
+        TestCaseResult::Invalid,
+        TestCaseResult::Overrun,
+    ] {
+        let (ds, handle) = random_source();
+        ds.mark_complete(&reported);
+        let concluded = NativeDataSource::try_conclusion(&handle).unwrap();
+        assert_eq!(
+            core::mem::discriminant(&concluded),
+            core::mem::discriminant(&reported)
+        );
+    }
+}
+
+#[test]
+fn try_conclusion_reports_an_interesting_conclusion_with_its_origin() {
+    let (ds, handle) = random_source();
+    ds.mark_complete(&TestCaseResult::Interesting(Failure {
+        origin: "Panic at somewhere".to_string(),
+        reproduce_blob: None,
+    }));
+    let conclusion = NativeDataSource::try_conclusion(&handle).unwrap();
+    let TestCaseResult::Interesting(failure) = conclusion else {
+        panic!("expected an interesting conclusion, got {conclusion:?}");
+    };
+    assert_eq!(failure.origin, "Panic at somewhere");
+    assert!(failure.reproduce_blob.is_none());
+}
+
+#[test]
+fn try_conclusion_reports_a_draw_time_overrun() {
+    let (ds, handle) = exhausted_source();
+    assert!(ds.generate_boolean(0.5, None).is_err());
+    assert!(matches!(
+        NativeDataSource::try_conclusion(&handle),
+        Some(TestCaseResult::Overrun)
+    ));
+}
