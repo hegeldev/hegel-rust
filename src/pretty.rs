@@ -686,7 +686,7 @@ macro_rules! pretty_print_as_debug {
     ($($t:ty),+ $(,)?) => {$(
         impl $crate::PrettyPrintable for $t {
             fn pretty_print(&self, printer: &mut $crate::PrettyPrinter) {
-                $crate::pretty::print_debug_repr(&format!("{:?}", self), printer);
+                $crate::pretty::print_debug_repr(&::std::format!("{:?}", self), printer);
             }
         }
     )+};
