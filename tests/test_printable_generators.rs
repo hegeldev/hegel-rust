@@ -697,6 +697,33 @@ fn clone_output_anchors_where_the_clone_was_made() {
 }
 
 #[test]
+fn a_root_handle_straggling_mid_draw_on_an_unjoined_thread_does_not_break_reporting() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::booleans());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tc.draw(gs::booleans().print_with(move |_, printer| {
+                if printer.should_print() {
+                    tx.send(()).unwrap();
+                    while !RELEASE.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                }
+            }));
+        });
+        let _ = rx.recv();
+        panic!("boom");
+    });
+    RELEASE.store(true, Ordering::Release);
+    assert_eq!(lines, vec!["let draw_1 = false;"]);
+}
+
+#[test]
 fn straggling_clones_note_harmlessly_after_the_run() {
     let stash: Arc<Mutex<Option<hegel::TestCase>>> = Arc::new(Mutex::new(None));
     let stash_writer = stash.clone();

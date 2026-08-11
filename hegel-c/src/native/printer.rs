@@ -63,18 +63,17 @@ use alloc::vec::Vec;
 /// well-formed printing never fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrinterError {
-    /// A [`SlotId`] was used after the session that created it was resolved,
-    /// or after the speculative region containing it was aborted.
+    /// A write target was used after its content could no longer appear in
+    /// the document: a [`SlotId`] after the session that created it was
+    /// resolved or after the speculative region containing it was aborted,
+    /// or any target once the document was read and sealed by
+    /// [`Printer::resolve`] / [`Printer::value`].
     DeadSlot,
     /// `end_group` was executed with no group open.
     UnbalancedGroup,
     /// `commit_speculative` or `abort_speculative` was called with no open
     /// speculative region on the target.
     NoSpeculation,
-    /// `resolve` or `value` was called while a speculative region was open
-    /// on the main output. (An open region on a slot is not an error there:
-    /// `resolve` aborts it and kills the slot.)
-    OpenSpeculation,
     /// `value` was called while a deferred session was outstanding.
     UnresolvedDeferred,
     /// `resolve` was called with no deferred session outstanding.
@@ -84,12 +83,9 @@ pub enum PrinterError {
 impl core::fmt::Display for PrinterError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
-            PrinterError::DeadSlot => "deferred slot used after its printing session ended",
+            PrinterError::DeadSlot => "print region used after its printing session ended",
             PrinterError::UnbalancedGroup => "end_group without a matching begin_group",
             PrinterError::NoSpeculation => "commit or abort without an open speculative region",
-            PrinterError::OpenSpeculation => {
-                "operation requires all speculative regions to be closed"
-            }
             PrinterError::UnresolvedDeferred => "printer has unresolved deferred slots",
             PrinterError::NothingToResolve => "resolve called with no outstanding deferred slots",
         })
@@ -222,6 +218,7 @@ pub struct Printer {
     speculation: Vec<Vec<Cmd>>,
     slots: Vec<Slot>,
     pending_resolve: bool,
+    sealed: bool,
     rendered: String,
 }
 
@@ -235,6 +232,7 @@ impl Printer {
             speculation: Vec::new(),
             slots: Vec::new(),
             pending_resolve: false,
+            sealed: false,
             rendered: String::new(),
         }
     }
@@ -328,6 +326,9 @@ impl Printer {
     /// Open a deferred hole at the current position of `target` and return
     /// its slot. Writes to the slot are spliced in at the hole's position.
     pub fn deferred(&mut self, target: Target) -> Result<SlotId, PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
         if let Target::Slot(SlotId(id)) = target {
             if self.slots[id].dead {
                 return Err(PrinterError::DeadSlot);
@@ -343,6 +344,9 @@ impl Printer {
     /// until [`Printer::commit_speculative`] emits them or
     /// [`Printer::abort_speculative`] discards them.
     pub fn begin_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
         match target {
             Target::Main => self.speculation.push(Vec::new()),
             Target::Slot(SlotId(id)) => {
@@ -360,6 +364,9 @@ impl Printer {
     /// content. Committing into the main output validates group balance and
     /// rejects atomically, leaving the region open.
     pub fn commit_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
         match target {
             Target::Main => {
                 if self.speculation.is_empty() {
@@ -410,6 +417,9 @@ impl Printer {
     /// Close the innermost speculative region on `target`, discarding its
     /// content. Deferred slots opened inside the region die with it.
     pub fn abort_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
         let buf = match target {
             Target::Main => self.speculation.pop().ok_or(PrinterError::NoSpeculation)?,
             Target::Slot(SlotId(id)) => {
@@ -424,58 +434,57 @@ impl Printer {
         Ok(())
     }
 
-    /// Close the outstanding deferred session: every slot of the session
-    /// dies, and layout errors in the spliced content surface here.
-    ///
-    /// A slot with a speculative region still open — a straggler thread
-    /// caught mid-draw when the document is read — has that region aborted:
-    /// uncommitted content was never part of the document, and the slot dies
-    /// like any other, so the straggler's later writes become dead-slot
-    /// no-ops. Only an open speculative region on the main output (whose
-    /// owner is the caller itself) is an error.
+    /// Close the outstanding deferred session and seal the document (see
+    /// [`Printer::seal`]): every slot dies, open speculative regions on any
+    /// target are aborted, and layout errors in the spliced content surface
+    /// here.
     pub fn resolve(&mut self) -> Result<(), PrinterError> {
-        if !self.speculation.is_empty() {
-            return Err(PrinterError::OpenSpeculation);
-        }
         if !self.pending_resolve {
             return Err(PrinterError::NothingToResolve);
         }
-        let mut work = splice_ids(&self.main);
-        let mut reachable = Vec::new();
-        while let Some(id) = work.pop() {
-            if self.slots[id].dead {
-                continue;
-            }
-            reachable.push(id);
-            work.extend(splice_ids(&self.slots[id].commands));
-        }
-        for &id in &reachable {
-            let aborted = core::mem::take(&mut self.slots[id].speculation);
-            for buf in &aborted {
-                self.kill_splices(buf);
-            }
-            self.slots[id].dead = true;
-        }
+        self.seal();
         self.pending_resolve = false;
         self.render()?;
         Ok(())
     }
 
-    /// Lay out the document and return everything printed so far.
+    /// Lay out the document and return everything printed so far. Reading
+    /// the document seals it exactly like [`Printer::resolve`] does.
     pub fn value(&mut self) -> Result<&str, PrinterError> {
-        if !self.speculation.is_empty() {
-            return Err(PrinterError::OpenSpeculation);
-        }
         if self.pending_resolve {
             return Err(PrinterError::UnresolvedDeferred);
         }
+        self.seal();
         self.rendered = self.render()?;
         Ok(&self.rendered)
+    }
+
+    /// Seal the document: an open speculative region on any target — a
+    /// straggler thread caught mid-draw when the document is read — is
+    /// aborted, since uncommitted content was never part of the document;
+    /// every slot dies; and all later writes on any target, the main output
+    /// included, are dead-region errors. Sealing is what lets a reader
+    /// render a document other writers may still hold handles to: their
+    /// late writes become harmless no-ops instead of corrupting (or
+    /// blocking) the rendered output.
+    fn seal(&mut self) {
+        self.speculation.clear();
+        for slot in &mut self.slots {
+            slot.speculation.clear();
+            slot.dead = true;
+        }
+        self.sealed = true;
     }
 
     /// Whether `slot` can still be written to.
     pub fn slot_is_live(&self, slot: SlotId) -> bool {
         !self.slots[slot.0].dead
+    }
+
+    /// Whether the main output can still be written to: `false` once the
+    /// document has been read and sealed.
+    pub fn main_is_live(&self) -> bool {
+        !self.sealed
     }
 
     /// Append a note to `target`: each `\n`-separated line of `text` is
@@ -493,6 +502,9 @@ impl Printer {
     }
 
     fn dispatch(&mut self, target: Target, cmd: Cmd) -> Result<(), PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
         match target {
             Target::Main => {
                 if let Some(buf) = self.speculation.last_mut() {

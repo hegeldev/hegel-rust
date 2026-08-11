@@ -4495,17 +4495,19 @@ pub unsafe extern "C" fn hegel_printer_abort_speculative(
     }
 }
 
-/// Splice every deferred hole's content in at its position and return the
-/// document to direct output. Must be called on the document's root handle
-/// (from `hegel_printer_new` / `hegel_test_case_printer`), after which every
-/// slot of the session is dead; a new session may open fresh holes
-/// afterwards.
+/// Splice every deferred hole's content in at its position and seal the
+/// document. Must be called on the document's root handle (from
+/// `hegel_printer_new` / `hegel_test_case_printer`). Sealing ends all
+/// writing: every slot dies, a speculative region still open on any target —
+/// a straggler thread caught mid-draw — is aborted (uncommitted content was
+/// never part of the document), and every later write on any handle reports
+/// `HEGEL_E_INVALID_HANDLE` like any other dead region, so a straggler's
+/// late writes are harmless to tolerate.
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
 /// `HEGEL_E_INVALID_ARG` — with a diagnostic — when called on a deferred
-/// handle, with no deferred session outstanding, with a speculative region
-/// still open, or when a recorded `hegel_printer_end_group` turns out to be
-/// unbalanced at replay.
+/// handle, with no deferred session outstanding, or when a recorded
+/// `hegel_printer_end_group` turns out to be unbalanced at replay.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_resolve(
     ctx: *mut HegelContext,
@@ -4550,7 +4552,7 @@ pub unsafe extern "C" fn hegel_printer_is_live(
         return HEGEL_E_INVALID_ARG;
     }
     let live = match handle.target {
-        PrinterTarget::Main => true,
+        PrinterTarget::Main => handle.inner.lock().main_is_live(),
         PrinterTarget::Slot(slot) => handle.inner.lock().slot_is_live(slot),
     };
     unsafe { *out_live = live };
@@ -4572,15 +4574,19 @@ pub struct hegel_printer_value_result_t {
     pub len: usize,
 }
 
-/// Read everything printed to the document so far, flushing pending break
-/// points. Must be called on the document's root handle.
+/// Read everything printed to the document, flushing pending break points.
+/// Must be called on the document's root handle. Reading seals the document
+/// exactly like `hegel_printer_resolve` does: open speculative regions on
+/// any target are aborted and every later write on any handle reports
+/// `HEGEL_E_INVALID_HANDLE`. Reading again is fine and returns the same
+/// document.
 ///
 /// On success fills `*out_result` with an engine-allocated UTF-8 buffer the
 /// caller owns (release with `hegel_printer_value_result_free`) and returns
 /// `HEGEL_OK`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
 /// `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_result`, a
-/// deferred handle, an unresolved deferred session (call
-/// `hegel_printer_resolve` first), or an open speculative region.
+/// deferred handle, or an unresolved deferred session (call
+/// `hegel_printer_resolve` first).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_value(
     ctx: *mut HegelContext,

@@ -134,6 +134,8 @@ fn deferred_slot_roundtrip_and_death() {
 
         ok(hegel_printer_is_live(ctx, slot, &mut live));
         assert!(!live);
+        ok(hegel_printer_is_live(ctx, p, &mut live));
+        assert!(!live, "resolve seals the main output too");
         assert_eq!(
             hegel_printer_text(ctx, slot, "x".as_ptr(), 1),
             HEGEL_E_INVALID_HANDLE
@@ -217,6 +219,12 @@ fn speculative_regions_commit_and_abort() {
     unsafe {
         let p = new_printer(ctx, 79);
         text(ctx, p, "a");
+        assert_eq!(
+            hegel_printer_commit_speculative(ctx, p),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("without an open speculative region"));
+        assert_eq!(hegel_printer_abort_speculative(ctx, p), HEGEL_E_INVALID_ARG);
         ok(hegel_printer_begin_speculative(ctx, p));
         text(ctx, p, "b");
         ok(hegel_printer_abort_speculative(ctx, p));
@@ -227,10 +235,9 @@ fn speculative_regions_commit_and_abort() {
 
         assert_eq!(
             hegel_printer_commit_speculative(ctx, p),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
-        assert!(last_error(ctx).contains("without an open speculative region"));
-        assert_eq!(hegel_printer_abort_speculative(ctx, p), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("printing session ended"));
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
     }
