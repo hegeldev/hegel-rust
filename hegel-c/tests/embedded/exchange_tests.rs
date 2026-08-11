@@ -50,6 +50,69 @@ fn offer_resumes_only_after_the_driver_polls_again() {
 }
 
 #[test]
+fn offer_nowait_queues_without_suspending() {
+    let exchange = CaseExchange::new();
+    exchange.offer_nowait(fresh_source());
+    exchange.offer_nowait(fresh_source());
+    assert!(exchange.try_take().is_some());
+    assert!(exchange.try_take().is_some());
+    assert!(exchange.try_take().is_none());
+}
+
+#[test]
+fn queued_cases_are_taken_in_offer_order() {
+    let exchange = CaseExchange::new();
+    let one_choice = NativeTestCase::for_choices(
+        &[crate::native::core::ChoiceValue::Boolean(true)],
+        None,
+        None,
+    );
+    let (first, _handle) = NativeDataSource::new(one_choice);
+    exchange.offer_nowait(Box::new(first));
+    exchange.offer_nowait(fresh_source());
+    assert!(
+        exchange
+            .try_take()
+            .unwrap()
+            .generate_boolean(0.5, None)
+            .is_ok()
+    );
+    assert!(
+        exchange
+            .try_take()
+            .unwrap()
+            .generate_boolean(0.5, None)
+            .is_err()
+    );
+}
+
+#[test]
+fn suspend_is_pending_once_then_ready() {
+    let exchange = CaseExchange::new();
+    let fut = exchange.suspend();
+    let mut fut = std::pin::pin!(fut);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    assert!(fut.as_mut().poll(&mut cx).is_ready());
+}
+
+#[test]
+fn offer_queues_several_cases_across_one_suspension() {
+    let exchange = CaseExchange::new();
+    let fut = async {
+        exchange.offer_nowait(fresh_source());
+        exchange.offer(fresh_source()).await;
+    };
+    let mut fut = std::pin::pin!(fut);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    assert!(exchange.try_take().is_some());
+    assert!(exchange.try_take().is_some());
+    assert!(exchange.try_take().is_none());
+    assert!(fut.as_mut().poll(&mut cx).is_ready());
+}
+
+#[test]
 fn take_errors_when_nothing_was_offered() {
     let err = CaseExchange::new().take().err().unwrap();
     let msg = err.to_string();

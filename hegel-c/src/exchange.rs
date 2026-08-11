@@ -9,15 +9,20 @@
 //! one poll per test case (`hegel_next_test_case`) or in a loop to
 //! completion (the test-only `drive`).
 //!
-//! The protocol is strict alternation. Polling the engine future either
-//! returns `Ready` (the run is finished) or `Pending`, in which case the
-//! engine has stored exactly one offered case in the exchange for the driver
-//! to [`take`](CaseExchange::take). The driver must finish that case —
-//! everything through `mark_complete` — before polling again: the next poll
-//! resumes the engine, which immediately reads the case's outcome off its
-//! handle.
+//! The protocol generalises strict alternation to a bounded queue. Polling
+//! the engine future either returns `Ready` (the run is finished) or
+//! `Pending`, in which case the engine has queued zero or more offered cases
+//! in the exchange for the driver to take (via
+//! [`try_take`](CaseExchange::try_take), or [`take`](CaseExchange::take)
+//! where the protocol guarantees one is queued). With a pipeline window of 1
+//! (the default) this is exactly the old strict alternation: each `Pending`
+//! carries exactly one queued case, and the driver must finish it —
+//! everything through `mark_complete` — before polling again. With a wider
+//! window the engine may queue several cases before suspending, and a poll
+//! may legitimately find some of them still open.
 
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -29,26 +34,45 @@ use crate::sys::sync::Mutex;
 /// A data source handed across the exchange, one per test case.
 pub(crate) type BoxedDataSource = Box<dyn DataSource + Send + Sync>;
 
-/// One engine-to-driver handoff slot. See the module docs for the protocol.
+/// The engine-to-driver handoff queue. See the module docs for the protocol.
 pub(crate) struct CaseExchange {
-    slot: Mutex<Option<BoxedDataSource>>,
+    queue: Mutex<VecDeque<BoxedDataSource>>,
 }
 
 impl CaseExchange {
     pub(crate) fn new() -> Self {
         CaseExchange {
-            slot: Mutex::new(None),
+            queue: Mutex::new(VecDeque::new()),
         }
     }
 
-    /// Yield `ds` to the driver. The returned future stores `ds` in the
-    /// exchange and suspends; by the alternation protocol it resolves on the
-    /// next poll, which the driver performs only once the case is complete.
-    pub(crate) fn offer(&self, ds: BoxedDataSource) -> Offer<'_> {
-        Offer {
-            exchange: self,
-            ds: Some(ds),
-        }
+    /// Queue `ds` for the driver without suspending, so the engine can keep
+    /// several cases open at once. The driver picks it up from a later
+    /// [`try_take`](Self::take) / [`take`](Self::take).
+    pub(crate) fn offer_nowait(&self, ds: BoxedDataSource) {
+        self.queue.lock().push_back(ds);
+    }
+
+    /// Suspend the engine until the driver polls it again. Combined with
+    /// [`offer_nowait`](Self::offer_nowait) this is how the engine hands
+    /// control back to the driver; on its own it is how the engine waits for
+    /// open cases to conclude.
+    pub(crate) fn suspend(&self) -> Yield {
+        Yield { suspended: false }
+    }
+
+    /// Yield `ds` to the driver: queue it and suspend. With a pipeline
+    /// window of 1 this preserves strict alternation — the future resolves
+    /// on the next poll, which the driver performs only once the case is
+    /// complete.
+    pub(crate) async fn offer(&self, ds: BoxedDataSource) {
+        self.offer_nowait(ds);
+        self.suspend().await;
+    }
+
+    /// Take the oldest queued case, or `None` when the queue is empty.
+    pub(crate) fn try_take(&self) -> Option<BoxedDataSource> {
+        self.queue.lock().pop_front()
     }
 
     /// Take the case the engine just offered. `Err` if the engine suspended
@@ -56,7 +80,7 @@ impl CaseExchange {
     /// bug in the engine, surfaced by the driver as a run-level error
     /// instead of a panic.
     pub(crate) fn take(&self) -> Result<BoxedDataSource, InternalError> {
-        let taken = self.slot.lock().take();
+        let taken = self.try_take();
         Ok(hegel_internal_unwrap!(
             taken,
             "the engine suspended without offering a test case"
@@ -70,24 +94,22 @@ impl Default for CaseExchange {
     }
 }
 
-/// Future returned by [`CaseExchange::offer`]: stores the data source and
-/// returns `Pending` on the first poll, `Ready` on the next.
-pub(crate) struct Offer<'a> {
-    exchange: &'a CaseExchange,
-    ds: Option<BoxedDataSource>,
+/// Future returned by [`CaseExchange::suspend`]: `Pending` on the first
+/// poll, `Ready` on the next.
+pub(crate) struct Yield {
+    suspended: bool,
 }
 
-impl Future for Offer<'_> {
+impl Future for Yield {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        match this.ds.take() {
-            Some(ds) => {
-                *this.exchange.slot.lock() = Some(ds);
-                Poll::Pending
-            }
-            None => Poll::Ready(()),
+        if this.suspended {
+            Poll::Ready(())
+        } else {
+            this.suspended = true;
+            Poll::Pending
         }
     }
 }
