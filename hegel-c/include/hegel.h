@@ -1758,8 +1758,8 @@ hegel_result_t hegel_printer_comment(hegel_context_t *ctx,
 /*
  Emit an unconditional newline followed by the current indentation.
 
- Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
- `HEGEL_E_INVALID_ARG` for a handle whose deferred slot is already dead.
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+ deferred slot is already dead.
  */
 hegel_result_t hegel_printer_hard_break(hegel_context_t *ctx, hegel_printer_t *printer);
 

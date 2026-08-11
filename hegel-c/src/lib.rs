@@ -3728,8 +3728,8 @@ pub unsafe extern "C" fn hegel_printer_comment(
 
 /// Emit an unconditional newline followed by the current indentation.
 ///
-/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
-/// `HEGEL_E_INVALID_ARG` for a handle whose deferred slot is already dead.
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+/// deferred slot is already dead.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_hard_break(
     ctx: *mut HegelContext,
