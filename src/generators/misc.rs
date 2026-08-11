@@ -39,7 +39,7 @@ pub fn booleans() -> BoolGenerator {
     BoolGenerator { p: 0.5 }
 }
 
-/// Generate boolean values with probability p of true.
+/// Generate boolean values with probability p in [0.0, 1.0] of true.
 pub fn weighted_booleans(p: f64) -> BoolGenerator {
     BoolGenerator { p }
 }
