@@ -202,6 +202,25 @@ fn pretty_print_as_debug_reuses_debug_output() {
     assert_eq!(render(&AlsoDebugOnly(true), 79), "AlsoDebugOnly(true)");
 }
 
+mod format_shadowing {
+    #[allow(unused_macros)]
+    macro_rules! format {
+        ($($t:tt)*) => {
+            ::std::compile_error!("pretty_print_as_debug! expanded a bare format!")
+        };
+    }
+
+    #[derive(Debug)]
+    pub struct Shadowed(#[allow(dead_code)] pub i32);
+
+    hegel::pretty_print_as_debug!(Shadowed);
+}
+
+#[test]
+fn pretty_print_as_debug_expands_hygienically() {
+    assert_eq!(render(&format_shadowing::Shadowed(3), 79), "Shadowed(3)");
+}
+
 #[test]
 fn pretty_print_as_debug_honors_newlines_at_current_indentation() {
     assert_eq!(render(&MultiLineDebug, 79), "line one\nline two");
