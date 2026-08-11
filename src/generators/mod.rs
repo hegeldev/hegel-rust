@@ -37,7 +37,7 @@ pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred};
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
-pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
+pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
