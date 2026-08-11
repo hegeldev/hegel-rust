@@ -308,15 +308,18 @@ where
             }
             speculation.printer().text("(");
             let key = draw_key(&self.keys, tc, speculation.printer());
-            if map.contains_key(&key) {
-                speculation.abort();
-                collection.reject(Some("duplicate key"));
-            } else {
-                speculation.printer().text(", ");
-                let value = draw_value(&self.values, tc, speculation.printer());
-                speculation.printer().text(")");
-                speculation.commit();
-                map.insert(key, value);
+            match map.entry(key) {
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    speculation.abort();
+                    collection.reject(Some("duplicate key"));
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    speculation.printer().text(", ");
+                    let value = draw_value(&self.values, tc, speculation.printer());
+                    speculation.printer().text(")");
+                    speculation.commit();
+                    entry.insert(value);
+                }
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
