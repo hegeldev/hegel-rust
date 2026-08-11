@@ -173,6 +173,16 @@
 //! }
 //! ```
 //!
+//! To override the number of test cases at runtime — for the whole suite,
+//! without editing source — set the `HEGEL_TEST_CASES` environment variable:
+//!
+//! ```bash
+//! HEGEL_TEST_CASES=10000 cargo test
+//! ```
+//!
+//! When set and non-empty, it takes precedence over any value configured in
+//! source, including explicit `test_cases` attributes.
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
