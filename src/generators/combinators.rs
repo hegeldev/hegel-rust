@@ -1,5 +1,5 @@
 use super::generators::draw_and_print_value;
-use super::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers, labels};
+use super::{BoxedPrintableGenerator, Generator, PrintableGenerator, TestCase, integers, labels};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
@@ -53,10 +53,11 @@ where
 /// builds an arity-specific generator that keeps its components unboxed.
 ///
 /// Generic over the stored generator type `B`: built from
-/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s it is itself
-/// printable; built from plain [`BoxedGenerator`](super::BoxedGenerator)s it
-/// can only be drawn silently.
-pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
+/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s (the
+/// default) it is itself printable; built from plain
+/// [`BoxedGenerator`](super::BoxedGenerator)s it can only be drawn
+/// silently.
+pub struct OneOfGenerator<'a, T, B = BoxedPrintableGenerator<'a, T>> {
     generators: Vec<B>,
     _phantom: PhantomData<fn(&'a ()) -> T>,
 }
