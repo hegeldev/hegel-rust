@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.29.5 - 2026-08-11
+
+This patch adds two environment variables that override settings at runtime, so a whole test suite's behavior can be adjusted without editing source:
+
+- `HEGEL_TEST_CASES` overrides the number of test cases each test runs, taking precedence over values configured in source (including explicit `test_cases` settings). For example, `HEGEL_TEST_CASES=10000 cargo test` runs a deep exploration of every property test.
+- `HEGEL_DATABASE` overrides the failure database location: `HEGEL_DATABASE=disabled` turns the database off (the same keyword the `--database` CLI flag uses), and any other non-empty value relocates the database to that path.
+
 ## 0.29.4 - 2026-08-10
 
 This patch improves random generation for tests with repeated structure (recursive generators, collections, state machines). The engine proposes new test cases by splicing the choices of one span over another with the same label; a spliced sequence that diverged from its donor's path was previously discarded, and is now completed with fresh random draws instead, so every such proposal becomes a real test case seeded with the mutation.
