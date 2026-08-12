@@ -86,9 +86,17 @@
  *   threads is a data race.
  * - A settings handle may be shared across threads once configured, but
  *   each setter call requires exclusive access.
- * - A run handle must only be used from one thread at a time. Calling
- *   hegel_next_test_case, hegel_run_result, or hegel_run_free concurrently
- *   on the same run is undefined behavior.
+ * - A run handle must only be used from one thread at a time: pump
+ *   hegel_next_test_case, hegel_run_result, and hegel_run_free from a
+ *   single thread. Misuse is detected — a concurrent call on the same run
+ *   returns HEGEL_E_CONCURRENT_USE instead of racing.
+ * - hegel_mark_complete may be called from any thread on any open test-case
+ *   handle; completion is family-wide and first-caller-wins. With
+ *   hegel_settings_set_max_open_test_cases above 1, one thread pumps
+ *   hegel_next_test_case and hands the open cases to any threads it likes,
+ *   each of which reports its case's outcome from wherever it ran;
+ *   hegel_next_test_case returns HEGEL_E_PENDING while it waits for one of
+ *   them.
  * - A test-case handle may be driven by at most one thread at a time.
  *   Concurrent operations on it return HEGEL_E_CONCURRENT_USE. To generate
  *   from several threads, hegel_test_case_clone the handle and give each
@@ -163,6 +171,13 @@ typedef enum {
      the handle instead.
      */
     HEGEL_E_CONCURRENT_USE = -9,
+    /*
+     `hegel_next_test_case`: no test case is available yet — the engine is
+     waiting for one of the open test cases to be marked complete. Complete
+     one, then call `hegel_next_test_case` again. Only returned when
+     `max_open_test_cases` is greater than 1.
+     */
+    HEGEL_E_PENDING = -10,
 } hegel_result_t;
 
 /*
@@ -550,6 +565,11 @@ typedef struct hegel_pool_t hegel_pool_t;
  The run handle owns the suspended run loop as a future, and each
  `hegel_next_test_case` call resumes it on the calling thread until it
  returns the next test case or finishes.
+
+ All run state lives behind an internal non-blocking lock: the run
+ functions are meant to be called from one thread at a time (see the
+ header preamble), and a concurrent call observes
+ `HEGEL_E_CONCURRENT_USE` instead of a data race.
  */
 typedef struct hegel_run_t hegel_run_t;
 
@@ -927,7 +947,10 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
  Returns `HEGEL_OK`, including at normal completion, where
  `*out_test_case` is NULL and you should call `hegel_run_result`.
  `HEGEL_E_NOT_COMPLETE` if the previous test case was not marked
- complete.
+ complete (with the default `max_open_test_cases` of 1).
+ `HEGEL_E_PENDING` if `max_open_test_cases` is above 1 and no case is
+ available until one of the open ones is marked complete.
+ `HEGEL_E_CONCURRENT_USE` if another thread is mid-call on this run.
 
  The handle is owned by the caller and must be released with
  `hegel_test_case_free`.
@@ -942,7 +965,8 @@ hegel_result_t hegel_next_test_case(hegel_context_t *ctx,
    result.
 
  Returns `HEGEL_OK`, or `HEGEL_E_NOT_COMPLETE` if the run hasn't finished
- yet.
+ yet, or `HEGEL_E_CONCURRENT_USE` if another thread is mid-call on this
+ run.
 
  Each call produces a copy, freed separately. It stays valid after
  `hegel_run_free`.
@@ -968,7 +992,7 @@ hegel_result_t hegel_run_result_free(hegel_context_t *ctx, hegel_run_result_t *r
 
  Returns `HEGEL_OK`.
 
- If the caller exited its loop early, any in-flight test case is marked
+ If the caller exited its loop early, every in-flight test case is marked
  complete and the rest of the exploration is dropped.
  */
 hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);

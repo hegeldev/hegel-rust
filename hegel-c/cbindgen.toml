@@ -88,9 +88,17 @@ header = """
  *   threads is a data race.
  * - A settings handle may be shared across threads once configured, but
  *   each setter call requires exclusive access.
- * - A run handle must only be used from one thread at a time. Calling
- *   hegel_next_test_case, hegel_run_result, or hegel_run_free concurrently
- *   on the same run is undefined behavior.
+ * - A run handle must only be used from one thread at a time: pump
+ *   hegel_next_test_case, hegel_run_result, and hegel_run_free from a
+ *   single thread. Misuse is detected — a concurrent call on the same run
+ *   returns HEGEL_E_CONCURRENT_USE instead of racing.
+ * - hegel_mark_complete may be called from any thread on any open test-case
+ *   handle; completion is family-wide and first-caller-wins. With
+ *   hegel_settings_set_max_open_test_cases above 1, one thread pumps
+ *   hegel_next_test_case and hands the open cases to any threads it likes,
+ *   each of which reports its case's outcome from wherever it ran;
+ *   hegel_next_test_case returns HEGEL_E_PENDING while it waits for one of
+ *   them.
  * - A test-case handle may be driven by at most one thread at a time.
  *   Concurrent operations on it return HEGEL_E_CONCURRENT_USE. To generate
  *   from several threads, hegel_test_case_clone the handle and give each

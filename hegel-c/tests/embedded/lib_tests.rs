@@ -212,10 +212,13 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
     let exchange = Arc::new(CaseExchange::new());
     let engine: EngineFuture = Box::pin(std::future::pending());
     let run = Box::into_raw(Box::new(HegelRun {
-        engine: Some(engine),
-        exchange,
-        current_family: None,
-        result: None,
+        inner: Mutex::new(RunInner {
+            engine: Some(engine),
+            exchange,
+            in_flight: Vec::new(),
+            max_open: 1,
+            result: None,
+        }),
     }));
 
     unsafe {
@@ -298,10 +301,13 @@ fn internal_run_error_surfaces_through_run_result_error() {
         ))
     });
     let run = Box::into_raw(Box::new(HegelRun {
-        engine: Some(engine),
-        exchange,
-        current_family: None,
-        result: None,
+        inner: Mutex::new(RunInner {
+            engine: Some(engine),
+            exchange,
+            in_flight: Vec::new(),
+            max_open: 1,
+            result: None,
+        }),
     }));
 
     unsafe {
@@ -326,5 +332,31 @@ fn internal_run_error_surfaces_through_run_result_error() {
         ok(hegel_run_result_free(ctx, result));
         ok(hegel_run_free(ctx, run));
         ok(hegel_context_free(ctx));
+    }
+}
+
+/// The run handle's internal lock turns a concurrent call on the same run
+/// into `HEGEL_E_CONCURRENT_USE` instead of a data race. As in
+/// [`concurrent_use_of_one_handle_is_rejected`], "another thread is
+/// mid-call" is stood in for by holding the run's own lock on this thread.
+#[test]
+fn concurrent_use_of_a_run_handle_is_rejected() {
+    unsafe {
+        let (ctx, s, run, tc) = start_run_and_first_case();
+
+        let held = (&*run).inner.try_lock().unwrap();
+        let mut next: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(
+            hegel_next_test_case(ctx, run, &mut next),
+            HEGEL_E_CONCURRENT_USE
+        );
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        assert_eq!(
+            hegel_run_result(ctx, run, &mut result),
+            HEGEL_E_CONCURRENT_USE
+        );
+        drop(held);
+
+        finish(ctx, s, run, tc);
     }
 }
