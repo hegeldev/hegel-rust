@@ -81,6 +81,25 @@ fn new_pool_pool_add_and_pool_generate_non_consuming() {
     assert_eq!(ds.pool_generate(&mut pool, true).ok().map(|_| ()), Some(()));
 }
 
+/// The fresh-id window is anchored on ids ever drawn in the family, not on
+/// the live pool, so consuming draws do not destabilize later recorded ids.
+/// Original run: add(0), add(1), consume-draw(0), add(2). Deleting the
+/// add-1 step replays [0, 0, 2]; the final id 2 must survive even though
+/// the live pool is empty at that point.
+#[test]
+fn pool_add_ids_survive_deletion_before_a_consuming_draw() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(2)),
+    ];
+    let (ds, _handle) = NativeDataSource::new(NativeTestCase::for_choices(&choices, None, None));
+    let mut pool = ds.new_pool().unwrap();
+    assert_eq!(ds.pool_add(&mut pool).unwrap(), 0);
+    assert_eq!(ds.pool_generate(&mut pool, true).unwrap(), 0);
+    assert_eq!(ds.pool_add(&mut pool).unwrap(), 2);
+}
+
 #[test]
 fn pool_generate_on_empty_pool_returns_assume() {
     let (ds, _handle) = random_source();
