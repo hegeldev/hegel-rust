@@ -46,6 +46,23 @@ fn width_32_float_bounds_must_be_f32_representable() {
 }
 
 #[test]
+fn narrow_to_f32_keeps_overflowing_finite_draws_finite() {
+    let snm = f64::from(f32::from_bits(1));
+    assert_eq!(
+        narrow_to_f32(f64::NEG_INFINITY, f64::INFINITY, snm, 1.5),
+        1.5
+    );
+    for raw in [1e300, -1e300, f64::MAX, f64::from(f32::MAX) * 2.0] {
+        let v = narrow_to_f32(f64::NEG_INFINITY, f64::INFINITY, snm, raw);
+        assert!(v.is_finite(), "{raw} narrowed to non-finite {v}");
+        assert!(v.abs() <= f64::from(f32::MAX));
+        assert_eq!(v, f64::from(v as f32));
+    }
+    let v = narrow_to_f32(0.0, f64::INFINITY, snm, 1e300);
+    assert!(v.is_finite() && v >= 0.0);
+}
+
+#[test]
 fn many_reject_marks_invalid_when_cannot_reach_min_size() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(1));
     let mut state = ManyState::new(6, Some(10));
