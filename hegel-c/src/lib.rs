@@ -495,18 +495,26 @@ struct FamilyShared {
     /// alive; the root handle also draws from this source, and completion
     /// (which is family-wide in the engine) is reported through it.
     ds: Arc<dyn DataSource + Send + Sync>,
-    /// Family-wide completion status. Set once via `compare_exchange` in
-    /// [`Self::complete`] so `ds.mark_complete` runs exactly once, no matter
-    /// which handle reports it. For a run-owned family this is also the gate
-    /// `hegel_next_test_case` checks before resuming the engine.
+    /// The family-wide completion *claim*. Taken once via `compare_exchange`
+    /// in [`Self::complete`] so `ds.mark_complete` runs exactly once, no
+    /// matter which handle reports it.
     completed: AtomicBool,
+    /// Whether the claimed completion's conclusion has been *written* to the
+    /// data source. This — not the claim — is what `hegel_next_test_case`
+    /// consults before dropping a family from the run's `in_flight`: between
+    /// the claim and the write (a completing thread preempted inside
+    /// `hegel_mark_complete`), the engine cannot see the conclusion yet, and
+    /// pruning on the claim alone would let the pump misreport the engine's
+    /// suspension as a run error instead of `HEGEL_E_PENDING`.
+    concluded: AtomicBool,
 }
 
 impl FamilyShared {
     /// Claim family-wide completion. First caller wins: it records `outcome`
-    /// on the data source; every later call — a racing clone, or the run
-    /// tearing down an in-flight case — is a no-op. This is the single home
-    /// of the exactly-once completion protocol.
+    /// on the data source, then publishes that the conclusion is visible;
+    /// every later call — a racing clone, or the run tearing down an
+    /// in-flight case — is a no-op. This is the single home of the
+    /// exactly-once completion protocol.
     fn complete(&self, outcome: &TestCaseResult) {
         if self
             .completed
@@ -514,6 +522,7 @@ impl FamilyShared {
             .is_ok()
         {
             self.ds.mark_complete(outcome);
+            self.concluded.store(true, Ordering::Release);
         }
     }
 }
@@ -1250,13 +1259,15 @@ pub unsafe extern "C" fn hegel_next_test_case(
     };
     let inner = &mut *inner;
 
-    // Drop the run's reference to every family the caller has completed
-    // since the last call; each release frees the data source unless the
-    // caller still holds a handle to it (in which case it lives until the
-    // caller frees that handle).
+    // Drop the run's reference to every family whose conclusion has been
+    // written since the last call; each release frees the data source unless
+    // the caller still holds a handle to it (in which case it lives until
+    // the caller frees that handle). This consults the conclusion, not the
+    // completion claim: a family claimed by a thread still inside
+    // `hegel_mark_complete` stays open until the engine can see its outcome.
     inner
         .in_flight
-        .retain(|family| !family.completed.load(Ordering::Acquire));
+        .retain(|family| !family.concluded.load(Ordering::Acquire));
 
     // A case the engine queued on an earlier poll can be handed out without
     // resuming the engine.
@@ -1589,6 +1600,7 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
+        concluded: AtomicBool::new(false),
     })
 }
 
