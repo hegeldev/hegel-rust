@@ -147,6 +147,11 @@ impl SettingsHandle {
                     raw,
                     settings.test_cases,
                 ));
+                require_ok(hegel_c::hegel_settings_set_max_open_test_cases(
+                    ctx,
+                    raw,
+                    settings.threads,
+                ));
                 require_ok(hegel_c::hegel_settings_set_stateful_step_count(
                     ctx,
                     raw,

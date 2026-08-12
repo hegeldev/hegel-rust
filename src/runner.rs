@@ -124,6 +124,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) threads: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
@@ -149,6 +150,7 @@ impl Settings {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            threads: 1,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             seed: None,
@@ -197,6 +199,31 @@ impl Settings {
     /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set how many worker threads run test-case bodies (default: 1).
+    ///
+    /// With `n` above 1, the engine keeps up to `n` test cases open at once
+    /// during generation and `n` worker threads run their bodies
+    /// concurrently; shrinking, database replay, and the final failure
+    /// replays stay sequential. The test function must then be `Fn + Sync`
+    /// — use [`Hegel::run_concurrent`](crate::Hegel::run_concurrent), which
+    /// `#[hegel::test]` and `#[hegel::main]` do automatically.
+    ///
+    /// With threads above 1 the *search* is not schedule-reproducible even
+    /// with a fixed [`seed`](Settings::seed): which test case is generated
+    /// next depends on the order completions land. What matters stays
+    /// deterministic — every discovered failure is shrunk sequentially,
+    /// replays exactly via the database and its reproduce blob, and
+    /// [`reproduce_failure`](crate::Hegel::reproduce_failure) is unaffected.
+    ///
+    /// `n` must be at least 1; a smaller value makes the run fail with a
+    /// usage error. The `HEGEL_THREADS` environment variable, when set and
+    /// non-empty, overrides this value at runtime, like `HEGEL_TEST_CASES`.
+    /// [`Mode::SingleTestCase`] and blob replay ignore it.
+    pub fn threads(mut self, n: u64) -> Self {
+        self.threads = n;
         self
     }
 
@@ -309,6 +336,14 @@ impl Settings {
                 match value.parse::<u64>() {
                     Ok(n) if n > 0 => self.test_cases = n,
                     _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
+                }
+            }
+        }
+        if let Some(value) = env("HEGEL_THREADS") {
+            if !value.is_empty() {
+                match value.parse::<u64>() {
+                    Ok(n) if n > 0 => self.threads = n,
+                    _ => panic!("HEGEL_THREADS must be a positive integer, got {value:?}"),
                 }
             }
         }
