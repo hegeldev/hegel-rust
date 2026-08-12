@@ -134,7 +134,7 @@ impl<T> Pool<T> {
     pub fn add(&mut self, v: T) {
         let variable_id: i64 = match self.tc.with_ctc(|ctc| ctc.pool_add(&self.pool)) {
             Ok(id) => id,
-            Err(rc) => raise_for_rc(rc), // nocov
+            Err(rc) => raise_for_rc(rc),
         };
         if self.values.contains_key(&variable_id) {
             panic!("unexpected variable id in map"); // nocov
