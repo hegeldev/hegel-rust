@@ -318,6 +318,28 @@ impl RunHandle {
         }
     }
 
+    /// Pull the next test case without assuming strict alternation: with
+    /// [`Settings::threads`](crate::Settings::threads) above 1 the engine
+    /// may have no case ready until one of the open ones is marked complete,
+    /// reported as [`NextCase::Pending`] (`HEGEL_E_PENDING`) rather than an
+    /// error.
+    pub(crate) fn next_test_case_any(&self) -> NextCase {
+        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
+        // SAFETY: self.raw is a live run handle; &mut raw is a valid
+        // out-parameter.
+        let rc =
+            with_context(|ctx| unsafe { hegel_c::hegel_next_test_case(ctx, self.raw, &mut raw) });
+        if rc == hegel_result_t::HEGEL_E_PENDING {
+            return NextCase::Pending;
+        }
+        require_ok(rc);
+        if raw.is_null() {
+            NextCase::Finished
+        } else {
+            NextCase::Case(CTestCase { raw })
+        }
+    }
+
     /// Read the aggregate result as an owned snapshot, independent of the
     /// run's lifetime; freed on drop.
     pub(crate) fn result(&self) -> RunResult {
@@ -342,6 +364,14 @@ impl Drop for RunHandle {
             drop(unsafe { Box::from_raw(p) });
         }
     }
+}
+
+/// One [`RunHandle::next_test_case_any`] outcome: a case to run, "nothing
+/// until an open case completes", or the run is finished.
+pub(crate) enum NextCase {
+    Case(CTestCase),
+    Pending,
+    Finished,
 }
 
 /// A libhegel test-case handle plus the per-primitive operations the frontend
