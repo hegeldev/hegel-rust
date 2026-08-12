@@ -51,19 +51,25 @@ where
 /// runtime-sized collection of alternatives needs.
 pub struct OneOfGenerator<'a, T, B = BoxedGenerator<'a, T>> {
     generators: Vec<B>,
-    _phantom: PhantomData<fn(&'a ()) -> T>,
+    _phantom: PhantomData<&'a fn() -> T>,
+}
+
+fn draw_one_of<T>(tc: &TestCase, max_index: usize, pick: impl FnOnce(usize) -> T) -> T {
+    tc.start_span(labels::ONE_OF);
+    let index = integers::<usize>()
+        .min_value(0)
+        .max_value(max_index)
+        .do_draw(tc);
+    let result = pick(index);
+    tc.stop_span(false);
+    result
 }
 
 impl<'a, T, B: Generator<T>> Generator<T> for OneOfGenerator<'a, T, B> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(labels::ONE_OF);
-        let index = integers::<usize>()
-            .min_value(0)
-            .max_value(self.generators.len() - 1)
-            .do_draw(tc);
-        let result = self.generators[index].do_draw(tc);
-        tc.stop_span(false);
-        result
+        draw_one_of(tc, self.generators.len() - 1, |index| {
+            self.generators[index].do_draw(tc)
+        })
     }
 
     fn enumerate_values(&self) -> Option<Vec<T>> {
@@ -99,9 +105,10 @@ where
 ///
 /// The component generators keep their concrete types (no boxing), so the
 /// result is a nameable, arity-specific generator type mirroring
-/// [`tuples!`](crate::tuples). For more than 12 alternatives, or a number
-/// not known at compile time, box the generators and call [`one_of`]
-/// directly.
+/// [`tuples!`](crate::tuples): [`OneOf1Generator`](crate::generators::OneOf1Generator)
+/// through [`OneOf12Generator`](crate::generators::OneOf12Generator). For
+/// more than 12 alternatives, or a number not known at compile time, box
+/// the generators and call [`one_of`] directly.
 ///
 /// # Example
 ///
@@ -156,92 +163,55 @@ macro_rules! one_of {
             $g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10, $g11, $g12,
         )
     };
-    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:expr),+ $(,)?) => {
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:tt)+) => {
         compile_error!(
             "one_of! supports at most 12 generators; for more, box them and call \
-             hegel::generators::one_of directly (e.g. \
-             one_of(vec![g1.boxed(), g2.boxed(), ...]))"
+             hegel::generators::one_of directly, e.g. \
+             one_of(vec![g1.boxed(), g2.boxed(), ...]) with the \
+             hegel::generators::Generator trait in scope for .boxed()"
         )
     };
 }
 
-/// Generator choosing from a single alternative. Created by
-/// [`one_of!`](crate::one_of); the 2–12 alternative forms are the
-/// macro-generated `OneOf2Generator` … `OneOf12Generator`.
-pub struct OneOf1Generator<G1, T> {
-    gen1: G1,
-    _phantom: PhantomData<fn(T)>,
-}
-
-impl<T, G1> Generator<T> for OneOf1Generator<G1, T>
-where
-    G1: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(labels::ONE_OF);
-        integers::<usize>().min_value(0).max_value(0).do_draw(tc);
-        let result = self.gen1.do_draw(tc);
-        tc.stop_span(false);
-        result
-    }
-
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.gen1.enumerate_values()
-    }
-}
-
-#[doc(hidden)]
-pub fn one_of1<T, G1: Generator<T>>(gen1: G1) -> OneOf1Generator<G1, T> {
-    OneOf1Generator {
-        gen1,
-        _phantom: PhantomData,
-    }
-}
-
 macro_rules! impl_one_of {
-    ($name:ident, $fn_name:ident, $max:expr,
-     $(($idx:tt, $field:ident, $G:ident)),+ ; ($last_field:ident, $last_G:ident)) => {
-        pub struct $name<$($G,)+ $last_G, T> {
-            $($field: $G,)+
+    ($name:ident, $fn_name:ident, $arity:literal,
+     $(($idx:tt, $field:ident, $G:ident)),* ; ($last_field:ident, $last_G:ident)) => {
+        #[doc = concat!(
+            "The ", $arity, "-alternative generator created by [`one_of!`](crate::one_of)."
+        )]
+        pub struct $name<$($G,)* $last_G, T> {
+            $($field: $G,)*
             $last_field: $last_G,
             _phantom: PhantomData<fn(T)>,
         }
 
-        impl<T, $($G,)+ $last_G> Generator<T> for $name<$($G,)+ $last_G, T>
+        impl<T, $($G,)* $last_G> Generator<T> for $name<$($G,)* $last_G, T>
         where
-            $($G: Generator<T>,)+
+            $($G: Generator<T>,)*
             $last_G: Generator<T>,
         {
             fn do_draw(&self, tc: &TestCase) -> T {
-                tc.start_span(labels::ONE_OF);
-                let index = integers::<usize>()
-                    .min_value(0)
-                    .max_value($max)
-                    .do_draw(tc);
-                let result = match index {
-                    $($idx => self.$field.do_draw(tc),)+
+                draw_one_of(tc, $arity - 1, |index| match index {
+                    $($idx => self.$field.do_draw(tc),)*
                     _ => self.$last_field.do_draw(tc),
-                };
-                tc.stop_span(false);
-                result
+                })
             }
 
             fn enumerate_values(&self) -> Option<Vec<T>> {
                 let mut all = Vec::new();
-                $(all.extend(self.$field.enumerate_values()?);)+
+                $(all.extend(self.$field.enumerate_values()?);)*
                 all.extend(self.$last_field.enumerate_values()?);
                 Some(all)
             }
         }
 
-
         #[doc(hidden)]
         #[allow(clippy::too_many_arguments)]
-        pub fn $fn_name<T, $($G: Generator<T>,)+ $last_G: Generator<T>>(
-            $($field: $G,)+ $last_field: $last_G,
-        ) -> $name<$($G,)+ $last_G, T> {
+        pub fn $fn_name<T, $($G: Generator<T>,)* $last_G: Generator<T>>(
+            $($field: $G,)* $last_field: $last_G,
+        ) -> $name<$($G,)* $last_G, T> {
             $name {
-                $($field,)+
+                $($field,)*
                 $last_field,
                 _phantom: PhantomData,
             }
@@ -249,11 +219,12 @@ macro_rules! impl_one_of {
     };
 }
 
-impl_one_of!(OneOf2Generator, one_of2, 1, (0, gen1, G1); (gen2, G2));
+impl_one_of!(OneOf1Generator, one_of1, 1, ; (gen1, G1));
+impl_one_of!(OneOf2Generator, one_of2, 2, (0, gen1, G1); (gen2, G2));
 impl_one_of!(
     OneOf3Generator,
     one_of3,
-    2,
+    3,
     (0, gen1, G1),
     (1, gen2, G2);
     (gen3, G3)
@@ -261,7 +232,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf4Generator,
     one_of4,
-    3,
+    4,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3);
@@ -270,7 +241,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf5Generator,
     one_of5,
-    4,
+    5,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -280,7 +251,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf6Generator,
     one_of6,
-    5,
+    6,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -291,7 +262,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf7Generator,
     one_of7,
-    6,
+    7,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -303,7 +274,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf8Generator,
     one_of8,
-    7,
+    8,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -316,7 +287,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf9Generator,
     one_of9,
-    8,
+    9,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -330,7 +301,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf10Generator,
     one_of10,
-    9,
+    10,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -345,7 +316,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf11Generator,
     one_of11,
-    10,
+    11,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),
@@ -361,7 +332,7 @@ impl_one_of!(
 impl_one_of!(
     OneOf12Generator,
     one_of12,
-    11,
+    12,
     (0, gen1, G1),
     (1, gen2, G2),
     (2, gen3, G3),

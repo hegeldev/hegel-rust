@@ -1129,3 +1129,152 @@ mod one_of_named_types {
         .run();
     }
 }
+
+fn _one_of_generator_is_covariant_in_its_lifetime<'a>(
+    g: gs::OneOfGenerator<'static, i64>,
+) -> gs::OneOfGenerator<'a, i64> {
+    g
+}
+
+mod one_of_arity_dispatch {
+    use hegel::generators::{self as gs, Generator};
+    use hegel::{Hegel, Settings, TestCase};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    fn assert_every_alternative_reachable<G>(arity: i32, generator: G)
+    where
+        G: Generator<i32> + Send + Sync + 'static,
+    {
+        let seen: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+        let track = Arc::clone(&seen);
+        Hegel::new(move |tc: TestCase| {
+            track.lock().unwrap().insert(tc.draw(&generator));
+        })
+        .settings(Settings::new().database(None).test_cases(500))
+        .run();
+        assert_eq!(*seen.lock().unwrap(), (0..arity).collect::<HashSet<i32>>());
+    }
+
+    #[test]
+    fn test_one_of_every_arity_reaches_every_alternative() {
+        assert_every_alternative_reachable(1, hegel::one_of!(gs::just(0)));
+        assert_every_alternative_reachable(2, hegel::one_of!(gs::just(0), gs::just(1)));
+        assert_every_alternative_reachable(
+            3,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2)),
+        );
+        assert_every_alternative_reachable(
+            4,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2), gs::just(3)),
+        );
+        assert_every_alternative_reachable(
+            5,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4)
+            ),
+        );
+        assert_every_alternative_reachable(
+            6,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5)
+            ),
+        );
+        assert_every_alternative_reachable(
+            7,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6)
+            ),
+        );
+        assert_every_alternative_reachable(
+            8,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7)
+            ),
+        );
+        assert_every_alternative_reachable(
+            9,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8)
+            ),
+        );
+        assert_every_alternative_reachable(
+            10,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9)
+            ),
+        );
+        assert_every_alternative_reachable(
+            11,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10)
+            ),
+        );
+        assert_every_alternative_reachable(
+            12,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10),
+                gs::just(11)
+            ),
+        );
+    }
+}

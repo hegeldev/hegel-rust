@@ -27,4 +27,12 @@ compile error pointing at the vec-based `one_of()`, which remains the way
 to choose among a runtime-sized (or very large) collection of boxed
 generators. `one_of()` itself now accepts any iterable of generators of
 one type — `OneOfGenerator` is generic over the stored generator type,
-defaulting to `BoxedGenerator`, so existing uses keep compiling unchanged.
+defaulting to `BoxedGenerator`, so most existing uses keep compiling
+unchanged. The exception is calls that spelled out the type arguments:
+`one_of` gained a type parameter, so e.g. `one_of::<i64, _>(gens)` must
+drop the turbofish (plain `one_of(gens)` infers everything).
+
+For parity, the arity-specific tuple generator types (`Tuple0Generator`
+through `Tuple12Generator`) are now exported as well, so `tuples!` results
+can be named the same way, and `tuples!` reports the same clear compile
+error as `one_of!` when given more than 12 generators.

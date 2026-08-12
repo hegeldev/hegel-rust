@@ -55,6 +55,11 @@ pub use strings::{
     from_regex, ip_addresses, text, time_strings, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
+pub use tuples::{
+    Tuple0Generator, Tuple1Generator, Tuple2Generator, Tuple3Generator, Tuple4Generator,
+    Tuple5Generator, Tuple6Generator, Tuple7Generator, Tuple8Generator, Tuple9Generator,
+    Tuple10Generator, Tuple11Generator, Tuple12Generator,
+};
 #[doc(hidden)]
 pub use tuples::{
     tuples0, tuples1, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9,

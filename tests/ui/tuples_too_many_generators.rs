@@ -1,5 +1,6 @@
-// `one_of!` supports up to 12 component generators; a thirteenth must
-// produce a clear error pointing at the vec-based `one_of` function.
+// `tuples!` supports up to 12 component generators; a thirteenth must
+// produce a clear error suggesting nesting instead of rustc's opaque
+// "no rules expected this token".
 //
 // (The `_used` binding keeps the `gs` import live — the compile_error!
 // discards the macro arguments before they can use it — and doubles as
@@ -12,7 +13,7 @@ use hegel::generators as gs;
 
 fn _check(tc: &hegel::TestCase) {
     let _used = gs::just(0);
-    tc.draw(hegel::one_of!(
+    tc.draw(hegel::tuples!(
         gs::just(0),
         gs::just(1),
         gs::just(2),
