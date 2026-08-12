@@ -1479,3 +1479,14 @@ fn choice_data_as_float_is_none_for_other_kinds() {
             .is_some()
     );
 }
+
+#[test]
+fn clone_kind_has_no_dense_index() {
+    assert_eq!(
+        ChoiceKind::Clone
+            .from_index(crate::native::bignum::BigUint::from(0u32))
+            .unwrap(),
+        None
+    );
+    assert_eq!(ChoiceKind::Clone.max_index(), None);
+}

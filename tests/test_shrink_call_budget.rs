@@ -1,7 +1,11 @@
 //! Shrink benchmarks derived from real bugs found by hegel in open-source
 //! crates: each test pins the minimal counterexample and a generous budget on
 //! post-discovery test-body executions, so shrinker call-count regressions
-//! fail loudly without flaking on generation-phase variance.
+//! fail loudly without flaking on generation-phase variance. The adversarial
+//! branch-switch test additionally pins the shrinker's ability to escape a
+//! locally-minimal `one_of` branch, which needs random continuations after
+//! lowering the branch selector; every seed is fixed, so the sweep is
+//! deterministic.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -79,6 +83,40 @@ fn shrink_budget_vec_of_ranges_with_empty_range() {
         stats.post_discovery_calls() < 600,
         "took {} post-discovery test-body calls",
         stats.post_discovery_calls()
+    );
+}
+
+#[test]
+fn shrink_quality_adversarial_branch_switch() {
+    let mut hits = 0;
+    for seed in 0..30 {
+        let stats = measure_failing_run(seed, 100, |tc| {
+            let branch = tc.draw(gs::integers::<u8>().min_value(0).max_value(2));
+            if branch == 0 {
+                let y = tc.draw(gs::integers::<u32>().min_value(0).max_value(9999));
+                (9000..=9500).contains(&y).then(|| format!("A y={y}"))
+            } else {
+                let a = tc.draw(gs::integers::<i64>());
+                (a != 0).then(|| format!("B branch={branch} a={a}"))
+            }
+        });
+        assert!(
+            stats.minimal_repr == "A y=9000" || stats.minimal_repr == "B branch=1 a=1",
+            "seed {seed} shrank to a non-minimal endpoint: {}",
+            stats.minimal_repr
+        );
+        if stats.minimal_repr == "A y=9000" {
+            hits += 1;
+        }
+        assert!(
+            stats.post_discovery_calls() < 6000,
+            "seed {seed} took {} post-discovery test-body calls",
+            stats.post_discovery_calls()
+        );
+    }
+    assert!(
+        hits >= 12,
+        "reached the true minimum on only {hits}/30 seeds"
     );
 }
 

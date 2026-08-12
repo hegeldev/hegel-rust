@@ -679,7 +679,8 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "mutate_and_shrink",
                 Box::new(|sh| boxed_pass(sh.mutate_and_shrink())),
-            ),
+            )
+            .stochastic(),
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;

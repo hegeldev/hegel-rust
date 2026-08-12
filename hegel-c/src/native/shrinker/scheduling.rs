@@ -51,6 +51,12 @@ pub struct ShrinkPass<'a> {
     pub shrinks: usize,
     /// Times the pass step reduced the sequence length.
     pub deletions: usize,
+    /// Whether a step's outcome depends on fresh randomness (probe-based
+    /// passes). Deterministic passes fixate after one non-improving step —
+    /// re-stepping an unchanged target would re-propose the same candidates
+    /// — while stochastic passes keep their consecutive-failure retry
+    /// budget, since a re-step draws new random continuations.
+    pub stochastic: bool,
 }
 
 impl<'a> ShrinkPass<'a> {
@@ -62,19 +68,30 @@ impl<'a> ShrinkPass<'a> {
             calls: 0,
             shrinks: 0,
             deletions: 0,
+            stochastic: false,
         }
+    }
+
+    /// Mark the pass as stochastic (see [`ShrinkPass::stochastic`]).
+    pub fn stochastic(mut self) -> Self {
+        self.stochastic = true;
+        self
     }
 }
 
 impl<'a> Shrinker<'a> {
     /// Run the supplied list of passes to a fixed point.
     ///
-    /// * Each outer iteration steps every pass; a pass is re-stepped only
-    ///   while each step strictly improves the shrink target. A step that
-    ///   completes without improving ends the pass's work for this
-    ///   iteration — one step already attempts the pass's whole repertoire
-    ///   against the current target, so re-stepping an unchanged target
-    ///   would only re-propose the same candidates.
+    /// * Each outer iteration steps every pass; a deterministic pass is
+    ///   re-stepped only while each step strictly improves the shrink
+    ///   target. A step that completes without improving ends the pass's
+    ///   work for this iteration — one step already attempts the pass's
+    ///   whole repertoire against the current target, so re-stepping an
+    ///   unchanged target would only re-propose the same candidates.
+    /// * A [stochastic](ShrinkPass::stochastic) pass draws fresh random
+    ///   continuations on every step, so it keeps a retry budget of
+    ///   `STOCHASTIC_MAX_FAILURES` consecutive non-improving steps (the
+    ///   budget every pass had before deterministic passes fixated early).
     /// * Inside each per-pass loop, `Shrinker::max_stall` is grown to
     ///   `max(max_stall, 2 * max_calls_per_failing_step + (calls -
     ///   calls_at_loop_start))` so a long shrink search where each step
@@ -89,6 +106,7 @@ impl<'a> Shrinker<'a> {
         &mut self,
         passes: &mut Vec<ShrinkPass<'a>>,
     ) -> ShrinkResult<()> {
+        const STOCHASTIC_MAX_FAILURES: usize = 6;
         let mut any_ran = true;
         while any_ran {
             any_ran = false;
@@ -102,8 +120,14 @@ impl<'a> Shrinker<'a> {
                 }
                 let before_nodes_len = self.current_nodes.len();
                 let epoch_before_pass = self.improvements;
+                let max_failures = if passes[idx].stochastic {
+                    STOCHASTIC_MAX_FAILURES
+                } else {
+                    1
+                };
+                let mut failures: usize = 0;
 
-                loop {
+                while failures < max_failures {
                     let span = self.calls.saturating_sub(calls_at_loop_start);
                     let target = max_calls_per_failing_step
                         .saturating_mul(2)
@@ -126,9 +150,12 @@ impl<'a> Shrinker<'a> {
                             passes[idx].deletions += 1;
                         }
                         any_ran = true;
-                    } else {
+                        failures = 0;
+                    } else if initial_calls != self.calls {
                         max_calls_per_failing_step = max_calls_per_failing_step
                             .max(self.calls.saturating_sub(initial_calls));
+                        failures += 1;
+                    } else {
                         break;
                     }
                 }

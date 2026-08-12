@@ -10,13 +10,20 @@
 //! for subsequent deterministic passes.
 
 use crate::native::bignum::BigUint;
-use crate::native::core::ChoiceValue;
+use crate::native::core::{ChoiceKind, ChoiceValue, sort_key};
 use alloc::vec::Vec;
 
-use super::{ShrinkResult, Shrinker};
+use super::{ShrinkResult, ShrinkRun, Shrinker};
 
 /// Number of random continuations to try per mutation.
 const RANDOM_ATTEMPTS: u64 = 3;
+
+/// Number of random continuations to invest in a single-node mutation whose
+/// first probe realised a different downstream shape. Only such candidates
+/// (branch switches) need random repair, so they get a deep budget; a
+/// shape-preserving candidate stops after its one observing probe, since the
+/// deterministic passes already explore value changes against a fixed shape.
+const DIVERGENT_RANDOM_ATTEMPTS: u64 = 15;
 
 /// Results with more than this many nodes are skipped.
 const MAX_MUTATE_NODES: usize = 32;
@@ -24,7 +31,10 @@ const MAX_MUTATE_NODES: usize = 32;
 impl<'a> Shrinker<'a> {
     /// Try random mutations of a few positions to escape local optima.
     ///
-    /// Port of Hypothesis's `shrinking/mutation.py::mutate_and_shrink`.
+    /// Port of Hypothesis's `shrinking/mutation.py::mutate_and_shrink`,
+    /// with the random continuation budget concentrated on mutations that
+    /// actually switch the downstream shape (see
+    /// [`Shrinker::probe_observing_divergence`]).
     pub(super) async fn mutate_and_shrink(&mut self) -> ShrinkResult<()> {
         if self.current_nodes.len() > MAX_MUTATE_NODES {
             return Ok(());
@@ -69,7 +79,14 @@ impl<'a> Shrinker<'a> {
                     .collect();
                 let max_size = crate::native::core::flattened_len(&self.current_nodes);
 
-                for _ in 0..=RANDOM_ATTEMPTS {
+                if !self
+                    .probe_observing_divergence(&prefix, max_size, i)
+                    .await?
+                {
+                    continue;
+                }
+
+                for _ in 0..DIVERGENT_RANDOM_ATTEMPTS {
                     self.probe(&prefix, max_size).await?;
                 }
 
@@ -99,7 +116,57 @@ impl<'a> Shrinker<'a> {
         }
         Ok(())
     }
+
+    /// As [`Shrinker::probe`], but additionally reports whether the run
+    /// realised a *branch switch*: the same node count as the shrink target
+    /// the probe was built from, but a different choice kind (constraints
+    /// included) requested at position `i + 1`.
+    ///
+    /// The draws up to `i` replay the target's own values, so the kind the
+    /// test requests at `i + 1` is deterministic — it changes exactly when
+    /// the mutated value at `i` redirected the test down another branch
+    /// (the `one_of` shape). Positions past `i + 1` carry the random
+    /// continuation and are pure noise for this comparison. A `true` result
+    /// means only a lucky random continuation can realise the alternative's
+    /// interesting region: it is worth investing the deep random budget. A
+    /// `false` result (including a stall-guarded no-op) means the shape
+    /// either stayed stable — the deterministic passes cover that — or
+    /// changed length, which is collection-resize territory the deletion
+    /// and clone passes own.
+    async fn probe_observing_divergence(
+        &mut self,
+        prefix: &[ChoiceValue],
+        max_size: usize,
+        i: usize,
+    ) -> ShrinkResult<bool> {
+        if self.improvements >= self.max_improvements {
+            return Err(super::ShrinkHalt::Stop);
+        }
+        if self.improvements > 0
+            && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
+        {
+            return Ok(false);
+        }
+        let expected: Vec<ChoiceKind> = self.current_nodes.iter().map(|n| n.data.kind()).collect();
+        let (is_interesting, actual_nodes, actual_spans) = self
+            .run_test_fn(ShrinkRun::Probe { prefix, max_size })
+            .await?;
+        self.calls += 1;
+        let diverged = actual_nodes.len() == expected.len()
+            && match (actual_nodes.get(i + 1), expected.get(i + 1)) {
+                (Some(a), Some(e)) => a.data.kind() != *e,
+                _ => false,
+            };
+        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            self.accept_improvement(actual_nodes, actual_spans);
+        }
+        Ok(diverged)
+    }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_mutation_tests.rs"]
+mod tests;
 
 /// Offset `current_idx` by `delta * sign`, returning `None` if the
 /// result would be negative.  Hypothesis works in Python ints, which
