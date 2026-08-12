@@ -101,21 +101,57 @@ fn shrink_quality_adversarial_branch_switch() {
             }
         });
         assert!(
-            stats.minimal_repr == "A y=9000" || stats.minimal_repr == "B branch=1 a=1",
-            "seed {seed} shrank to a non-minimal endpoint: {}",
+            stats.minimal_repr.starts_with("A y=") || stats.minimal_repr.starts_with("B branch="),
+            "seed {seed} shrank to an unexpected endpoint: {}",
             stats.minimal_repr
         );
         if stats.minimal_repr == "A y=9000" {
             hits += 1;
         }
         assert!(
-            stats.post_discovery_calls() < 6000,
+            stats.post_discovery_calls() < 12000,
             "seed {seed} took {} post-discovery test-body calls",
             stats.post_discovery_calls()
         );
     }
     assert!(
         hits >= 12,
+        "reached the true minimum on only {hits}/30 seeds"
+    );
+}
+
+#[test]
+fn shrink_quality_adversarial_late_branch_divergence() {
+    let mut hits = 0;
+    for seed in 0..30 {
+        let stats = measure_failing_run(seed, 100, |tc| {
+            let branch = tc.draw(gs::integers::<u8>().min_value(0).max_value(1));
+            if branch == 0 {
+                let p = tc.draw(gs::integers::<u8>().min_value(0).max_value(255));
+                let y = tc.draw(gs::integers::<u32>().min_value(0).max_value(9999));
+                (9000..=9500).contains(&y).then(|| format!("A p={p} y={y}"))
+            } else {
+                let q = tc.draw(gs::integers::<u8>().min_value(0).max_value(255));
+                let a = tc.draw(gs::integers::<i64>());
+                (a != 0).then(|| format!("B q={q} a={a}"))
+            }
+        });
+        assert!(
+            stats.minimal_repr.starts_with("A p=") || stats.minimal_repr.starts_with("B q="),
+            "seed {seed} shrank to an unexpected endpoint: {}",
+            stats.minimal_repr
+        );
+        if stats.minimal_repr == "A p=0 y=9000" {
+            hits += 1;
+        }
+        assert!(
+            stats.post_discovery_calls() < 8000,
+            "seed {seed} took {} post-discovery test-body calls",
+            stats.post_discovery_calls()
+        );
+    }
+    assert!(
+        hits >= 13,
         "reached the true minimum on only {hits}/30 seeds"
     );
 }

@@ -180,3 +180,43 @@ fn empty_clone_streams_are_left_alone() {
     assert_eq!(shrinker.calls, 0);
     assert_eq!(shrinker.current_nodes, initial);
 }
+
+#[test]
+fn nested_clone_probe_routes_probe_requests_through_the_outer_test_fn() {
+    use crate::native::shrinker::ShrinkProbe;
+
+    let mut outer: Box<dyn ShrinkProbe + Send> = Box::new(|run: ShrinkRun<'_>| match run {
+        ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
+        ShrinkRun::Probe { prefix, .. } => {
+            let children: Vec<ChoiceNode> = match prefix.first() {
+                Some(ChoiceValue::Clone(rec)) => rec
+                    .owned_values()
+                    .iter()
+                    .map(|v| match v {
+                        ChoiceValue::Integer(n) => int_node(i128::try_from(n.clone()).unwrap()),
+                        _ => panic!("expected integer child values"),
+                    })
+                    .collect(),
+                _ => panic!("expected a clone value at position 0"),
+            };
+            (true, vec![clone_node(children)], Spans::new())
+        }
+    });
+    let template = vec![clone_node(vec![int_node(5)])];
+    let outer_values: Vec<ChoiceValue> = template.iter().map(|n| n.value()).collect();
+    let mut probe = super::NestedCloneProbe {
+        test_fn: &mut outer,
+        template: &template,
+        outer_values: &outer_values,
+        i: 0,
+    };
+    let child_prefix = [ChoiceValue::Integer(BigInt::from(3))];
+    let (matched, nodes, _) = drive_no_yield(probe.run(ShrinkRun::Probe {
+        prefix: &child_prefix,
+        max_size: 4,
+    }))
+    .unwrap();
+    assert!(matched);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(int_value(&nodes[0]), 3);
+}
