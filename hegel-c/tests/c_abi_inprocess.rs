@@ -2028,8 +2028,8 @@ fn pool_is_shared_across_two_clone_threads() {
 }
 
 /// Repeated multi-case runs where each test case drives one pool from two
-/// concurrent clone streams. The fresh-id window is a function of each
-/// stream's own realized prefix, so racing streams widen only their own
+/// concurrent clone streams. The fresh-id window is anchored on the family
+/// registry of ids ever drawn, so racing clone streams can skew each other's
 /// recorded ranges (kind drift inside clone records is tolerated) and the
 /// data tree must never report the run as non-deterministic.
 #[test]
