@@ -10,3 +10,5 @@ fn my_test(tc: hegel::TestCase) { ... }
 With `threads` above 1 the search itself is not schedule-reproducible, even with a fixed seed: which test case is generated next depends on the order completions arrive. `#[hegel::standalone_function]` does not yet support `threads` above 1 and fails with a usage error if it is requested.
 
 Code calling the `Hegel` builder directly reaches parallel execution through the new `Hegel::new_concurrent` / `Hegel::run_concurrent` entry points, which require the test function to be `Fn(TestCase) + Sync`; `Hegel::new` / `Hegel::run` are unchanged and single-threaded.
+
+The TooSlow health check now measures the generation phase's wall-clock time rather than summed per-test-case time, so it also accounts for time between test cases; single-threaded runs near the threshold may trip it marginally sooner.
