@@ -448,10 +448,7 @@ pub(crate) fn drive<F>(
     let output = RunOutput::resolve();
 
     let c_settings = SettingsHandle::build(settings, database_key);
-    let run = match RunHandle::start(&c_settings, output.sink()) {
-        Ok(run) => run,
-        Err(message) => panic!("{message}"), // nocov
-    };
+    let run = start_run(&c_settings, &output);
 
     if mode == Mode::SingleTestCase {
         drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
@@ -470,6 +467,15 @@ pub(crate) fn drive<F>(
         test_location,
         &output,
     );
+}
+
+/// Start the engine run, surfacing libhegel's diagnostic as a panic if it
+/// could not be started.
+fn start_run(c_settings: &SettingsHandle, output: &RunOutput) -> RunHandle {
+    match RunHandle::start(c_settings, output.sink()) {
+        Ok(run) => run,
+        Err(message) => panic!("{message}"), // nocov
+    }
 }
 
 /// One worker-to-pump notification in [`drive_parallel`]: a test case was
@@ -526,10 +532,7 @@ pub(crate) fn drive_parallel<F>(
     let output = RunOutput::resolve();
 
     let c_settings = SettingsHandle::build(settings, database_key);
-    let run = match RunHandle::start(&c_settings, output.sink()) {
-        Ok(run) => run,
-        Err(message) => panic!("{message}"), // nocov
-    };
+    let run = start_run(&c_settings, &output);
 
     let workers = settings.threads as usize;
     let escaped = std::thread::scope(|scope| {

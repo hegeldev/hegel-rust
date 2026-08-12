@@ -1508,3 +1508,95 @@ fn resuming_without_completion_at_window_one_is_a_usage_error() {
         other => panic!("expected RunError::UsageError, got {other:?}"),
     }
 }
+
+#[test]
+fn await_completions_with_nothing_in_flight_returns_empty() {
+    with_counting_ctx(
+        |_| TestCaseResult::Valid,
+        async |ctx, count| {
+            let runs = ctx.await_completions().await.unwrap();
+            assert!(runs.is_empty());
+            assert_eq!(count.get(), 0);
+        },
+    );
+}
+
+#[test]
+fn drain_in_flight_surfaces_nondeterminism() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = AtomicUsize::new(0);
+    with_counting_ctx(
+        |ds| {
+            let r = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 0, 100).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx, _| {
+            let (run, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(
+                    &[ChoiceValue::Boolean(true)],
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert!(mismatch.is_none());
+
+            ctx.spawn_case(NativeTestCase::for_choices(
+                &[ChoiceValue::Boolean(true)],
+                None,
+                None,
+            ));
+            let err = ctx.drain_in_flight().await.unwrap_err();
+            assert!(matches!(err, crate::backend::RunError::NonDeterministic(_)));
+        },
+    );
+}
+
+/// Same driving-contract violation as
+/// [`resuming_without_completion_at_window_one_is_a_usage_error`], but on a
+/// generation-loop case rather than the initial probe, so the pipelined
+/// wait path reports it too.
+#[test]
+fn resuming_generation_without_completion_at_window_one_is_a_usage_error() {
+    let settings = Settings::new().database(None).verbosity(Verbosity::Quiet);
+    let exchange = CaseExchange::new();
+    let fut = run_main(
+        &settings,
+        None,
+        &exchange,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    let probe = exchange.take().unwrap();
+    let result = match rbool(&*probe) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    };
+    probe.mark_complete(&result);
+
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    let abandoned = exchange.take().unwrap();
+    let result = match fut.as_mut().poll(&mut cx) {
+        core::task::Poll::Ready(out) => out,
+        core::task::Poll::Pending => panic!("expected the run to end in a usage error"),
+    };
+    drop(abandoned);
+    match result {
+        Err(crate::backend::RunError::UsageError(msg)) => {
+            assert!(msg.contains("never marked complete"), "{msg}");
+        }
+        other => panic!("expected RunError::UsageError, got {other:?}"),
+    }
+}
