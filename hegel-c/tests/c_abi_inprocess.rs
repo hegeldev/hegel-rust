@@ -1996,7 +1996,7 @@ fn pool_is_shared_across_two_clone_threads() {
                         ok(hegel_pool_generate(
                             worker_ctx, clone.0, pool.0, true, &mut drawn,
                         ));
-                        assert!(drawn >= 1, "drew an id that was never added: {drawn}");
+                        assert!(drawn >= 0, "drew an id that was never added: {drawn}");
                         consumed.lock().unwrap().push(drawn);
                     }
                     ok(hegel_context_free(worker_ctx));
@@ -2009,7 +2009,7 @@ fn pool_is_shared_across_two_clone_threads() {
         consumed.dedup();
         assert_eq!(n, 8, "each consuming draw returns one variable");
         assert_eq!(consumed.len(), 8, "no consumed variable is drawn twice");
-        assert!(consumed.iter().all(|id| (1..=16).contains(id)));
+        assert!(consumed.iter().all(|id| (0..16).contains(id)));
 
         ok(hegel_test_case_free(ctx, clone_a));
         ok(hegel_test_case_free(ctx, clone_b));

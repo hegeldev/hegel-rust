@@ -74,8 +74,8 @@ fn new_pool_pool_add_and_pool_generate_non_consuming() {
     let mut pool = ds.new_pool().unwrap();
     let v1 = ds.pool_add(&mut pool).unwrap();
     let v2 = ds.pool_add(&mut pool).unwrap();
-    assert_eq!(v1, 1);
-    assert_eq!(v2, 2);
+    assert_eq!(v1, 0);
+    assert_eq!(v2, 1);
     let drawn = ds.pool_generate(&mut pool, false).unwrap();
     assert!(drawn == v1 || drawn == v2);
     assert_eq!(ds.pool_generate(&mut pool, true).ok().map(|_| ()), Some(()));

@@ -1,5 +1,6 @@
 use crate::native::{HashMap, HashSet};
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -736,9 +737,34 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
     cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
 }
 
+/// The choice kind shared by [`NativeTestCase::draw_fresh_id`] and
+/// [`NativeTestCase::draw_from_set`]: a nonnegative `i64` shrinking towards
+/// zero. Both draws use the full range so a replayed value never fails
+/// range validation when the set of live identifiers changes.
+fn id_choice_kind() -> IntegerChoice {
+    IntegerChoice {
+        min_value: BigInt::zero(),
+        max_value: BigInt::from(i64::MAX),
+        shrink_towards: BigInt::zero(),
+    }
+}
+
+/// The smallest nonnegative integer not in `used`.
+fn smallest_unused_id(used: &BTreeSet<i64>) -> i64 {
+    let mut candidate = 0;
+    for &id in used {
+        if id > candidate {
+            break;
+        }
+        if id == candidate {
+            candidate += 1;
+        }
+    }
+    candidate
+}
+
 /// A pool of variable IDs for stateful testing.
 pub struct NativeVariables {
-    last_id: i64,
     variables: Vec<i64>,
     removed: crate::native::HashSet<i64>,
 }
@@ -746,17 +772,14 @@ pub struct NativeVariables {
 impl NativeVariables {
     pub fn new() -> Self {
         NativeVariables {
-            last_id: 0,
             variables: Vec::new(),
             removed: crate::native::HashSet::default(),
         }
     }
 
-    /// Add a new variable and return its ID.
-    pub fn next(&mut self) -> i64 {
-        self.last_id += 1;
-        self.variables.push(self.last_id);
-        self.last_id
+    /// Add a variable ID (from [`NativeTestCase::draw_fresh_id`]) to the pool.
+    pub fn add(&mut self, id: i64) {
+        self.variables.push(id);
     }
 
     /// Return the IDs of variables that have not been consumed, in order.
@@ -1000,6 +1023,9 @@ pub struct FamilyCore {
     /// when [`Self::state_machine_steps_unbounded`] is set. Defaults to 50,
     /// overridden per run from the `stateful_step_count` setting.
     stateful_step_count: AtomicI64,
+    /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
+    /// so an identifier is unique across every stream of the test case.
+    fresh_ids: Mutex<BTreeSet<i64>>,
 }
 
 impl FamilyCore {
@@ -1012,6 +1038,7 @@ impl FamilyCore {
             target_observations: Mutex::new(HashMap::default()),
             state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
+            fresh_ids: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -1542,6 +1569,92 @@ impl NativeTestCase {
         self.nodes.push(ChoiceNode::integer(kind, v, true));
 
         Ok(())
+    }
+
+    /// Draw an integer identifier that is arbitrary but unique within this
+    /// test case's family.
+    ///
+    /// The identifier is recorded in the choice sequence *by value*, so a
+    /// replayed identifier stays stable when unrelated earlier draws are
+    /// deleted during shrinking. A replayed value that is already in use is
+    /// repaired to the smallest unused identifier; fresh generation always
+    /// hands out the smallest unused identifier.
+    pub fn draw_fresh_id(&mut self) -> Result<i64, EngineError> {
+        let used: BTreeSet<i64> = self.family.fresh_ids.lock().clone();
+        let fallback = smallest_unused_id(&used);
+        let kind = id_choice_kind();
+        let (v, was_forced) = self.resolve_choice(
+            || Ok(BigInt::from(fallback)),
+            || Ok(BigInt::from(fallback)),
+            |v| match v {
+                ChoiceValue::Integer(n)
+                    if kind.validate(n) && n.to_i64().is_some_and(|id| !used.contains(&id)) =>
+                {
+                    Some(n.clone())
+                }
+                _ => None,
+            },
+            |_rng| Ok(BigInt::from(fallback)),
+        )?;
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_integer(&v, was_forced);
+        }
+
+        let id = hegel_internal_unwrap!(v.to_i64(), "draw_fresh_id: id does not fit i64");
+        self.nodes.push(ChoiceNode::integer(kind, v, was_forced));
+        self.family.fresh_ids.lock().insert(id);
+        Ok(id)
+    }
+
+    /// Draw one of `members` (nonnegative, not necessarily sorted or
+    /// deduplicated), recording the chosen member *by value* rather than as
+    /// an index into `members`.
+    ///
+    /// A replayed value that is no longer a member is repaired to the
+    /// largest member below it (or the smallest member overall), so a
+    /// recorded choice keeps meaning the same member while that member
+    /// survives, references shrink towards earlier members, and deleting
+    /// other members never shifts what a recorded choice refers to.
+    pub fn draw_from_set(&mut self, members: &[i64]) -> Result<i64, EngineError> {
+        hegel_internal_assert!(
+            !members.is_empty(),
+            "draw_from_set requires at least one member"
+        );
+        let mut sorted = members.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        hegel_internal_assert!(sorted[0] >= 0, "draw_from_set requires nonnegative members");
+        let kind = id_choice_kind();
+        let smallest = sorted[0];
+        let (v, was_forced) = self.resolve_choice(
+            || Ok(BigInt::from(smallest)),
+            || Ok(BigInt::from(smallest)),
+            |v| match v {
+                ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
+                _ => None,
+            },
+            |rng| {
+                let idx = rng.random_range(0..sorted.len());
+                Ok(BigInt::from(sorted[idx]))
+            },
+        )?;
+
+        let raw = hegel_internal_unwrap!(v.to_i64(), "draw_from_set: value does not fit i64");
+        let chosen = match sorted.binary_search(&raw) {
+            Ok(idx) => sorted[idx],
+            Err(0) => sorted[0],
+            Err(idx) => sorted[idx - 1],
+        };
+        let value = BigInt::from(chosen);
+
+        if let Some(ref mut obs) = self.observer {
+            obs.draw_integer(&value, was_forced);
+        }
+
+        self.nodes
+            .push(ChoiceNode::integer(kind, value, was_forced));
+        Ok(chosen)
     }
 
     /// Draw a floating-point value in `[min_value, max_value]`. NaN is drawn

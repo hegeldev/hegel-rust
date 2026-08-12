@@ -189,11 +189,15 @@ pub trait DataSource: Send + Sync {
     /// [`Self::pool_generate`]; any stream of the same family may drive it.
     fn new_pool(&self) -> Result<NativeVariables, DataSourceError>;
 
-    /// Register a new variable in the pool. Returns the variable id.
+    /// Register a new variable in the pool. Returns the variable id, drawn
+    /// from this stream as a fresh identifier unique within the test-case
+    /// family and recorded in the choice sequence by value.
     fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError>;
 
     /// Draw a variable id from the pool, with the choice drawn from this
-    /// stream. If `consume` is true, the variable is removed from the pool.
+    /// stream and recorded as the chosen id itself rather than as an index
+    /// into the pool. If `consume` is true, the variable is removed from
+    /// the pool.
     fn pool_generate(
         &self,
         pool: &mut NativeVariables,
