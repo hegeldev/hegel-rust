@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::panic::{UnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
@@ -189,6 +190,63 @@ where
     pub fn run(self) {
         self.inner
             .run_with_health_checks_suppressed(&[HealthCheck::TooSlow, HealthCheck::FilterTooMuch]);
+    }
+}
+
+/// Stats from one full seeded run of a failing property: how many times the
+/// test body executed across all phases, the call index at which the failure
+/// was first found, and the debug representation the body reported on its
+/// last (minimal) failure.
+pub struct FailingRunStats {
+    pub total_calls: u64,
+    pub calls_at_first_failure: u64,
+    pub minimal_repr: String,
+}
+
+impl FailingRunStats {
+    /// Test-body executions after the failure was first found: the shrink
+    /// phase plus the final verification replays.
+    pub fn post_discovery_calls(&self) -> u64 {
+        self.total_calls - self.calls_at_first_failure
+    }
+}
+
+/// Run a failing property to completion with a fixed seed and return its
+/// [`FailingRunStats`]. `body` draws from the test case and returns
+/// `Some(debug repr)` when the drawn value hits the failure condition.
+pub fn measure_failing_run<F>(seed: u64, test_cases: u64, body: F) -> FailingRunStats
+where
+    F: Fn(&TestCase) -> Option<String> + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicU64::new(0));
+    let first_failure = Arc::new(AtomicU64::new(0));
+    let minimal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let calls_c = Arc::clone(&calls);
+    let first_c = Arc::clone(&first_failure);
+    let minimal_c = Arc::clone(&minimal);
+    let result = catch_unwind(AssertUnwindSafe(move || {
+        Hegel::new(move |tc| {
+            let n = calls_c.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(repr) = body(&tc) {
+                let _ = first_c.compare_exchange(0, n, Ordering::SeqCst, Ordering::SeqCst);
+                *minimal_c.lock().unwrap() = Some(repr);
+                panic!("HEGEL_MEASURE_FAILING_RUN");
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(test_cases)
+                .database(None)
+                .seed(Some(seed)),
+        )
+        .run();
+    }));
+    assert!(result.is_err(), "expected the property to fail");
+    let minimal_repr = minimal.lock().unwrap().clone().unwrap();
+    FailingRunStats {
+        total_calls: calls.load(Ordering::SeqCst),
+        calls_at_first_failure: first_failure.load(Ordering::SeqCst),
+        minimal_repr,
     }
 }
 

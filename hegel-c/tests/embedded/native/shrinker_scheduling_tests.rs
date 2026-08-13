@@ -203,6 +203,99 @@ fn fixate_passes_does_full_run_even_when_stalled() {
 }
 
 #[test]
+fn fixate_steps_a_failing_pass_only_once_per_outer_iteration() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.fetch_add(1, Ordering::Relaxed);
+                let interesting = matches!(&nodes[0].value(),
+                    ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == 5);
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    let mut passes = vec![ShrinkPass::new(
+        "always_fails",
+        Box::new(|sh| {
+            Box::pin(async move {
+                sh.consider(&[int_node(4)]).await?;
+                Ok(())
+            })
+        }),
+    )];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "a pass that makes calls without improving must not be re-stepped"
+    );
+    assert_eq!(shrinker.pass_stats(&passes)[0].1, 1);
+}
+
+#[test]
+fn fixate_re_steps_a_failing_stochastic_pass_up_to_its_retry_budget() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                calls_clone.fetch_add(1, Ordering::Relaxed);
+                let interesting = matches!(&nodes[0].value(),
+                    ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == 5);
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    let mut passes = vec![
+        ShrinkPass::new(
+            "always_fails",
+            Box::new(|sh| {
+                Box::pin(async move {
+                    sh.consider(&[int_node(4)]).await?;
+                    Ok(())
+                })
+            }),
+        )
+        .stochastic(),
+    ];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        6,
+        "a stochastic pass gets the full consecutive-failure retry budget"
+    );
+    assert_eq!(shrinker.pass_stats(&passes)[0].1, 6);
+}
+
+#[test]
+fn fixate_stops_re_stepping_a_stochastic_pass_that_makes_no_calls() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    let mut passes =
+        vec![ShrinkPass::new("no_op", Box::new(|_| Box::pin(async { Ok(()) }))).stochastic()];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    assert_eq!(shrinker.pass_stats(&passes)[0].1, 1);
+}
+
+#[test]
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     let initial = vec![int_node(5)];
     let mut shrinker = Shrinker::with_probe(

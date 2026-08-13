@@ -206,7 +206,7 @@ fn simulate_unseen_when_path_diverges() {
 }
 
 #[test]
-fn simulate_unseen_when_choices_run_out_mid_path() {
+fn simulate_predicts_overrun_when_choices_run_out_mid_path() {
     let mut root = DataTreeNode::default();
     record_tree(
         &mut root,
@@ -214,7 +214,21 @@ fn simulate_unseen_when_choices_run_out_mid_path() {
         Status::Valid,
         &[],
     );
-    assert_eq!(simulate(&root, &[ChoiceValue::Boolean(false)]), None);
+    let outcome = simulate_full(&root, &[ChoiceValue::Boolean(false)], None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.status, Status::EarlyStop);
+    assert_eq!(outcome.nodes.len(), 1);
+    assert_eq!(outcome.origin, None);
+}
+
+#[test]
+fn simulate_predicts_overrun_for_empty_choices_on_a_recorded_tree() {
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[bool_node(false)], Status::Valid, &[]);
+    let outcome = simulate_full(&root, &[], None).unwrap().unwrap();
+    assert_eq!(outcome.status, Status::EarlyStop);
+    assert!(outcome.nodes.is_empty());
 }
 
 #[test]
