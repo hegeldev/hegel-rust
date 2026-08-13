@@ -212,10 +212,13 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
     let exchange = Arc::new(CaseExchange::new());
     let engine: EngineFuture = Box::pin(std::future::pending());
     let run = Box::into_raw(Box::new(HegelRun {
-        engine: Some(engine),
-        exchange,
-        current_family: None,
-        result: None,
+        inner: Mutex::new(RunInner {
+            engine: Some(engine),
+            exchange,
+            in_flight: Vec::new(),
+            max_open: 1,
+            result: None,
+        }),
     }));
 
     unsafe {
@@ -298,10 +301,13 @@ fn internal_run_error_surfaces_through_run_result_error() {
         ))
     });
     let run = Box::into_raw(Box::new(HegelRun {
-        engine: Some(engine),
-        exchange,
-        current_family: None,
-        result: None,
+        inner: Mutex::new(RunInner {
+            engine: Some(engine),
+            exchange,
+            in_flight: Vec::new(),
+            max_open: 1,
+            result: None,
+        }),
     }));
 
     unsafe {
@@ -325,6 +331,114 @@ fn internal_run_error_surfaces_through_run_result_error() {
 
         ok(hegel_run_result_free(ctx, result));
         ok(hegel_run_free(ctx, run));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// The run handle's internal lock turns a concurrent call on the same run
+/// into `HEGEL_E_CONCURRENT_USE` instead of a data race. As in
+/// [`concurrent_use_of_one_handle_is_rejected`], "another thread is
+/// mid-call" is stood in for by holding the run's own lock on this thread.
+#[test]
+fn concurrent_use_of_a_run_handle_is_rejected() {
+    unsafe {
+        let (ctx, s, run, tc) = start_run_and_first_case();
+
+        let held = (&*run).inner.try_lock().unwrap();
+        let mut next: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(
+            hegel_next_test_case(ctx, run, &mut next),
+            HEGEL_E_CONCURRENT_USE
+        );
+        let mut result: *mut HegelRunResult = ptr::null_mut();
+        assert_eq!(
+            hegel_run_result(ctx, run, &mut result),
+            HEGEL_E_CONCURRENT_USE
+        );
+        drop(held);
+
+        finish(ctx, s, run, tc);
+    }
+}
+
+/// A worker preempted inside `hegel_mark_complete` — the family's completion
+/// claim has landed but the conclusion is not yet written to the data source
+/// — must not make the pump misreport the run. The prune in
+/// `hegel_next_test_case` may only drop a family once its conclusion is
+/// visible to the engine; until then the case counts as open, so the pump
+/// gets `HEGEL_E_PENDING`, not a false "internal error" run conclusion.
+#[test]
+fn half_completed_family_reports_pending_not_a_run_error() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut s: *mut HegelSettings = ptr::null_mut();
+        assert_eq!(hegel_settings_new(ctx, &mut s), HEGEL_OK);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_settings_set_seed(ctx, s, 1, true));
+        ok(hegel_settings_set_test_cases(ctx, s, 3));
+        ok(hegel_settings_set_max_open_test_cases(ctx, s, 2));
+        let mut run: *mut HegelRun = ptr::null_mut();
+        assert_eq!(
+            hegel_run_start(ctx, s, None, ptr::null_mut(), &mut run),
+            HEGEL_OK
+        );
+
+        let next = |out: &mut *mut HegelTestCase| -> hegel_result_t {
+            *out = ptr::null_mut();
+            hegel_next_test_case(ctx, run, out)
+        };
+        let draw = |tc: *mut HegelTestCase| {
+            let mut n: i64 = 0;
+            let rc = hegel_generate_integer(ctx, tc, 0, 1000, &mut n);
+            assert!(rc == HEGEL_OK || rc == HEGEL_E_STOP_TEST, "rc={rc:?}");
+        };
+        let complete_valid = |tc: *mut HegelTestCase| {
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
+        };
+
+        let mut probe: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(next(&mut probe), HEGEL_OK);
+        assert!(!probe.is_null());
+        draw(probe);
+        complete_valid(probe);
+
+        let mut a: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(next(&mut a), HEGEL_OK);
+        assert!(!a.is_null());
+        draw(a);
+        let mut b: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(next(&mut b), HEGEL_OK);
+        assert!(!b.is_null());
+        draw(b);
+
+        // Simulate the preemption: B's completion claim has landed, but the
+        // conclusion write has not happened yet.
+        let b_ref = &*b;
+        b_ref
+            .family
+            .completed
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        complete_valid(a);
+
+        let mut tc: *mut HegelTestCase = ptr::null_mut();
+        assert_eq!(
+            next(&mut tc),
+            HEGEL_E_PENDING,
+            "B is still open: the pump must wait for it, not conclude the run"
+        );
+        assert!(tc.is_null());
+
+        ok(hegel_test_case_free(ctx, b));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
 }

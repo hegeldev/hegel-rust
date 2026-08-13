@@ -250,8 +250,8 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
             TestCaseResult::Valid
         },
         async |ctx, _| {
-            let run = ctx
-                .execute(NativeTestCase::for_choices(&[], None, None))
+            let (run, _mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(&[], None, None))
                 .await
                 .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
@@ -1205,4 +1205,398 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         choices[1],
         ChoiceValue::Integer(crate::native::bignum::BigInt::from(0))
     );
+}
+
+/// Drive an engine future with up to `max_open_test_cases` cases open at
+/// once: on each suspension, pull every queued case into a local pool and
+/// run its body immediately, then mark exactly one pooled case complete —
+/// the one `pick` chooses — before polling again. Single-threaded and fully
+/// deterministic, this exercises every out-of-order completion path without
+/// spawning a thread.
+fn drive_out_of_order<F: core::future::Future>(
+    exchange: &CaseExchange,
+    fut: F,
+    mut run_case: impl FnMut(&dyn DataSource) -> TestCaseResult,
+    mut pick: impl FnMut(usize) -> usize,
+) -> F::Output {
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+    let mut pool: Vec<(crate::exchange::BoxedDataSource, TestCaseResult)> = Vec::new();
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            core::task::Poll::Ready(out) => return out,
+            core::task::Poll::Pending => {
+                while let Some(ds) = exchange.try_take() {
+                    let result = run_case(&*ds);
+                    pool.push((ds, result));
+                }
+                assert!(!pool.is_empty(), "engine suspended with nothing to run");
+                let idx = pick(pool.len());
+                let (ds, result) = pool.remove(idx);
+                ds.mark_complete(&result);
+            }
+        }
+    }
+}
+
+/// Run `run_main` under [`drive_out_of_order`] with a window of
+/// `max_open` and the given completion policy.
+fn run_main_out_of_order<F>(
+    settings: Settings,
+    mut body: F,
+    pick: impl FnMut(usize) -> usize,
+) -> Result<Vec<Failure>, crate::backend::RunError>
+where
+    F: FnMut(&dyn DataSource) -> TestCaseResult,
+{
+    let exchange = CaseExchange::new();
+    drive_out_of_order(
+        &exchange,
+        run_main(
+            &settings,
+            None,
+            &exchange,
+            Duration::from_secs(30),
+            Duration::from_secs(300),
+        ),
+        &mut body,
+        pick,
+    )
+}
+
+/// A body failing on values >= 100 whose sequential convergent minimum is
+/// the single choice `100`.
+fn threshold_body(ds: &dyn DataSource) -> TestCaseResult {
+    match rint(ds, 0, 1000) {
+        Ok(v) if v >= 100 => boom("too big"),
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    }
+}
+
+fn assert_shrunk_to_100(failures: &[Failure]) {
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].origin.contains("too big"), "{failures:?}");
+    let blob = failures[0].reproduce_blob.as_ref().unwrap();
+    let choices = crate::native::blob::decode_failure(blob).unwrap();
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0], ChoiceValue::Integer(BigInt::from(100)));
+}
+
+#[test]
+fn out_of_order_newest_first_completion_shrinks_to_the_sequential_minimum() {
+    let failures = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        threshold_body,
+        |n| n - 1,
+    )
+    .unwrap();
+    assert_shrunk_to_100(&failures);
+}
+
+#[test]
+fn out_of_order_oldest_first_completion_shrinks_to_the_sequential_minimum() {
+    let failures = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        threshold_body,
+        |_| 0,
+    )
+    .unwrap();
+    assert_shrunk_to_100(&failures);
+}
+
+#[test]
+fn out_of_order_seeded_random_completion_shrinks_to_the_sequential_minimum() {
+    let mut state: u64 = 0x2545F4914F6CDD1D;
+    let failures = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .max_open_test_cases(4)
+            .verbosity(Verbosity::Quiet),
+        threshold_body,
+        move |n| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((state >> 33) as usize) % n
+        },
+    )
+    .unwrap();
+    assert_shrunk_to_100(&failures);
+}
+
+#[test]
+fn pipelined_passing_run_executes_exactly_the_example_budget() {
+    use std::cell::Cell;
+    let executed = Cell::new(0u64);
+    let failures = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .test_cases(50)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        |ds| {
+            executed.set(executed.get() + 1);
+            match ru64(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        |n| n - 1,
+    )
+    .unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        executed.get(),
+        50,
+        "spawn gating must count in-flight cases against the budget"
+    );
+}
+
+#[test]
+fn pipelined_filter_too_much_fires_for_an_always_rejecting_body() {
+    let result = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        |ds| match ru64(ds) {
+            Ok(_) => TestCaseResult::Invalid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |n| n - 1,
+    );
+    match result {
+        Err(crate::backend::RunError::HealthCheck(msg)) => {
+            assert!(msg.contains("FilterTooMuch"), "{msg}");
+        }
+        other => panic!("expected RunError::HealthCheck, got {other:?}"),
+    }
+}
+
+#[test]
+fn pipelined_harvest_surfaces_nondeterminism() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let flip = AtomicUsize::new(0);
+    let result = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        |ds| {
+            let r = if flip.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, i64::MIN, i64::MAX).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        |n| n - 1,
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
+}
+
+#[test]
+fn pipelined_targeting_drains_and_optimises() {
+    let failures = run_main_out_of_order(
+        Settings::new()
+            .database(None)
+            .test_cases(60)
+            .max_open_test_cases(3)
+            .verbosity(Verbosity::Quiet),
+        |ds| match rint(ds, 0, 1000) {
+            Ok(v) => {
+                ds.target_observation(v as f64, "score").unwrap();
+                TestCaseResult::Valid
+            }
+            Err(()) => TestCaseResult::Overrun,
+        },
+        |n| n - 1,
+    )
+    .unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+/// The engine tolerates being resumed with cases open and nothing concluded
+/// when the window allows several open cases: it just suspends again, and
+/// the run still finishes once the driver resumes completing cases.
+#[test]
+fn resume_without_progress_is_benign_with_a_multi_case_window() {
+    let settings = Settings::new()
+        .database(None)
+        .test_cases(10)
+        .max_open_test_cases(3)
+        .verbosity(Verbosity::Quiet);
+    let exchange = CaseExchange::new();
+    let fut = run_main(
+        &settings,
+        None,
+        &exchange,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+    let mut pool: Vec<(crate::exchange::BoxedDataSource, TestCaseResult)> = Vec::new();
+    let mut idle_polls = 0usize;
+    let failures = loop {
+        match fut.as_mut().poll(&mut cx) {
+            core::task::Poll::Ready(out) => break out.unwrap(),
+            core::task::Poll::Pending => {
+                while let Some(ds) = exchange.try_take() {
+                    let result = match ru64(&*ds) {
+                        Ok(_) => TestCaseResult::Valid,
+                        Err(()) => TestCaseResult::Overrun,
+                    };
+                    pool.push((ds, result));
+                }
+                if idle_polls < 5 {
+                    idle_polls += 1;
+                    continue;
+                }
+                let (ds, result) = pool.pop().unwrap();
+                ds.mark_complete(&result);
+            }
+        }
+    };
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(idle_polls, 5, "the idle polls must actually have happened");
+}
+
+/// Under strict alternation (the default window of 1), resuming the engine
+/// without completing the offered case is still the driving-contract
+/// violation it always was.
+#[test]
+fn resuming_without_completion_at_window_one_is_a_usage_error() {
+    let settings = Settings::new().database(None).verbosity(Verbosity::Quiet);
+    let exchange = CaseExchange::new();
+    let fut = run_main(
+        &settings,
+        None,
+        &exchange,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    let ds = exchange.take().unwrap();
+    let result = match fut.as_mut().poll(&mut cx) {
+        core::task::Poll::Ready(out) => out,
+        core::task::Poll::Pending => panic!("expected the run to end in a usage error"),
+    };
+    drop(ds);
+    match result {
+        Err(crate::backend::RunError::UsageError(msg)) => {
+            assert!(msg.contains("never marked complete"), "{msg}");
+        }
+        other => panic!("expected RunError::UsageError, got {other:?}"),
+    }
+}
+
+#[test]
+fn await_completions_with_nothing_in_flight_returns_empty() {
+    with_counting_ctx(
+        |_| TestCaseResult::Valid,
+        async |ctx, count| {
+            let runs = ctx.await_completions().await.unwrap();
+            assert!(runs.is_empty());
+            assert_eq!(count.get(), 0);
+        },
+    );
+}
+
+#[test]
+fn drain_in_flight_surfaces_nondeterminism() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = AtomicUsize::new(0);
+    with_counting_ctx(
+        |ds| {
+            let r = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 0, 100).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx, _| {
+            let (run, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(
+                    &[ChoiceValue::Boolean(true)],
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert!(mismatch.is_none());
+
+            ctx.spawn_case(NativeTestCase::for_choices(
+                &[ChoiceValue::Boolean(true)],
+                None,
+                None,
+            ));
+            let err = ctx.drain_in_flight().await.unwrap_err();
+            assert!(matches!(err, crate::backend::RunError::NonDeterministic(_)));
+        },
+    );
+}
+
+/// Same driving-contract violation as
+/// [`resuming_without_completion_at_window_one_is_a_usage_error`], but on a
+/// generation-loop case rather than the initial probe, so the pipelined
+/// wait path reports it too.
+#[test]
+fn resuming_generation_without_completion_at_window_one_is_a_usage_error() {
+    let settings = Settings::new().database(None).verbosity(Verbosity::Quiet);
+    let exchange = CaseExchange::new();
+    let fut = run_main(
+        &settings,
+        None,
+        &exchange,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
+
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    let probe = exchange.take().unwrap();
+    let result = match rbool(&*probe) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    };
+    probe.mark_complete(&result);
+
+    assert!(fut.as_mut().poll(&mut cx).is_pending());
+    let abandoned = exchange.take().unwrap();
+    let result = match fut.as_mut().poll(&mut cx) {
+        core::task::Poll::Ready(out) => out,
+        core::task::Poll::Pending => panic!("expected the run to end in a usage error"),
+    };
+    drop(abandoned);
+    match result {
+        Err(crate::backend::RunError::UsageError(msg)) => {
+            assert!(msg.contains("never marked complete"), "{msg}");
+        }
+        other => panic!("expected RunError::UsageError, got {other:?}"),
+    }
 }

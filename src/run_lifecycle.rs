@@ -22,7 +22,7 @@ use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
     hegel_internal_error, with_test_context,
 };
-use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
+use crate::ffi::{CTestCase, NextCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
 use crate::test_case::{RunOutput, TestCase};
 
@@ -445,14 +445,10 @@ pub(crate) fn drive<F>(
     let mut test_fn = test_fn;
     let mode = settings.mode;
     let verbosity = settings.verbosity;
-    let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
 
     let c_settings = SettingsHandle::build(settings, database_key);
-    let run = match RunHandle::start(&c_settings, output.sink()) {
-        Ok(run) => run,
-        Err(message) => panic!("{message}"), // nocov
-    };
+    let run = start_run(&c_settings, &output);
 
     if mode == Mode::SingleTestCase {
         drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
@@ -463,6 +459,171 @@ pub(crate) fn drive<F>(
         run_test_case(c_tc, &mut test_fn, false, mode, verbosity, &output);
     }
 
+    finish_test_run(
+        &run,
+        &c_settings,
+        settings,
+        &mut test_fn,
+        test_location,
+        &output,
+    );
+}
+
+/// Start the engine run, surfacing libhegel's diagnostic as a panic if it
+/// could not be started.
+fn start_run(c_settings: &SettingsHandle, output: &RunOutput) -> RunHandle {
+    match RunHandle::start(c_settings, output.sink()) {
+        Ok(run) => run,
+        Err(message) => panic!("{message}"), // nocov
+    }
+}
+
+/// One worker-to-pump notification in [`drive_parallel`]: a test case was
+/// marked complete (poll the engine again), or a panic escaped
+/// [`run_test_case`] — an `InvalidArgument` / `InternalError` re-raise — and
+/// the run must tear down and re-raise it on the calling thread.
+enum WorkerEvent {
+    Completed,
+    Escaped(Box<dyn std::any::Any + Send>),
+}
+
+/// Record an escaped payload (first one wins) and report whether the pump
+/// should stop.
+fn record_escape(escaped: &mut Option<Box<dyn std::any::Any + Send>>, event: WorkerEvent) -> bool {
+    match event {
+        WorkerEvent::Completed => false,
+        WorkerEvent::Escaped(payload) => {
+            escaped.get_or_insert(payload);
+            true
+        }
+    }
+}
+
+/// Drive a libhegel run with `settings.threads` worker threads running test
+/// bodies concurrently.
+///
+/// The calling thread is the pump: it is the only thread that touches the
+/// run handle, pulling cases with [`RunHandle::next_test_case_any`] and
+/// handing each to the workers over a channel. Workers run every case
+/// through the same [`run_test_case`] as the sequential drive — the panic
+/// hook and its captures are thread-local, so each worker classifies its own
+/// case's panic — and signal the pump after each `mark_complete`, which is
+/// what wakes the pump from [`NextCase::Pending`]. A payload that escapes
+/// `run_test_case` (an invalid-argument or internal-error re-raise) is
+/// forwarded to the pump, which stops pumping, lets the scope join, and
+/// resumes it — dropping the [`RunHandle`] on the way completes every case
+/// still open in the engine.
+///
+/// Everything after the search — final replays, the failure report, the
+/// closing re-raise — runs on the calling thread via [`finish_test_run`],
+/// exactly as in the sequential drive.
+pub(crate) fn drive_parallel<F>(
+    test_fn: &F,
+    settings: &Settings,
+    database_key: Option<&str>,
+    test_location: Option<&TestLocation>,
+) where
+    F: Fn(TestCase) + Sync,
+{
+    init_panic_hook();
+    require_antithesis_feature();
+    let mode = settings.mode;
+    let verbosity = settings.verbosity;
+    let output = RunOutput::resolve();
+
+    let c_settings = SettingsHandle::build(settings, database_key);
+    let run = start_run(&c_settings, &output);
+
+    let workers = settings.threads as usize;
+    let escaped = std::thread::scope(|scope| {
+        let (case_tx, case_rx) = std::sync::mpsc::channel::<CTestCase>();
+        let case_rx = Arc::new(std::sync::Mutex::new(case_rx));
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<WorkerEvent>();
+        for _ in 0..workers {
+            let case_rx = Arc::clone(&case_rx);
+            let event_tx = event_tx.clone();
+            let output = &output;
+            scope.spawn(move || {
+                let mut body = |tc: TestCase| test_fn(tc);
+                loop {
+                    let next = case_rx.lock().unwrap().recv();
+                    let Ok(c_tc) = next else { return };
+                    let outcome = catch_unwind(AssertUnwindSafe(|| {
+                        run_test_case(c_tc, &mut body, false, mode, verbosity, output);
+                    }));
+                    match outcome {
+                        Ok(_) => {
+                            let _ = event_tx.send(WorkerEvent::Completed);
+                        }
+                        Err(payload) => {
+                            let _ = event_tx.send(WorkerEvent::Escaped(payload));
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+
+        let mut escaped: Option<Box<dyn std::any::Any + Send>> = None;
+        loop {
+            match run.next_test_case_any() {
+                NextCase::Case(c_tc) => {
+                    let _ = case_tx.send(c_tc);
+                }
+                NextCase::Pending => {
+                    // The pump holds an event_tx of its own, so recv can
+                    // only block for the next completion, never disconnect.
+                    let event = event_rx.recv().unwrap();
+                    if record_escape(&mut escaped, event) {
+                        break;
+                    }
+                }
+                NextCase::Finished => break,
+            }
+        }
+        // Closing the case channel ends the workers once each finishes its
+        // current case; dropping the pump's event_tx then lets the drain
+        // below end once the last worker is gone, doubling as a join
+        // barrier that also picks up any escape the pump raced past.
+        drop(case_tx);
+        drop(event_tx);
+        for event in event_rx.iter() {
+            record_escape(&mut escaped, event);
+        }
+        escaped
+    });
+
+    if let Some(payload) = escaped {
+        drop(run);
+        std::panic::resume_unwind(payload);
+    }
+
+    finish_test_run(
+        &run,
+        &c_settings,
+        settings,
+        &mut |tc| test_fn(tc),
+        test_location,
+        &output,
+    );
+}
+
+/// Read a drained run's aggregate result and produce the closing report:
+/// surface a run-level error, replay each discovered counterexample as a
+/// final case (printing its diagnostic and reproducer line), and re-raise
+/// the failing test's own panic. Shared by [`drive`] and [`drive_parallel`];
+/// runs entirely on the calling thread.
+fn finish_test_run(
+    run: &RunHandle,
+    c_settings: &SettingsHandle,
+    settings: &Settings,
+    test_fn: &mut dyn FnMut(TestCase),
+    test_location: Option<&TestLocation>,
+    output: &RunOutput,
+) {
+    let mode = settings.mode;
+    let verbosity = settings.verbosity;
+    let quiet = verbosity == Verbosity::Quiet;
     let result = run.result();
     use hegel_c::hegel_run_status_t as RunStatus;
     let status = result.status();
@@ -493,12 +654,12 @@ pub(crate) fn drive<F>(
                     .failure(index)
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
-                let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
+                let c_tc = match CTestCase::from_blob(c_settings, &blob, output.sink()) {
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output);
+                    run_test_case(c_tc, test_fn, true, mode, verbosity, output);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }

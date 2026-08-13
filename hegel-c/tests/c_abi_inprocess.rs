@@ -145,6 +145,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_c::hegel_settings_set_max_open_test_cases(ctx, ptr::null_mut(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
@@ -648,6 +652,12 @@ fn out_of_range_enum_values_are_invalid_arguments() {
             hegel_c::hegel_settings_set_stateful_step_count(ctx, s, -3),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 0),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("max_open must be at least 1"));
+        ok(hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 3));
 
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
@@ -2023,6 +2033,147 @@ fn pool_is_shared_across_two_clone_threads() {
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_pool_free(ctx, pool.0));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// Drive a whole run single-threadedly with `max_open_test_cases = 3`:
+/// pull open cases until `HEGEL_E_PENDING` (or the window is full), run each
+/// body as it is pulled, and mark them complete newest-first. Exercises the
+/// multi-case window over the public ABI — the pending state, out-of-order
+/// completion, and the run result at the end — with no threads involved.
+#[test]
+fn max_open_window_reverse_order_completion_reaches_the_verdict() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 0xfeed, true));
+        ok(hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 3));
+        let run = start(ctx, s);
+
+        let mut open: Vec<(*mut HegelTestCase, u32, *const c_char)> = Vec::new();
+        let origin = CString::new("n >= 900").unwrap();
+        let mut saw_pending = false;
+        'run: loop {
+            loop {
+                let mut tc: *mut HegelTestCase = ptr::null_mut();
+                let rc = hegel_next_test_case(ctx, run, &mut tc);
+                if rc == HEGEL_E_PENDING {
+                    saw_pending = true;
+                    assert!(
+                        !open.is_empty(),
+                        "PENDING must only be reported while cases are open"
+                    );
+                    assert!(last_error(ctx).contains("marked complete"));
+                    break;
+                }
+                ok(rc);
+                if tc.is_null() {
+                    // The run can finish while the caller still holds cases
+                    // that concluded during a draw (an overrun latches the
+                    // conclusion before mark_complete); report and free them.
+                    for (tc, status, case_origin) in open.drain(..) {
+                        ok(hegel_mark_complete(ctx, tc, status, case_origin));
+                        ok(hegel_test_case_free(ctx, tc));
+                    }
+                    break 'run;
+                }
+                assert!(open.len() < 3, "the engine must respect the window");
+                let mut n: i64 = 0;
+                let draw = hegel_generate_integer(ctx, tc, 0, 1000, &mut n);
+                let (status, case_origin) = if draw == HEGEL_E_STOP_TEST {
+                    (hegel_status_t::HEGEL_STATUS_OVERRUN as u32, ptr::null())
+                } else {
+                    ok(draw);
+                    if n >= 900 {
+                        (
+                            hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
+                            origin.as_ptr(),
+                        )
+                    } else {
+                        (hegel_status_t::HEGEL_STATUS_VALID as u32, ptr::null())
+                    }
+                };
+                open.push((tc, status, case_origin));
+                if open.len() == 3 {
+                    break;
+                }
+            }
+            if let Some((tc, status, case_origin)) = open.pop() {
+                ok(hegel_mark_complete(ctx, tc, status, case_origin));
+                ok(hegel_test_case_free(ctx, tc));
+            }
+        }
+        assert!(saw_pending, "a window of 3 must hit the pending state");
+
+        let r = result(ctx, run);
+        assert!(matches!(
+            status_of(ctx, r),
+            hegel_run_status_t::HEGEL_RUN_STATUS_FAILED
+        ));
+        assert_eq!(failure_count_of(ctx, r), 1);
+        let f = failure_at(ctx, r, 0);
+        let reported = std::ffi::CStr::from_ptr(origin_of(ctx, f))
+            .to_str()
+            .unwrap();
+        assert_eq!(reported, "n >= 900");
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, r));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// `hegel_run_free` with several cases still open completes every one of
+/// them, so handles the caller still holds observe a concluded case.
+#[test]
+fn run_free_completes_every_open_case() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 7, true));
+        ok(hegel_c::hegel_settings_set_max_open_test_cases(ctx, s, 3));
+        let run = start(ctx, s);
+
+        // The run's first case is the sequential smallest-natural-example
+        // probe; the window opens once it completes. It must draw, or the
+        // drawless choice tree is exhausted and the run ends immediately.
+        let mut probe: *mut HegelTestCase = ptr::null_mut();
+        ok(hegel_next_test_case(ctx, run, &mut probe));
+        assert!(!probe.is_null());
+        let mut n: i64 = 0;
+        ok(hegel_generate_integer(ctx, probe, 0, 1000, &mut n));
+        ok(hegel_mark_complete(
+            ctx,
+            probe,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, probe));
+
+        let mut open: Vec<*mut HegelTestCase> = Vec::new();
+        for _ in 0..3 {
+            let mut tc: *mut HegelTestCase = ptr::null_mut();
+            ok(hegel_next_test_case(ctx, run, &mut tc));
+            assert!(!tc.is_null());
+            open.push(tc);
+        }
+        ok(hegel_run_free(ctx, run));
+
+        for tc in open {
+            let mut n: i64 = 0;
+            assert_eq!(
+                hegel_generate_integer(ctx, tc, 0, 10, &mut n),
+                HEGEL_E_ALREADY_COMPLETE
+            );
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
 }

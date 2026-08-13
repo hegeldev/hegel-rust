@@ -517,7 +517,9 @@ pub use hegel_macros::main;
 /// Behaves like [`test`] for name rewriting, explicit test cases, and
 /// settings parsing. The generated function has the original signature
 /// with the `TestCase` parameter removed, and its body is run as an
-/// [`FnMut`] closure inside [`Hegel::run`].
+/// [`FnMut`] closure inside [`Hegel::run`]. Because of that `FnMut`
+/// wrapping, standalone functions do not yet support
+/// [`Settings::threads`] above 1; requesting it fails with a usage error.
 ///
 /// ```no_run
 /// use hegel::TestCase;

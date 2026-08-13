@@ -147,7 +147,10 @@ pub(crate) struct TestCaseLocalData {
 /// # Threading
 ///
 /// `TestCase` is `Send` but not `Sync`. To drive generation from another
-/// thread, clone the test case and move the clone. Each clone generates
+/// thread, clone the test case and move the clone. (This is about threads
+/// *inside* one test case; to run whole test-case bodies concurrently, see
+/// [`Settings::threads`](crate::Settings::threads) — each body still gets
+/// its own `TestCase`.) Each clone generates
 /// from its own *independent stream* of choices: draws on one clone never
 /// perturb the values any other clone (or the original) produces, so
 /// several threads can generate concurrently and the test stays fully

@@ -121,6 +121,12 @@ pub enum hegel_result_t {
     /// A single test-case handle was used from two threads at once. Clone
     /// the handle instead.
     HEGEL_E_CONCURRENT_USE = -9,
+
+    /// `hegel_next_test_case`: no test case is available yet — the engine is
+    /// waiting for one of the open test cases to be marked complete. Complete
+    /// one, then call `hegel_next_test_case` again. Only returned when
+    /// `max_open_test_cases` is greater than 1.
+    HEGEL_E_PENDING = -10,
 }
 
 use hegel_result_t::*;
@@ -489,18 +495,26 @@ struct FamilyShared {
     /// alive; the root handle also draws from this source, and completion
     /// (which is family-wide in the engine) is reported through it.
     ds: Arc<dyn DataSource + Send + Sync>,
-    /// Family-wide completion status. Set once via `compare_exchange` in
-    /// [`Self::complete`] so `ds.mark_complete` runs exactly once, no matter
-    /// which handle reports it. For a run-owned family this is also the gate
-    /// `hegel_next_test_case` checks before resuming the engine.
+    /// The family-wide completion *claim*. Taken once via `compare_exchange`
+    /// in [`Self::complete`] so `ds.mark_complete` runs exactly once, no
+    /// matter which handle reports it.
     completed: AtomicBool,
+    /// Whether the claimed completion's conclusion has been *written* to the
+    /// data source. This — not the claim — is what `hegel_next_test_case`
+    /// consults before dropping a family from the run's `in_flight`: between
+    /// the claim and the write (a completing thread preempted inside
+    /// `hegel_mark_complete`), the engine cannot see the conclusion yet, and
+    /// pruning on the claim alone would let the pump misreport the engine's
+    /// suspension as a run error instead of `HEGEL_E_PENDING`.
+    concluded: AtomicBool,
 }
 
 impl FamilyShared {
     /// Claim family-wide completion. First caller wins: it records `outcome`
-    /// on the data source; every later call — a racing clone, or the run
-    /// tearing down an in-flight case — is a no-op. This is the single home
-    /// of the exactly-once completion protocol.
+    /// on the data source, then publishes that the conclusion is visible;
+    /// every later call — a racing clone, or the run tearing down an
+    /// in-flight case — is a no-op. This is the single home of the
+    /// exactly-once completion protocol.
     fn complete(&self, outcome: &TestCaseResult) {
         if self
             .completed
@@ -508,6 +522,7 @@ impl FamilyShared {
             .is_ok()
         {
             self.ds.mark_complete(outcome);
+            self.concluded.store(true, Ordering::Release);
         }
     }
 }
@@ -562,21 +577,37 @@ type EngineFuture = Pin<Box<dyn Future<Output = Result<TestRunResult, RunError>>
 /// The run handle owns the suspended run loop as a future, and each
 /// `hegel_next_test_case` call resumes it on the calling thread until it
 /// returns the next test case or finishes.
+///
+/// All run state lives behind an internal non-blocking lock: the run
+/// functions are meant to be called from one thread at a time (see the
+/// header preamble), and a concurrent call observes
+/// `HEGEL_E_CONCURRENT_USE` instead of a data race.
 pub struct HegelRun {
+    inner: Mutex<RunInner>,
+}
+
+/// The lock-guarded state of a [`HegelRun`].
+struct RunInner {
     /// The suspended engine. `None` once the run has produced its result.
     engine: Option<EngineFuture>,
     /// The exchange the engine offers each test case's data source through;
     /// the engine future holds the other reference.
     exchange: Arc<CaseExchange>,
-    // The run's own reference to the current test case's family.
+    // The run's own references to the open test cases' families, oldest
+    // first.
     //
-    // The handle returned to the caller from `hegel_next_test_case` is freed
-    // by the caller (via `hegel_test_case_free`); this is a *separate*
-    // reference the run holds so the data source stays alive while the run is
-    // reading it, and so the caller freeing its handle early does not drop the
-    // family. It is released (decrementing the family refcount) when the run
-    // advances to the next case or is freed.
-    current_family: Option<Arc<FamilyShared>>,
+    // The handles returned to the caller from `hegel_next_test_case` are
+    // freed by the caller (via `hegel_test_case_free`); these are *separate*
+    // references the run holds so each data source stays alive while the run
+    // is reading it, and so the caller freeing its handle early does not drop
+    // the family. Each is released (decrementing the family refcount) once
+    // `hegel_next_test_case` observes its completion, or when the run is
+    // freed.
+    in_flight: Vec<Arc<FamilyShared>>,
+    /// The run's `max_open_test_cases` setting: how many incomplete families
+    /// `hegel_next_test_case` allows before refusing (1, the strict
+    /// alternation contract) or reporting `HEGEL_E_PENDING` (above 1).
+    max_open: u64,
     result: Option<HegelRunResult>,
 }
 
@@ -820,6 +851,38 @@ pub unsafe extern "C" fn hegel_settings_set_test_cases(
         Err(rc) => return rc,
     };
     handle.inner = handle.inner.clone().test_cases(n);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `max_open`: Maximum number of test cases that may be open (taken via
+///   `hegel_next_test_case` but not yet marked complete) at once. The
+///   default is 1, which preserves the strict-alternation contract exactly.
+///   Values above 1 let the caller run that many test-case bodies
+///   concurrently during generation; `hegel_next_test_case` then returns
+///   `HEGEL_E_PENDING` when the engine is waiting for one of the open cases
+///   to be marked complete. `max_open` must be at least 1.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for `max_open` of 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_max_open_test_cases(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    max_open: u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_max_open_test_cases") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if max_open < 1 {
+        set_last_error(
+            ctx,
+            "hegel_settings_set_max_open_test_cases: max_open must be at least 1, got 0",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    handle.inner = handle.inner.clone().max_open_test_cases(max_open);
     HEGEL_OK
 }
 
@@ -1139,6 +1202,7 @@ pub unsafe extern "C" fn hegel_run_start(
         .clone()
         .output(output_from_callback(callback, user_data));
     let database_key = handle.database_key.clone();
+    let max_open = settings.max_open_test_cases;
 
     let exchange = Arc::new(CaseExchange::new());
     let engine_exchange = Arc::clone(&exchange);
@@ -1147,10 +1211,13 @@ pub unsafe extern "C" fn hegel_run_start(
     });
 
     let run = Box::into_raw(Box::new(HegelRun {
-        engine: Some(engine),
-        exchange,
-        current_family: None,
-        result: None,
+        inner: Mutex::new(RunInner {
+            engine: Some(engine),
+            exchange,
+            in_flight: Vec::new(),
+            max_open,
+            result: None,
+        }),
     }));
     unsafe { *out_run = run };
     HEGEL_OK
@@ -1163,7 +1230,10 @@ pub unsafe extern "C" fn hegel_run_start(
 /// Returns `HEGEL_OK`, including at normal completion, where
 /// `*out_test_case` is NULL and you should call `hegel_run_result`.
 /// `HEGEL_E_NOT_COMPLETE` if the previous test case was not marked
-/// complete.
+/// complete (with the default `max_open_test_cases` of 1).
+/// `HEGEL_E_PENDING` if `max_open_test_cases` is above 1 and no case is
+/// available until one of the open ones is marked complete.
+/// `HEGEL_E_CONCURRENT_USE` if another thread is mid-call on this run.
 ///
 /// The handle is owned by the caller and must be released with
 /// `hegel_test_case_free`.
@@ -1174,7 +1244,7 @@ pub unsafe extern "C" fn hegel_next_test_case(
     out_test_case: *mut *mut HegelTestCase,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let Some(run) = (unsafe { run.as_mut() }) else {
+    let Some(run) = (unsafe { run.as_ref() }) else {
         set_last_error(ctx, "hegel_next_test_case: run pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
@@ -1183,49 +1253,100 @@ pub unsafe extern "C" fn hegel_next_test_case(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
+    let mut inner = match run_lock(ctx, "hegel_next_test_case", run) {
+        Ok(guard) => guard,
+        Err(rc) => return rc,
+    };
+    let inner = &mut *inner;
 
-    if let Some(family) = run.current_family.take() {
-        if !family.completed.load(Ordering::Acquire) {
-            set_last_error(
-                ctx,
-                "hegel_next_test_case: previous test case was not marked complete \
-                 (call hegel_mark_complete before requesting the next case)",
-            );
-            run.current_family = Some(family);
-            return HEGEL_E_NOT_COMPLETE;
-        }
-        // The previous case is complete; dropping the run's reference here
-        // releases the data source unless the caller still holds a handle to
-        // it (in which case it lives until the caller frees that handle).
-        drop(family);
+    // Drop the run's reference to every family whose conclusion has been
+    // written since the last call; each release frees the data source unless
+    // the caller still holds a handle to it (in which case it lives until
+    // the caller frees that handle). This consults the conclusion, not the
+    // completion claim: a family claimed by a thread still inside
+    // `hegel_mark_complete` stays open until the engine can see its outcome.
+    inner
+        .in_flight
+        .retain(|family| !family.concluded.load(Ordering::Acquire));
+
+    // A case the engine queued on an earlier poll can be handed out without
+    // resuming the engine.
+    if let Some(ds) = inner.exchange.try_take() {
+        unsafe { *out_test_case = hand_out_case(inner, ds) };
+        return HEGEL_OK;
     }
 
-    let Some(engine) = run.engine.as_mut() else {
+    if inner.max_open <= 1 && !inner.in_flight.is_empty() {
+        set_last_error(
+            ctx,
+            "hegel_next_test_case: previous test case was not marked complete \
+             (call hegel_mark_complete before requesting the next case)",
+        );
+        return HEGEL_E_NOT_COMPLETE;
+    }
+
+    let Some(engine) = inner.engine.as_mut() else {
         return HEGEL_OK;
     };
 
     match poll_engine(engine) {
-        Poll::Pending => match run.exchange.take() {
+        Poll::Pending => match inner.exchange.take() {
             Ok(ds) => {
-                let family = new_family(ds);
-                let case = handle_from_family(Arc::clone(&family));
-                run.current_family = Some(family);
-                unsafe { *out_test_case = case };
+                unsafe { *out_test_case = hand_out_case(inner, ds) };
                 HEGEL_OK
             }
+            Err(_) if !inner.in_flight.is_empty() => {
+                set_last_error(
+                    ctx,
+                    "hegel_next_test_case: no test case is available until one of \
+                     the open test cases is marked complete (call \
+                     hegel_mark_complete on one, then call hegel_next_test_case \
+                     again)",
+                );
+                HEGEL_E_PENDING
+            }
             Err(e) => {
-                run.result = Some(HegelRunResult::from_error(&e.to_string()));
-                run.engine = None;
+                inner.result = Some(HegelRunResult::from_error(&e.to_string()));
+                inner.engine = None;
                 HEGEL_OK
             }
         },
         Poll::Ready(r) => {
-            run.result = Some(match r {
+            inner.result = Some(match r {
                 Ok(r) => HegelRunResult::from(r),
                 Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
             });
-            run.engine = None;
+            inner.engine = None;
             HEGEL_OK
+        }
+    }
+}
+
+/// Wrap a queued data source as a caller-owned test-case handle, keeping the
+/// run's own reference to the family in `in_flight`.
+fn hand_out_case(
+    inner: &mut RunInner,
+    ds: Box<dyn DataSource + Send + Sync>,
+) -> *mut HegelTestCase {
+    let family = new_family(ds);
+    let case = handle_from_family(Arc::clone(&family));
+    inner.in_flight.push(family);
+    case
+}
+
+/// Acquire a run handle's internal lock without blocking, reporting a
+/// concurrent call on the same run as `HEGEL_E_CONCURRENT_USE` rather than
+/// racing it.
+fn run_lock<'a>(
+    ctx: *mut HegelContext,
+    func: &str,
+    run: &'a HegelRun,
+) -> Result<MutexGuard<'a, RunInner>, hegel_result_t> {
+    match run.inner.try_lock() {
+        Some(guard) => Ok(guard),
+        None => {
+            set_last_error(ctx, &format!("{func}: the run is in use by another thread"));
+            Err(HEGEL_E_CONCURRENT_USE)
         }
     }
 }
@@ -1244,7 +1365,8 @@ fn poll_engine(engine: &mut EngineFuture) -> Poll<Result<TestRunResult, RunError
 ///   result.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_NOT_COMPLETE` if the run hasn't finished
-/// yet.
+/// yet, or `HEGEL_E_CONCURRENT_USE` if another thread is mid-call on this
+/// run.
 ///
 /// Each call produces a copy, freed separately. It stays valid after
 /// `hegel_run_free`.
@@ -1264,7 +1386,11 @@ pub unsafe extern "C" fn hegel_run_result(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_result = ptr::null_mut() };
-    match &run.result {
+    let inner = match run_lock(ctx, "hegel_run_result", run) {
+        Ok(guard) => guard,
+        Err(rc) => return rc,
+    };
+    match &inner.result {
         Some(r) => {
             unsafe { *out_result = into_raw_send_sync(r.clone()) };
             HEGEL_OK
@@ -1303,7 +1429,7 @@ pub unsafe extern "C" fn hegel_run_result_free(
 ///
 /// Returns `HEGEL_OK`.
 ///
-/// If the caller exited its loop early, any in-flight test case is marked
+/// If the caller exited its loop early, every in-flight test case is marked
 /// complete and the rest of the exploration is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_free(
@@ -1316,14 +1442,17 @@ pub unsafe extern "C" fn hegel_run_free(
     }
     let run = unsafe { Box::from_raw(run) };
 
-    if let Some(family) = run.current_family.as_ref() {
-        // If the caller bailed out of its loop with this case still in flight,
-        // claim completion for the family so any handles the caller still
-        // holds observe a concluded case. Dropping the run's reference (as
-        // part of dropping the run below) releases the data source unless the
-        // caller still holds a handle to it, in which case it lives until the
-        // caller frees that handle.
-        family.complete(&TestCaseResult::Valid);
+    {
+        let inner = run.inner.lock();
+        for family in inner.in_flight.iter() {
+            // If the caller bailed out of its loop with cases still in
+            // flight, claim completion for each family so any handles the
+            // caller still holds observe a concluded case. Dropping the
+            // run's references (as part of dropping the run below) releases
+            // each data source unless the caller still holds a handle to it,
+            // in which case it lives until the caller frees that handle.
+            family.complete(&TestCaseResult::Valid);
+        }
     }
 
     // Dropping the run drops the suspended engine future, cancelling the rest
@@ -1471,6 +1600,7 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
+        concluded: AtomicBool::new(false),
     })
 }
 

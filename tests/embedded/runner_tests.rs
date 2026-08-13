@@ -361,3 +361,39 @@ mod reproduce {
         );
     }
 }
+
+#[test]
+fn test_threads_defaults_to_one_and_is_settable() {
+    assert_eq!(Settings::new().threads, 1);
+    assert_eq!(Settings::new().threads(4).threads, 4);
+}
+
+#[test]
+fn test_env_override_replaces_threads() {
+    let s = Settings::new()
+        .threads(2)
+        .with_env_overrides_from(|key| (key == "HEGEL_THREADS").then(|| "8".to_string()));
+    assert_eq!(s.threads, 8);
+}
+
+#[test]
+fn test_env_override_threads_empty_is_ignored() {
+    let s = Settings::new()
+        .threads(2)
+        .with_env_overrides_from(|key| (key == "HEGEL_THREADS").then(String::new));
+    assert_eq!(s.threads, 2);
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_THREADS must be a positive integer, got \"many\"")]
+fn test_env_override_threads_non_numeric_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_THREADS").then(|| "many".to_string()));
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_THREADS must be a positive integer, got \"0\"")]
+fn test_env_override_threads_zero_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_THREADS").then(|| "0".to_string()));
+}

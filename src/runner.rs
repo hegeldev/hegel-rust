@@ -124,6 +124,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) threads: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
@@ -149,6 +150,7 @@ impl Settings {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            threads: 1,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             seed: None,
@@ -197,6 +199,31 @@ impl Settings {
     /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set how many worker threads run test-case bodies (default: 1).
+    ///
+    /// With `n` above 1, the engine keeps up to `n` test cases open at once
+    /// during generation and `n` worker threads run their bodies
+    /// concurrently; shrinking, database replay, and the final failure
+    /// replays stay sequential. The test function must then be `Fn + Sync`
+    /// — use [`Hegel::run_concurrent`](crate::Hegel::run_concurrent), which
+    /// `#[hegel::test]` and `#[hegel::main]` do automatically.
+    ///
+    /// With threads above 1 the *search* is not schedule-reproducible even
+    /// with a fixed [`seed`](Settings::seed): which test case is generated
+    /// next depends on the order completions land. What matters stays
+    /// deterministic — every discovered failure is shrunk sequentially,
+    /// replays exactly via the database and its reproduce blob, and
+    /// [`reproduce_failure`](crate::Hegel::reproduce_failure) is unaffected.
+    ///
+    /// `n` must be at least 1; a smaller value makes the run fail with a
+    /// usage error. The `HEGEL_THREADS` environment variable, when set and
+    /// non-empty, overrides this value at runtime, like `HEGEL_TEST_CASES`.
+    /// [`Mode::SingleTestCase`] and blob replay ignore it.
+    pub fn threads(mut self, n: u64) -> Self {
+        self.threads = n;
         self
     }
 
@@ -309,6 +336,14 @@ impl Settings {
                 match value.parse::<u64>() {
                     Ok(n) if n > 0 => self.test_cases = n,
                     _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
+                }
+            }
+        }
+        if let Some(value) = env("HEGEL_THREADS") {
+            if !value.is_empty() {
+                match value.parse::<u64>() {
+                    Ok(n) if n > 0 => self.threads = n,
+                    _ => panic!("HEGEL_THREADS must be a positive integer, got {value:?}"),
                 }
             }
         }
@@ -455,8 +490,30 @@ where
     /// Run the property-based tests.
     ///
     /// Panics if any test case fails.
+    ///
+    /// Supports single-threaded execution only: with
+    /// [`Settings::threads`] above 1 it fails with a usage error, since
+    /// running test-case bodies concurrently needs the stronger
+    /// `Fn(TestCase) + Sync` bound of [`run_concurrent`](Self::run_concurrent).
     pub fn run(self) {
-        let settings = self.settings.with_env_overrides();
+        let settings = self.settings.clone().with_env_overrides();
+        if wants_parallel(&settings, self.reproduce_failure.is_some()) {
+            panic!(
+                "Settings::threads is {}, but this entry point runs test cases on a \
+                 single thread only: parallel execution needs a test function that \
+                 is Fn + Sync, via Hegel::run_concurrent. #[hegel::test] and \
+                 #[hegel::main] use run_concurrent automatically; \
+                 #[hegel::standalone_function] does not yet support threads > 1.",
+                settings.threads
+            );
+        }
+        self.run_with(settings);
+    }
+
+    /// Dispatch a run whose settings already have environment overrides
+    /// applied: blob replay when a reproduce blob is set, the sequential
+    /// drive otherwise.
+    fn run_with(self, settings: Settings) {
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
@@ -475,6 +532,55 @@ where
             self.test_location.as_ref(),
         );
     }
+}
+
+impl<F> Hegel<F>
+where
+    F: Fn(TestCase) + Sync,
+{
+    /// Like [`new`](Self::new), for a test function that may run
+    /// concurrently.
+    ///
+    /// The `Fn(TestCase) + Sync` bound is what lets
+    /// [`run_concurrent`](Self::run_concurrent) share the test function
+    /// across worker threads. A builder headed for `run_concurrent` must be
+    /// constructed through this entry point: a closure handed to
+    /// [`new`](Self::new) has its kind pinned to `FnMut` by inference and
+    /// cannot be upgraded afterwards.
+    pub fn new_concurrent(test_fn: F) -> Self {
+        Self::new(test_fn)
+    }
+
+    /// Run the property-based tests, honouring [`Settings::threads`].
+    ///
+    /// With `threads` at its default of 1 this is exactly [`run`](Self::run).
+    /// Above 1, test-case bodies run concurrently on that many worker
+    /// threads during generation — which is why this entry point requires
+    /// `Fn(TestCase) + Sync` — while shrinking, replay, and the failure
+    /// report stay sequential on the calling thread.
+    /// `#[hegel::test]` and `#[hegel::main]` call this automatically.
+    ///
+    /// Panics if any test case fails.
+    pub fn run_concurrent(self) {
+        let settings = self.settings.clone().with_env_overrides();
+        if wants_parallel(&settings, self.reproduce_failure.is_some()) {
+            crate::run_lifecycle::drive_parallel(
+                &self.test_fn,
+                &settings,
+                self.database_key.as_deref(),
+                self.test_location.as_ref(),
+            );
+            return;
+        }
+        self.run_with(settings);
+    }
+}
+
+/// Whether this run should execute test-case bodies in parallel: more than
+/// one thread requested, in a mode that actually explores
+/// ([`Mode::SingleTestCase`] and blob replay ignore `threads`).
+fn wants_parallel(settings: &Settings, replaying_blob: bool) -> bool {
+    settings.threads > 1 && settings.mode == Mode::TestRun && !replaying_blob
 }
 
 #[cfg(test)]

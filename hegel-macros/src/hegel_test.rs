@@ -125,7 +125,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#explicit_blocks)*
             }
 
-            ::hegel::Hegel::new(|#param_pat: #param_ty| #body)
+            ::hegel::Hegel::new_concurrent(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
             #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
@@ -135,7 +135,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
                 class: module_path!().to_string(),
                 begin_line: line!(),
             })
-            .run();
+            .run_concurrent();
         }
     };
 

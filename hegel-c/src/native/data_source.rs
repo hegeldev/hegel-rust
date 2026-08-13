@@ -77,6 +77,24 @@ impl NativeDataSource {
         handle.lock().family().target_observations.lock().clone()
     }
 
+    /// The test case's outcome if its family has concluded, or `None` while
+    /// it is still open. The non-erroring peek the engine's harvest loop
+    /// uses to spot finished cases among several in flight, where an
+    /// unconcluded family is an ordinary state rather than a contract
+    /// violation.
+    pub fn try_conclusion(handle: &NativeTestCaseHandle) -> Option<TestCaseResult> {
+        let (status, origin) = handle.lock().family().conclusion()?;
+        Some(match status {
+            Status::Valid => TestCaseResult::Valid,
+            Status::Invalid => TestCaseResult::Invalid,
+            Status::EarlyStop => TestCaseResult::Overrun,
+            Status::Interesting => TestCaseResult::Interesting(Failure {
+                origin: origin.map(|o| o.0).unwrap_or_default(),
+                reproduce_blob: None,
+            }),
+        })
+    }
+
     /// The test case's outcome, reconstructed from its family's write-once
     /// conclusion. Whoever concluded the family first — a draw that overran
     /// or hit a terminal assume, or the body via `mark_complete` — set the
@@ -89,23 +107,13 @@ impl NativeDataSource {
     /// unconcluded run, so its callers can't reach this), reported as a
     /// run-level [`RunError::UsageError`] rather than a panic.
     pub fn take_outcome(handle: &NativeTestCaseHandle) -> Result<TestCaseResult, RunError> {
-        let conclusion = handle.lock().family().conclusion();
-        let Some((status, origin)) = conclusion else {
-            return Err(RunError::UsageError(
+        Self::try_conclusion(handle).ok_or_else(|| {
+            RunError::UsageError(
                 "the test case was never marked complete: every test case the \
                  engine offers must be concluded with mark_complete before the \
                  run is resumed"
                     .to_string(),
-            ));
-        };
-        Ok(match status {
-            Status::Valid => TestCaseResult::Valid,
-            Status::Invalid => TestCaseResult::Invalid,
-            Status::EarlyStop => TestCaseResult::Overrun,
-            Status::Interesting => TestCaseResult::Interesting(Failure {
-                origin: origin.map(|o| o.0).unwrap_or_default(),
-                reproduce_blob: None,
-            }),
+            )
         })
     }
 
