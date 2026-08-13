@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.10 - 2026-08-13
+
+This patch significantly improves shrinking for stateful tests that use `stateful::Pool`.
+
 ## 0.29.9 - 2026-08-13
 
 This patch improves shrinking: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before.
