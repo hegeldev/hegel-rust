@@ -958,7 +958,11 @@ fn libhegel_pool_primitives_draw_added_variables() {
                 assert_eq!(rc, HEGEL_OK, "pool_add failed: rc={}", rc);
                 added.push(var_id);
             }
-            assert_eq!(added, vec![1, 2, 3]);
+            let mut distinct = added.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(distinct.len(), 3, "pool ids must be distinct: {added:?}");
+            assert!(added.iter().all(|id| *id >= 0), "pool ids: {added:?}");
 
             let mut drawn: i64 = -1;
             let rc = (a.pool_generate)(ctx, tc, pool, false, &mut drawn);

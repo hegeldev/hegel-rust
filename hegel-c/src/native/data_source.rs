@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseResult};
-use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
     NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Status,
@@ -296,7 +296,11 @@ impl DataSource for NativeDataSource {
     }
 
     fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError> {
-        self.with_ntc(|_| Ok(pool.next()))
+        self.with_ntc(|ntc| {
+            let variable_id = draws::fresh_id(ntc)?;
+            pool.add(variable_id);
+            Ok(variable_id)
+        })
     }
 
     fn pool_generate(
@@ -309,12 +313,7 @@ impl DataSource for NativeDataSource {
             if active.is_empty() {
                 return Err(EngineError::AssumeViolation);
             }
-            let n = active.len();
-            let k = ntc
-                .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
-                .to_i128()
-                .unwrap() as usize;
-            let variable_id = active[n - 1 - k];
+            let variable_id = draws::choose_from(ntc, &active)?;
             if consume {
                 pool.consume(variable_id);
             }

@@ -392,6 +392,16 @@ typedef enum {
      at once. Opened by the frontend's state-machine driver.
      */
     HEGEL_LABEL_STATEFUL_RULE = 31,
+    /*
+     Span around one fresh-identifier draw (`hegel_pool_add`). Emitted
+     internally by the engine.
+     */
+    HEGEL_LABEL_FRESH_ID = 32,
+    /*
+     Span around one choose-from-set draw (`hegel_pool_generate`). Emitted
+     internally by the engine.
+     */
+    HEGEL_LABEL_SET_CHOICE = 33,
 } hegel_label_t;
 
 /*
@@ -1131,6 +1141,10 @@ hegel_result_t hegel_new_pool(hegel_context_t *ctx, hegel_test_case_t *tc, hegel
  `out_variable_id`: Receives a fresh variable id, which the caller
    associates with the value it just generated.
 
+ The id is drawn from `tc`'s stream and recorded in the choice sequence
+ by value, so it stays stable while the test case shrinks: deleting an
+ earlier addition never renumbers the survivors.
+
  Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
  */
 hegel_result_t hegel_pool_add(hegel_context_t *ctx,
@@ -1141,7 +1155,9 @@ hegel_result_t hegel_pool_add(hegel_context_t *ctx,
 /*
  Draws a variable from the pool, letting libhegel choose (and shrink)
  which previously added variable to reuse. The choice is drawn from
- `tc`'s stream.
+ `tc`'s stream and recorded as the chosen variable id itself, not as an
+ index into the pool's current contents, so shrinking away other
+ additions never changes which variable a recorded choice refers to.
 
  Parameters:
  `consume`: When `true` the drawn variable is removed from the pool.

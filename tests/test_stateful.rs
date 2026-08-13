@@ -153,6 +153,25 @@ fn test_draw_domain(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+/// `Pool::add` draws a fresh identifier from the engine, so it stops the
+/// test case (rather than panicking) once the choice budget is exhausted.
+#[test]
+fn test_pool_add_stops_the_test_case_when_out_of_data() {
+    common::utils::expect_panic(
+        || {
+            hegel::Hegel::new(|tc| {
+                let mut bundle = pool(&tc);
+                loop {
+                    bundle.add(0u8);
+                }
+            })
+            .settings(hegel::Settings::new().database(None).test_cases(5))
+            .run();
+        },
+        "LargeInitialTestCase",
+    );
+}
+
 /// Regression test: the module docs promise invariants can take `&self`,
 /// but the macro used to register methods as bare `fn(&mut M, TestCase)`
 /// pointers, so a `&self` invariant failed to compile inside generated code.

@@ -92,6 +92,13 @@ impl<'a> Shrinker<'a> {
     ///   continuations on every step, so it keeps a retry budget of
     ///   `STOCHASTIC_MAX_FAILURES` consecutive non-improving steps (the
     ///   budget every pass had before deterministic passes fixated early).
+    /// * Each outer iteration starts a fresh stall window
+    ///   (`calls_at_last_shrink` is reset to `calls`), so quiet calls
+    ///   burned in one iteration — chiefly by the stochastic passes —
+    ///   cannot leave the guard latched for the whole next iteration.
+    ///   A latched guard silently drops every candidate, so the loop
+    ///   would read the resulting all-quiet iteration as a fixed point
+    ///   even when a deterministic pass still had a winning candidate.
     /// * Inside each per-pass loop, `Shrinker::max_stall` is grown to
     ///   `max(max_stall, 2 * max_calls_per_failing_step + (calls -
     ///   calls_at_loop_start))` so a long shrink search where each step
@@ -110,6 +117,7 @@ impl<'a> Shrinker<'a> {
         let mut any_ran = true;
         while any_ran {
             any_ran = false;
+            self.calls_at_last_shrink = self.calls;
             let mut can_discard = self.remove_discarded().await?;
             let calls_at_loop_start = self.calls;
             let mut max_calls_per_failing_step: usize = 1;

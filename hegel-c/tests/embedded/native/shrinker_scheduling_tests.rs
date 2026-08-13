@@ -296,6 +296,35 @@ fn fixate_stops_re_stepping_a_stochastic_pass_that_makes_no_calls() {
 }
 
 #[test]
+fn fixate_grants_each_outer_iteration_a_fresh_stall_window() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.improvements = 1;
+    shrinker.calls = 1000;
+    shrinker.calls_at_last_shrink = 0;
+    shrinker.max_stall = 10;
+    let mut passes = vec![ShrinkPass::new(
+        "zero_choices",
+        Box::new(|sh| Box::pin(sh.zero_choices())),
+    )];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    let v = match &shrinker.current_nodes[0].value() {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        v, 0,
+        "a stall latched in a previous iteration must not gate the next iteration's candidates"
+    );
+}
+
+#[test]
 fn fixate_shrink_passes_reorders_useful_passes_to_the_front() {
     let initial = vec![int_node(5)];
     let mut shrinker = Shrinker::with_probe(

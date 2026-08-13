@@ -188,7 +188,12 @@ pub struct Shrinker<'a> {
     /// + `max_stall` to detect runaway shrink searches.
     pub calls: usize,
     /// Value of `calls` at the moment of the most recent
-    /// `accept_improvement`.  See `max_stall`.
+    /// `accept_improvement`, or at the start of the current
+    /// `fixate_shrink_passes` outer iteration if that is later — each
+    /// iteration gets a fresh stall window, so calls burned by the
+    /// stochastic passes in one iteration cannot silently gate the
+    /// deterministic passes' candidates in the next and fake a fixed
+    /// point.  See `max_stall`.
     pub calls_at_last_shrink: usize,
     /// Once `calls - calls_at_last_shrink >= max_stall`, further
     /// `consider` / `probe` invocations short-circuit. Grows on every

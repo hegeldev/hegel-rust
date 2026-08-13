@@ -1996,7 +1996,7 @@ fn pool_is_shared_across_two_clone_threads() {
                         ok(hegel_pool_generate(
                             worker_ctx, clone.0, pool.0, true, &mut drawn,
                         ));
-                        assert!(drawn >= 1, "drew an id that was never added: {drawn}");
+                        assert!(drawn >= 0, "drew an id that was never added: {drawn}");
                         consumed.lock().unwrap().push(drawn);
                     }
                     ok(hegel_context_free(worker_ctx));
@@ -2009,7 +2009,7 @@ fn pool_is_shared_across_two_clone_threads() {
         consumed.dedup();
         assert_eq!(n, 8, "each consuming draw returns one variable");
         assert_eq!(consumed.len(), 8, "no consumed variable is drawn twice");
-        assert!(consumed.iter().all(|id| (1..=16).contains(id)));
+        assert!(consumed.iter().all(|id| (0..16).contains(id)));
 
         ok(hegel_test_case_free(ctx, clone_a));
         ok(hegel_test_case_free(ctx, clone_b));
@@ -2024,5 +2024,76 @@ fn pool_is_shared_across_two_clone_threads() {
         ok(hegel_settings_free(ctx, s));
         ok(hegel_pool_free(ctx, pool.0));
         ok(hegel_context_free(ctx));
+    }
+}
+
+/// Repeated multi-case runs where each test case drives one pool from two
+/// concurrent clone streams. The fresh-id window is anchored on the family
+/// registry of ids ever drawn, so racing clone streams can skew each other's
+/// recorded ranges (kind drift inside clone records is tolerated) and the
+/// data tree must never report the run as non-deterministic.
+#[test]
+fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
+    for seed in [3u64, 4, 5] {
+        let ctx = hegel_context_new();
+        unsafe {
+            let s = make_settings(ctx);
+            let empty = CString::new("").unwrap();
+            ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+            ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 10));
+            ok(hegel_c::hegel_settings_set_seed(ctx, s, seed, true));
+            let run = start(ctx, s);
+            loop {
+                let tc = next_case(ctx, run);
+                if tc.is_null() {
+                    assert_eq!(last_error(ctx), "");
+                    break;
+                }
+                let mut pool: *mut HegelPool = ptr::null_mut();
+                ok(hegel_new_pool(ctx, tc, &mut pool));
+                let mut clone_a: *mut HegelTestCase = ptr::null_mut();
+                ok(hegel_test_case_clone(ctx, tc, &mut clone_a));
+                let mut clone_b: *mut HegelTestCase = ptr::null_mut();
+                ok(hegel_test_case_clone(ctx, tc, &mut clone_b));
+                let pool = SendPtr(pool);
+                std::thread::scope(|scope| {
+                    for clone in [SendPtr(clone_a), SendPtr(clone_b)] {
+                        scope.spawn(move || {
+                            let clone = clone;
+                            let pool = pool;
+                            let worker_ctx = hegel_context_new();
+                            for _ in 0..4 {
+                                let mut var_id = 0i64;
+                                ok(hegel_pool_add(worker_ctx, clone.0, pool.0, &mut var_id));
+                                assert!(var_id >= 0);
+                                let mut drawn = 0i64;
+                                ok(hegel_pool_generate(
+                                    worker_ctx, clone.0, pool.0, false, &mut drawn,
+                                ));
+                                assert!(drawn >= 0);
+                            }
+                            ok(hegel_context_free(worker_ctx));
+                        });
+                    }
+                });
+                ok(hegel_test_case_free(ctx, clone_a));
+                ok(hegel_test_case_free(ctx, clone_b));
+                ok(hegel_mark_complete(
+                    ctx,
+                    tc,
+                    hegel_status_t::HEGEL_STATUS_VALID as u32,
+                    ptr::null(),
+                ));
+                ok(hegel_test_case_free(ctx, tc));
+                ok(hegel_pool_free(ctx, pool.0));
+            }
+            let res = result(ctx, run);
+            assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_PASSED);
+            assert!(run_error_of(ctx, res).is_null());
+            ok(hegel_run_result_free(ctx, res));
+            ok(hegel_run_free(ctx, run));
+            ok(hegel_settings_free(ctx, s));
+            ok(hegel_context_free(ctx));
+        }
     }
 }

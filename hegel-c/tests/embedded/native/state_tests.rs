@@ -1106,3 +1106,284 @@ fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
         "a span past the end of the nodes must not count as trivial"
     );
 }
+
+fn fresh_id_kind_max(tc: &NativeTestCase, i: usize) -> BigInt {
+    use crate::native::core::choices::ChoiceKind;
+    match tc.nodes[i].kind() {
+        ChoiceKind::Integer(ic) => ic.max_value.clone(),
+        other => panic!("expected an integer kind, got {other:?}"),
+    }
+}
+
+#[test]
+fn draw_fresh_id_hands_out_sequential_ids_during_generation() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 1);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 2);
+    assert!(tc.nodes.iter().all(|n| !n.was_forced));
+    assert_eq!(fresh_id_kind_max(&tc, 0), BigInt::from(1));
+    assert_eq!(fresh_id_kind_max(&tc, 1), BigInt::from(2));
+    assert_eq!(fresh_id_kind_max(&tc, 2), BigInt::from(3));
+}
+
+#[test]
+fn draw_fresh_id_keeps_the_hole_when_the_first_addition_is_deleted() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(1)),
+        ChoiceValue::Integer(BigInt::from(2)),
+        ChoiceValue::Integer(BigInt::from(3)),
+    ];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 1);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 2);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 3);
+}
+
+#[test]
+fn draw_fresh_id_keeps_the_hole_when_a_middle_addition_is_deleted() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(2)),
+    ];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 2);
+}
+
+/// With a `high + 1` bound the first surviving id after a deletion would sit
+/// just outside the empty-registry window `[0, 0]`, get punned to `0`, and
+/// renumber every later survivor. The `+ 2` headroom keeps the whole
+/// suffix intact.
+#[test]
+fn draw_fresh_id_does_not_cascade_after_a_single_deletion() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(1)),
+        ChoiceValue::Integer(BigInt::from(2)),
+        ChoiceValue::Integer(BigInt::from(3)),
+        ChoiceValue::Integer(BigInt::from(4)),
+    ];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let ids: Vec<i64> = (0..4).map(|_| tc.draw_fresh_id().unwrap()).collect();
+    assert_eq!(ids, vec![1, 2, 3, 4]);
+}
+
+/// Deleting two adjacent additions leaves a gap of three; the survivor falls
+/// outside the window and is repaired to the smallest unused id. Accepted
+/// shrinks re-record realized values, so the repair does not recur.
+#[test]
+fn draw_fresh_id_repairs_a_gap_of_three_to_small_ids() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(2)),
+        ChoiceValue::Integer(BigInt::from(3)),
+    ];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 1);
+}
+
+#[test]
+fn draw_fresh_id_repairs_a_used_prefix_id_to_the_smallest_unused() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(1)),
+    ];
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 1);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 2);
+}
+
+#[test]
+fn draw_fresh_id_fills_gaps_when_generating_past_the_prefix() {
+    let choices = [ChoiceValue::Integer(BigInt::from(1))];
+    let mut tc = NativeTestCase::for_choices_and_template(&choices, None, None, BUFFER_SIZE, None)
+        .with_random(EngineRng::seeded(0));
+    assert_eq!(tc.draw_fresh_id().unwrap(), 1);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 2);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 3);
+}
+
+/// The window is anchored on the family registry, so a clone stream
+/// continues where the parent's ids left off instead of colliding and
+/// being repaired: ids stay family-unique and every window admits the
+/// smallest unused id.
+#[test]
+fn draw_fresh_id_continues_across_clone_streams_without_collisions() {
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert_eq!(parent.draw_fresh_id().unwrap(), 0);
+    assert_eq!(parent.draw_fresh_id().unwrap(), 1);
+    assert_eq!(parent.draw_fresh_id().unwrap(), 2);
+    let child = parent.clone_stream().unwrap();
+    let mut child_ntc = child.lock();
+    assert_eq!(child_ntc.draw_fresh_id().unwrap(), 3);
+    assert_eq!(fresh_id_kind_max(&child_ntc, 0), BigInt::from(4));
+    assert_eq!(child_ntc.draw_fresh_id().unwrap(), 4);
+}
+
+#[test]
+fn draw_fresh_id_puns_a_mismatched_prefix_kind() {
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+}
+
+#[test]
+fn draw_fresh_id_notifies_the_observer() {
+    use std::sync::{Arc, Mutex};
+    struct IdObserver {
+        captured: Arc<Mutex<Option<(BigInt, bool)>>>,
+    }
+    impl DataObserver for IdObserver {
+        fn draw_integer(&mut self, value: &BigInt, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.clone(), was_forced));
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let obs = Box::new(IdObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
+        .with_random(EngineRng::seeded(0));
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((BigInt::from(0), false)));
+}
+
+#[test]
+fn smallest_unused_id_skips_gaps() {
+    let mut used = BTreeSet::new();
+    assert_eq!(smallest_unused_id(&used), 0);
+    used.insert(1);
+    assert_eq!(smallest_unused_id(&used), 0);
+    used.insert(0);
+    used.insert(3);
+    assert_eq!(smallest_unused_id(&used), 2);
+    used.insert(2);
+    assert_eq!(smallest_unused_id(&used), 4);
+}
+
+#[test]
+fn draw_from_set_generates_a_member_and_records_it_by_value() {
+    let members = [4, 9];
+    for seed in 0..10 {
+        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        for i in 0..10 {
+            assert_eq!(tc.draw_fresh_id().unwrap(), i);
+        }
+        let chosen = tc.draw_from_set(&members).unwrap();
+        assert!(members.contains(&chosen));
+        assert_eq!(
+            tc.nodes.last().unwrap().value(),
+            ChoiceValue::Integer(BigInt::from(chosen))
+        );
+        assert_eq!(fresh_id_kind_max(&tc, tc.nodes.len() - 1), BigInt::from(10));
+    }
+}
+
+fn tc_with_fresh_ids(count: i64, tail: &[i64]) -> NativeTestCase {
+    let mut choices: Vec<ChoiceValue> = (0..count)
+        .map(|i| ChoiceValue::Integer(BigInt::from(i)))
+        .collect();
+    choices.extend(tail.iter().map(|&v| ChoiceValue::Integer(BigInt::from(v))));
+    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    for i in 0..count {
+        assert_eq!(tc.draw_fresh_id().unwrap(), i);
+    }
+    tc
+}
+
+#[test]
+fn draw_from_set_replays_a_surviving_member() {
+    let mut tc = tc_with_fresh_ids(3, &[1]);
+    assert_eq!(tc.draw_from_set(&[0, 1, 2]).unwrap(), 1);
+}
+
+#[test]
+fn draw_from_set_repairs_a_dead_value_to_the_largest_member_below() {
+    let mut tc = tc_with_fresh_ids(3, &[1]);
+    assert_eq!(tc.draw_from_set(&[0, 2]).unwrap(), 0);
+    assert_eq!(
+        tc.nodes.last().unwrap().value(),
+        ChoiceValue::Integer(BigInt::from(0))
+    );
+}
+
+#[test]
+fn draw_from_set_repairs_a_value_below_all_members_to_the_smallest() {
+    let mut tc = tc_with_fresh_ids(3, &[0]);
+    assert_eq!(tc.draw_from_set(&[1, 2]).unwrap(), 1);
+}
+
+/// A reference just above the window (its addition was deleted along with
+/// everything after it) fails validation and puns to the smallest member.
+#[test]
+fn draw_from_set_puns_a_value_beyond_the_window_to_the_smallest_member() {
+    let mut tc = tc_with_fresh_ids(2, &[4]);
+    assert_eq!(tc.draw_from_set(&[0, 1]).unwrap(), 0);
+}
+
+#[test]
+fn draw_from_set_accepts_unsorted_duplicated_members() {
+    let mut tc = tc_with_fresh_ids(3, &[1]);
+    assert_eq!(tc.draw_from_set(&[2, 1, 1, 0]).unwrap(), 1);
+}
+
+#[test]
+fn draw_from_set_notifies_the_observer() {
+    use std::sync::{Arc, Mutex};
+    struct SetObserver {
+        captured: Arc<Mutex<Option<(BigInt, bool)>>>,
+    }
+    impl DataObserver for SetObserver {
+        fn draw_integer(&mut self, value: &BigInt, was_forced: bool) {
+            *self.captured.lock().unwrap() = Some((value.clone(), was_forced));
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let obs = Box::new(SetObserver {
+        captured: captured.clone(),
+    });
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
+        .with_random(EngineRng::seeded(0));
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    let chosen = tc.draw_from_set(&[0]).unwrap();
+    assert_eq!(chosen, 0);
+    let recorded = captured.lock().unwrap().take();
+    assert_eq!(recorded, Some((BigInt::from(0), false)));
+}
+
+#[test]
+fn draw_from_set_with_no_members_is_an_internal_error() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert!(tc.draw_from_set(&[]).is_err());
+}
+
+#[test]
+fn draw_from_set_with_negative_members_is_an_internal_error() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert!(tc.draw_from_set(&[-1, 3]).is_err());
+}
+
+#[test]
+fn draw_from_set_with_members_beyond_the_registry_is_an_internal_error() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
+    assert_eq!(tc.draw_fresh_id().unwrap(), 0);
+    assert!(tc.draw_from_set(&[7]).is_err());
+}
+
+#[test]
+fn native_variables_add_active_and_consume_round_trip() {
+    let mut vars = NativeVariables::new();
+    vars.add(0);
+    vars.add(1);
+    vars.add(2);
+    assert_eq!(vars.active(), vec![0, 1, 2]);
+    vars.consume(1);
+    assert_eq!(vars.active(), vec![0, 2]);
+    vars.consume(2);
+    assert_eq!(vars.active(), vec![0]);
+    vars.consume(0);
+    assert_eq!(vars.active(), Vec::<i64>::new());
+}
