@@ -73,10 +73,43 @@ mod integers {
             let _b: u64 = tc.draw(gs::integers::<u64>());
             a
         });
-        assert_rate!(vs, |&v| v == 0, 0.005, "zero");
-        assert_rate!(vs, |&v| v == u64::MAX, 0.005, "u64::MAX");
-        assert_rate!(vs, |&v| v >= u64::MAX - 1, 0.005, "near-MAX");
-        assert_rate!(vs, |&v| v <= 8, 0.05, "small");
+        assert_rate!(vs, |&v| v == 0, 0.003, "zero");
+        assert_rate!(vs, |&v| v == u64::MAX, 0.001, "u64::MAX");
+        assert_rate!(vs, |&v| v >= u64::MAX - 1, 0.003, "near-MAX");
+        assert_rate!(vs, |&v| v <= 8, 0.02, "small");
+    }
+
+    /// The swarm draws category weights once per test case, so several draws
+    /// in one case go extreme together: pairs of full-width draws overflow
+    /// `x + y` on over 1% of cases and land on boundaries simultaneously
+    /// more often than independent per-draw rates would predict.
+    #[test]
+    fn i64_full_width_pairs_go_extreme_together() {
+        let vs = sample(20_000, 0xD6, |tc| {
+            let a: i64 = tc.draw(gs::integers::<i64>());
+            let b: i64 = tc.draw(gs::integers::<i64>());
+            (a, b)
+        });
+        let boundary = |v: i64| {
+            v == i64::MIN
+                || v == i64::MAX
+                || v == i64::MIN + 1
+                || v == i64::MAX - 1
+                || v.unsigned_abs() <= 1
+        };
+        assert_rate!(vs, |&(a, _)| boundary(a), 0.01, "boundary");
+        assert_rate!(
+            vs,
+            |&(a, b)| boundary(a) && boundary(b),
+            0.0006,
+            "both boundary"
+        );
+        assert_rate!(
+            vs,
+            |&(a, b)| a.checked_add(b).is_none(),
+            0.005,
+            "overflowing sum"
+        );
     }
 
     #[test]
@@ -89,10 +122,10 @@ mod integers {
         assert_rate!(
             vs,
             |&v| v == i128::MIN || v == i128::MAX || v.unsigned_abs() <= 1,
-            0.015,
+            0.006,
             "boundary"
         );
-        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.03, "small");
+        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.015, "small");
         assert_rate!(vs, |&v| v > 0, 0.2, "positive");
         assert_rate!(vs, |&v| v < 0, 0.2, "negative");
     }
@@ -104,9 +137,9 @@ mod integers {
             let _b: u128 = tc.draw(gs::integers::<u128>());
             a
         });
-        assert_rate!(vs, |&v| v == 0, 0.005, "zero");
-        assert_rate!(vs, |&v| v == u128::MAX, 0.005, "u128::MAX");
-        assert_rate!(vs, |&v| v <= 8, 0.05, "small");
+        assert_rate!(vs, |&v| v == 0, 0.003, "zero");
+        assert_rate!(vs, |&v| v == u128::MAX, 0.001, "u128::MAX");
+        assert_rate!(vs, |&v| v <= 8, 0.015, "small");
     }
 
     #[test]
@@ -116,9 +149,9 @@ mod integers {
             let _b: u64 = tc.draw(gs::integers::<u64>());
             a
         });
-        assert_rate!(vs, |&v| v == 1, 0.005, "one (min endpoint)");
-        assert_rate!(vs, |&v| v <= 8, 0.05, "small");
-        assert_rate!(vs, |&v| v == u64::MAX, 0.005, "u64::MAX");
+        assert_rate!(vs, |&v| v == 1, 0.003, "one (min endpoint)");
+        assert_rate!(vs, |&v| v <= 8, 0.015, "small");
+        assert_rate!(vs, |&v| v == u64::MAX, 0.001, "u64::MAX");
     }
 
     #[test]
@@ -130,7 +163,7 @@ mod integers {
         });
         assert_rate!(vs, |&v| v == i32::MIN, 0.0025, "i32::MIN");
         assert_rate!(vs, |&v| v == i32::MAX, 0.0025, "i32::MAX");
-        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.03, "small");
+        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.015, "small");
     }
 
     /// u16 arithmetic wraps at 65535/65536 in real bugs (length prefixes,
@@ -143,7 +176,7 @@ mod integers {
             let b: u16 = tc.draw(gs::integers::<u16>());
             (a, b)
         });
-        assert_rate!(vs, |&(a, _)| a == 0, 0.005, "zero");
+        assert_rate!(vs, |&(a, _)| a == 0, 0.004, "zero");
         assert_rate!(vs, |&(a, _)| a == u16::MAX, 0.005, "u16::MAX");
         assert_rate!(vs, |&(a, _)| a >= u16::MAX - 2, 0.005, "near-MAX");
         assert_rate!(
@@ -161,8 +194,8 @@ mod integers {
             let b: i16 = tc.draw(gs::integers::<i16>());
             (a, b)
         });
-        assert_rate!(vs, |&(a, _)| a == i16::MIN, 0.005, "i16::MIN");
-        assert_rate!(vs, |&(a, _)| a == i16::MAX, 0.005, "i16::MAX");
+        assert_rate!(vs, |&(a, _)| a == i16::MIN, 0.0025, "i16::MIN");
+        assert_rate!(vs, |&(a, _)| a == i16::MAX, 0.0025, "i16::MAX");
         assert_rate!(
             vs,
             |&(a, b)| i32::from(a) - i32::from(b) > i32::from(i16::MAX),
@@ -193,7 +226,7 @@ mod floats {
             let _b: f64 = tc.draw(gs::floats::<f64>());
             a
         });
-        assert_rate!(vs, |v: &f64| v.is_nan(), 0.01, "NaN");
+        assert_rate!(vs, |v: &f64| v.is_nan(), 0.005, "NaN");
         assert_rate!(vs, |&v| v == f64::INFINITY, 0.005, "+inf");
         assert_rate!(vs, |&v| v == f64::NEG_INFINITY, 0.005, "-inf");
         assert_rate!(vs, |&v| v == 0.0 && v.is_sign_positive(), 0.002, "+0.0");
