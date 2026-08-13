@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.4 - 2026-08-13
+
+This patch makes shrinking much cheaper and better at escaping locally-minimal branches: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before. Individual runs are still randomized, so a particular seed may shrink differently than it used to, but every deterministic benchmark result is unchanged and the branch-escape rate is higher across the board.
+
 ## 0.32.3 - 2026-08-11
 
 This patch fixes `hegel_test_case_from_blob` ignoring the `stateful_step_count` setting ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). A stateful counterexample that needed more than 50 steps did not reproduce.
