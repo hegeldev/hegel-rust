@@ -5,7 +5,7 @@
 //! fixed seed, so failures are deterministic, and every threshold sits well
 //! below the observed rate (at most half of it).
 
-use hegel::generators as gs;
+use hegel::generators::{self as gs, Generator};
 use hegel::{HealthCheck, Hegel, Settings, TestCase};
 use std::sync::{Arc, Mutex};
 
@@ -37,46 +37,156 @@ fn sample<T: Send + 'static>(
     vs
 }
 
+/// Draw a pair per test case: the value under test plus a deliberate second
+/// draw. The second draw is part of every claim, not an accident: category
+/// weights are chosen per test case and real properties draw more than one
+/// value, so all rates are measured in the presence of another draw rather
+/// than for a lone draw in an otherwise empty test case.
+fn sample_pairs<T: std::fmt::Debug + Send + 'static>(
+    seed: u64,
+    first: impl Generator<T> + Send + Sync + 'static,
+    second: impl Generator<T> + Send + Sync + 'static,
+) -> Vec<(T, T)> {
+    sample(20_000, seed, move |tc| (tc.draw(&first), tc.draw(&second)))
+}
+
+/// Like [`sample_pairs`] for claims about a non-numeric value: the deliberate
+/// second draw is a full-width `u64`, and only the value under test is kept.
+fn sample_with_u64_companion<T: std::fmt::Debug + Send + 'static>(
+    seed: u64,
+    g: impl Generator<T> + Send + Sync + 'static,
+) -> Vec<T> {
+    sample(20_000, seed, move |tc| {
+        let v = tc.draw(&g);
+        tc.draw(gs::integers::<u64>());
+        v
+    })
+}
+
 fn rate<T>(vs: &[T], pred: impl Fn(&T) -> bool) -> f64 {
     vs.iter().filter(|v| pred(v)).count() as f64 / vs.len() as f64
 }
 
-macro_rules! assert_rate {
-    ($vs:expr, $pred:expr, $min:expr, $what:literal) => {
-        let r = rate(&$vs, $pred);
-        assert!(
-            r > $min,
-            concat!($what, " rate {:.4}; expected > {}"),
-            r,
-            $min
-        );
-    };
-    ($vs:expr, $pred:expr, $min:expr, $max:expr, $what:literal) => {
-        let r = rate(&$vs, $pred);
-        assert!(
-            r > $min && r < $max,
-            concat!($what, " rate {:.4}; expected in ({}, {})"),
-            r,
-            $min,
-            $max
-        );
-    };
+fn assert_min_rate<T>(vs: &[T], pred: impl Fn(&T) -> bool, min: f64, what: &str) {
+    let r = rate(vs, pred);
+    assert!(r > min, "{what} rate {r:.4}; expected > {min}");
+}
+
+fn assert_rate_between<T>(vs: &[T], pred: impl Fn(&T) -> bool, min: f64, max: f64, what: &str) {
+    let r = rate(vs, pred);
+    assert!(
+        r > min && r < max,
+        "{what} rate {r:.4}; expected in ({min}, {max})"
+    );
 }
 
 mod integers {
     use super::*;
+    use IntClaim::*;
+
+    trait ClaimInt: Copy + PartialEq + std::fmt::Debug + Send + 'static {
+        const MIN_VALUE: Self;
+        const MAX_VALUE: Self;
+        fn magnitude(self) -> u128;
+        fn distance_to_max(self) -> u128;
+    }
+
+    macro_rules! impl_claim_int {
+        ($($t:ty),*) => {$(
+            impl ClaimInt for $t {
+                const MIN_VALUE: Self = <$t>::MIN;
+                const MAX_VALUE: Self = <$t>::MAX;
+                fn magnitude(self) -> u128 {
+                    u128::from(self.unsigned_abs())
+                }
+                fn distance_to_max(self) -> u128 {
+                    u128::from(<$t>::MAX.abs_diff(self))
+                }
+            }
+        )*};
+    }
+    impl_claim_int!(i16, i32, i64, i128);
+
+    macro_rules! impl_claim_uint {
+        ($($t:ty),*) => {$(
+            impl ClaimInt for $t {
+                const MIN_VALUE: Self = <$t>::MIN;
+                const MAX_VALUE: Self = <$t>::MAX;
+                fn magnitude(self) -> u128 {
+                    u128::from(self)
+                }
+                fn distance_to_max(self) -> u128 {
+                    u128::from(<$t>::MAX - self)
+                }
+            }
+        )*};
+    }
+    impl_claim_uint!(u8, u16, u64, u128);
+
+    /// One standard claim about the first draw of each pair, carrying its
+    /// individually calibrated threshold (at most half the rate observed at
+    /// the test's pinned seed).
+    enum IntClaim {
+        /// The generator's range minimum.
+        MinEndpoint(f64),
+        /// The type's `MAX`.
+        MaxEndpoint(f64),
+        /// Within the given distance of `MAX`.
+        NearMax(u128, f64),
+        /// `MIN`, `MAX`, or a magnitude of at most 1.
+        Boundary(f64),
+        /// A magnitude of at most 8.
+        Small(f64),
+    }
+
+    fn check_int_claims<T: ClaimInt>(vs: &[(T, T)], range_min: T, claims: &[IntClaim]) {
+        let ty = std::any::type_name::<T>();
+        for claim in claims {
+            match *claim {
+                MinEndpoint(min) => assert_min_rate(
+                    vs,
+                    |&(a, _)| a == range_min,
+                    min,
+                    &format!("{ty} min endpoint"),
+                ),
+                MaxEndpoint(min) => assert_min_rate(
+                    vs,
+                    |&(a, _)| a == T::MAX_VALUE,
+                    min,
+                    &format!("{ty} max endpoint"),
+                ),
+                NearMax(distance, min) => assert_min_rate(
+                    vs,
+                    |&(a, _)| a.distance_to_max() <= distance,
+                    min,
+                    &format!("{ty} near-MAX"),
+                ),
+                Boundary(min) => assert_min_rate(
+                    vs,
+                    |&(a, _)| a == T::MIN_VALUE || a == T::MAX_VALUE || a.magnitude() <= 1,
+                    min,
+                    &format!("{ty} boundary"),
+                ),
+                Small(min) => assert_min_rate(
+                    vs,
+                    |&(a, _)| a.magnitude() <= 8,
+                    min,
+                    &format!("{ty} small"),
+                ),
+            }
+        }
+    }
 
     #[test]
     fn u64_full_width_hits_endpoints_and_small_values() {
-        let vs = sample(20_000, 0xD2, |tc| {
-            let a: u64 = tc.draw(gs::integers::<u64>());
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            a
-        });
-        assert_rate!(vs, |&v| v == 0, 0.003, "zero");
-        assert_rate!(vs, |&v| v == u64::MAX, 0.001, "u64::MAX");
-        assert_rate!(vs, |&v| v >= u64::MAX - 1, 0.003, "near-MAX");
-        assert_rate!(vs, |&v| v <= 8, 0.02, "small");
+        let vs = sample_pairs(0xD2, gs::integers::<u64>(), gs::integers::<u64>());
+        let claims = [
+            MinEndpoint(0.003),
+            MaxEndpoint(0.001),
+            NearMax(1, 0.003),
+            Small(0.02),
+        ];
+        check_int_claims(&vs, 0, &claims);
     }
 
     /// The swarm draws category weights once per test case, so several draws
@@ -85,11 +195,7 @@ mod integers {
     /// more often than independent per-draw rates would predict.
     #[test]
     fn i64_full_width_pairs_go_extreme_together() {
-        let vs = sample(20_000, 0xD6, |tc| {
-            let a: i64 = tc.draw(gs::integers::<i64>());
-            let b: i64 = tc.draw(gs::integers::<i64>());
-            (a, b)
-        });
+        let vs = sample_pairs(0xD6, gs::integers::<i64>(), gs::integers::<i64>());
         let boundary = |v: i64| {
             v == i64::MIN
                 || v == i64::MAX
@@ -97,73 +203,52 @@ mod integers {
                 || v == i64::MAX - 1
                 || v.unsigned_abs() <= 1
         };
-        assert_rate!(vs, |&(a, _)| boundary(a), 0.01, "boundary");
-        assert_rate!(
-            vs,
+        assert_min_rate(&vs, |&(a, _)| boundary(a), 0.01, "i64 boundary");
+        assert_min_rate(
+            &vs,
             |&(a, b)| boundary(a) && boundary(b),
             0.0006,
-            "both boundary"
+            "i64 both draws boundary",
         );
-        assert_rate!(
-            vs,
+        assert_min_rate(
+            &vs,
             |&(a, b)| a.checked_add(b).is_none(),
             0.005,
-            "overflowing sum"
+            "i64 overflowing pair sum",
         );
     }
 
     #[test]
     fn i128_full_width_hits_boundary_and_small_values() {
-        let vs = sample(20_000, 0xD3, |tc| {
-            let a: i128 = tc.draw(gs::integers::<i128>());
-            let _b: i128 = tc.draw(gs::integers::<i128>());
-            a
-        });
-        assert_rate!(
-            vs,
-            |&v| v == i128::MIN || v == i128::MAX || v.unsigned_abs() <= 1,
-            0.006,
-            "boundary"
-        );
-        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.015, "small");
-        assert_rate!(vs, |&v| v > 0, 0.2, "positive");
-        assert_rate!(vs, |&v| v < 0, 0.2, "negative");
+        let vs = sample_pairs(0xD3, gs::integers::<i128>(), gs::integers::<i128>());
+        check_int_claims(&vs, i128::MIN, &[Boundary(0.006), Small(0.015)]);
+        assert_min_rate(&vs, |&(a, _)| a > 0, 0.2, "i128 positive");
+        assert_min_rate(&vs, |&(a, _)| a < 0, 0.2, "i128 negative");
     }
 
     #[test]
     fn u128_full_width_hits_endpoints_and_small_values() {
-        let vs = sample(20_000, 0xD5, |tc| {
-            let a: u128 = tc.draw(gs::integers::<u128>());
-            let _b: u128 = tc.draw(gs::integers::<u128>());
-            a
-        });
-        assert_rate!(vs, |&v| v == 0, 0.003, "zero");
-        assert_rate!(vs, |&v| v == u128::MAX, 0.001, "u128::MAX");
-        assert_rate!(vs, |&v| v <= 8, 0.015, "small");
+        let vs = sample_pairs(0xD5, gs::integers::<u128>(), gs::integers::<u128>());
+        let claims = [MinEndpoint(0.003), MaxEndpoint(0.001), Small(0.015)];
+        check_int_claims(&vs, 0, &claims);
     }
 
     #[test]
     fn u64_range_from_one_hits_low_endpoint() {
-        let vs = sample(20_000, 0xD4, |tc| {
-            let a: u64 = tc.draw(gs::integers::<u64>().min_value(1));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            a
-        });
-        assert_rate!(vs, |&v| v == 1, 0.003, "one (min endpoint)");
-        assert_rate!(vs, |&v| v <= 8, 0.015, "small");
-        assert_rate!(vs, |&v| v == u64::MAX, 0.001, "u64::MAX");
+        let vs = sample_pairs(
+            0xD4,
+            gs::integers::<u64>().min_value(1),
+            gs::integers::<u64>(),
+        );
+        let claims = [MinEndpoint(0.003), MaxEndpoint(0.001), Small(0.015)];
+        check_int_claims(&vs, 1, &claims);
     }
 
     #[test]
     fn i32_full_width_hits_endpoints_and_small_values() {
-        let vs = sample(20_000, 0xA5, |tc| {
-            let a: i32 = tc.draw(gs::integers::<i32>());
-            let _b: i32 = tc.draw(gs::integers::<i32>());
-            a
-        });
-        assert_rate!(vs, |&v| v == i32::MIN, 0.0025, "i32::MIN");
-        assert_rate!(vs, |&v| v == i32::MAX, 0.0025, "i32::MAX");
-        assert_rate!(vs, |&v| v.unsigned_abs() <= 8, 0.015, "small");
+        let vs = sample_pairs(0xA5, gs::integers::<i32>(), gs::integers::<i32>());
+        let claims = [MinEndpoint(0.0025), MaxEndpoint(0.0025), Small(0.015)];
+        check_int_claims(&vs, i32::MIN, &claims);
     }
 
     /// u16 arithmetic wraps at 65535/65536 in real bugs (length prefixes,
@@ -171,72 +256,165 @@ mod integers {
     /// common.
     #[test]
     fn u16_hits_near_max_and_overflowing_sums() {
-        let vs = sample(20_000, 0xA3, |tc| {
-            let a: u16 = tc.draw(gs::integers::<u16>());
-            let b: u16 = tc.draw(gs::integers::<u16>());
-            (a, b)
-        });
-        assert_rate!(vs, |&(a, _)| a == 0, 0.004, "zero");
-        assert_rate!(vs, |&(a, _)| a == u16::MAX, 0.005, "u16::MAX");
-        assert_rate!(vs, |&(a, _)| a >= u16::MAX - 2, 0.005, "near-MAX");
-        assert_rate!(
-            vs,
+        let vs = sample_pairs(0xA3, gs::integers::<u16>(), gs::integers::<u16>());
+        let claims = [MinEndpoint(0.004), MaxEndpoint(0.005), NearMax(2, 0.005)];
+        check_int_claims(&vs, 0, &claims);
+        assert_min_rate(
+            &vs,
             |&(a, b)| u32::from(a) + u32::from(b) > u32::from(u16::MAX),
             0.02,
-            "overflowing sum"
+            "u16 overflowing pair sum",
         );
     }
 
     #[test]
     fn i16_hits_endpoints_and_overflowing_differences() {
-        let vs = sample(20_000, 0xA4, |tc| {
-            let a: i16 = tc.draw(gs::integers::<i16>());
-            let b: i16 = tc.draw(gs::integers::<i16>());
-            (a, b)
-        });
-        assert_rate!(vs, |&(a, _)| a == i16::MIN, 0.0025, "i16::MIN");
-        assert_rate!(vs, |&(a, _)| a == i16::MAX, 0.0025, "i16::MAX");
-        assert_rate!(
-            vs,
+        let vs = sample_pairs(0xA4, gs::integers::<i16>(), gs::integers::<i16>());
+        check_int_claims(&vs, i16::MIN, &[MinEndpoint(0.0025), MaxEndpoint(0.0025)]);
+        assert_min_rate(
+            &vs,
             |&(a, b)| i32::from(a) - i32::from(b) > i32::from(i16::MAX),
             0.002,
-            "overflowing difference"
+            "i16 overflowing difference",
         );
     }
 
     #[test]
     fn u8_hits_both_endpoints() {
-        let vs = sample(20_000, 0xA2, |tc| {
-            let a: u8 = tc.draw(gs::integers::<u8>());
-            let _b: u8 = tc.draw(gs::integers::<u8>());
-            a
-        });
-        assert_rate!(vs, |&v| v == 0, 0.005, "zero");
-        assert_rate!(vs, |&v| v == u8::MAX, 0.005, "u8::MAX");
+        let vs = sample_pairs(0xA2, gs::integers::<u8>(), gs::integers::<u8>());
+        check_int_claims(&vs, 0, &[MinEndpoint(0.005), MaxEndpoint(0.005)]);
     }
 }
 
 mod floats {
     use super::*;
+    use FloatClaim::*;
+
+    trait ClaimFloat: Copy + std::fmt::Debug + Send + 'static {
+        const HALF_MAX: f64;
+        fn widen(self) -> f64;
+        fn subnormal(self) -> bool;
+    }
+
+    impl ClaimFloat for f64 {
+        const HALF_MAX: f64 = f64::MAX / 2.0;
+        fn widen(self) -> f64 {
+            self
+        }
+        fn subnormal(self) -> bool {
+            self.is_subnormal()
+        }
+    }
+
+    impl ClaimFloat for f32 {
+        const HALF_MAX: f64 = (f32::MAX / 2.0) as f64;
+        fn widen(self) -> f64 {
+            f64::from(self)
+        }
+        fn subnormal(self) -> bool {
+            self.is_subnormal()
+        }
+    }
+
+    /// One standard claim about the first draw of each pair, carrying its
+    /// individually calibrated threshold like `IntClaim`. Predicates on `f32`
+    /// widen the value to `f64` first, which is exact.
+    enum FloatClaim {
+        Nan(f64),
+        PosInf(f64),
+        NegInf(f64),
+        /// A band: infinities must appear but not dominate.
+        InfiniteBand(f64, f64),
+        PosZero(f64),
+        NegZero(f64),
+        /// Finite, nonzero, with a zero fractional part.
+        IntegerValued(f64),
+        /// A finite magnitude of at least 1e100.
+        Huge(f64),
+        /// A finite magnitude above the type's `MAX / 2`.
+        NearMax(f64),
+        /// A nonzero magnitude of at most 1e-100.
+        Tiny(f64),
+        Subnormal(f64),
+    }
+
+    fn check_float_claims<T: ClaimFloat>(vs: &[(T, T)], claims: &[FloatClaim]) {
+        let ty = std::any::type_name::<T>();
+        let w = |&(a, _): &(T, T)| a.widen();
+        for claim in claims {
+            match *claim {
+                Nan(min) => assert_min_rate(vs, |v| w(v).is_nan(), min, &format!("{ty} NaN")),
+                PosInf(min) => {
+                    assert_min_rate(vs, |v| w(v) == f64::INFINITY, min, &format!("{ty} +inf"))
+                }
+                NegInf(min) => assert_min_rate(
+                    vs,
+                    |v| w(v) == f64::NEG_INFINITY,
+                    min,
+                    &format!("{ty} -inf"),
+                ),
+                InfiniteBand(min, max) => assert_rate_between(
+                    vs,
+                    |v| w(v).is_infinite(),
+                    min,
+                    max,
+                    &format!("{ty} infinite"),
+                ),
+                PosZero(min) => assert_min_rate(
+                    vs,
+                    |v| w(v) == 0.0 && w(v).is_sign_positive(),
+                    min,
+                    &format!("{ty} +0.0"),
+                ),
+                NegZero(min) => assert_min_rate(
+                    vs,
+                    |v| w(v) == 0.0 && w(v).is_sign_negative(),
+                    min,
+                    &format!("{ty} -0.0"),
+                ),
+                IntegerValued(min) => assert_min_rate(
+                    vs,
+                    |v| w(v).is_finite() && w(v) != 0.0 && w(v).fract() == 0.0,
+                    min,
+                    &format!("{ty} integer-valued"),
+                ),
+                Huge(min) => assert_min_rate(
+                    vs,
+                    |v| w(v).is_finite() && w(v).abs() >= 1e100,
+                    min,
+                    &format!("{ty} huge magnitude"),
+                ),
+                NearMax(min) => assert_min_rate(
+                    vs,
+                    |v| w(v).is_finite() && w(v).abs() > T::HALF_MAX,
+                    min,
+                    &format!("{ty} near-MAX magnitude"),
+                ),
+                Tiny(min) => assert_min_rate(
+                    vs,
+                    |v| w(v) != 0.0 && w(v).abs() <= 1e-100,
+                    min,
+                    &format!("{ty} tiny magnitude"),
+                ),
+                Subnormal(min) => {
+                    assert_min_rate(vs, |&(a, _)| a.subnormal(), min, &format!("{ty} subnormal"))
+                }
+            }
+        }
+    }
 
     #[test]
     fn f64_unbounded_hits_special_values() {
-        let vs = sample(20_000, 0xF1, |tc| {
-            let a: f64 = tc.draw(gs::floats::<f64>());
-            let _b: f64 = tc.draw(gs::floats::<f64>());
-            a
-        });
-        assert_rate!(vs, |v: &f64| v.is_nan(), 0.005, "NaN");
-        assert_rate!(vs, |&v| v == f64::INFINITY, 0.005, "+inf");
-        assert_rate!(vs, |&v| v == f64::NEG_INFINITY, 0.005, "-inf");
-        assert_rate!(vs, |&v| v == 0.0 && v.is_sign_positive(), 0.002, "+0.0");
-        assert_rate!(vs, |&v| v == 0.0 && v.is_sign_negative(), 0.001, "-0.0");
-        assert_rate!(
-            vs,
-            |&v| v.is_finite() && v != 0.0 && v.fract() == 0.0,
-            0.2,
-            "integer-valued"
-        );
+        let vs = sample_pairs(0xF1, gs::floats::<f64>(), gs::floats::<f64>());
+        let claims = [
+            Nan(0.005),
+            PosInf(0.005),
+            NegInf(0.005),
+            PosZero(0.002),
+            NegZero(0.001),
+            IntegerValued(0.2),
+        ];
+        check_float_claims(&vs, &claims);
     }
 
     /// The bugs that need floats are overwhelmingly overflow (huge finite
@@ -244,35 +422,9 @@ mod floats {
     /// robust predicates, normalization) — both shapes must be generated.
     #[test]
     fn f64_unbounded_hits_extreme_magnitudes() {
-        let vs = sample(20_000, 0xA6, |tc| {
-            let a: f64 = tc.draw(gs::floats::<f64>());
-            let b: f64 = tc.draw(gs::floats::<f64>());
-            (a, b)
-        });
-        assert_rate!(
-            vs,
-            |&(a, _): &(f64, f64)| a.is_finite() && a.abs() >= 1e100,
-            0.03,
-            "huge magnitude"
-        );
-        assert_rate!(
-            vs,
-            |&(a, _): &(f64, f64)| a.is_finite() && a.abs() > f64::MAX / 2.0,
-            0.003,
-            "near-MAX magnitude"
-        );
-        assert_rate!(
-            vs,
-            |&(a, _): &(f64, f64)| a != 0.0 && a.abs() <= 1e-100,
-            0.03,
-            "tiny magnitude"
-        );
-        assert_rate!(
-            vs,
-            |&(a, _): &(f64, f64)| a.is_subnormal(),
-            0.001,
-            "subnormal"
-        );
+        let vs = sample_pairs(0xA6, gs::floats::<f64>(), gs::floats::<f64>());
+        let claims = [Huge(0.03), NearMax(0.003), Tiny(0.03), Subnormal(0.001)];
+        check_float_claims(&vs, &claims);
         let overflowing_sums = vs
             .iter()
             .filter(|(a, b)| a.is_finite() && b.is_finite() && (a + b).is_infinite())
@@ -285,50 +437,44 @@ mod floats {
 
     #[test]
     fn f64_unit_interval_hits_endpoints_and_tiny_values() {
-        let vs = sample(20_000, 0xF2, |tc| {
-            let a: f64 = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1.0));
-            let _b: f64 = tc.draw(gs::floats::<f64>());
-            a
-        });
-        assert_rate!(vs, |&v| v == 0.0, 0.005, "zero");
-        assert_rate!(vs, |&v| v == 1.0, 0.01, "one");
-        assert_rate!(vs, |&v| v > 0.0 && v < 1e-300, 0.005, "tiny");
+        let vs = sample_pairs(
+            0xF2,
+            gs::floats::<f64>().min_value(0.0).max_value(1.0),
+            gs::floats::<f64>(),
+        );
+        assert_min_rate(&vs, |&(a, _)| a == 0.0, 0.005, "f64 in [0, 1] zero");
+        assert_min_rate(&vs, |&(a, _)| a == 1.0, 0.01, "f64 in [0, 1] one");
+        assert_min_rate(
+            &vs,
+            |&(a, _)| a > 0.0 && a < 1e-300,
+            0.005,
+            "f64 in [0, 1] tiny",
+        );
     }
 
     /// Unbounded f32 draws must not collapse to infinity: large *finite*
     /// f32 values are the ones that trigger overflow bugs.
     #[test]
     fn f32_unbounded_is_mostly_finite_with_extreme_magnitudes() {
-        let vs = sample(20_000, 0xA7, |tc| {
-            let a: f32 = tc.draw(gs::floats::<f32>());
-            let _b: f32 = tc.draw(gs::floats::<f32>());
-            a
-        });
-        assert_rate!(vs, |v: &f32| v.is_nan(), 0.005, "NaN");
-        assert_rate!(vs, |v: &f32| v.is_infinite(), 0.005, 0.2, "infinite");
-        assert_rate!(
-            vs,
-            |&v| v.is_finite() && v.abs() > f32::MAX / 2.0,
-            0.02,
-            "near-MAX magnitude"
-        );
-        assert_rate!(
-            vs,
-            |&v| v != 0.0 && v.abs() < f32::MIN_POSITIVE,
-            0.001,
-            "subnormal"
-        );
+        let vs = sample_pairs(0xA7, gs::floats::<f32>(), gs::floats::<f32>());
+        let claims = [
+            Nan(0.005),
+            InfiniteBand(0.005, 0.2),
+            NearMax(0.02),
+            Subnormal(0.001),
+        ];
+        check_float_claims(&vs, &claims);
     }
 }
 
 mod booleans {
     use super::*;
 
-    fn true_rate(seed: u64, p: f64) -> f64 {
+    fn true_rate(seed: u64, g: impl Generator<bool> + Send + Sync + 'static) -> f64 {
         let vs = sample(2_000, seed, move |tc| {
             let mut trues = 0u32;
             for _ in 0..64 {
-                if tc.draw(gs::weighted_booleans(p)) {
+                if tc.draw(&g) {
                     trues += 1;
                 }
             }
@@ -340,27 +486,17 @@ mod booleans {
 
     #[test]
     fn unweighted_booleans_are_roughly_fair() {
-        let vs = sample(2_000, 0xB1, |tc| {
-            let mut trues = 0u32;
-            for _ in 0..64 {
-                if tc.draw(gs::booleans()) {
-                    trues += 1;
-                }
-            }
-            trues
-        });
-        let total: u64 = vs.iter().map(|&t| u64::from(t)).sum();
-        let r = total as f64 / (vs.len() as u64 * 64) as f64;
+        let r = true_rate(0xB1, gs::booleans());
         assert!((0.4..=0.6).contains(&r), "true rate {r:.4}; expected ~0.5");
     }
 
     #[test]
     fn weighted_booleans_roughly_match_their_weight() {
-        let r = true_rate(0xB2, 0.05);
+        let r = true_rate(0xB2, gs::weighted_booleans(0.05));
         assert!((0.01..=0.15).contains(&r), "p=0.05 true rate {r:.4}");
-        let r = true_rate(0xB3, 0.9);
+        let r = true_rate(0xB3, gs::weighted_booleans(0.9));
         assert!((0.8..=0.97).contains(&r), "p=0.9 true rate {r:.4}");
-        let r = true_rate(0xB4, 0.25);
+        let r = true_rate(0xB4, gs::weighted_booleans(0.25));
         assert!((0.15..=0.35).contains(&r), "p=0.25 true rate {r:.4}");
     }
 }
@@ -376,71 +512,59 @@ mod collections {
 
     #[test]
     fn default_vecs_cover_empty_long_and_duplicated() {
-        let vs = sample(20_000, 0xC1, |tc| {
-            let v: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(255)));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v
-        });
-        assert_rate!(vs, |v: &Vec<i64>| v.is_empty(), 0.01, "empty");
-        assert_rate!(vs, |v: &Vec<i64>| v.len() >= 10, 0.05, "len >= 10");
-        assert_rate!(vs, |v: &Vec<i64>| has_duplicate(v), 0.2, "duplicate");
+        let vs = sample_with_u64_companion(
+            0xC1,
+            gs::vecs(gs::integers::<i64>().min_value(0).max_value(255)),
+        );
+        assert_min_rate(&vs, |v: &Vec<i64>| v.is_empty(), 0.01, "vec empty");
+        assert_min_rate(&vs, |v: &Vec<i64>| v.len() >= 10, 0.05, "vec len >= 10");
+        assert_min_rate(&vs, |v: &Vec<i64>| has_duplicate(v), 0.2, "vec duplicate");
     }
 
     #[test]
     fn sized_vecs_hit_min_and_max_size() {
-        let vs = sample(20_000, 0xC2, |tc| {
-            let v: Vec<bool> = tc.draw(gs::vecs(gs::booleans()).min_size(2).max_size(5));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v.len()
-        });
-        assert_rate!(vs, |&l| l == 2, 0.05, "at min size");
-        assert_rate!(vs, |&l| l == 5, 0.05, "at max size");
+        let vs = sample_with_u64_companion(0xC2, gs::vecs(gs::booleans()).min_size(2).max_size(5));
+        assert_min_rate(&vs, |v: &Vec<bool>| v.len() == 2, 0.05, "vec at min size");
+        assert_min_rate(&vs, |v: &Vec<bool>| v.len() == 5, 0.05, "vec at max size");
     }
 
     #[test]
     fn small_range_vecs_repeat_elements() {
-        let vs = sample(20_000, 0xC3, |tc| {
-            let v: Vec<i64> = tc.draw(
-                gs::vecs(gs::integers::<i64>().min_value(0).max_value(9))
-                    .min_size(2)
-                    .max_size(20),
-            );
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v
-        });
-        assert_rate!(vs, |v: &Vec<i64>| has_duplicate(v), 0.5, "duplicate");
-        assert_rate!(
-            vs,
+        let vs = sample_with_u64_companion(
+            0xC3,
+            gs::vecs(gs::integers::<i64>().min_value(0).max_value(9))
+                .min_size(2)
+                .max_size(20),
+        );
+        assert_min_rate(&vs, |v: &Vec<i64>| has_duplicate(v), 0.5, "vec duplicate");
+        assert_min_rate(
+            &vs,
             |v: &Vec<i64>| v.len() >= 3 && v.iter().all(|&x| x == v[0]),
             0.0005,
-            "all elements equal"
+            "vec all elements equal",
         );
     }
 
     #[test]
     fn nested_vecs_reach_real_nesting() {
-        let vs = sample(20_000, 0xA8, |tc| {
-            let v: Vec<Vec<bool>> = tc.draw(gs::vecs(gs::vecs(gs::booleans())));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v
-        });
-        assert_rate!(
-            vs,
+        let vs = sample_with_u64_companion(0xA8, gs::vecs(gs::vecs(gs::booleans())));
+        assert_min_rate(
+            &vs,
             |v: &Vec<Vec<bool>>| v.iter().any(|inner| !inner.is_empty()),
             0.5,
-            "some non-empty inner vec"
+            "some non-empty inner vec",
         );
-        assert_rate!(
-            vs,
+        assert_min_rate(
+            &vs,
             |v: &Vec<Vec<bool>>| v.iter().map(Vec::len).sum::<usize>() >= 8,
             0.3,
-            "at least 8 leaves"
+            "at least 8 leaves",
         );
-        assert_rate!(
-            vs,
+        assert_min_rate(
+            &vs,
             |v: &Vec<Vec<bool>>| v.len() >= 4 && v.iter().all(|inner| !inner.is_empty()),
             0.03,
-            "4+ non-empty inner vecs"
+            "4+ non-empty inner vecs",
         );
     }
 }
@@ -450,24 +574,20 @@ mod strings {
 
     #[test]
     fn default_text_covers_empty_and_non_ascii() {
-        let vs = sample(20_000, 0x51, |tc| {
-            let s: String = tc.draw(gs::text());
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            s
-        });
-        assert_rate!(vs, |s: &String| s.is_empty(), 0.02, "empty");
-        assert_rate!(vs, |s: &String| !s.is_ascii(), 0.2, "non-ASCII");
-        assert_rate!(
-            vs,
+        let vs = sample_with_u64_companion(0x51, gs::text());
+        assert_min_rate(&vs, |s: &String| s.is_empty(), 0.02, "text empty");
+        assert_min_rate(&vs, |s: &String| !s.is_ascii(), 0.2, "text non-ASCII");
+        assert_min_rate(
+            &vs,
             |s: &String| s.chars().any(|c| c as u32 > 0xFFFF),
             0.05,
-            "astral plane"
+            "text astral plane",
         );
-        assert_rate!(
-            vs,
+        assert_min_rate(
+            &vs,
             |s: &String| s.chars().next().is_some_and(|c| c.len_utf8() > 1),
             0.1,
-            "multi-byte first char"
+            "text multi-byte first char",
         );
     }
 }
@@ -477,29 +597,29 @@ mod combinators {
 
     #[test]
     fn optional_generates_both_none_and_some() {
-        let vs = sample(20_000, 0x01, |tc| {
-            let v: Option<u64> = tc.draw(gs::optional(gs::integers::<u64>()));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v.is_none()
-        });
-        assert_rate!(vs, |&none| none, 0.1, "None");
-        assert_rate!(vs, |&none| !none, 0.3, "Some");
+        let vs = sample_with_u64_companion(0x01, gs::optional(gs::integers::<u64>()));
+        assert_min_rate(&vs, |v: &Option<u64>| v.is_none(), 0.1, "optional None");
+        assert_min_rate(&vs, |v: &Option<u64>| v.is_some(), 0.3, "optional Some");
     }
 
     #[test]
     fn one_of_hits_every_branch() {
-        let vs = sample(20_000, 0x02, |tc| {
-            let v: i64 = tc.draw(hegel::one_of!(
+        let vs = sample_with_u64_companion(
+            0x02,
+            hegel::one_of!(
                 gs::integers::<i64>().min_value(0).max_value(9),
                 gs::integers::<i64>().min_value(100).max_value(109),
                 gs::integers::<i64>().min_value(1000).max_value(1009),
-            ));
-            let _b: u64 = tc.draw(gs::integers::<u64>());
-            v
-        });
-        assert_rate!(vs, |&v| v < 100, 0.1, "first branch");
-        assert_rate!(vs, |&v| (100..1000).contains(&v), 0.1, "second branch");
-        assert_rate!(vs, |&v| v >= 1000, 0.1, "third branch");
+            ),
+        );
+        assert_min_rate(&vs, |&v| v < 100, 0.1, "one_of first branch");
+        assert_min_rate(
+            &vs,
+            |&v| (100..1000).contains(&v),
+            0.1,
+            "one_of second branch",
+        );
+        assert_min_rate(&vs, |&v| v >= 1000, 0.1, "one_of third branch");
     }
 
     #[test]
