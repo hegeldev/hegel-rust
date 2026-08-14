@@ -28,6 +28,15 @@ fn test_one_of_enumerates_when_all_children_do() {
 
     let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]), gs::integers::<i64>());
     assert!(g.enumerate_values().is_none());
+
+    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]));
+    assert_eq!(g.enumerate_values(), Some(vec![1, 2]));
+
+    let g = gs::one_of(vec![
+        gs::sampled_from(vec![1_i64, 2]).boxed(),
+        gs::sampled_from(vec![3_i64, 4]).boxed(),
+    ]);
+    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
 }
 
 #[test]
@@ -100,6 +109,44 @@ fn test_one_of_with_different_types_via_map(tc: TestCase) {
 fn test_one_of_many(tc: TestCase) {
     let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed())));
     assert!((0..10).contains(&value));
+}
+
+#[derive(Clone, PartialEq)]
+struct Opaque(i32);
+
+#[hegel::test]
+fn test_one_of_with_non_debug_components_draws_silently(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(1)),
+        gs::integers::<i32>().min_value(2).max_value(5).map(Opaque),
+    ));
+    assert!(value == Opaque(1) || (2..=5).contains(&value.0));
+}
+
+#[hegel::test]
+fn test_one_of_single_component(tc: TestCase) {
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(42))), 42);
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(43),)), 43);
+    assert_eq!(tc.draw_silent(hegel::one_of!(gs::just(44))), 44);
+}
+
+#[hegel::test]
+fn test_one_of_twelve_components(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
+        gs::just(0),
+        gs::just(1),
+        gs::just(2),
+        gs::just(3),
+        gs::just(4),
+        gs::just(5),
+        gs::just(6),
+        gs::just(7),
+        gs::just(8),
+        gs::just(9),
+        gs::just(10),
+        gs::just(11),
+    ));
+    assert!((0..12).contains(&value));
 }
 
 #[hegel::test]
@@ -395,7 +442,7 @@ mod one_of {
     fn test_one_of_empty() {
         expect_panic(
             || {
-                gs::one_of::<i64, _>(vec![]);
+                gs::one_of(Vec::<gs::BoxedGenerator<i64>>::new());
             },
             "one_of requires at least one generator",
         );
@@ -1058,5 +1105,176 @@ mod nocover_given_reuse {
         })
         .settings(Settings::new().database(None))
         .run();
+    }
+}
+
+mod one_of_named_types {
+    use hegel::generators::{self as gs, OneOf2Generator};
+    use hegel::{Hegel, Settings};
+
+    struct Holder {
+        generator:
+            OneOf2Generator<gs::IntegerGenerator<i64>, gs::SampledFromGenerator<'static, i64>, i64>,
+    }
+
+    #[test]
+    fn test_one_of_result_types_are_nameable() {
+        let holder = Holder {
+            generator: hegel::one_of!(gs::integers::<i64>(), gs::sampled_from(vec![1_i64, 2])),
+        };
+        Hegel::new(move |tc| {
+            let _: i64 = tc.draw(&holder.generator);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+}
+
+fn _one_of_generator_is_covariant_in_its_lifetime<'a>(
+    g: gs::OneOfGenerator<'static, i64>,
+) -> gs::OneOfGenerator<'a, i64> {
+    g
+}
+
+mod one_of_arity_dispatch {
+    use hegel::generators::{self as gs, Generator};
+    use hegel::{Hegel, Settings, TestCase};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    fn assert_every_alternative_reachable<G>(arity: i32, generator: G)
+    where
+        G: Generator<i32> + Send + Sync + 'static,
+    {
+        let seen: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+        let track = Arc::clone(&seen);
+        Hegel::new(move |tc: TestCase| {
+            track.lock().unwrap().insert(tc.draw(&generator));
+        })
+        .settings(Settings::new().database(None).test_cases(500))
+        .run();
+        assert_eq!(*seen.lock().unwrap(), (0..arity).collect::<HashSet<i32>>());
+    }
+
+    #[test]
+    fn test_one_of_every_arity_reaches_every_alternative() {
+        assert_every_alternative_reachable(1, hegel::one_of!(gs::just(0)));
+        assert_every_alternative_reachable(2, hegel::one_of!(gs::just(0), gs::just(1)));
+        assert_every_alternative_reachable(
+            3,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2)),
+        );
+        assert_every_alternative_reachable(
+            4,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2), gs::just(3)),
+        );
+        assert_every_alternative_reachable(
+            5,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4)
+            ),
+        );
+        assert_every_alternative_reachable(
+            6,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5)
+            ),
+        );
+        assert_every_alternative_reachable(
+            7,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6)
+            ),
+        );
+        assert_every_alternative_reachable(
+            8,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7)
+            ),
+        );
+        assert_every_alternative_reachable(
+            9,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8)
+            ),
+        );
+        assert_every_alternative_reachable(
+            10,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9)
+            ),
+        );
+        assert_every_alternative_reachable(
+            11,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10)
+            ),
+        );
+        assert_every_alternative_reachable(
+            12,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10),
+                gs::just(11)
+            ),
+        );
     }
 }
