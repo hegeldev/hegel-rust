@@ -82,7 +82,6 @@ fn assert_rate_between<T>(vs: &[T], pred: impl Fn(&T) -> bool, min: f64, max: f6
 
 mod integers {
     use super::*;
-    use IntClaim::*;
 
     trait ClaimInt: Copy + PartialEq + std::fmt::Debug + Send + 'static {
         const MIN_VALUE: Self;
@@ -123,70 +122,71 @@ mod integers {
     }
     impl_claim_uint!(u8, u16, u64, u128);
 
-    /// One standard claim about the first draw of each pair, carrying its
-    /// individually calibrated threshold (at most half the rate observed at
-    /// the test's pinned seed).
-    enum IntClaim {
-        /// The generator's range minimum.
-        MinEndpoint(f64),
-        /// The type's `MAX`.
-        MaxEndpoint(f64),
-        /// Within the given distance of `MAX`.
-        NearMax(u128, f64),
-        /// `MIN`, `MAX`, or a magnitude of at most 1.
-        Boundary(f64),
-        /// A magnitude of at most 8.
-        Small(f64),
+    /// The generator's range minimum appears in the first draw of at least
+    /// `min` of the pairs. Every threshold in this suite is individually
+    /// calibrated to at most half the rate observed at the test's pinned
+    /// seed.
+    fn assert_min_endpoint<T: ClaimInt>(vs: &[(T, T)], range_min: T, min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a == range_min,
+            min,
+            &format!("{ty} min endpoint"),
+        );
     }
 
-    fn check_int_claims<T: ClaimInt>(vs: &[(T, T)], range_min: T, claims: &[IntClaim]) {
+    /// The type's `MAX`.
+    fn assert_max_endpoint<T: ClaimInt>(vs: &[(T, T)], min: f64) {
         let ty = std::any::type_name::<T>();
-        for claim in claims {
-            match *claim {
-                MinEndpoint(min) => assert_min_rate(
-                    vs,
-                    |&(a, _)| a == range_min,
-                    min,
-                    &format!("{ty} min endpoint"),
-                ),
-                MaxEndpoint(min) => assert_min_rate(
-                    vs,
-                    |&(a, _)| a == T::MAX_VALUE,
-                    min,
-                    &format!("{ty} max endpoint"),
-                ),
-                NearMax(distance, min) => assert_min_rate(
-                    vs,
-                    |&(a, _)| a.distance_to_max() <= distance,
-                    min,
-                    &format!("{ty} near-MAX"),
-                ),
-                Boundary(min) => assert_min_rate(
-                    vs,
-                    |&(a, _)| a == T::MIN_VALUE || a == T::MAX_VALUE || a.magnitude() <= 1,
-                    min,
-                    &format!("{ty} boundary"),
-                ),
-                Small(min) => assert_min_rate(
-                    vs,
-                    |&(a, _)| a.magnitude() <= 8,
-                    min,
-                    &format!("{ty} small"),
-                ),
-            }
-        }
+        assert_min_rate(
+            vs,
+            |&(a, _)| a == T::MAX_VALUE,
+            min,
+            &format!("{ty} max endpoint"),
+        );
+    }
+
+    /// Within the given distance of `MAX`.
+    fn assert_near_max<T: ClaimInt>(vs: &[(T, T)], distance: u128, min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.distance_to_max() <= distance,
+            min,
+            &format!("{ty} near-MAX"),
+        );
+    }
+
+    /// `MIN`, `MAX`, or a magnitude of at most 1.
+    fn assert_boundary<T: ClaimInt>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a == T::MIN_VALUE || a == T::MAX_VALUE || a.magnitude() <= 1,
+            min,
+            &format!("{ty} boundary"),
+        );
+    }
+
+    /// A magnitude of at most 8.
+    fn assert_small<T: ClaimInt>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.magnitude() <= 8,
+            min,
+            &format!("{ty} small"),
+        );
     }
 
     #[test]
     fn u64_full_width_hits_endpoints_and_small_values() {
         let vs = sample_pairs(0xD2, gs::integers::<u64>(), gs::integers::<u64>());
-        let claims = [
-            MinEndpoint(0.003),
-            MaxEndpoint(0.001),
-            NearMax(1, 0.003),
-            Small(0.02),
-        ];
-        check_int_claims(&vs, 0, &claims);
+        assert_min_endpoint(&vs, 0, 0.003);
+        assert_max_endpoint(&vs, 0.001);
+        assert_near_max(&vs, 1, 0.003);
+        assert_small(&vs, 0.02);
     }
 
     /// The swarm draws category weights once per test case, so several draws
@@ -221,7 +221,8 @@ mod integers {
     #[test]
     fn i128_full_width_hits_boundary_and_small_values() {
         let vs = sample_pairs(0xD3, gs::integers::<i128>(), gs::integers::<i128>());
-        check_int_claims(&vs, i128::MIN, &[Boundary(0.006), Small(0.015)]);
+        assert_boundary(&vs, 0.006);
+        assert_small(&vs, 0.015);
         assert_min_rate(&vs, |&(a, _)| a > 0, 0.2, "i128 positive");
         assert_min_rate(&vs, |&(a, _)| a < 0, 0.2, "i128 negative");
     }
@@ -229,8 +230,9 @@ mod integers {
     #[test]
     fn u128_full_width_hits_endpoints_and_small_values() {
         let vs = sample_pairs(0xD5, gs::integers::<u128>(), gs::integers::<u128>());
-        let claims = [MinEndpoint(0.003), MaxEndpoint(0.001), Small(0.015)];
-        check_int_claims(&vs, 0, &claims);
+        assert_min_endpoint(&vs, 0, 0.003);
+        assert_max_endpoint(&vs, 0.001);
+        assert_small(&vs, 0.015);
     }
 
     #[test]
@@ -240,15 +242,17 @@ mod integers {
             gs::integers::<u64>().min_value(1),
             gs::integers::<u64>(),
         );
-        let claims = [MinEndpoint(0.003), MaxEndpoint(0.001), Small(0.015)];
-        check_int_claims(&vs, 1, &claims);
+        assert_min_endpoint(&vs, 1, 0.003);
+        assert_max_endpoint(&vs, 0.001);
+        assert_small(&vs, 0.015);
     }
 
     #[test]
     fn i32_full_width_hits_endpoints_and_small_values() {
         let vs = sample_pairs(0xA5, gs::integers::<i32>(), gs::integers::<i32>());
-        let claims = [MinEndpoint(0.0025), MaxEndpoint(0.0025), Small(0.015)];
-        check_int_claims(&vs, i32::MIN, &claims);
+        assert_min_endpoint(&vs, i32::MIN, 0.0025);
+        assert_max_endpoint(&vs, 0.0025);
+        assert_small(&vs, 0.015);
     }
 
     /// u16 arithmetic wraps at 65535/65536 in real bugs (length prefixes,
@@ -257,8 +261,9 @@ mod integers {
     #[test]
     fn u16_hits_near_max_and_overflowing_sums() {
         let vs = sample_pairs(0xA3, gs::integers::<u16>(), gs::integers::<u16>());
-        let claims = [MinEndpoint(0.004), MaxEndpoint(0.005), NearMax(2, 0.005)];
-        check_int_claims(&vs, 0, &claims);
+        assert_min_endpoint(&vs, 0, 0.004);
+        assert_max_endpoint(&vs, 0.005);
+        assert_near_max(&vs, 2, 0.005);
         assert_min_rate(
             &vs,
             |&(a, b)| u32::from(a) + u32::from(b) > u32::from(u16::MAX),
@@ -270,7 +275,8 @@ mod integers {
     #[test]
     fn i16_hits_endpoints_and_overflowing_differences() {
         let vs = sample_pairs(0xA4, gs::integers::<i16>(), gs::integers::<i16>());
-        check_int_claims(&vs, i16::MIN, &[MinEndpoint(0.0025), MaxEndpoint(0.0025)]);
+        assert_min_endpoint(&vs, i16::MIN, 0.0025);
+        assert_max_endpoint(&vs, 0.0025);
         assert_min_rate(
             &vs,
             |&(a, b)| i32::from(a) - i32::from(b) > i32::from(i16::MAX),
@@ -282,13 +288,13 @@ mod integers {
     #[test]
     fn u8_hits_both_endpoints() {
         let vs = sample_pairs(0xA2, gs::integers::<u8>(), gs::integers::<u8>());
-        check_int_claims(&vs, 0, &[MinEndpoint(0.005), MaxEndpoint(0.005)]);
+        assert_min_endpoint(&vs, 0, 0.005);
+        assert_max_endpoint(&vs, 0.005);
     }
 }
 
 mod floats {
     use super::*;
-    use FloatClaim::*;
 
     trait ClaimFloat: Copy + std::fmt::Debug + Send + 'static {
         const HALF_MAX: f64;
@@ -316,105 +322,124 @@ mod floats {
         }
     }
 
-    /// One standard claim about the first draw of each pair, carrying its
-    /// individually calibrated threshold like `IntClaim`. Predicates on `f32`
-    /// widen the value to `f64` first, which is exact.
-    enum FloatClaim {
-        Nan(f64),
-        PosInf(f64),
-        NegInf(f64),
-        /// A band: infinities must appear but not dominate.
-        InfiniteBand(f64, f64),
-        PosZero(f64),
-        NegZero(f64),
-        /// Finite, nonzero, with a zero fractional part.
-        IntegerValued(f64),
-        /// A finite magnitude of at least 1e100.
-        Huge(f64),
-        /// A finite magnitude above the type's `MAX / 2`.
-        NearMax(f64),
-        /// A nonzero magnitude of at most 1e-100.
-        Tiny(f64),
-        Subnormal(f64),
+    /// NaN in the first draw of at least `min` of the pairs. Predicates on
+    /// `f32` widen the value to `f64` first, which is exact; thresholds are
+    /// calibrated like the integer ones.
+    fn assert_nan_rate<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(vs, |&(a, _)| a.widen().is_nan(), min, &format!("{ty} NaN"));
     }
 
-    fn check_float_claims<T: ClaimFloat>(vs: &[(T, T)], claims: &[FloatClaim]) {
+    fn assert_pos_inf<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
         let ty = std::any::type_name::<T>();
-        let w = |&(a, _): &(T, T)| a.widen();
-        for claim in claims {
-            match *claim {
-                Nan(min) => assert_min_rate(vs, |v| w(v).is_nan(), min, &format!("{ty} NaN")),
-                PosInf(min) => {
-                    assert_min_rate(vs, |v| w(v) == f64::INFINITY, min, &format!("{ty} +inf"))
-                }
-                NegInf(min) => assert_min_rate(
-                    vs,
-                    |v| w(v) == f64::NEG_INFINITY,
-                    min,
-                    &format!("{ty} -inf"),
-                ),
-                InfiniteBand(min, max) => assert_rate_between(
-                    vs,
-                    |v| w(v).is_infinite(),
-                    min,
-                    max,
-                    &format!("{ty} infinite"),
-                ),
-                PosZero(min) => assert_min_rate(
-                    vs,
-                    |v| w(v) == 0.0 && w(v).is_sign_positive(),
-                    min,
-                    &format!("{ty} +0.0"),
-                ),
-                NegZero(min) => assert_min_rate(
-                    vs,
-                    |v| w(v) == 0.0 && w(v).is_sign_negative(),
-                    min,
-                    &format!("{ty} -0.0"),
-                ),
-                IntegerValued(min) => assert_min_rate(
-                    vs,
-                    |v| w(v).is_finite() && w(v) != 0.0 && w(v).fract() == 0.0,
-                    min,
-                    &format!("{ty} integer-valued"),
-                ),
-                Huge(min) => assert_min_rate(
-                    vs,
-                    |v| w(v).is_finite() && w(v).abs() >= 1e100,
-                    min,
-                    &format!("{ty} huge magnitude"),
-                ),
-                NearMax(min) => assert_min_rate(
-                    vs,
-                    |v| w(v).is_finite() && w(v).abs() > T::HALF_MAX,
-                    min,
-                    &format!("{ty} near-MAX magnitude"),
-                ),
-                Tiny(min) => assert_min_rate(
-                    vs,
-                    |v| w(v) != 0.0 && w(v).abs() <= 1e-100,
-                    min,
-                    &format!("{ty} tiny magnitude"),
-                ),
-                Subnormal(min) => {
-                    assert_min_rate(vs, |&(a, _)| a.subnormal(), min, &format!("{ty} subnormal"))
-                }
-            }
-        }
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen() == f64::INFINITY,
+            min,
+            &format!("{ty} +inf"),
+        );
+    }
+
+    fn assert_neg_inf<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen() == f64::NEG_INFINITY,
+            min,
+            &format!("{ty} -inf"),
+        );
+    }
+
+    /// A band: infinities must appear but not dominate.
+    fn assert_infinite_band<T: ClaimFloat>(vs: &[(T, T)], min: f64, max: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_rate_between(
+            vs,
+            |&(a, _)| a.widen().is_infinite(),
+            min,
+            max,
+            &format!("{ty} infinite"),
+        );
+    }
+
+    fn assert_pos_zero<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen() == 0.0 && a.widen().is_sign_positive(),
+            min,
+            &format!("{ty} +0.0"),
+        );
+    }
+
+    fn assert_neg_zero<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen() == 0.0 && a.widen().is_sign_negative(),
+            min,
+            &format!("{ty} -0.0"),
+        );
+    }
+
+    /// Finite, nonzero, with a zero fractional part.
+    fn assert_integer_valued<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen().is_finite() && a.widen() != 0.0 && a.widen().fract() == 0.0,
+            min,
+            &format!("{ty} integer-valued"),
+        );
+    }
+
+    /// A finite magnitude of at least 1e100.
+    fn assert_huge<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen().is_finite() && a.widen().abs() >= 1e100,
+            min,
+            &format!("{ty} huge magnitude"),
+        );
+    }
+
+    /// A finite magnitude above the type's `MAX / 2`.
+    fn assert_near_max_magnitude<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen().is_finite() && a.widen().abs() > T::HALF_MAX,
+            min,
+            &format!("{ty} near-MAX magnitude"),
+        );
+    }
+
+    /// A nonzero magnitude of at most 1e-100.
+    fn assert_tiny<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(
+            vs,
+            |&(a, _)| a.widen() != 0.0 && a.widen().abs() <= 1e-100,
+            min,
+            &format!("{ty} tiny magnitude"),
+        );
+    }
+
+    fn assert_subnormal<T: ClaimFloat>(vs: &[(T, T)], min: f64) {
+        let ty = std::any::type_name::<T>();
+        assert_min_rate(vs, |&(a, _)| a.subnormal(), min, &format!("{ty} subnormal"));
     }
 
     #[test]
     fn f64_unbounded_hits_special_values() {
         let vs = sample_pairs(0xF1, gs::floats::<f64>(), gs::floats::<f64>());
-        let claims = [
-            Nan(0.005),
-            PosInf(0.005),
-            NegInf(0.005),
-            PosZero(0.002),
-            NegZero(0.001),
-            IntegerValued(0.2),
-        ];
-        check_float_claims(&vs, &claims);
+        assert_nan_rate(&vs, 0.005);
+        assert_pos_inf(&vs, 0.005);
+        assert_neg_inf(&vs, 0.005);
+        assert_pos_zero(&vs, 0.002);
+        assert_neg_zero(&vs, 0.001);
+        assert_integer_valued(&vs, 0.2);
     }
 
     /// The bugs that need floats are overwhelmingly overflow (huge finite
@@ -423,8 +448,10 @@ mod floats {
     #[test]
     fn f64_unbounded_hits_extreme_magnitudes() {
         let vs = sample_pairs(0xA6, gs::floats::<f64>(), gs::floats::<f64>());
-        let claims = [Huge(0.03), NearMax(0.003), Tiny(0.03), Subnormal(0.001)];
-        check_float_claims(&vs, &claims);
+        assert_huge(&vs, 0.03);
+        assert_near_max_magnitude(&vs, 0.003);
+        assert_tiny(&vs, 0.03);
+        assert_subnormal(&vs, 0.001);
         let overflowing_sums = vs
             .iter()
             .filter(|(a, b)| a.is_finite() && b.is_finite() && (a + b).is_infinite())
@@ -457,13 +484,10 @@ mod floats {
     #[test]
     fn f32_unbounded_is_mostly_finite_with_extreme_magnitudes() {
         let vs = sample_pairs(0xA7, gs::floats::<f32>(), gs::floats::<f32>());
-        let claims = [
-            Nan(0.005),
-            InfiniteBand(0.005, 0.2),
-            NearMax(0.02),
-            Subnormal(0.001),
-        ];
-        check_float_claims(&vs, &claims);
+        assert_nan_rate(&vs, 0.005);
+        assert_infinite_band(&vs, 0.005, 0.2);
+        assert_near_max_magnitude(&vs, 0.02);
+        assert_subnormal(&vs, 0.001);
     }
 }
 
