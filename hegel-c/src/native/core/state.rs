@@ -1001,6 +1001,12 @@ pub struct FamilyCore {
     /// Defaults to 50, overridden per run from the `stateful_step_count`
     /// setting.
     stateful_step_count: AtomicI64,
+    /// Set when a state machine was created on any stream of this family
+    /// with `max_concurrency > 1`: the test asked for real concurrency, so
+    /// its behaviour depends on thread scheduling and the run driving this
+    /// family is nondeterministic. The engine reads this after each
+    /// execution and flips the whole run into nondeterministic mode.
+    concurrent_machine: AtomicBool,
 }
 
 impl FamilyCore {
@@ -1013,7 +1019,20 @@ impl FamilyCore {
             target_observations: Mutex::new(HashMap::default()),
             state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
+            concurrent_machine: AtomicBool::new(false),
         }
+    }
+
+    /// Record that a state machine with `max_concurrency > 1` was created
+    /// on a stream of this family (see [`Self::concurrent_machine`]).
+    pub(crate) fn set_concurrent_machine(&self) {
+        self.concurrent_machine.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether a state machine with `max_concurrency > 1` was created on
+    /// any stream of this family.
+    pub(crate) fn concurrent_machine(&self) -> bool {
+        self.concurrent_machine.load(Ordering::Relaxed)
     }
 
     /// Make every state machine of this family run without a step cap.

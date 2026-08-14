@@ -459,8 +459,9 @@ pub use hegel_macros::state_machine;
 /// invariants must take `&self` (mutable state needs interior mutability),
 /// and the model type must be `Sync`. See
 /// [`run_concurrent`](crate::stateful::run_concurrent) for the full
-/// execution model, the required `nondeterministic = true` declaration, and
-/// the lock-poisoning guidance for rules that hold locks across draws.
+/// execution model, how a concurrent run's inherent nondeterminism is
+/// handled, and the lock-poisoning guidance for rules that hold locks
+/// across draws.
 ///
 /// ```no_run
 /// use std::sync::Mutex;
@@ -497,7 +498,7 @@ pub use hegel_macros::state_machine;
 ///     }
 /// }
 ///
-/// #[hegel::test(nondeterministic = true)]
+/// #[hegel::test]
 /// fn test_kv(tc: TestCase) {
 ///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
 ///     hegel::stateful::run_concurrent(m, tc, 1, 3);

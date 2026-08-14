@@ -185,8 +185,7 @@ impl<'a> Engine<'a> {
         };
 
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
-        let nondeterministic = settings.nondeterministic;
-        let target_enabled = settings.phases.contains(&Phase::Target) && !nondeterministic;
+        let target_phase = settings.phases.contains(&Phase::Target);
         let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
         let mut replay_aligned = false;
         let report_multiple = settings.report_multiple_failures;
@@ -266,6 +265,10 @@ impl<'a> Engine<'a> {
                             db.delete(&secondary_key, &raw);
                         }
                     }
+                    if self.nondeterministic {
+                        replay_aligned = false;
+                        break;
+                    }
                 }
                 if self.interesting.is_empty() {
                     replay_aligned = false;
@@ -274,7 +277,7 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let shrink_enabled = settings.phases.contains(&Phase::Shrink) && !nondeterministic;
+        let shrink_phase = settings.phases.contains(&Phase::Shrink);
         let found_in_reuse = !self.interesting.is_empty();
 
         let actually_generate =
@@ -317,7 +320,7 @@ impl<'a> Engine<'a> {
                 self.calls,
                 self.first_bug_at,
                 self.last_bug_at,
-                shrink_enabled,
+                shrink_phase && !self.nondeterministic,
                 report_multiple,
                 self.first_bug_time.map(|t| t.elapsed()),
             )
@@ -332,7 +335,7 @@ impl<'a> Engine<'a> {
                         self.calls,
                         self.first_bug_at,
                         self.last_bug_at,
-                        shrink_enabled,
+                        shrink_phase && !self.nondeterministic,
                         report_multiple,
                         self.first_bug_time.map(|t| t.elapsed()),
                     )
@@ -341,7 +344,7 @@ impl<'a> Engine<'a> {
                 }
 
                 let case_rng = self.rng.spawn();
-                let prefix = if nondeterministic {
+                let prefix = if self.nondeterministic {
                     Vec::new()
                 } else {
                     generate_novel_prefix(&self.tree_root, &mut self.rng)?
@@ -409,7 +412,8 @@ impl<'a> Engine<'a> {
                     }
                 }
 
-                if target_enabled
+                if target_phase
+                    && !self.nondeterministic
                     && self.interesting.is_empty()
                     && !self.targeting.is_empty()
                     && target_schedule.should_fire(self.valid_test_cases)
@@ -422,7 +426,7 @@ impl<'a> Engine<'a> {
                     optimiser.optimise_targets().await?;
                 }
 
-                if !nondeterministic
+                if !self.nondeterministic
                     && run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
@@ -455,7 +459,8 @@ impl<'a> Engine<'a> {
             log_phase("Generate", "End");
         }
 
-        if !self.interesting.is_empty() && !replay_aligned && shrink_enabled {
+        if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.nondeterministic
+        {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
@@ -569,7 +574,7 @@ impl<'a> Engine<'a> {
             output.line("Skipping shrink: reused aligned database replay");
         }
 
-        if let (Some(db), Some(key)) = (self.db(), database_key) {
+        if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             let new_entries: crate::native::HashSet<Vec<u8>> = self
@@ -609,6 +614,7 @@ impl<'a> Engine<'a> {
             }
         }
 
+        let nondeterministic = self.nondeterministic;
         Ok(origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
@@ -739,6 +745,18 @@ pub(crate) fn flaky_diagnostic() -> String {
      This usually means your test depends on external state such as \
      global variables, system time, or external random number generators."
         .to_string()
+}
+
+/// Notice emitted once, when the run first executes a test case that
+/// created a state machine with `max_concurrency > 1` and the run flips
+/// into nondeterministic mode (see [`Engine::nondeterministic`]).
+/// Informational rather than a warning: the concurrency was asked for
+/// explicitly, but the user should learn why their failure is reported
+/// unshrunk and without a reproduce blob.
+pub(crate) fn concurrent_machine_notice() -> &'static str {
+    "Concurrent state machine detected: this run is nondeterministic, so failures \
+     are reported from the execution that discovered them, without shrinking, \
+     replay, database persistence, or a reproduce blob."
 }
 
 /// Warning emitted when shrinking exhausts its wall-clock budget
@@ -939,6 +957,17 @@ pub(crate) struct Engine<'a> {
     pub(crate) first_bug_at: Option<u64>,
     pub(crate) last_bug_at: Option<u64>,
     pub(crate) first_bug_time: Option<crate::sys::Instant>,
+    /// Sticky run-level nondeterminism flag, flipped by the first executed
+    /// test case that creates a state machine with `max_concurrency > 1`
+    /// (see [`crate::native::core::FamilyCore::concurrent_machine`]): the
+    /// test asked for real concurrency, so nothing that assumes
+    /// deterministic replay can be trusted. While set, the run skips
+    /// data-tree recording (and with it novel-prefix generation and the
+    /// choice-tree mismatch check), span mutation, targeting, the verify +
+    /// shrink pass (so generation stops at the first bug), database
+    /// persistence and reuse, and reproduce-blob emission — failures are
+    /// reported faithfully from the execution that discovered them.
+    pub(crate) nondeterministic: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -947,16 +976,10 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
-        let db: Option<Box<dyn TestCaseDatabase>> = if settings.nondeterministic {
-            None
-        } else {
-            match &settings.database {
-                Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
-                Database::Unset => {
-                    Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples")))
-                }
-                Database::Disabled => None,
-            }
+        let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
+            Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
+            Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
+            Database::Disabled => None,
         };
         Ok(Engine {
             settings,
@@ -976,6 +999,7 @@ impl<'a> Engine<'a> {
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
+            nondeterministic: false,
         })
     }
 
@@ -999,11 +1023,17 @@ impl<'a> Engine<'a> {
         &mut self,
         ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        ntc.family()
-            .set_stateful_step_count(self.settings.stateful_step_count);
+        let family = alloc::sync::Arc::clone(ntc.family());
+        family.set_stateful_step_count(self.settings.stateful_step_count);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
+        if !self.nondeterministic && family.concurrent_machine() {
+            self.nondeterministic = true;
+            if self.settings.verbosity != Verbosity::Quiet {
+                self.settings.output.line(concurrent_machine_notice());
+            }
+        }
         let mismatch = self.record_run(&run, elapsed);
         Ok((run, mismatch))
     }
@@ -1017,7 +1047,7 @@ impl<'a> Engine<'a> {
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
     fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
-        let mismatch = if self.settings.nondeterministic {
+        let mismatch = if self.nondeterministic {
             None
         } else {
             crate::native::data_tree::record_tree_full(
@@ -1050,7 +1080,9 @@ impl<'a> Engine<'a> {
                 }
                 self.last_bug_at = Some(self.calls);
                 let origin = run.origin.clone().unwrap_or_default();
-                self.persister.record(&origin, &run.nodes);
+                if !self.nondeterministic {
+                    self.persister.record(&origin, &run.nodes);
+                }
                 update_interesting(&mut self.interesting, origin, run.nodes.clone());
             }
         }

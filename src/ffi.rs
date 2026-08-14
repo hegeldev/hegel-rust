@@ -209,11 +209,6 @@ impl SettingsHandle {
                     raw,
                     map_backend(settings.backend),
                 ));
-                require_ok(hegel_c::hegel_settings_set_nondeterministic(
-                    ctx,
-                    raw,
-                    settings.nondeterministic,
-                ));
             }
             SettingsHandle { raw }
         })

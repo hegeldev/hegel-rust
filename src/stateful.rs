@@ -12,9 +12,9 @@
 //! For *concurrent* stateful testing — rules applied to a shared model from
 //! several worker threads at once — define the machine with the
 //! [`concurrent_state_machine`](crate::concurrent_state_machine) attribute
-//! macro instead and call [`run_concurrent()`] inside a test declared
-//! `#[hegel::test(nondeterministic = true)]`. See [`run_concurrent()`] for
-//! the execution model.
+//! macro instead and call [`run_concurrent()`]. See [`run_concurrent()`]
+//! for the execution model and how such a run handles its inherent
+//! nondeterminism.
 //!
 //! Example:
 //! ```rust
@@ -269,8 +269,9 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
 /// consumed value. The accepted trade-off is that a shared pool couples the
 /// workers' streams: which value a draw resolves to (and whether it rejects
 /// as empty) depends on what other workers have added or consumed in the
-/// meantime. In a nondeterministic run — the only place concurrency > 1
-/// exists — nothing downstream depends on that independence anyway.
+/// meantime. In a nondeterministic run — which is what any run with
+/// concurrency > 1 becomes — nothing downstream depends on that
+/// independence anyway.
 pub struct ConcurrentPool<T> {
     handle: PoolHandle,
     values: Mutex<HashMap<i64, T>>,
@@ -767,17 +768,18 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// recoverable even though the report reads worker by worker. Verbose
 /// runs additionally stream every line live, in arrival order.
 ///
-/// # The run must be declared nondeterministic
+/// # The run becomes nondeterministic
 ///
 /// Concurrency bugs are nondeterministic — thread scheduling is outside
-/// Hegel's control — so a test using `run_concurrent` must declare its run
-/// nondeterministic *statically*, via `#[hegel::test(nondeterministic =
-/// true)]` (or [`Settings::nondeterministic`](crate::Settings::nondeterministic)
-/// for non-macro users). Failures are then reported faithfully from the
-/// discovering execution, with no replay, shrinking, flakiness complaints,
-/// database persistence, or reproduce blob — and at most one failure per
-/// run. This function panics up front when the run has not been declared
-/// nondeterministic.
+/// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
+/// makes the whole run nondeterministic, automatically. Failures are then
+/// reported faithfully from the discovering execution, with no replay,
+/// shrinking, flakiness complaints, database persistence, or reproduce
+/// blob — and at most one failure per run. A notice explaining this is
+/// printed once per run (unless the run is quiet). The declared bound is
+/// what counts: a test case that happens to draw a concurrency level of 1
+/// is still part of a nondeterministic run. With `max_concurrency == 1`
+/// the run stays deterministic and shrinks and replays as usual.
 ///
 /// # Abandoned rules and lock poisoning
 ///
@@ -830,7 +832,7 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 ///     }
 /// }
 ///
-/// #[hegel::test(nondeterministic = true)]
+/// #[hegel::test]
 /// fn test_counter(tc: TestCase) {
 ///     let m = CounterTest { counter: Mutex::new(0) };
 ///     hegel::stateful::run_concurrent(m, tc, 1, 3);
@@ -842,14 +844,8 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     min_concurrency: i64,
     max_concurrency: i64,
 ) {
-    if !tc.nondeterministic() {
-        raise_control(InvalidArgument(
-            "stateful::run_concurrent requires the run to be declared nondeterministic: \
-             concurrent stateful tests cannot be replayed or shrunk deterministically. \
-             Declare it with #[hegel::test(nondeterministic = true)], or with \
-             Settings::new().nondeterministic(true) when configuring the run by hand."
-                .to_string(),
-        ));
+    if max_concurrency > 1 {
+        tc.mark_nondeterministic();
     }
 
     let rules = m.rules();

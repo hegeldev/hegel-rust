@@ -161,10 +161,6 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_c::hegel_settings_set_derandomize(ctx, ptr::null_mut(), false),
             HEGEL_E_INVALID_HANDLE
         );
-        assert_eq!(
-            hegel_c::hegel_settings_set_nondeterministic(ctx, ptr::null_mut(), true),
-            HEGEL_E_INVALID_HANDLE
-        );
 
         let mut run: *mut HegelRun = ptr::null_mut();
         assert_eq!(
@@ -1016,10 +1012,10 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     }
 }
 
-/// A full run declared nondeterministic via
-/// `hegel_settings_set_nondeterministic` stops at the first bug and surfaces
-/// it with an origin but no reproduce blob: with replay and shrinking off,
-/// there is no shrunk choice sequence to encode.
+/// A full run whose test case creates a state machine with
+/// `max_concurrency > 1` becomes nondeterministic: it stops at the first
+/// bug and surfaces it with an origin but no reproduce blob — with replay
+/// and shrinking off, there is no shrunk choice sequence to encode.
 #[test]
 fn nondeterministic_run_failure_has_origin_but_no_blob() {
     let ctx = hegel_context_new();
@@ -1027,9 +1023,9 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
         let s = make_settings(ctx);
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
-        ok(hegel_c::hegel_settings_set_nondeterministic(ctx, s, true));
         let run = start(ctx, s);
         let origin = CString::new("nondeterministic bug").unwrap();
+        let rule = CString::new("only").unwrap();
 
         let mut cases = 0usize;
         loop {
@@ -1038,6 +1034,24 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 break;
             }
             cases += 1;
+            let rules = [rule.as_ptr()];
+            let rule_groups: [i64; 1] = [0];
+            let mut machine: *mut HegelStateMachine = ptr::null_mut();
+            let mut out_concurrency = 0i64;
+            ok(hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                2,
+                2,
+                &mut machine,
+                &mut out_concurrency,
+            ));
+            ok(hegel_state_machine_free(ctx, machine));
             let mut value = 0i64;
             assert_eq!(
                 hegel_generate_integer(ctx, tc, 0, 100, &mut value),

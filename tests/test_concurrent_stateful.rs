@@ -38,7 +38,7 @@ impl Counter {
     }
 }
 
-#[hegel::test(nondeterministic = true)]
+#[hegel::test]
 fn test_concurrent_counter_passes(tc: TestCase) {
     let m = Counter {
         value: AtomicI64::new(0),
@@ -80,7 +80,7 @@ impl Grouped {
     }
 }
 
-#[hegel::test(nondeterministic = true)]
+#[hegel::test]
 fn test_grouped_machine_passes(tc: TestCase) {
     let m = Grouped {
         log: Mutex::new(Vec::new()),
@@ -102,19 +102,23 @@ impl Boom {
 #[test]
 fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
-            .settings(Settings::new().nondeterministic(true).database(None))
+        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
+            .settings(Settings::new().database(None).print_blob(true))
             .run();
     });
     let payload = result.expect_err("the failing machine must fail the run");
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
     let text = lines.join("\n");
     assert!(
+        text.contains("Concurrent state machine detected"),
+        "the run must print the nondeterminism notice:\n{text}"
+    );
+    assert!(
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
         "the join points must note the round's concurrency group:\n{text}"
     );
     assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\] Rule: boom");
-    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\]   let draw_1");
+    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\]   let draw_\d");
     assert!(
         text.contains("test_concurrent_stateful.rs"),
         "the diagnostic must carry the worker's real panic location:\n{text}"
@@ -125,20 +129,16 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     );
     assert!(
         !text.contains("To reproduce this failure"),
-        "a nondeterministic failure must not print a reproducer line:\n{text}"
+        "a nondeterministic failure must not print a reproducer line even \
+         with print_blob on:\n{text}"
     );
 }
 
 #[test]
 fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
-            .settings(
-                Settings::new()
-                    .nondeterministic(true)
-                    .database(None)
-                    .verbosity(Verbosity::Quiet),
-            )
+        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
     let payload = result.expect_err("the failing machine must fail the run even when quiet");
@@ -147,37 +147,55 @@ fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
 }
 
 #[test]
-fn run_concurrent_requires_the_nondeterministic_declaration() {
-    let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| {
-            let m = Counter {
-                value: AtomicI64::new(0),
-            };
-            run_concurrent(m, tc, 1, 1);
-        })
-        .settings(Settings::new().database(None))
-        .run();
+fn a_run_with_max_concurrency_one_stays_deterministic() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
+            .settings(Settings::new().database(None).print_blob(true))
+            .run();
     });
-    let payload = result.expect_err("run_concurrent must reject an undeclared run");
-    assert_matches_regex(
-        &panic_message(&payload),
-        "requires the run to be declared nondeterministic",
+    let payload = result.expect_err("the failing machine must fail the run");
+    assert_matches_regex(&panic_message(&payload), "concurrent boom");
+    let text = lines.join("\n");
+    assert!(
+        !text.contains("Concurrent state machine detected"),
+        "a single-worker machine must not flip the run nondeterministic:\n{text}"
+    );
+    assert!(
+        text.contains("To reproduce this failure"),
+        "a deterministic run shrinks and prints a reproducer line:\n{text}"
     );
 }
 
+/// A blob recorded while a test was deterministic cannot replay once the
+/// test runs a concurrent machine: the replay comes up short and is
+/// reported as a stale reproducer rather than shrunk or re-explored.
 #[test]
-fn reproduce_failure_is_rejected_on_a_nondeterministic_run() {
-    let result = std::panic::catch_unwind(|| {
-        Hegel::new(|_tc| {})
-            .settings(Settings::new().nondeterministic(true).database(None))
-            .reproduce_failure("AAEC")
+fn a_stale_blob_on_a_concurrent_test_reports_that_it_no_longer_reproduces() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc: TestCase| {
+            let x: i64 = tc.draw(gs::integers());
+            assert!(x < 100, "deterministic boom {x}");
+        })
+        .settings(Settings::new().database(None).print_blob(true))
+        .run();
+    });
+    result.expect_err("the fixture run must fail and print a blob");
+    let blob = lines
+        .iter()
+        .find_map(|l| {
+            let (_, rest) = l.split_once("reproduce_failure(\"")?;
+            rest.split_once('"').map(|(blob, _)| blob.to_string())
+        })
+        .unwrap();
+
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
+            .settings(Settings::new().database(None))
+            .reproduce_failure(blob)
             .run();
     });
-    let payload = result.expect_err("the blob must be rejected before any test case runs");
-    assert_matches_regex(
-        &panic_message(&payload),
-        "reproduce_failure.* is not supported on a test declared\\s+nondeterministic",
-    );
+    let payload = result.expect_err("the stale blob cannot replay a concurrent test");
+    assert_matches_regex(&panic_message(&payload), "no longer reproduces");
 }
 
 struct Exhaust;
@@ -198,7 +216,6 @@ fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
         Hegel::new(|tc| run_concurrent(Exhaust, tc, 1, 1))
             .settings(
                 Settings::new()
-                    .nondeterministic(true)
                     .database(None)
                     .suppress_health_check([HealthCheck::LargeInitialTestCase])
                     .verbosity(Verbosity::Quiet),
@@ -226,12 +243,7 @@ impl DeepSpans {
 fn an_engine_invalid_conclusion_classifies_the_case_as_invalid() {
     let (_, result) = capture_hegel_output(|| {
         Hegel::new(|tc| run_concurrent(DeepSpans, tc, 1, 1))
-            .settings(
-                Settings::new()
-                    .nondeterministic(true)
-                    .database(None)
-                    .verbosity(Verbosity::Quiet),
-            )
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
     let payload = result.expect_err("every case is invalid, so the health check fires");
@@ -257,7 +269,6 @@ fn a_panic_that_loses_to_an_engine_side_conclusion_is_discarded() {
         Hegel::new(|tc| run_concurrent(NestAndBoom, tc, 1, 1))
             .settings(
                 Settings::new()
-                    .nondeterministic(true)
                     .database(None)
                     .suppress_health_check([HealthCheck::FilterTooMuch]),
             )
@@ -288,12 +299,7 @@ impl UsageError {
 fn a_workers_usage_error_aborts_the_run_verbatim() {
     let (_, result) = capture_hegel_output(|| {
         Hegel::new(|tc| run_concurrent(UsageError, tc, 1, 1))
-            .settings(
-                Settings::new()
-                    .nondeterministic(true)
-                    .database(None)
-                    .verbosity(Verbosity::Quiet),
-            )
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
     let payload = result.expect_err("an invalid-argument control payload aborts the run");
@@ -324,12 +330,7 @@ fn an_invariant_assumption_failure_at_a_join_point_invalidates_the_case() {
             };
             run_concurrent(m, tc, 1, 2);
         })
-        .settings(
-            Settings::new()
-                .nondeterministic(true)
-                .database(None)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("every case is invalid, so the health check fires");
@@ -395,7 +396,7 @@ impl PoolMachine {
     }
 }
 
-#[hegel::test(nondeterministic = true)]
+#[hegel::test]
 fn test_concurrent_pool_across_workers(tc: TestCase) {
     let m = PoolMachine {
         pool: concurrent_pool(&tc),
@@ -444,7 +445,6 @@ fn racy_smoke_test_reports_only_genuine_failures() {
         })
         .settings(
             Settings::new()
-                .nondeterministic(true)
                 .database(None)
                 .test_cases(20)
                 .verbosity(Verbosity::Quiet),
@@ -480,12 +480,7 @@ impl hegel::stateful::ConcurrentStateMachine for NoRules {
 fn a_machine_without_rules_is_a_usage_error() {
     let (_, result) = capture_hegel_output(|| {
         Hegel::new(|tc| run_concurrent(NoRules, tc, 1, 1))
-            .settings(
-                Settings::new()
-                    .nondeterministic(true)
-                    .database(None)
-                    .verbosity(Verbosity::Quiet),
-            )
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
     let payload = result.expect_err("a machine with no rules cannot run");
@@ -520,7 +515,7 @@ fn the_failure_report_groups_each_rounds_lines_by_worker() {
     static TICKS: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc| run_concurrent(GroupedTicker { ticks: &TICKS }, tc, 2, 2))
-            .settings(Settings::new().nondeterministic(true).database(None))
+            .settings(Settings::new().database(None))
             .run();
     });
     result.expect_err("the ticker must run out of ticks and fail");
@@ -559,12 +554,7 @@ fn invalid_concurrency_bounds_are_a_usage_error() {
                 };
                 run_concurrent(m, tc, min, max);
             })
-            .settings(
-                Settings::new()
-                    .nondeterministic(true)
-                    .database(None)
-                    .verbosity(Verbosity::Quiet),
-            )
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
         });
         let payload = result.expect_err("invalid concurrency bounds cannot run");
@@ -616,12 +606,7 @@ fn pool_add_on_an_exhausted_stream_is_an_overrun() {
             };
             run_concurrent(m, tc, 1, 1);
         })
-        .settings(
-            Settings::new()
-                .nondeterministic(true)
-                .database(None)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");
@@ -641,12 +626,7 @@ fn creating_a_pool_on_an_exhausted_stream_is_an_overrun() {
             let _: ConcurrentPool<i64> = concurrent_pool(&tc);
             unreachable!("creating a pool on an exhausted stream must overrun");
         })
-        .settings(
-            Settings::new()
-                .nondeterministic(true)
-                .database(None)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");
@@ -663,16 +643,26 @@ fn budget_exhaustion_during_machine_creation_is_an_overrun() {
             };
             run_concurrent(m, tc, 1, 1);
         })
-        .settings(
-            Settings::new()
-                .nondeterministic(true)
-                .database(None)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");
     assert_matches_regex(&panic_message(&payload), "LargeInitialTestCase");
+}
+
+struct Noop;
+
+#[hegel::concurrent_state_machine]
+impl Noop {
+    #[rule]
+    fn noop(&self, _: TestCase) {}
+}
+
+/// Flip the run into nondeterministic mode by running a trivial concurrent
+/// machine on an independent clone stream, leaving `tc` free for the test
+/// body's own draws.
+fn flip_nondeterministic(tc: &TestCase) {
+    run_concurrent(Noop, tc.clone(), 2, 2);
 }
 
 #[test]
@@ -680,6 +670,7 @@ fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
+            flip_nondeterministic(&tc);
             let case = CASES.fetch_add(1, Ordering::SeqCst);
             let x: i64 = tc.draw(gs::integers());
             if case == 2 {
@@ -688,8 +679,8 @@ fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
         })
         .settings(
             Settings::new()
-                .nondeterministic(true)
                 .database(None)
+                .stateful_step_count(1)
                 .print_blob(true),
         )
         .run();
@@ -717,6 +708,7 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
+            flip_nondeterministic(&tc);
             let case = CASES.fetch_add(1, Ordering::SeqCst);
             let x: i64 = tc.draw(gs::integers());
             if case == 2 {
@@ -725,8 +717,8 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
         })
         .settings(
             Settings::new()
-                .nondeterministic(true)
                 .database(None)
+                .stateful_step_count(1)
                 .verbosity(Verbosity::Verbose),
         )
         .run();

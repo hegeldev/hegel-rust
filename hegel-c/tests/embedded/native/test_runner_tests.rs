@@ -51,6 +51,21 @@ fn boom(msg: &str) -> TestCaseResult {
     })
 }
 
+/// Create (and immediately drop) a one-rule state machine whose declared
+/// concurrency bound is above 1, flipping the run into nondeterministic
+/// mode at the end of this test case. `Err(())` if the case overran.
+fn concurrent_machine(ds: &dyn DataSource) -> Result<(), ()> {
+    ds.new_state_machine(
+        vec!["rule".to_string()],
+        vec![0],
+        alloc::vec::Vec::new(),
+        2,
+        2,
+    )
+    .map(|_| ())
+    .map_err(|_| ())
+}
+
 #[test]
 fn too_slow_check_reports_when_under_threshold_and_unsuppressed() {
     let msg = too_slow_check(1, Duration::from_secs(60), Duration::from_secs(30), false);
@@ -1058,10 +1073,12 @@ fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
         Settings::new()
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
-            .nondeterministic(true)
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
+            if concurrent_machine(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
             let a = match rbool(ds) {
                 Ok(v) => v,
                 Err(()) => return TestCaseResult::Overrun,
@@ -1098,13 +1115,17 @@ fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
         Settings::new()
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
-            .nondeterministic(true)
             .verbosity(Verbosity::Quiet),
         "k",
-        |ds| match rbool(ds) {
-            Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
-            Ok(_) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
+        |ds| {
+            if concurrent_machine(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            match rbool(ds) {
+                Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
         },
     )
     .unwrap();
@@ -1124,12 +1145,16 @@ fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
     let result = reuse_run(
         Settings::new()
             .database(Some(path.clone()))
-            .nondeterministic(true)
             .verbosity(Verbosity::Quiet),
         "k",
-        |ds| match rbool(ds) {
-            Ok(_) => boom("db origin"),
-            Err(()) => TestCaseResult::Overrun,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if concurrent_machine(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("db origin")
         },
     )
     .unwrap();
@@ -1139,10 +1164,44 @@ fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
     assert_eq!(
         entries,
         vec![seeded],
-        "the seeded entry must be neither replayed away nor joined by a new save"
+        "the seeded entry must be neither deleted nor joined by a new save"
     );
     let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
     assert!(db.fetch(&secondary).is_empty());
+}
+
+#[test]
+fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if concurrent_machine(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Concurrent state machine detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
 }
 
 #[test]

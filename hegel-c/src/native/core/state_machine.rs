@@ -222,6 +222,9 @@ impl NativeStateMachine {
             min_concurrency >= 1 && min_concurrency <= max_concurrency,
             "Stateful testing: concurrency bounds must satisfy 1 <= min <= max"
         );
+        if max_concurrency > 1 {
+            ntc.family().set_concurrent_machine();
+        }
 
         let mut group_ids: Vec<i64> = Vec::new();
         let mut groups: Vec<Vec<usize>> = Vec::new();

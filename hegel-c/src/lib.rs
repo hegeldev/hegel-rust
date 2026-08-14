@@ -960,26 +960,6 @@ pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
     HEGEL_OK
 }
 
-/// Declare the run nondeterministic: the test may produce different
-/// outcomes (or draw different choice sequences) when run on identical
-/// data — e.g. because of thread scheduling. The frontend must set this
-/// whenever a run may be nondeterministic, typically because the test
-/// uses concurrent stateful testing.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_nondeterministic(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    nondeterministic: bool,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_nondeterministic") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    handle.inner = handle.inner.clone().nondeterministic(nondeterministic);
-    HEGEL_OK
-}
-
 /// Parameters:
 /// `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
 ///   disables the database entirely. Discovered failures will not be
@@ -2173,6 +2153,20 @@ unsafe fn state_machine_ref<'a>(
 /// concurrency level and each worker's swarm parameters are decided here,
 /// up front, so the machine is fully constructed before any rule is
 /// requested.
+///
+/// Creating a machine with `max_concurrency > 1` declares the run
+/// nondeterministic: thread scheduling is outside the engine's control, so
+/// nothing that assumes deterministic replay can be trusted. The engine
+/// notices at the end of the creating test case and, for the rest of the
+/// run, reports failures faithfully from the discovering execution and
+/// skips data-tree recording (and with it novel-prefix generation and the
+/// nondeterminism mismatch check), span mutation, the verify and shrink
+/// pass (and with it the flakiness check — generation stops at the first
+/// bug, so at most one failure is reported), targeting, and database
+/// persistence and reuse. Failures from such a run carry no reproduce
+/// blob. A notice explaining this is printed once, on the run's output,
+/// unless verbosity is quiet. This applies even to test cases whose drawn
+/// concurrency level is 1: the declared bound is what counts.
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /

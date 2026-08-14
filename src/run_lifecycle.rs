@@ -14,6 +14,7 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 
 use crate::antithesis::TestLocation;
@@ -258,6 +259,13 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// report (and, in verbose mode, printed to `output` as well, like any
 /// other non-final case's).
 ///
+/// `run_nondeterministic` is the run-level flag shared with every case of
+/// the run: `stateful::run_concurrent` sets it (through
+/// [`TestCase::mark_nondeterministic`]) when the test asks for real
+/// concurrency, which can happen *during* this very case — the flag is read
+/// again when a panic is caught, so the case that flips it already captures
+/// its own failure for the deferred report.
+///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
 /// closing unwind instead of synthesizing one.
@@ -268,7 +276,7 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
-    nondeterministic: bool,
+    run_nondeterministic: &Arc<AtomicBool>,
     case_sink: Option<crate::test_case::OutputSink>,
 ) -> (
     TestCaseResult,
@@ -277,7 +285,7 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    let capture_at_discovery = nondeterministic && !is_final;
+    let capture_at_discovery = run_nondeterministic.load(Ordering::Relaxed) && !is_final;
     let should_emit = ((is_final || capture_at_discovery) && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
     // Drop any capture left over from a previous test case on this thread
@@ -290,7 +298,8 @@ pub(crate) fn run_test_case(
         Arc::clone(&c_tc),
         should_emit,
         mode,
-        nondeterministic,
+        Arc::clone(run_nondeterministic),
+        !quiet,
         case_sink.or_else(|| output.sink().cloned()),
     );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
@@ -314,6 +323,10 @@ pub(crate) fn run_test_case(
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
+            // Re-read the run flag: the body itself may have flipped it
+            // (the first case of a concurrent stateful test), and that
+            // case's failure must be captured like any later one's.
+            let capture_at_discovery = run_nondeterministic.load(Ordering::Relaxed) && !is_final;
             let captured = if (is_final || capture_at_discovery) && !quiet {
                 let msg = panic_message(&e);
                 let diagnostic =
@@ -439,18 +452,20 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
     ))
 }
 
-/// The run's failure candidate retained by a declared-nondeterministic run:
-/// everything captured at discovery time from the last test case that
-/// classified interesting frontend-side. There is no replay for such a run,
-/// so discovery is the only chance to capture — but printing it *as the
-/// failure report* is deferred to the run verdict (verbose runs stream the
-/// lines live at discovery too, like any other case's), because a
-/// frontend-interesting report can lose silently to an engine-side family
+/// The run's failure candidate: everything captured at discovery time from
+/// the last test case that classified interesting frontend-side. Stashed
+/// unconditionally, but *read* only when the run turns out nondeterministic
+/// (a test case created a concurrent state machine): such a run has no
+/// final replay, so discovery is the only chance to capture — but printing
+/// it *as the failure report* is deferred to the run verdict (verbose runs
+/// stream the lines live at discovery too, like any other case's), because
+/// a frontend-interesting report can lose silently to an engine-side family
 /// conclusion (an overrunning or invalidating draw concluded the family
 /// first, and `mark_complete` after a conclusion is a no-op). If the run
 /// comes back failed the stash is the accepted bug and the report is
 /// printed then; if the run passes the stash lost, and is discarded — a
-/// genuine racy bug resurfaces in a later case.
+/// genuine racy bug resurfaces in a later case. A deterministic run never
+/// reads the stash: its failures are replayed from their reproduce blobs.
 struct NondetStash {
     /// The buffered draw/note lines of the case (empty under
     /// [`Verbosity::Quiet`], where nothing would be printed), regrouped by
@@ -554,68 +569,47 @@ pub(crate) fn drive<F>(
     };
 
     if mode == Mode::SingleTestCase {
-        drive_single_case(
-            &run,
-            &mut test_fn,
-            verbosity,
-            settings.nondeterministic,
-            test_location,
-            &output,
-        );
+        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
         return;
     }
 
-    let nondeterministic = settings.nondeterministic;
+    let run_nondeterministic: Arc<AtomicBool> = Arc::default();
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
-        if nondeterministic {
-            let buffer: Arc<std::sync::Mutex<Vec<WorkerLine>>> = Arc::default();
-            let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
-            let case_sink: Option<crate::test_case::OutputSink> = if quiet {
-                None
-            } else {
-                let buffer = Arc::clone(&buffer);
-                Some(Arc::new(move |line: &str| {
-                    if let Some(live) = &live {
-                        live.line(line);
-                    }
-                    buffer
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push((crate::stateful::current_worker_index(), line.to_string()));
-                }))
-            };
-            let (tc_result, payload, diagnostic) = run_test_case(
-                c_tc,
-                &mut test_fn,
-                false,
-                mode,
-                verbosity,
-                &output,
-                true,
-                case_sink,
-            );
-            if matches!(tc_result, TestCaseResult::Interesting(_)) {
-                let records =
-                    std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
-                stash = Some(NondetStash {
-                    lines: group_concurrent_output(records),
-                    diagnostic,
-                    payload: payload.expect("an interesting case carries the caught panic payload"),
-                });
-            }
+        let buffer: Arc<std::sync::Mutex<Vec<WorkerLine>>> = Arc::default();
+        let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
+        let case_sink: Option<crate::test_case::OutputSink> = if quiet {
+            None
         } else {
-            run_test_case(
-                c_tc,
-                &mut test_fn,
-                false,
-                mode,
-                verbosity,
-                &output,
-                false,
-                None,
-            );
+            let buffer = Arc::clone(&buffer);
+            Some(Arc::new(move |line: &str| {
+                if let Some(live) = &live {
+                    live.line(line);
+                }
+                buffer
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((crate::stateful::current_worker_index(), line.to_string()));
+            }))
+        };
+        let (tc_result, payload, diagnostic) = run_test_case(
+            c_tc,
+            &mut test_fn,
+            false,
+            mode,
+            verbosity,
+            &output,
+            &run_nondeterministic,
+            case_sink,
+        );
+        if matches!(tc_result, TestCaseResult::Interesting(_)) {
+            let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
+            stash = Some(NondetStash {
+                lines: group_concurrent_output(records),
+                diagnostic,
+                payload: payload.expect("an interesting case carries the caught panic payload"),
+            });
         }
     }
 
@@ -632,7 +626,7 @@ pub(crate) fn drive<F>(
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
         }
-        RunStatus::HEGEL_RUN_STATUS_FAILED if nondeterministic => {
+        RunStatus::HEGEL_RUN_STATUS_FAILED if run_nondeterministic.load(Ordering::Relaxed) => {
             let stash = stash.expect("a failed nondeterministic run has a stashed failure");
             for line in &stash.lines {
                 output.line(line);
@@ -670,7 +664,7 @@ pub(crate) fn drive<F>(
                     mode,
                     verbosity,
                     &output,
-                    false,
+                    &run_nondeterministic,
                     None,
                 );
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
@@ -708,7 +702,6 @@ fn drive_single_case(
     run: &RunHandle,
     test_fn: &mut dyn FnMut(TestCase),
     verbosity: Verbosity,
-    nondeterministic: bool,
     test_location: Option<&TestLocation>,
     output: &RunOutput,
 ) {
@@ -722,7 +715,7 @@ fn drive_single_case(
         Mode::SingleTestCase,
         verbosity,
         output,
-        nondeterministic,
+        &Arc::default(),
         None,
     );
     if matches!(result, TestCaseResult::Interesting(_)) {
@@ -769,7 +762,7 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
-        settings.nondeterministic,
+        &Arc::default(),
         None,
     );
     if let Some(diagnostic) = diagnostic {

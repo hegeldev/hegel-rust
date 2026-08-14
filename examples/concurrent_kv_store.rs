@@ -106,7 +106,7 @@ impl KvTest {
     }
 }
 
-#[hegel::test(nondeterministic = true)]
+#[hegel::test]
 fn test_concurrent_kv_store(tc: TestCase) {
     let test = KvTest {
         store: KvStore::new(),

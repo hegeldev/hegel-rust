@@ -40,13 +40,6 @@ fn settings_in_ci_disable_the_database_and_derandomize() {
 }
 
 #[test]
-fn nondeterministic_defaults_off_and_is_settable() {
-    let settings = Settings::new();
-    assert!(!settings.nondeterministic);
-    assert!(settings.nondeterministic(true).nondeterministic);
-}
-
-#[test]
 fn settings_outside_ci_leave_the_database_unset_and_randomized() {
     let settings = Settings::for_ci(false);
     assert!(matches!(settings.database, Database::Unset));

@@ -26,7 +26,14 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
             .unwrap_or_else(|e| e.into_inner())
             .push(msg.to_string());
     });
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, true, Some(sink));
+    let tc = TestCase::new(
+        Arc::new(c_tc),
+        true,
+        Mode::TestRun,
+        Arc::default(),
+        true,
+        Some(sink),
+    );
     (run, tc, lines)
 }
 
