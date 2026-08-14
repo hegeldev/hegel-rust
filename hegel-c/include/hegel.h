@@ -1208,17 +1208,25 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
 
  Creating a machine with `max_concurrency > 1` declares the run
  nondeterministic: thread scheduling is outside the engine's control, so
- nothing that assumes deterministic replay can be trusted. The engine
- notices at the end of the creating test case and, for the rest of the
- run, reports failures faithfully from the discovering execution and
- skips data-tree recording (and with it novel-prefix generation and the
- nondeterminism mismatch check), span mutation, the verify and shrink
- pass (and with it the flakiness check — generation stops at the first
- bug, so at most one failure is reported), targeting, and database
- persistence and reuse. Failures from such a run carry no reproduce
- blob. A notice explaining this is printed once, on the run's output,
- unless verbosity is quiet. This applies even to test cases whose drawn
- concurrency level is 1: the declared bound is what counts.
+ nothing that assumes deterministic replay can be trusted. On a run not
+ already known to be nondeterministic, the first such creation is
+ rejected with `HEGEL_E_ASSUME` — the caller should abandon the body and
+ report the case `HEGEL_STATUS_INVALID`, exactly as for a failed
+ assumption — and the engine flips the run at that case's end. Every
+ later test case is marked nondeterministic before it starts (so a
+ frontend can capture its whole trace for the failure report, including
+ draws made before the machine is created) and its creations succeed.
+ From the flip on, the run reports failures faithfully from the
+ discovering execution and skips data-tree recording (and with it
+ novel-prefix generation and the nondeterminism mismatch check), span
+ mutation, the verify and shrink pass (and with it the flakiness check —
+ generation stops at the first bug, so at most one failure is reported),
+ targeting, and database persistence and reuse. Failures from such a run
+ carry no reproduce blob. A notice explaining this is printed once, on
+ the run's output, unless verbosity is quiet. This applies even to test
+ cases whose drawn concurrency level is 1: the declared bound is what
+ counts. Standalone test cases — single-test-case runs and
+ `hegel_test_case_from_blob` replays — are never rejected.
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /
@@ -1226,7 +1234,10 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  calls (through any handle of the same test-case family) and release it
  with `hegel_state_machine_free` exactly once — writes the drawn
  concurrency level into `*out_concurrency`, and returns `HEGEL_OK`.
- Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
+ Returns `HEGEL_E_ASSUME` for the run's first `max_concurrency > 1`
+ creation (the caller should abort the body and call
+ `hegel_mark_complete` with `HEGEL_STATUS_INVALID`; see above). Returns
+ `HEGEL_E_STOP_TEST` when the engine's choice budget is
  exhausted (the caller should abort the body and call
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`

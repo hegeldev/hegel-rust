@@ -1013,9 +1013,12 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 }
 
 /// A full run whose test case creates a state machine with
-/// `max_concurrency > 1` becomes nondeterministic: it stops at the first
-/// bug and surfaces it with an origin but no reproduce blob — with replay
-/// and shrinking off, there is no shrunk choice sequence to encode.
+/// `max_concurrency > 1` becomes nondeterministic. The first case's
+/// creation is rejected with `HEGEL_E_ASSUME` — the case is discarded like
+/// a failed assumption while the run flips — and from the next case on the
+/// creation succeeds. The run stops at the first bug and surfaces it with
+/// an origin but no reproduce blob: with replay and shrinking off, there
+/// is no shrunk choice sequence to encode.
 #[test]
 fn nondeterministic_run_failure_has_origin_but_no_blob() {
     let ctx = hegel_context_new();
@@ -1038,7 +1041,7 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
             let rule_groups: [i64; 1] = [0];
             let mut machine: *mut HegelStateMachine = ptr::null_mut();
             let mut out_concurrency = 0i64;
-            ok(hegel_new_state_machine(
+            let rc = hegel_new_state_machine(
                 ctx,
                 tc,
                 rules.as_ptr(),
@@ -1050,7 +1053,20 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 2,
                 &mut machine,
                 &mut out_concurrency,
-            ));
+            );
+            if rc == HEGEL_E_ASSUME {
+                assert_eq!(cases, 1, "only the flipping case is rejected");
+                assert!(machine.is_null());
+                ok(hegel_mark_complete(
+                    ctx,
+                    tc,
+                    hegel_status_t::HEGEL_STATUS_INVALID as u32,
+                    ptr::null(),
+                ));
+                ok(hegel_test_case_free(ctx, tc));
+                continue;
+            }
+            assert_eq!(rc, HEGEL_OK);
             ok(hegel_state_machine_free(ctx, machine));
             let mut value = 0i64;
             assert_eq!(
@@ -1065,7 +1081,10 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
             ));
             ok(hegel_test_case_free(ctx, tc));
         }
-        assert_eq!(cases, 1, "a nondeterministic run stops at the first bug");
+        assert_eq!(
+            cases, 2,
+            "the discarded flipping case, then the run stops at the first bug"
+        );
 
         let res = result(ctx, run);
         assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
@@ -1589,14 +1608,10 @@ fn state_machine_and_primitive_boolean_paths() {
                 &mut ranged,
                 &mut out_concurrency,
             ),
-            HEGEL_OK
+            HEGEL_E_ASSUME,
+            "the first concurrent creation of a run is rejected while the run flips"
         );
-        assert!(!ranged.is_null());
-        assert!(
-            (2..=4).contains(&out_concurrency),
-            "the drawn level respects the bounds, got {out_concurrency}"
-        );
-        assert_eq!(hegel_state_machine_free(ctx, ranged), HEGEL_OK);
+        assert!(ranged.is_null());
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),
@@ -1611,6 +1626,39 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
 
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                2,
+                4,
+                &mut ranged,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK,
+            "once the run is nondeterministic, concurrent creations succeed"
+        );
+        assert!(!ranged.is_null());
+        assert!(
+            (2..=4).contains(&out_concurrency),
+            "the drawn level respects the bounds, got {out_concurrency}"
+        );
+        assert_eq!(hegel_state_machine_free(ctx, ranged), HEGEL_OK);
         ok(hegel_mark_complete(
             ctx,
             tc,

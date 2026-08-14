@@ -146,6 +146,31 @@ fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
     assert!(lines.is_empty(), "quiet runs print nothing: {lines:?}");
 }
 
+/// The reason the first case to reach a concurrent machine is discarded:
+/// every case that can fail starts with the nondeterminism flag already
+/// set, so draws and notes made *before* `run_concurrent` are captured in
+/// the failure report too.
+#[test]
+fn output_before_the_machine_is_captured_in_the_failure_report() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc: TestCase| {
+            let seed: i64 = tc.draw(gs::integers());
+            tc.note(&format!("preamble for seed {seed}"));
+            run_concurrent(Boom, tc, 2, 2);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    });
+    let payload = result.expect_err("the failing machine must fail the run");
+    assert_matches_regex(&panic_message(&payload), "concurrent boom");
+    let text = lines.join("\n");
+    assert_matches_regex(&text, r"let draw_1 = ");
+    assert!(
+        text.contains("preamble for seed"),
+        "output emitted before run_concurrent must appear in the report:\n{text}"
+    );
+}
+
 #[test]
 fn a_run_with_max_concurrency_one_stays_deterministic() {
     let (lines, result) = capture_hegel_output(|| {

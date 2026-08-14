@@ -81,7 +81,7 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     use hegel_c::hegel_result_t::*;
     match rc {
         HEGEL_E_STOP_TEST => raise_control(StopTest),
-        HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
+        HEGEL_E_ASSUME => raise_control(AssumeFailed),
         HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
         HEGEL_E_ALREADY_COMPLETE => panic!(
             "this test case has already finished; was the TestCase moved to a \
@@ -100,23 +100,18 @@ pub(crate) struct TestCaseGlobalData {
     mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
-    /// verbose output is on).
-    /// While false the draw-recording bookkeeping in
+    /// verbose output is on, and for every non-final case of a run already
+    /// known to be nondeterministic, whose failures are reported from the
+    /// discovering execution).
+    /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
-    /// rendering of the value) is skipped entirely, and `on_draw` drops its
-    /// input. Atomic because [`TestCase::mark_nondeterministic`] flips it
-    /// mid-case: a nondeterministic run's failures are reported from the
-    /// discovering execution, so its cases must surface their output.
-    emit: Arc<AtomicBool>,
+    /// rendering of the value) can be skipped entirely.
+    emit: bool,
     /// The run-level nondeterminism flag, shared by every test case of the
     /// run and with the lifecycle that drives it. Set (never cleared) by
     /// [`TestCase::mark_nondeterministic`] when `stateful::run_concurrent`
     /// asks for real concurrency (`max_concurrency > 1`).
     run_nondeterministic: Arc<AtomicBool>,
-    /// Whether [`TestCase::mark_nondeterministic`] should also enable
-    /// [`Self::emit`] and panic-backtrace capture: true unless the run is
-    /// quiet, where the deferred failure report would never be printed.
-    arm_emit_on_nondet: bool,
     /// Draw-name bookkeeping shared between every clone of a `TestCase`,
     /// behind a blocking, non-reentrant mutex. The backend handle is no longer
     /// shared here — each `TestCase` instance owns its own libhegel handle (so
@@ -365,35 +360,28 @@ impl TestCase {
         emit: bool,
         mode: Mode,
         run_nondeterministic: Arc<AtomicBool>,
-        arm_emit_on_nondet: bool,
         sink: Option<OutputSink>,
     ) -> Self {
-        let emit = Arc::new(AtomicBool::new(emit));
-        let on_draw: OutputSink = {
+        let on_draw: OutputSink = if emit {
             let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
             // Captured once per test case and shared by every worker's
             // clone, so worker-line offsets are comparable across workers.
             let case_start = std::time::Instant::now();
-            let emit = Arc::clone(&emit);
-            Arc::new(move |msg: &str| {
-                if !emit.load(Ordering::Relaxed) {
-                    return;
+            Arc::new(move |msg| match crate::stateful::current_worker_index() {
+                Some(worker) => {
+                    let ms = case_start.elapsed().as_secs_f64() * 1000.0;
+                    raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
                 }
-                match crate::stateful::current_worker_index() {
-                    Some(worker) => {
-                        let ms = case_start.elapsed().as_secs_f64() * 1000.0;
-                        raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
-                    }
-                    None => raw(msg),
-                }
+                None => raw(msg),
             })
+        } else {
+            Arc::new(|_| {})
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
                 emit,
                 run_nondeterministic,
-                arm_emit_on_nondet,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
                     named_draw_repeatable: HashMap::new(),
@@ -410,23 +398,18 @@ impl TestCase {
     }
 
     /// Declare the run driving this test case nondeterministic. Called by
-    /// `stateful::run_concurrent` when the machine's declared bound is
-    /// `max_concurrency > 1` — before any worker runs, so everything a
-    /// failure report needs is captured from this case on: the run-level
-    /// flag the lifecycle reads at each case's end and at the run verdict,
-    /// this case's own output emission (a nondeterministic failure is
-    /// reported from the execution that discovered it, so the discovering
-    /// case must surface its draw/note lines), and panic-backtrace capture
-    /// on the calling thread (worker threads mirror it when they start).
-    /// Sticky: nothing ever clears the run-level flag.
+    /// `stateful::run_concurrent`, right before machine creation, when the
+    /// machine's declared bound is `max_concurrency > 1`. The lifecycle
+    /// reads the flag at each case's start (to surface the case's output
+    /// and capture backtraces from its first draw) and at the run verdict.
+    /// The engine rejects this case's machine creation when the run wasn't
+    /// already known nondeterministic — the case is discarded like a failed
+    /// assumption — so by the time any case can fail, the flag was set
+    /// before it started. Sticky: nothing ever clears it.
     pub(crate) fn mark_nondeterministic(&self) {
         self.global
             .run_nondeterministic
             .store(true, Ordering::Relaxed);
-        if self.global.arm_emit_on_nondet {
-            self.global.emit.store(true, Ordering::Relaxed);
-            crate::run_lifecycle::set_backtrace_capture(true);
-        }
     }
 
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.
@@ -704,7 +687,7 @@ impl TestCase {
     }
 
     fn record_named_draw<T: std::fmt::Debug>(&self, value: &T, name: &str, repeatable: bool) {
-        let emit = self.global.emit.load(Ordering::Relaxed);
+        let emit = self.global.emit;
 
         let display_name = self.with_draw_state(|draw_state| {
             match draw_state.named_draw_repeatable.get(name) {

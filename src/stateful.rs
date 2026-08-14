@@ -772,14 +772,18 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 ///
 /// Concurrency bugs are nondeterministic — thread scheduling is outside
 /// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
-/// makes the whole run nondeterministic, automatically. Failures are then
-/// reported faithfully from the discovering execution, with no replay,
-/// shrinking, flakiness complaints, database persistence, or reproduce
-/// blob — and at most one failure per run. A notice explaining this is
-/// printed once per run (unless the run is quiet). The declared bound is
-/// what counts: a test case that happens to draw a concurrency level of 1
-/// is still part of a nondeterministic run. With `max_concurrency == 1`
-/// the run stays deterministic and shrinks and replays as usual.
+/// makes the whole run nondeterministic, automatically. The first test
+/// case to reach the machine is discarded like a failed assumption and
+/// flips the run; every later case then captures its entire trace up
+/// front — draws and notes made *before* `run_concurrent` included — so
+/// failures are reported faithfully from the discovering execution, with
+/// no replay, shrinking, flakiness complaints, database persistence, or
+/// reproduce blob — and at most one failure per run. A notice explaining
+/// this is printed once per run (unless the run is quiet). The declared
+/// bound is what counts: a test case that happens to draw a concurrency
+/// level of 1 is still part of a nondeterministic run. With
+/// `max_concurrency == 1` the run stays deterministic and shrinks and
+/// replays as usual.
 ///
 /// # Abandoned rules and lock poisoning
 ///
@@ -844,10 +848,6 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     min_concurrency: i64,
     max_concurrency: i64,
 ) {
-    if max_concurrency > 1 {
-        tc.mark_nondeterministic();
-    }
-
     let rules = m.rules();
     let invariants = m.invariants();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
@@ -865,6 +865,9 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
         rule_groups.push(index as i64);
     }
 
+    if max_concurrency > 1 {
+        tc.mark_nondeterministic();
+    }
     let (machine, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
             &rule_names,

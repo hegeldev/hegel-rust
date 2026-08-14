@@ -24,7 +24,6 @@ fn emitting_test_case() -> (RunHandle, TestCase) {
         true,
         Mode::TestRun,
         Arc::default(),
-        false,
         current_output_sink(),
     );
     (run, tc)

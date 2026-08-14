@@ -1025,6 +1025,7 @@ impl<'a> Engine<'a> {
     ) -> Result<(RunResult, Option<String>), RunError> {
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_stateful_step_count(self.settings.stateful_step_count);
+        family.set_reject_concurrent_machine(!self.nondeterministic);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
@@ -1062,7 +1063,7 @@ impl<'a> Engine<'a> {
         };
         self.calls += 1;
         self.total_test_time += elapsed;
-        if run.nodes.is_empty() && run.status >= Status::Invalid {
+        if run.nodes.is_empty() && run.status >= Status::Invalid && !self.nondeterministic {
             self.test_is_trivial = true;
         }
         if run.status >= Status::Valid && !run.target_observations.is_empty() {

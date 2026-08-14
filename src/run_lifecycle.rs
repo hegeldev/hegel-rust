@@ -262,9 +262,9 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// `run_nondeterministic` is the run-level flag shared with every case of
 /// the run: `stateful::run_concurrent` sets it (through
 /// [`TestCase::mark_nondeterministic`]) when the test asks for real
-/// concurrency, which can happen *during* this very case — the flag is read
-/// again when a panic is caught, so the case that flips it already captures
-/// its own failure for the deferred report.
+/// concurrency. The case that sets it is discarded — the engine rejects
+/// its machine creation like a failed assumption — so reading the flag
+/// once, at case start, already covers every case that can fail.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -299,7 +299,6 @@ pub(crate) fn run_test_case(
         should_emit,
         mode,
         Arc::clone(run_nondeterministic),
-        !quiet,
         case_sink.or_else(|| output.sink().cloned()),
     );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
@@ -323,10 +322,6 @@ pub(crate) fn run_test_case(
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
-            // Re-read the run flag: the body itself may have flipped it
-            // (the first case of a concurrent stateful test), and that
-            // case's failure must be captured like any later one's.
-            let capture_at_discovery = run_nondeterministic.load(Ordering::Relaxed) && !is_final;
             let captured = if (is_final || capture_at_discovery) && !quiet {
                 let msg = panic_message(&e);
                 let diagnostic =

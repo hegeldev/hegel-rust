@@ -31,7 +31,6 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
         true,
         Mode::TestRun,
         Arc::default(),
-        true,
         Some(sink),
     );
     (run, tc, lines)

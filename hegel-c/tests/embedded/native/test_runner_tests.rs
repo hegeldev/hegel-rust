@@ -13,7 +13,7 @@ use super::*;
 use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
-use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Mode, Phase};
 use std::time::Duration;
@@ -52,18 +52,22 @@ fn boom(msg: &str) -> TestCaseResult {
 }
 
 /// Create (and immediately drop) a one-rule state machine whose declared
-/// concurrency bound is above 1, flipping the run into nondeterministic
-/// mode at the end of this test case. `Err(())` if the case overran.
-fn concurrent_machine(ds: &dyn DataSource) -> Result<(), ()> {
-    ds.new_state_machine(
+/// concurrency bound is above 1. On the first such case of a run the
+/// engine rejects the creation with an assume violation (`Err(Invalid)`
+/// here): the case is discarded and the run flips into nondeterministic
+/// mode, and later cases create the machine successfully.
+fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
+    match ds.new_state_machine(
         vec!["rule".to_string()],
         vec![0],
         alloc::vec::Vec::new(),
         2,
         2,
-    )
-    .map(|_| ())
-    .map_err(|_| ())
+    ) {
+        Ok(_) => Ok(()),
+        Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
+        Err(_) => Err(TestCaseResult::Overrun),
+    }
 }
 
 #[test]
@@ -1076,8 +1080,8 @@ fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
-            if concurrent_machine(ds).is_err() {
-                return TestCaseResult::Overrun;
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
             }
             let a = match rbool(ds) {
                 Ok(v) => v,
@@ -1118,8 +1122,8 @@ fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
-            if concurrent_machine(ds).is_err() {
-                return TestCaseResult::Overrun;
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
             }
             match rbool(ds) {
                 Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
@@ -1135,7 +1139,7 @@ fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
 }
 
 #[test]
-fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
+fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
@@ -1151,8 +1155,8 @@ fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
             if rbool(ds).is_err() {
                 return TestCaseResult::Overrun;
             }
-            if concurrent_machine(ds).is_err() {
-                return TestCaseResult::Overrun;
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
             }
             boom("db origin")
         },
@@ -1160,11 +1164,10 @@ fn nondeterministic_run_neither_reuses_nor_persists_the_database() {
     .unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].reproduce_blob.is_none());
-    let entries = db.fetch(b"k");
-    assert_eq!(
-        entries,
-        vec![seeded],
-        "the seeded entry must be neither deleted nor joined by a new save"
+    assert!(
+        db.fetch(b"k").is_empty(),
+        "the stale replay is discarded like a failed assumption and deleted, \
+         and the fresh failure is not persisted"
     );
     let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
     assert!(db.fetch(&secondary).is_empty());
@@ -1184,8 +1187,8 @@ fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
             })),
         "k",
         |ds| {
-            if concurrent_machine(ds).is_err() {
-                return TestCaseResult::Overrun;
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
             }
             match rbool(ds) {
                 Ok(_) => TestCaseResult::Valid,
