@@ -290,7 +290,7 @@ fn minimize_individual_choices_no_op_on_already_simplest_node() {
 }
 
 #[test]
-fn try_replace_with_deletion_continues_past_sizes_reaching_into_idx() {
+fn try_replace_with_deletion_returns_false_when_the_deficit_reaches_idx() {
     let initial = vec![int_node(1), int_node(2), int_node(3)];
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
