@@ -4,7 +4,6 @@ This patch adds `hegel::prelude`, which brings the items most tests need into sc
 
 ```rust
 use hegel::prelude::*;
-use hegel::generators as gs;
 
 #[composite]
 fn even_integers(tc: &TestCase) -> i32 {
@@ -19,6 +18,6 @@ fn test_sum_of_even_integers_is_even(tc: TestCase) {
 }
 ```
 
-The prelude re-exports `TestCase`, the `Generator` trait, the `generators` module, and `#[composite]`. The `Generator` import is important: without it in scope, `map` and `filter` resolve against `Iterator` and rustc reports that your generator "is not an iterator".
+The prelude re-exports `TestCase`, the `Generator` trait, `#[composite]`, and the `generators` module under both its full name and the conventional `gs` alias. The `Generator` import is important: without it in scope, `map` and `filter` resolve against `Iterator` and rustc reports that your generator "is not an iterator". If you bind `gs` to something of your own, your explicit import shadows the prelude's without an ambiguity error.
 
-It omits `hegel::test`, whose name would collide with the standard `#[test]` attribute, so keep writing `#[hegel::test]` on your test functions. Generators are conventionally reached through a `gs` alias rather than the glob-imported `generators` name, so most tests will still want that second import.
+It omits `hegel::test`, whose name would collide with the standard `#[test]` attribute, so keep writing `#[hegel::test]` on your test functions.

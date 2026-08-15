@@ -2,7 +2,6 @@
 //!
 //! ```no_run
 //! use hegel::prelude::*;
-//! use hegel::generators as gs;
 //!
 //! #[composite]
 //! fn even_integers(tc: &TestCase) -> i32 {
@@ -17,21 +16,25 @@
 //! }
 //! ```
 //!
-//! Three of the names above come from the prelude: [`TestCase`], the
+//! Every name in that test comes from the prelude: [`TestCase`], the
 //! [`composite`](macro@crate::composite) attribute (written bare rather than
-//! as `#[hegel::composite]`), and the [`Generator`] trait, which has to be in
-//! scope for the [`map`](crate::generators::Generator::map) call. Without it,
-//! `map` resolves against [`Iterator`] and rustc reports the generator "is not
-//! an iterator". The prelude also re-exports the [`generators`] module.
+//! as `#[hegel::composite]`), the [`Generator`] trait, which has to be in
+//! scope for the [`map`](crate::generators::Generator::map) call, and `gs`.
+//! Without `Generator`, `map` resolves against [`Iterator`] instead and rustc
+//! reports that your generator "is not an iterator".
 //!
-//! It omits [`hegel::test`](macro@crate::test), whose name would collide with
-//! the standard `#[test]` attribute. Write `#[hegel::test]` on your test
-//! functions, as above.
+//! `gs` is the conventional alias for the [`generators`] module, which the
+//! prelude re-exports under both names. They are the same module, so
+//! `gs::integers()` and `generators::integers()` are interchangeable; the
+//! short form is the one the rest of this documentation uses. If you bind
+//! `gs` to something of your own, your explicit import shadows the prelude's
+//! without an ambiguity error.
 //!
-//! Generators are conventionally reached through a `gs` alias
-//! (`use hegel::generators as gs;`) rather than the glob-imported
-//! [`generators`] name, so most tests will still want that second import.
+//! The prelude omits [`hegel::test`](macro@crate::test), whose name would
+//! collide with the standard `#[test]` attribute. Write `#[hegel::test]` on
+//! your test functions, as above.
 
 pub use crate::TestCase;
 pub use crate::composite;
+pub use crate::generators as gs;
 pub use crate::generators::{self, Generator};
