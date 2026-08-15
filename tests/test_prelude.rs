@@ -1,4 +1,3 @@
-use hegel::generators as gs;
 use hegel::prelude::*;
 
 #[composite]
@@ -7,20 +6,37 @@ fn even_integers(tc: &TestCase) -> i32 {
 }
 
 #[hegel::test]
-fn test_prelude_supplies_test_case_composite_and_generator_trait(tc: TestCase) {
+fn test_prelude_alone_supplies_a_whole_test(tc: TestCase) {
     let xs = tc.draw(gs::vecs(even_integers()));
     let total = xs.iter().fold(0i32, |acc, n| acc.wrapping_add(*n));
     assert_eq!(total % 2, 0);
 }
 
-mod generators_module {
-    use hegel::prelude::generators as gs;
+mod module_alias {
     use hegel::prelude::*;
 
     #[hegel::test]
-    fn test_prelude_provides_generators_module(tc: TestCase) {
-        let n = tc.draw(gs::integers::<i32>().filter(|n: &i32| n % 2 == 0));
-        assert_eq!(n % 2, 0);
+    fn test_gs_and_generators_name_the_same_module(tc: TestCase) {
+        let g: generators::IntegerGenerator<i32> = gs::integers::<i32>();
+        let n = tc.draw(g.min_value(0).max_value(10));
+        assert!((0..=10).contains(&n));
+    }
+}
+
+mod shadowing {
+    use self::my_generators as gs;
+    use hegel::prelude::*;
+
+    mod my_generators {
+        pub fn integers() -> &'static str {
+            "shadowed"
+        }
+    }
+
+    #[hegel::test]
+    fn test_an_explicit_gs_shadows_the_prelude(tc: TestCase) {
+        assert_eq!(gs::integers(), "shadowed");
+        assert_eq!(tc.draw(super::even_integers()) % 2, 0);
     }
 }
 
