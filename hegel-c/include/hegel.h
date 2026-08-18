@@ -1011,6 +1011,14 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
+ Returns whether this test case belongs to a run already known to be
+ nondeterministic.
+ */
+hegel_result_t hegel_test_case_is_nondeterministic(hegel_context_t *ctx,
+                                                   const hegel_test_case_t *tc,
+                                                   bool *out_is_nondeterministic);
+
+/*
  Parameters:
  `out_test_case`: Receives a new handle onto an independent stream of
    the same test case.

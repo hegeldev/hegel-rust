@@ -377,6 +377,10 @@ impl DataSource for NativeDataSource {
         Ok(())
     }
 
+    fn is_nondeterministic(&self) -> bool {
+        self.inner.lock().is_nondeterministic()
+    }
+
     fn mark_complete(&self, result: &TestCaseResult) {
         let mut ntc = self.inner.lock();
         let (status, origin) = match result {

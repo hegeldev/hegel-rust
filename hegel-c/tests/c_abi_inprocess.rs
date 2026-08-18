@@ -29,7 +29,7 @@ use hegel_c::{
     hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
     hegel_state_machine_next_rule, hegel_state_machine_rule_rejected, hegel_status_t,
     hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_version,
+    hegel_test_case_from_blob, hegel_test_case_is_nondeterministic, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -236,6 +236,11 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert!(clone_out.is_null());
+        let mut is_nondeterministic = false;
+        assert_eq!(
+            hegel_test_case_is_nondeterministic(ctx, ptr::null(), &mut is_nondeterministic),
+            HEGEL_E_INVALID_HANDLE
+        );
 
         let tc: *mut HegelTestCase = ptr::null_mut();
         let mut value = 0i64;
@@ -466,6 +471,18 @@ fn explicit_backend_run_and_lifecycle_misuse() {
 
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
+
+        let mut is_nondeterministic = true;
+        ok(hegel_test_case_is_nondeterministic(
+            ctx,
+            tc,
+            &mut is_nondeterministic,
+        ));
+        assert!(!is_nondeterministic);
+        assert_eq!(
+            hegel_test_case_is_nondeterministic(ctx, tc, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
 
         let mut tc2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
@@ -977,6 +994,13 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
+        let mut is_nondeterministic = false;
+        ok(hegel_test_case_is_nondeterministic(
+            ctx,
+            tc,
+            &mut is_nondeterministic,
+        ));
+        assert!(!is_nondeterministic);
         let mut value = 0i64;
         assert_eq!(
             hegel_generate_integer(ctx, tc, 0, 100, &mut value),
@@ -1037,6 +1061,13 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 break;
             }
             cases += 1;
+            let mut is_nondeterministic = false;
+            ok(hegel_test_case_is_nondeterministic(
+                ctx,
+                tc,
+                &mut is_nondeterministic,
+            ));
+            assert_eq!(is_nondeterministic, cases > 1);
             let rules = [rule.as_ptr()];
             let rule_groups: [i64; 1] = [0];
             let mut machine: *mut HegelStateMachine = ptr::null_mut();
@@ -1819,6 +1850,15 @@ fn clones_share_a_run_owned_family() {
 
         let mut c1a: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, c1, &mut c1a), HEGEL_OK);
+        for tc in [root, c1, c1a] {
+            let mut is_nondeterministic = true;
+            ok(hegel_test_case_is_nondeterministic(
+                ctx,
+                tc,
+                &mut is_nondeterministic,
+            ));
+            assert!(!is_nondeterministic);
+        }
         assert_eq!(
             hegel_generate_integer(ctx, c1a, 0, 100, &mut value),
             HEGEL_OK
@@ -1913,11 +1953,27 @@ fn standalone_handles_are_freed_independently() {
             HEGEL_OK
         );
         assert!(!root.is_null());
+        let mut is_nondeterministic = false;
+        ok(hegel_test_case_is_nondeterministic(
+            ctx,
+            root,
+            &mut is_nondeterministic,
+        ));
+        assert!(!is_nondeterministic);
 
         let mut c1: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
         let mut c2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
+        for tc in [c1, c2] {
+            is_nondeterministic = false;
+            ok(hegel_test_case_is_nondeterministic(
+                ctx,
+                tc,
+                &mut is_nondeterministic,
+            ));
+            assert!(!is_nondeterministic);
+        }
 
         // A non-consuming span op proves a handle is live and reaches its
         // stream; the blob's finite choice sequence means we can't keep

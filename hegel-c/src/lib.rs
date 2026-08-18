@@ -1429,6 +1429,30 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
+/// Returns whether this test case belongs to a run already known to be
+/// nondeterministic.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_is_nondeterministic(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    out_is_nondeterministic: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_is_nondeterministic", tc) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    if out_is_nondeterministic.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_test_case_is_nondeterministic: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_is_nondeterministic = tc.stream.is_nondeterministic() };
+    HEGEL_OK
+}
+
 /// Parameters:
 /// `out_test_case`: Receives a new handle onto an independent stream of
 ///   the same test case.

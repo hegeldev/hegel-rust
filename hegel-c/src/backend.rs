@@ -236,6 +236,10 @@ pub trait DataSource: Send + Sync {
     /// non-finite or the label has already been observed this test case.
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
 
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic.
+    fn is_nondeterministic(&self) -> bool;
+
     /// Signal that the test case is complete and report its outcome.
     ///
     /// Called exactly once per test case, after the test body has finished

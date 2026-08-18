@@ -1016,7 +1016,7 @@ pub struct FamilyCore {
     /// [`Self::concurrent_machine`] still tells the engine to flip the run.
     /// Every later case is stamped as nondeterministic up front, so its
     /// whole execution — including draws made before the machine is
-    /// created — can be captured for the failure report. Defaults to false
+    /// created — can be emitted for the failure report. Defaults to false
     /// (allow), which standalone handles (single-test-case runs, blob
     /// replays, embeddings driving the engine directly) keep.
     reject_concurrent_machine: AtomicBool,
@@ -1145,6 +1145,9 @@ pub struct NativeTestCase {
     /// status) lets `conclude_test` conclude before calling `freeze()`
     /// without triggering the idempotency early-return.
     frozen: bool,
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic. Copied into every cloned stream.
+    is_nondeterministic: bool,
     /// State shared with every other stream of this test case's family.
     pub(crate) family: Arc<FamilyCore>,
     /// This stream's position in the clone tree: empty for the root, the
@@ -1225,6 +1228,7 @@ impl NativeTestCase {
             trailing,
             max_size,
             observer,
+            false,
             Arc::new(FamilyCore::new(budget)),
             Vec::new(),
         )
@@ -1239,6 +1243,7 @@ impl NativeTestCase {
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
+        is_nondeterministic: bool,
         family: Arc<FamilyCore>,
         clone_id: Vec<usize>,
     ) -> Self {
@@ -1249,6 +1254,7 @@ impl NativeTestCase {
             max_size,
             nodes: Vec::new(),
             frozen: false,
+            is_nondeterministic,
             family,
             clone_id,
             clone_counter: 0,
@@ -1313,6 +1319,16 @@ impl NativeTestCase {
         &self.family
     }
 
+    /// Mark this test case as belonging to a nondeterministic run.
+    pub(crate) fn set_nondeterministic(&mut self) {
+        self.is_nondeterministic = true;
+    }
+
+    /// Whether this test case belongs to a nondeterministic run.
+    pub(crate) fn is_nondeterministic(&self) -> bool {
+        self.is_nondeterministic
+    }
+
     /// Create an independent cloned stream of this test case.
     ///
     /// The clone occupies one choice position in this stream (a
@@ -1362,6 +1378,7 @@ impl NativeTestCase {
             child_template,
             child_max_size,
             None,
+            self.is_nondeterministic,
             Arc::clone(&self.family),
             child_id,
         );

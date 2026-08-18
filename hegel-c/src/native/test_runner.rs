@@ -1021,8 +1021,11 @@ impl<'a> Engine<'a> {
     /// the run contract (see [`NativeDataSource::take_outcome`]).
     pub(crate) async fn test_function(
         &mut self,
-        ntc: NativeTestCase,
+        mut ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
+        if self.nondeterministic {
+            ntc.set_nondeterministic();
+        }
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_stateful_step_count(self.settings.stateful_step_count);
         family.set_reject_concurrent_machine(!self.nondeterministic);
