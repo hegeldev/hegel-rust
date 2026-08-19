@@ -1040,9 +1040,11 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 /// `max_concurrency > 1` becomes nondeterministic. The first case's
 /// creation is rejected with `HEGEL_E_ASSUME` — the case is discarded like
 /// a failed assumption while the run flips — and from the next case on the
-/// creation succeeds. The run stops at the first bug and surfaces it with
-/// an origin but no reproduce blob: with replay and shrinking off, there
-/// is no shrunk choice sequence to encode.
+/// creation succeeds. The run stops at the first bug and reports
+/// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, surfacing the bug with an
+/// origin but no reproduce blob: with replay and shrinking off, there is no
+/// shrunk choice sequence to encode, and the caller reports the bug from
+/// its own captured output instead.
 #[test]
 fn nondeterministic_run_failure_has_origin_but_no_blob() {
     let ctx = hegel_context_new();
@@ -1118,7 +1120,9 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
         );
 
         let res = result(ctx, run);
-        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        assert!(
+            status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC
+        );
         assert_eq!(failure_count_of(ctx, res), 1);
         let f = failure_at(ctx, res, 0);
         assert!(!f.is_null());

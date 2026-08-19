@@ -66,11 +66,11 @@ pub(crate) async fn run_native_async(
             crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
+            nondeterministic: false,
         });
     }
 
-    let failures = crate::native::test_runner::explore(settings, database_key, exchange).await?;
-    Ok(TestRunResult { failures })
+    crate::native::test_runner::explore(settings, database_key, exchange).await
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a

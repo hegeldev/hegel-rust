@@ -29,7 +29,7 @@ use hashbrown::hash_map::Entry;
 
 use rand::RngExt;
 
-use crate::backend::{Failure, RunError, TestCaseResult};
+use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
@@ -102,10 +102,11 @@ const HEALTH_CHECK_MAX_VALID: u64 = 10;
 const MAX_OVERRUN_DRAWS: u64 = 20;
 
 /// Run the exploration half of a test run — database replay, generation, and
-/// shrinking — and return one [`Failure`] per distinct bug, each carrying the
-/// origin the engine grouped on and the base64 reproduce blob encoding the
-/// minimal counterexample's choices. `Err` means the run itself failed (health
-/// check, nondeterminism) before reaching a verdict.
+/// shrinking — and return a [`TestRunResult`] with one [`Failure`] per
+/// distinct bug, each carrying the origin the engine grouped on and (unless
+/// the run turned nondeterministic) the base64 reproduce blob encoding the
+/// minimal counterexample's choices. `Err` means the run itself failed
+/// (health check, nondeterminism mismatch) before reaching a verdict.
 ///
 /// The caller replays each blob (via `hegel_test_case_from_blob`) to produce
 /// the final report. Every test case this runs is non-final.
@@ -113,7 +114,7 @@ pub(crate) async fn explore(
     settings: &Settings,
     database_key: Option<&str>,
     exchange: &CaseExchange,
-) -> Result<Vec<Failure>, RunError> {
+) -> Result<TestRunResult, RunError> {
     run_main(
         settings,
         database_key,
@@ -154,7 +155,7 @@ async fn run_main(
     exchange: &CaseExchange,
     too_slow_threshold: core::time::Duration,
     shrink_budget: core::time::Duration,
-) -> Result<Vec<Failure>, RunError> {
+) -> Result<TestRunResult, RunError> {
     Engine::new(settings, database_key, exchange)?
         .run(too_slow_threshold, shrink_budget)
         .await
@@ -169,7 +170,7 @@ impl<'a> Engine<'a> {
         &mut self,
         too_slow_threshold: core::time::Duration,
         shrink_budget: core::time::Duration,
-    ) -> Result<Vec<Failure>, RunError> {
+    ) -> Result<TestRunResult, RunError> {
         let settings = self.settings;
         let database_key = self.database_key;
         let max_test_cases = settings.test_cases;
@@ -615,7 +616,7 @@ impl<'a> Engine<'a> {
         }
 
         let nondeterministic = self.nondeterministic;
-        Ok(origins_sorted
+        let failures = origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
                 let reproduce_blob = if nondeterministic {
@@ -629,7 +630,11 @@ impl<'a> Engine<'a> {
                     reproduce_blob,
                 }
             })
-            .collect())
+            .collect();
+        Ok(TestRunResult {
+            failures,
+            nondeterministic,
+        })
     }
 }
 

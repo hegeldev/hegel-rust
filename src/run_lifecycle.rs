@@ -449,8 +449,8 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
 /// The run's failure candidate: everything captured at discovery time from
 /// the last test case that classified interesting frontend-side. Stashed
 /// unconditionally, but *read* only when the run turns out nondeterministic
-/// (a test case created a concurrent state machine) — recognized at the
-/// verdict by the engine omitting the failures' reproduce blobs: such a run
+/// (a test case created a concurrent state machine) — the verdict then
+/// comes back `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`: such a run
 /// has no final replay, so discovery is the only chance to capture — but printing
 /// it *as the failure report* is deferred to the run verdict (verbose runs
 /// stream the lines live at discovery too, like any other case's), because
@@ -619,7 +619,7 @@ pub(crate) fn drive<F>(
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
         }
-        RunStatus::HEGEL_RUN_STATUS_FAILED if result.failure(0).reproduce_blob.is_none() => {
+        RunStatus::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC => {
             let stash = stash.expect("a failed nondeterministic run has a stashed failure");
             for line in &stash.lines {
                 output.line(line);

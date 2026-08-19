@@ -163,7 +163,7 @@ fn run_main_sync(
     run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
     too_slow_threshold: Duration,
     shrink_budget: Duration,
-) -> Result<Vec<Failure>, crate::backend::RunError> {
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
     let exchange = CaseExchange::new();
     crate::exchange::drive(
         &exchange,
@@ -461,18 +461,6 @@ fn create_rng_urandom_backend_reads_urandom() {
     ));
 }
 
-/// Wrap a `run_main` outcome into the aggregate
-/// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
-/// convenient for tests that drive `run_main` directly to inject the
-/// TooSlow / shrink-budget thresholds: the exploration failures wrapped up.
-fn complete_native(
-    exploration: Result<Vec<crate::backend::Failure>, crate::backend::RunError>,
-) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    Ok(crate::backend::TestRunResult {
-        failures: exploration?,
-    })
-}
-
 #[test]
 fn run_single_case_returns_the_failure() {
     let failure = run_single_case_sync(
@@ -525,7 +513,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -550,7 +538,8 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
+    assert!(!result.nondeterministic);
     assert!(
         result.failures[0].origin.contains("always fails"),
         "{:?}",
@@ -605,7 +594,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         Duration::from_secs(30),
         Duration::ZERO,
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
@@ -635,7 +624,7 @@ fn run_main_reports_too_slow_at_call_site() {
         Duration::ZERO,
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration);
+    let result = exploration;
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
@@ -733,14 +722,13 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let exploration = run_main_sync(
+    run_main_sync(
         &settings,
         Some(key),
         &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
-    );
-    complete_native(exploration)
+    )
 }
 
 #[test]
@@ -1105,6 +1093,7 @@ fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("stable origin"));
     assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(result.nondeterministic);
     assert!(
         seen_bug.load(Ordering::SeqCst),
         "the bug must have been discovered by generation"
@@ -1342,7 +1331,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("child too big"));
 

@@ -184,11 +184,24 @@ pub enum hegel_run_status_t {
     HEGEL_RUN_STATUS_PASSED = 0,
     /// The property failed. Inspect each distinct counterexample.
     HEGEL_RUN_STATUS_FAILED = 1,
-    /// The run itself failed — a failed health check, a nondeterministic
-    /// test, a violated engine invariant — and produced no verdict on the
-    /// property. There are no failures to inspect; read the message with
+    /// The run itself failed — a failed health check, a nondeterminism
+    /// mismatch, a violated engine invariant — and produced no verdict on
+    /// the property. There are no failures to inspect; read the message with
     /// `hegel_run_result_error`.
     HEGEL_RUN_STATUS_ERROR = 2,
+    /// The property failed on a run that was declared nondeterministic (a
+    /// test case created a state machine with `max_concurrency > 1`). The
+    /// failures carry no reproduce blob — there was no shrinking and there
+    /// is no final replay — so the caller should report the bug from
+    /// whatever it captured while running the discovering test case (the
+    /// engine stamps every case of such a run nondeterministic up front,
+    /// see `hegel_test_case_is_nondeterministic`, precisely so the caller
+    /// captures each case's output as it runs). Only full test runs report
+    /// this status; a failing single-test-case run reports
+    /// `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
+    /// machine, since the caller reports such a case from its own execution
+    /// anyway.
+    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
@@ -589,13 +602,17 @@ pub struct HegelRun {
 ///
 /// A failed run produced counterexamples to the property. An errored run
 /// produced no verdict on the property at all, so it has no failures to
-/// inspect. A run errors on a failed health check, a nondeterministic test,
-/// or a violated internal invariant of libhegel.
+/// inspect. A run errors on a failed health check, a nondeterminism
+/// mismatch, or a violated internal invariant of libhegel.
 #[derive(Clone)]
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
+    /// Whether the run was nondeterministic: a failing run then reports
+    /// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` and its failures carry no
+    /// reproduce blob.
+    nondeterministic: bool,
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -613,7 +630,8 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob (a
-    /// single-test-case run). Read via `hegel_failure_reproduction_blob`.
+    /// single-test-case run, or a nondeterministic run). Read via
+    /// `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
 
@@ -631,6 +649,7 @@ impl From<TestRunResult> for HegelRunResult {
         HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
+            nondeterministic: r.nondeterministic,
         }
     }
 }
@@ -642,6 +661,7 @@ impl HegelRunResult {
         HegelRunResult {
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
+            nondeterministic: false,
         }
     }
 
@@ -650,6 +670,8 @@ impl HegelRunResult {
             hegel_run_status_t::HEGEL_RUN_STATUS_ERROR
         } else if self.failures.is_empty() {
             hegel_run_status_t::HEGEL_RUN_STATUS_PASSED
+        } else if self.nondeterministic {
+            hegel_run_status_t::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC
         } else {
             hegel_run_status_t::HEGEL_RUN_STATUS_FAILED
         }
@@ -3601,7 +3623,8 @@ unsafe fn failure_ref<'a>(
 
 /// Parameters:
 /// `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-///   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
+///   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
+///   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]

@@ -346,6 +346,11 @@ pub struct TestRunResult {
     /// One entry per distinct interesting example surfaced by the run, one
     /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
+    /// Whether the run was nondeterministic (a test case created a state
+    /// machine with `max_concurrency > 1`). Failures of such a run carry no
+    /// reproduce blob — there is no final replay — so the caller should
+    /// report them from whatever it captured at discovery time.
+    pub nondeterministic: bool,
 }
 
 #[cfg(test)]

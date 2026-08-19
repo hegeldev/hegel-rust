@@ -180,12 +180,27 @@ typedef enum {
      */
     HEGEL_RUN_STATUS_FAILED = 1,
     /*
-     The run itself failed — a failed health check, a nondeterministic
-     test, a violated engine invariant — and produced no verdict on the
-     property. There are no failures to inspect; read the message with
+     The run itself failed — a failed health check, a nondeterminism
+     mismatch, a violated engine invariant — and produced no verdict on
+     the property. There are no failures to inspect; read the message with
      `hegel_run_result_error`.
      */
     HEGEL_RUN_STATUS_ERROR = 2,
+    /*
+     The property failed on a run that was declared nondeterministic (a
+     test case created a state machine with `max_concurrency > 1`). The
+     failures carry no reproduce blob — there was no shrinking and there
+     is no final replay — so the caller should report the bug from
+     whatever it captured while running the discovering test case (the
+     engine stamps every case of such a run nondeterministic up front,
+     see `hegel_test_case_is_nondeterministic`, precisely so the caller
+     captures each case's output as it runs). Only full test runs report
+     this status; a failing single-test-case run reports
+     `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
+     machine, since the caller reports such a case from its own execution
+     anyway.
+     */
+    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 } hegel_run_status_t;
 
 /*
@@ -567,8 +582,8 @@ typedef struct hegel_run_t hegel_run_t;
 
  A failed run produced counterexamples to the property. An errored run
  produced no verdict on the property at all, so it has no failures to
- inspect. A run errors on a failed health check, a nondeterministic test,
- or a violated internal invariant of libhegel.
+ inspect. A run errors on a failed health check, a nondeterminism
+ mismatch, or a violated internal invariant of libhegel.
  */
 typedef struct hegel_run_result_t hegel_run_result_t;
 
@@ -1727,7 +1742,8 @@ hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
 /*
  Parameters:
  `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
+   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
+   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
 
  Returns `HEGEL_OK`.
  */
