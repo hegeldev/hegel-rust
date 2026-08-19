@@ -409,6 +409,20 @@ impl CTestCase {
         CTestCase { raw }
     }
 
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic (`hegel_test_case_is_nondeterministic`). The engine
+    /// stamps the case before it starts, so the answer is stable for the
+    /// case's whole lifetime; standalone handles (blob replays) are never
+    /// stamped.
+    pub(crate) fn is_nondeterministic(&self) -> bool {
+        let mut out = false;
+        // SAFETY: self.raw is a live handle; &mut out is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_is_nondeterministic(ctx, self.raw, &mut out)
+        }));
+        out
+    }
+
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
     pub(crate) fn generate_integer(
         &self,

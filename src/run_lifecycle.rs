@@ -14,7 +14,6 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 
 use crate::antithesis::TestLocation;
@@ -38,9 +37,9 @@ thread_local! {
         const { RefCell::new(None) };
 
     /// Whether the panic hook should pay to capture a backtrace for the next
-    /// panic on this thread. Set by [`run_test_case`] to `should_emit`
-    /// (`(is_final && !quiet) || verbose`) — i.e. only when the resulting
-    /// diagnostic will actually be shown. Capturing (and, under
+    /// panic on this thread. Set by [`run_test_case`] to `should_emit` —
+    /// i.e. only when the resulting diagnostic will actually be shown.
+    /// Capturing (and, under
     /// `RUST_BACKTRACE`, symbolizing) a backtrace for every discarded shrink
     /// probe is the dominant cost of failing-heavy property runs, and is far
     /// worse on Windows.
@@ -259,12 +258,14 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// report (and, in verbose mode, printed to `output` as well, like any
 /// other non-final case's).
 ///
-/// `run_nondeterministic` is the run-level flag shared with every case of
-/// the run: `stateful::run_concurrent` sets it (through
-/// [`TestCase::mark_nondeterministic`]) when the test asks for real
-/// concurrency. The case that sets it is discarded — the engine rejects
-/// its machine creation like a failed assumption — so reading the flag
-/// once, at case start, already covers every case that can fail.
+/// The capture-at-discovery decision is the engine's, read once at case
+/// start ([`CTestCase::is_nondeterministic`]): the engine stamps every case
+/// of a run it already knows to be nondeterministic before the case starts.
+/// The case that *makes* a run nondeterministic — the first to ask
+/// `stateful::run_concurrent` for real concurrency — is discarded (the
+/// engine rejects its machine creation like a failed assumption), so every
+/// case that can fail was stamped up front and captures its whole trace,
+/// draws and notes made before `run_concurrent` included.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -276,7 +277,6 @@ pub(crate) fn run_test_case(
     mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
-    run_nondeterministic: &Arc<AtomicBool>,
     case_sink: Option<crate::test_case::OutputSink>,
 ) -> (
     TestCaseResult,
@@ -285,7 +285,7 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    let capture_at_discovery = run_nondeterministic.load(Ordering::Relaxed) && !is_final;
+    let capture_at_discovery = !is_final && c_tc.is_nondeterministic();
     let should_emit = ((is_final || capture_at_discovery) && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
     // Drop any capture left over from a previous test case on this thread
@@ -298,7 +298,6 @@ pub(crate) fn run_test_case(
         Arc::clone(&c_tc),
         should_emit,
         mode,
-        Arc::clone(run_nondeterministic),
         case_sink.or_else(|| output.sink().cloned()),
     );
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
@@ -450,8 +449,9 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
 /// The run's failure candidate: everything captured at discovery time from
 /// the last test case that classified interesting frontend-side. Stashed
 /// unconditionally, but *read* only when the run turns out nondeterministic
-/// (a test case created a concurrent state machine): such a run has no
-/// final replay, so discovery is the only chance to capture — but printing
+/// (a test case created a concurrent state machine) — recognized at the
+/// verdict by the engine omitting the failures' reproduce blobs: such a run
+/// has no final replay, so discovery is the only chance to capture — but printing
 /// it *as the failure report* is deferred to the run verdict (verbose runs
 /// stream the lines live at discovery too, like any other case's), because
 /// a frontend-interesting report can lose silently to an engine-side family
@@ -568,7 +568,6 @@ pub(crate) fn drive<F>(
         return;
     }
 
-    let run_nondeterministic: Arc<AtomicBool> = Arc::default();
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
@@ -595,7 +594,6 @@ pub(crate) fn drive<F>(
             mode,
             verbosity,
             &output,
-            &run_nondeterministic,
             case_sink,
         );
         if matches!(tc_result, TestCaseResult::Interesting(_)) {
@@ -621,7 +619,7 @@ pub(crate) fn drive<F>(
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
         }
-        RunStatus::HEGEL_RUN_STATUS_FAILED if run_nondeterministic.load(Ordering::Relaxed) => {
+        RunStatus::HEGEL_RUN_STATUS_FAILED if result.failure(0).reproduce_blob.is_none() => {
             let stash = stash.expect("a failed nondeterministic run has a stashed failure");
             for line in &stash.lines {
                 output.line(line);
@@ -652,16 +650,8 @@ pub(crate) fn drive<F>(
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
-                let (tc_result, payload, diagnostic) = run_test_case(
-                    c_tc,
-                    &mut test_fn,
-                    true,
-                    mode,
-                    verbosity,
-                    &output,
-                    &run_nondeterministic,
-                    None,
-                );
+                let (tc_result, payload, diagnostic) =
+                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -710,7 +700,6 @@ fn drive_single_case(
         Mode::SingleTestCase,
         verbosity,
         output,
-        &Arc::default(),
         None,
     );
     if matches!(result, TestCaseResult::Interesting(_)) {
@@ -757,7 +746,6 @@ pub(crate) fn drive_blob_replay<F>(
         settings.mode,
         settings.verbosity,
         &output,
-        &Arc::default(),
         None,
     );
     if let Some(diagnostic) = diagnostic {

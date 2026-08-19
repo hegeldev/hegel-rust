@@ -198,7 +198,6 @@ fn run_one_case(
         Mode::TestRun,
         verbosity,
         &RunOutput::resolve(),
-        &Arc::default(),
         None,
     )
 }

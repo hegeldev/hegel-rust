@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[diagnostic::on_unimplemented(
     message = "The first parameter in a #[composite] generator must have type TestCase.",
@@ -107,11 +106,6 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
-    /// The run-level nondeterminism flag, shared by every test case of the
-    /// run and with the lifecycle that drives it. Set (never cleared) by
-    /// [`TestCase::mark_nondeterministic`] when `stateful::run_concurrent`
-    /// asks for real concurrency (`max_concurrency > 1`).
-    run_nondeterministic: Arc<AtomicBool>,
     /// Draw-name bookkeeping shared between every clone of a `TestCase`,
     /// behind a blocking, non-reentrant mutex. The backend handle is no longer
     /// shared here — each `TestCase` instance owns its own libhegel handle (so
@@ -350,8 +344,9 @@ impl RunOutput {
 
 impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
-    /// true on a non-quiet final replay or in verbose mode, where drawn
-    /// values and notes should be surfaced. `sink` is the run's resolved
+    /// true on a non-quiet final replay, in verbose mode, or for a non-final
+    /// case the engine stamped as belonging to a nondeterministic run —
+    /// wherever drawn values and notes should be surfaced. `sink` is the run's resolved
     /// output destination ([`RunOutput::sink`]) — passed in rather than read
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.
@@ -359,7 +354,6 @@ impl TestCase {
         handle: Arc<CTestCase>,
         emit: bool,
         mode: Mode,
-        run_nondeterministic: Arc<AtomicBool>,
         sink: Option<OutputSink>,
     ) -> Self {
         let on_draw: OutputSink = if emit {
@@ -381,7 +375,6 @@ impl TestCase {
             global: Arc::new(TestCaseGlobalData {
                 mode,
                 emit,
-                run_nondeterministic,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
                     named_draw_repeatable: HashMap::new(),
@@ -395,21 +388,6 @@ impl TestCase {
             }),
             handle,
         }
-    }
-
-    /// Declare the run driving this test case nondeterministic. Called by
-    /// `stateful::run_concurrent`, right before machine creation, when the
-    /// machine's declared bound is `max_concurrency > 1`. The lifecycle
-    /// reads the flag at each case's start (to surface the case's output
-    /// and capture backtraces from its first draw) and at the run verdict.
-    /// The engine rejects this case's machine creation when the run wasn't
-    /// already known nondeterministic — the case is discarded like a failed
-    /// assumption — so by the time any case can fail, the flag was set
-    /// before it started. Sticky: nothing ever clears it.
-    pub(crate) fn mark_nondeterministic(&self) {
-        self.global
-            .run_nondeterministic
-            .store(true, Ordering::Relaxed);
     }
 
     /// Acquire the shared draw-name bookkeeping for the duration of `f`.

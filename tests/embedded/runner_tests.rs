@@ -209,7 +209,6 @@ mod reproduce {
                 Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
-                &std::sync::Arc::default(),
                 None,
             );
         }

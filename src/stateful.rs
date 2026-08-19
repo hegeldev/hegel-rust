@@ -865,9 +865,6 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
         rule_groups.push(index as i64);
     }
 
-    if max_concurrency > 1 {
-        tc.mark_nondeterministic();
-    }
     let (machine, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
             &rule_names,
