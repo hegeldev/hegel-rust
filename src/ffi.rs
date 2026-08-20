@@ -409,6 +409,20 @@ impl CTestCase {
         CTestCase { raw }
     }
 
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic (`hegel_test_case_is_nondeterministic`). The engine
+    /// stamps the case before it starts, so the answer is stable for the
+    /// case's whole lifetime; standalone handles (blob replays) are never
+    /// stamped.
+    pub(crate) fn is_nondeterministic(&self) -> bool {
+        let mut out = false;
+        // SAFETY: self.raw is a live handle; &mut out is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_is_nondeterministic(ctx, self.raw, &mut out)
+        }));
+        out
+    }
+
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
     pub(crate) fn generate_integer(
         &self,
@@ -454,7 +468,6 @@ impl CTestCase {
     }
 
     /// Draw a float according to the full spec libhegel accepts.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,
@@ -705,11 +718,21 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
+    /// Register a state machine. Each rule is assigned to a concurrency
+    /// group by `rule_groups` (parallel to `rule_names`); group ids are
+    /// arbitrary and the machine has one group per distinct value. The
+    /// engine draws the concurrency level in
+    /// `[min_concurrency, max_concurrency]` at creation — weighted toward
+    /// the maximum (the engine owns the distribution) — and returns it
+    /// alongside the new machine's id.
     pub(crate) fn new_state_machine(
         &self,
         rule_names: &[&str],
+        rule_groups: &[i64],
         invariant_names: &[&str],
-    ) -> Result<StateMachineHandle, hegel_result_t> {
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
@@ -717,32 +740,66 @@ impl CTestCase {
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
         let mut raw: *mut hegel_c::HegelStateMachine = ptr::null_mut();
+        let mut concurrency: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
                 rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
+                min_concurrency,
+                max_concurrency,
                 &mut raw,
+                &mut concurrency,
             )
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(rc);
         }
-        Ok(StateMachineHandle { raw })
+        Ok((StateMachineHandle { raw }, concurrency))
     }
 
-    /// Ask the engine for the next rule to run; `None` once the engine has
-    /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
-    pub(crate) fn state_machine_next_rule(
+    /// Start the machine's next round, yielding the id of the round's
+    /// current concurrency group (its value in the registering
+    /// `rule_groups`); `None` once the engine has run enough rounds
+    /// (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case handle at
+    /// every join point, including before the first rule is requested.
+    pub(crate) fn state_machine_next_group(
         &self,
         state_machine: &StateMachineHandle,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine.raw, &mut out)
+            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine.raw, &mut out)
+        });
+        let group = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
+            None
+        } else {
+            Some(out)
+        };
+        rc_to_value(rc, group)
+    }
+
+    /// Ask the engine for the next rule for worker `worker_index` to run
+    /// this round; `None` once the worker's round budget is exhausted
+    /// (`HEGEL_STATE_MACHINE_DONE`) and it should wait for the join point.
+    pub(crate) fn state_machine_next_rule(
+        &self,
+        state_machine: &StateMachineHandle,
+        worker_index: i64,
+    ) -> Result<Option<i64>, hegel_result_t> {
+        let mut out: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_next_rule(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                worker_index,
+                &mut out,
+            )
         });
         let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
             None
@@ -752,14 +809,21 @@ impl CTestCase {
         rc_to_value(rc, index)
     }
 
-    /// Report that the most recently drawn rule was rejected (a violated
-    /// assumption), so the engine does not count it toward the step budget.
+    /// Report that the rule most recently drawn for worker `worker_index`
+    /// was rejected (a violated assumption), so the engine does not count
+    /// it toward the step budget.
     pub(crate) fn state_machine_rule_rejected(
         &self,
         state_machine: &StateMachineHandle,
+        worker_index: i64,
     ) -> Result<(), hegel_result_t> {
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_rule_rejected(ctx, self.raw, state_machine.raw)
+            hegel_c::hegel_state_machine_rule_rejected(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                worker_index,
+            )
         });
         rc_to_value(rc, ())
     }
@@ -896,7 +960,6 @@ impl std::fmt::Debug for StringGenerator {
 impl StringGenerator {
     /// Build a text generator over the alphabet described by the fields.
     /// `max_codepoint` of `None` means unconstrained.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text(
         min_size: u64,
         max_size: u64,

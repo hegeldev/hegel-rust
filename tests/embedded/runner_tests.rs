@@ -274,6 +274,7 @@ mod reproduce {
                 Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
+                None,
             );
         }
         let result = run.result();

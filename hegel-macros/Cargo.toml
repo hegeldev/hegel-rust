@@ -9,6 +9,9 @@ repository = "https://github.com/hegeldev/hegel-rust"
 homepage = "http://hegel.dev"
 description = "Procedural macros for Hegel."
 
+[lints]
+workspace = true
+
 [lib]
 name = "hegel_macros"
 proc-macro = true

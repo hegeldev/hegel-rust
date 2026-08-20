@@ -39,6 +39,7 @@ pub(crate) const LABEL_BYTES: u64 = hegel_label_t::HEGEL_LABEL_BYTES as u64;
 pub(crate) const LABEL_STRING: u64 = hegel_label_t::HEGEL_LABEL_STRING as u64;
 pub(crate) const LABEL_FRESH_ID: u64 = hegel_label_t::HEGEL_LABEL_FRESH_ID as u64;
 pub(crate) const LABEL_SET_CHOICE: u64 = hegel_label_t::HEGEL_LABEL_SET_CHOICE as u64;
+pub(crate) const LABEL_CONCURRENCY: u64 = hegel_label_t::HEGEL_LABEL_CONCURRENCY as u64;
 
 /// Parameters of a float draw as accepted at the `hegel_generate_float` API
 /// surface. Width-32 handling (bound clamping, result rounding) and the

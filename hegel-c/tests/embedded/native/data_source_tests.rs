@@ -110,28 +110,93 @@ fn pool_generate_on_empty_pool_returns_assume() {
     ));
 }
 
+fn sequential_machine(
+    ds: &NativeDataSource,
+    rule_names: Vec<String>,
+    invariant_names: Vec<String>,
+) -> Result<NativeStateMachine, DataSourceError> {
+    let rule_groups = vec![0; rule_names.len()];
+    ds.new_state_machine(rule_names, rule_groups, invariant_names, 1, 1)
+}
+
 #[test]
 fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
-    let err = match ds.new_state_machine(vec![], vec![]) {
+    let err = match sequential_machine(&ds, vec![], vec![]) {
         Err(e) => e,
         Ok(_) => panic!("expected an InvalidArgument error"),
     };
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("no rules"));
     assert!(!ds.test_aborted());
-    ds.new_state_machine(vec!["push".into()], vec![]).unwrap();
+    sequential_machine(&ds, vec!["push".into()], vec![]).unwrap();
+}
+
+#[test]
+fn new_state_machine_with_non_parallel_rule_groups_is_invalid_argument() {
+    let (ds, _handle) = random_source();
+    let err = match ds.new_state_machine(vec!["a".into()], vec![0, 0], vec![], 1, 1) {
+        Err(e) => e,
+        Ok(_) => panic!("expected an InvalidArgument error"),
+    };
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    assert!(err.to_string().contains("parallel"));
+}
+
+#[test]
+fn new_state_machine_infers_the_groups_from_the_distinct_ids() {
+    let (ds, _handle) = random_source();
+    let mut machine = ds
+        .new_state_machine(
+            vec!["a".into(), "b".into(), "c".into()],
+            vec![-5, 40, -5],
+            vec![],
+            1,
+            1,
+        )
+        .unwrap();
+    for _ in 0..20 {
+        match ds.state_machine_next_group(&mut machine).unwrap() {
+            Some(group) => assert!(group == -5 || group == 40),
+            None => break,
+        }
+    }
+}
+
+#[test]
+fn new_state_machine_with_bad_concurrency_bounds_is_invalid_argument() {
+    let (ds, _handle) = random_source();
+    for (min, max) in [(0, 1), (-1, -1), (3, 2)] {
+        let err = match ds.new_state_machine(vec!["a".into()], vec![0], vec![], min, max) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an InvalidArgument error"),
+        };
+        assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+        assert!(
+            err.to_string()
+                .contains("concurrency bounds must satisfy 1 <= min <= max")
+        );
+        assert!(!ds.test_aborted());
+    }
 }
 
 #[test]
 fn state_machine_next_rule_returns_in_range_indices() {
     let (ds, _handle) = random_source();
-    let mut machine = ds
-        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
-        .unwrap();
-    assert!(ds.state_machine_next_rule(&mut machine).unwrap().unwrap() < 3);
+    let mut machine =
+        sequential_machine(&ds, vec!["a".into(), "b".into(), "c".into()], vec![]).unwrap();
+    assert!(ds.state_machine_next_group(&mut machine).unwrap().is_some());
+    assert!(
+        ds.state_machine_next_rule(&mut machine, 0)
+            .unwrap()
+            .unwrap()
+            < 3
+    );
     for _ in 0..20 {
-        match ds.state_machine_next_rule(&mut machine).unwrap() {
+        if ds.state_machine_next_group(&mut machine).unwrap().is_none() {
+            break;
+        }
+        match ds.state_machine_next_rule(&mut machine, 0).unwrap() {
             Some(index) => assert!(index < 3),
             None => break,
         }
@@ -151,15 +216,28 @@ fn with_ntc_maps_internal_engine_errors_without_latching_abort() {
 }
 
 #[test]
-fn state_machine_next_rule_on_exhausted_source_stops_test() {
+fn state_machine_calls_on_exhausted_source_stop_test() {
     let (ds, _handle) = exhausted_source();
-    let mut machine = NativeStateMachine::new(vec!["a".into(), "b".into()], vec![]).unwrap();
     assert!(matches!(
-        ds.state_machine_next_rule(&mut machine),
+        sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]),
         Err(DataSourceError::StopTest)
     ));
-    assert!(ds.state_machine_next_rule(&mut machine).is_err());
-    assert!(ds.new_state_machine(vec!["a".into()], vec![]).is_err());
+    let (fresh, _fresh_handle) = random_source();
+    let mut machine = sequential_machine(&fresh, vec!["a".into(), "b".into()], vec![]).unwrap();
+    assert!(matches!(
+        ds.state_machine_next_group(&mut machine),
+        Err(DataSourceError::StopTest)
+    ));
+    assert!(
+        fresh
+            .state_machine_next_group(&mut machine)
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        ds.state_machine_next_rule(&mut machine, 0),
+        Err(DataSourceError::StopTest)
+    ));
 }
 
 #[test]
@@ -245,18 +323,21 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
 #[test]
 fn state_machine_rule_rejected_reports_the_outstanding_rule() {
     let (ds, _handle) = random_source();
-    let mut machine = ds
-        .new_state_machine(vec!["a".into(), "b".into()], vec![])
-        .unwrap();
-    let without_draw = ds.state_machine_rule_rejected(&mut machine).unwrap_err();
+    let mut machine = sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]).unwrap();
+    let without_draw = ds.state_machine_rule_rejected(&mut machine, 0).unwrap_err();
     assert!(
         matches!(&without_draw, DataSourceError::InvalidArgument(m) if m.contains("no outstanding rule")),
         "{without_draw:?}"
     );
     assert!(!ds.test_aborted());
-    assert!(ds.state_machine_next_rule(&mut machine).unwrap().is_some());
-    ds.state_machine_rule_rejected(&mut machine).unwrap();
-    assert!(ds.state_machine_rule_rejected(&mut machine).is_err());
+    assert!(ds.state_machine_next_group(&mut machine).unwrap().is_some());
+    assert!(
+        ds.state_machine_next_rule(&mut machine, 0)
+            .unwrap()
+            .is_some()
+    );
+    ds.state_machine_rule_rejected(&mut machine, 0).unwrap();
+    assert!(ds.state_machine_rule_rejected(&mut machine, 0).is_err());
 }
 
 #[test]
@@ -362,17 +443,20 @@ fn collections_are_shared_across_cloned_streams() {
 fn state_machines_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
     let mut machine = ds
-        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
+        .new_state_machine(
+            vec!["a".into(), "b".into(), "c".into()],
+            vec![0, 0, 0],
+            vec![],
+            2,
+            2,
+        )
         .unwrap();
+    assert_eq!(ds.state_machine_next_group(&mut machine).unwrap(), Some(0));
     let child = ds.clone_stream().unwrap();
-    assert!(
-        child
-            .state_machine_next_rule(&mut machine)
-            .unwrap()
-            .unwrap()
-            < 3
-    );
-    if let Some(index) = ds.state_machine_next_rule(&mut machine).unwrap() {
+    if let Some(index) = child.state_machine_next_rule(&mut machine, 1).unwrap() {
+        assert!(index < 3);
+    }
+    if let Some(index) = ds.state_machine_next_rule(&mut machine, 0).unwrap() {
         assert!(index < 3);
     }
 }

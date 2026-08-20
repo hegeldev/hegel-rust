@@ -80,7 +80,7 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     use hegel_c::hegel_result_t::*;
     match rc {
         HEGEL_E_STOP_TEST => raise_control(StopTest),
-        HEGEL_E_ASSUME => raise_control(AssumeFailed), // nocov
+        HEGEL_E_ASSUME => raise_control(AssumeFailed),
         HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
         HEGEL_E_ALREADY_COMPLETE => panic!(
             "this test case has already finished; was the TestCase moved to a \
@@ -99,7 +99,9 @@ pub(crate) struct TestCaseGlobalData {
     mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
-    /// verbose output is on).
+    /// verbose output is on, and for every non-final case of a run already
+    /// known to be nondeterministic, whose failures are reported from the
+    /// discovering execution).
     /// When false `on_draw` is a no-op, so the draw-recording bookkeeping in
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
@@ -298,6 +300,7 @@ pub(crate) fn emit_verbose_line(msg: &str) {
 /// from a different thread than the one that started it) never see the
 /// starting thread's thread-local override, so resolving lazily at emit
 /// time would send their output to the wrong place.
+#[derive(Clone)]
 pub(crate) struct RunOutput {
     sink: Option<OutputSink>,
 }
@@ -341,8 +344,9 @@ impl RunOutput {
 
 impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
-    /// true on a non-quiet final replay or in verbose mode, where drawn
-    /// values and notes should be surfaced. `sink` is the run's resolved
+    /// true on a non-quiet final replay, in verbose mode, or for a non-final
+    /// case the engine stamped as belonging to a nondeterministic run —
+    /// wherever drawn values and notes should be surfaced. `sink` is the run's resolved
     /// output destination ([`RunOutput::sink`]) — passed in rather than read
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.
@@ -352,10 +356,20 @@ impl TestCase {
         mode: Mode,
         sink: Option<OutputSink>,
     ) -> Self {
-        let on_draw: OutputSink = match sink {
-            Some(sink) if emit => sink,
-            _ if emit => Arc::new(|msg| eprintln!("{}", msg)),
-            _ => Arc::new(|_| {}),
+        let on_draw: OutputSink = if emit {
+            let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
+            // Captured once per test case and shared by every worker's
+            // clone, so worker-line offsets are comparable across workers.
+            let case_start = std::time::Instant::now();
+            Arc::new(move |msg| match crate::stateful::current_worker_index() {
+                Some(worker) => {
+                    let ms = case_start.elapsed().as_secs_f64() * 1000.0;
+                    raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
+                }
+                None => raw(msg),
+            })
+        } else {
+            Arc::new(|_| {})
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
@@ -785,7 +799,6 @@ impl TestCase {
     }
 
     /// Draw a float according to the full libhegel spec.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,

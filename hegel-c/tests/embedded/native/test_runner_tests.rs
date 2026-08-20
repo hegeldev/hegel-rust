@@ -13,7 +13,7 @@ use super::*;
 use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
-use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Mode, Phase};
 use std::time::Duration;
@@ -49,6 +49,25 @@ fn boom(msg: &str) -> TestCaseResult {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
     })
+}
+
+/// Create (and immediately drop) a one-rule state machine whose declared
+/// concurrency bound is above 1. On the first such case of a run the
+/// engine rejects the creation with an assume violation (`Err(Invalid)`
+/// here): the case is discarded and the run flips into nondeterministic
+/// mode, and later cases create the machine successfully.
+fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
+    match ds.new_state_machine(
+        vec!["rule".to_string()],
+        vec![0],
+        alloc::vec::Vec::new(),
+        2,
+        2,
+    ) {
+        Ok(_) => Ok(()),
+        Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
+        Err(_) => Err(TestCaseResult::Overrun),
+    }
 }
 
 #[test]
@@ -144,7 +163,7 @@ fn run_main_sync(
     run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
     too_slow_threshold: Duration,
     shrink_budget: Duration,
-) -> Result<Vec<Failure>, crate::backend::RunError> {
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
     let exchange = CaseExchange::new();
     crate::exchange::drive(
         &exchange,
@@ -502,18 +521,6 @@ fn create_rng_urandom_backend_reads_urandom() {
     ));
 }
 
-/// Wrap a `run_main` outcome into the aggregate
-/// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
-/// convenient for tests that drive `run_main` directly to inject the
-/// TooSlow / shrink-budget thresholds: the exploration failures wrapped up.
-fn complete_native(
-    exploration: Result<Vec<crate::backend::Failure>, crate::backend::RunError>,
-) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    Ok(crate::backend::TestRunResult {
-        failures: exploration?,
-    })
-}
-
 #[test]
 fn run_single_case_returns_the_failure() {
     let failure = run_single_case_sync(
@@ -566,7 +573,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -591,7 +598,8 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
+    assert!(!result.nondeterministic);
     assert!(
         result.failures[0].origin.contains("always fails"),
         "{:?}",
@@ -646,7 +654,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         Duration::from_secs(30),
         Duration::ZERO,
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
@@ -676,7 +684,7 @@ fn run_main_reports_too_slow_at_call_site() {
         Duration::ZERO,
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration);
+    let result = exploration;
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
@@ -774,14 +782,13 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let exploration = run_main_sync(
+    run_main_sync(
         &settings,
         Some(key),
         &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
-    );
-    complete_native(exploration)
+    )
 }
 
 #[test]
@@ -1111,6 +1118,145 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
 }
 
 #[test]
+fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("stable origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(result.nondeterministic);
+    assert!(
+        seen_bug.load(Ordering::SeqCst),
+        "the bug must have been discovered by generation"
+    );
+}
+
+#[test]
+fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let failed_once = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("racy origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+}
+
+#[test]
+fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
+    db.save(b"k", &seeded);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            boom("db origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(
+        db.fetch(b"k").is_empty(),
+        "the stale replay is discarded like a failed assumption and deleted, \
+         and the fresh failure is not persisted"
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(db.fetch(&secondary).is_empty());
+}
+
+#[test]
+fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Concurrent state machine detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
@@ -1245,7 +1391,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("child too big"));
 

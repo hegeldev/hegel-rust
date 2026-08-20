@@ -148,33 +148,62 @@ pub trait DataSource: Send + Sync {
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
 
-    /// Register a state machine with the given rule and invariant names for
-    /// engine-owned (swarm) rule selection. The caller owns the returned
+    /// Register a state machine for engine-owned (swarm) rule selection:
+    /// rules (each assigned to a concurrency group via `rule_groups`,
+    /// parallel to `rule_names`), invariants, and concurrency bounds.
+    /// Groups are identified by arbitrary `i64` ids: the machine has one
+    /// group per distinct value of `rule_groups`. Draws the machine's
+    /// concurrency level in
+    /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
+    /// (concurrency bugs need concurrency); `min == max` fixes the level
+    /// without consuming entropy. The caller owns the returned
     /// [`NativeStateMachine`] and passes it back to
-    /// [`Self::state_machine_next_rule`]; any stream of the same family may
-    /// drive it. Errors with `InvalidArgument` if `rule_names` is empty.
+    /// [`Self::state_machine_next_group`] /
+    /// [`Self::state_machine_next_rule`] /
+    /// [`Self::state_machine_rule_rejected`]; any stream of the same family
+    /// may drive it. Errors with `InvalidArgument` if `rule_names` is
+    /// empty, `rule_groups` is not parallel to `rule_names`,
+    /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
+        rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
+        min_concurrency: i64,
+        max_concurrency: i64,
     ) -> Result<NativeStateMachine, DataSourceError>;
 
-    /// Draw the index of the next rule to run, in `[0, num_rules)`, or
-    /// `None` once the test case has run enough steps. The rule choice is
-    /// drawn from this stream.
-    fn state_machine_next_rule(
+    /// Start the machine's next round, drawing the stop decision and which
+    /// concurrency group is current for it from this stream. Returns that
+    /// group's id (a value of `rule_groups`), or `None` once the test case
+    /// has run enough rounds. Must be called (from the root stream) at
+    /// every join point, including before the first
+    /// [`Self::state_machine_next_rule`] call.
+    fn state_machine_next_group(
         &self,
         machine: &mut NativeStateMachine,
     ) -> Result<Option<i64>, DataSourceError>;
 
+    /// Draw the index of the next rule for `worker_index` to run — always a
+    /// rule belonging to the current group, in `[0, num_rules)` — or `None`
+    /// once the worker's round is over and it should wait for the next join
+    /// point. Consults only per-worker and per-stream state, so draws on
+    /// one worker never affect draws on another.
+    fn state_machine_next_rule(
+        &self,
+        machine: &mut NativeStateMachine,
+        worker_index: i64,
+    ) -> Result<Option<i64>, DataSourceError>;
+
     /// Report that the rule most recently returned by
-    /// [`Self::state_machine_next_rule`] was rejected — an assumption
-    /// failed before it completed — so it does not count toward the test
-    /// case's step budget. Errors with `InvalidArgument` if the state
-    /// machine has no outstanding rule.
+    /// [`Self::state_machine_next_rule`] to `worker_index` was rejected —
+    /// an assumption failed before it completed — so it does not count
+    /// toward the test case's budget. Errors with `InvalidArgument` if the
+    /// worker has no outstanding rule.
     fn state_machine_rule_rejected(
         &self,
         machine: &mut NativeStateMachine,
+        worker_index: i64,
     ) -> Result<(), DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.
@@ -210,6 +239,10 @@ pub trait DataSource: Send + Sync {
     /// higher-scoring inputs. Errors with `InvalidArgument` if the score is
     /// non-finite or the label has already been observed this test case.
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
+
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic.
+    fn is_nondeterministic(&self) -> bool;
 
     /// Signal that the test case is complete and report its outcome.
     ///
@@ -317,6 +350,11 @@ pub struct TestRunResult {
     /// One entry per distinct interesting example surfaced by the run, one
     /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
+    /// Whether the run was nondeterministic (a test case created a state
+    /// machine with `max_concurrency > 1`). Failures of such a run carry no
+    /// reproduce blob — there is no final replay — so the caller should
+    /// report them from whatever it captured at discovery time.
+    pub nondeterministic: bool,
 }
 
 #[cfg(test)]

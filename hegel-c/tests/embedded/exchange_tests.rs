@@ -43,8 +43,10 @@ fn offer_resumes_only_after_the_driver_polls_again() {
     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
     assert!(fut.as_mut().poll(&mut cx).is_pending());
     assert!(!resumed.get());
-    let ds = exchange.take().unwrap();
-    ds.mark_complete(&TestCaseResult::Valid);
+    exchange
+        .take()
+        .unwrap()
+        .mark_complete(&TestCaseResult::Valid);
     assert!(fut.as_mut().poll(&mut cx).is_ready());
     assert!(resumed.get());
 }

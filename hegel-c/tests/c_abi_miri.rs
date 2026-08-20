@@ -242,15 +242,21 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
         ok(hegel_new_pool(ctx, tc, &mut pool));
         let rule = CString::new("only").unwrap();
         let rules = [rule.as_ptr()];
+        let rule_groups: [i64; 1] = [0];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
+        let mut out_concurrency = 0i64;
         ok(hegel_new_state_machine(
             ctx,
             tc,
             rules.as_ptr(),
+            rule_groups.as_ptr(),
             1,
             ptr::null(),
             0,
+            1,
+            1,
             &mut machine,
+            &mut out_concurrency,
         ));
 
         let mut var_id = 0i64;

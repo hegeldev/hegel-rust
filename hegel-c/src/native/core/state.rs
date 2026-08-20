@@ -1006,11 +1006,31 @@ pub struct FamilyCore {
     /// rule sequence as done. Set for single-test-case runs, which explore
     /// one unbounded test case instead of many capped ones.
     state_machine_steps_unbounded: AtomicBool,
-    /// Target number of steps a stateful test case runs. Bounds the
-    /// per-step stop decision in [`NativeStateMachine::next_rule`]; ignored
-    /// when [`Self::state_machine_steps_unbounded`] is set. Defaults to 50,
-    /// overridden per run from the `stateful_step_count` setting.
+    /// Target number of rounds a stateful test case runs. Bounds the
+    /// per-round stop decision in [`NativeStateMachine::next_group`];
+    /// ignored when [`Self::state_machine_steps_unbounded`] is set.
+    /// Defaults to 50, overridden per run from the `stateful_step_count`
+    /// setting.
     stateful_step_count: AtomicI64,
+    /// Set when a state machine with `max_concurrency > 1` was requested on
+    /// any stream of this family: the test asked for real concurrency, so
+    /// its behaviour depends on thread scheduling and the run driving this
+    /// family is nondeterministic. Set even when the creation itself is
+    /// rejected (see [`Self::reject_concurrent_machine`]). The engine reads
+    /// this after each execution and flips the whole run into
+    /// nondeterministic mode.
+    concurrent_machine: AtomicBool,
+    /// Set by the engine on every test case of a run that is not (yet)
+    /// known to be nondeterministic: a state machine creation with
+    /// `max_concurrency > 1` must then fail with an assume violation, so
+    /// the case is discarded like a failed assumption while
+    /// [`Self::concurrent_machine`] still tells the engine to flip the run.
+    /// Every later case is stamped as nondeterministic up front, so its
+    /// whole execution — including draws made before the machine is
+    /// created — can be emitted for the failure report. Defaults to false
+    /// (allow), which standalone handles (single-test-case runs, blob
+    /// replays, embeddings driving the engine directly) keep.
+    reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<BTreeSet<i64>>,
@@ -1026,8 +1046,36 @@ impl FamilyCore {
             target_observations: Mutex::new(HashMap::default()),
             state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
+            concurrent_machine: AtomicBool::new(false),
+            reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// Record that a state machine with `max_concurrency > 1` was requested
+    /// on a stream of this family (see [`Self::concurrent_machine`]).
+    pub(crate) fn set_concurrent_machine(&self) {
+        self.concurrent_machine.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether a state machine with `max_concurrency > 1` was requested on
+    /// any stream of this family.
+    pub(crate) fn concurrent_machine(&self) -> bool {
+        self.concurrent_machine.load(Ordering::Relaxed)
+    }
+
+    /// Set whether a state machine creation with `max_concurrency > 1`
+    /// must be rejected on this family (see
+    /// [`Self::reject_concurrent_machine`]).
+    pub(crate) fn set_reject_concurrent_machine(&self, reject: bool) {
+        self.reject_concurrent_machine
+            .store(reject, Ordering::Relaxed);
+    }
+
+    /// Whether a state machine creation with `max_concurrency > 1` must be
+    /// rejected on this family.
+    pub(crate) fn reject_concurrent_machine(&self) -> bool {
+        self.reject_concurrent_machine.load(Ordering::Relaxed)
     }
 
     /// Make every state machine of this family run without a step cap.
@@ -1112,6 +1160,9 @@ pub struct NativeTestCase {
     /// status) lets `conclude_test` conclude before calling `freeze()`
     /// without triggering the idempotency early-return.
     frozen: bool,
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic. Copied into every cloned stream.
+    is_nondeterministic: bool,
     /// State shared with every other stream of this test case's family.
     pub(crate) family: Arc<FamilyCore>,
     /// This stream's position in the clone tree: empty for the root, the
@@ -1192,6 +1243,7 @@ impl NativeTestCase {
             trailing,
             max_size,
             observer,
+            false,
             Arc::new(FamilyCore::new(budget)),
             Vec::new(),
         )
@@ -1199,7 +1251,6 @@ impl NativeTestCase {
 
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
-    #[allow(clippy::too_many_arguments)]
     fn new_stream(
         prefix: Vec<ChoiceValue>,
         prefix_nodes: Option<Vec<ChoiceNode>>,
@@ -1207,6 +1258,7 @@ impl NativeTestCase {
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
+        is_nondeterministic: bool,
         family: Arc<FamilyCore>,
         clone_id: Vec<usize>,
     ) -> Self {
@@ -1217,6 +1269,7 @@ impl NativeTestCase {
             max_size,
             nodes: Vec::new(),
             frozen: false,
+            is_nondeterministic,
             family,
             clone_id,
             clone_counter: 0,
@@ -1281,6 +1334,16 @@ impl NativeTestCase {
         &self.family
     }
 
+    /// Mark this test case as belonging to a nondeterministic run.
+    pub(crate) fn set_nondeterministic(&mut self) {
+        self.is_nondeterministic = true;
+    }
+
+    /// Whether this test case belongs to a nondeterministic run.
+    pub(crate) fn is_nondeterministic(&self) -> bool {
+        self.is_nondeterministic
+    }
+
     /// Create an independent cloned stream of this test case.
     ///
     /// The clone occupies one choice position in this stream (a
@@ -1330,6 +1393,7 @@ impl NativeTestCase {
             child_template,
             child_max_size,
             None,
+            self.is_nondeterministic,
             Arc::clone(&self.family),
             child_id,
         );
