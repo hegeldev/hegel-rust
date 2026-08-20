@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.31.0 - 2026-08-20
+
+This release adds concurrent stateful testing: stateful tests where rules run concurrently from a number of worker threads. See the new stateful module documentation for details.
+
 ## 0.30.0 - 2026-08-14
 
 This release changes `one_of!` to expand to arity-specific generator types
