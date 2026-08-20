@@ -328,7 +328,27 @@ fn at_least_one_rule_per_group_is_forced_enabled() {
 
 #[test]
 fn concurrent_workers_have_their_own_flags_and_round_budgets() {
-    let mut ntc = simplest_after(&[], 4096);
+    let prefix = [
+        int(0),
+        int(0),
+        go(),
+        ChoiceValue::Boolean(true),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(false),
+        go(),
+        ChoiceValue::Boolean(true),
+        int(0),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+        int(0),
+        ChoiceValue::Boolean(false),
+    ];
+    let mut ntc = replay(&prefix, 32);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert_eq!(count_draws_with_max(&ntc, 254), 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
@@ -342,14 +362,13 @@ fn concurrent_workers_have_their_own_flags_and_round_budgets() {
 }
 
 #[test]
-fn simplest_template_runs_one_rule_per_worker_per_round() {
+fn simplest_template_runs_no_rules() {
     let mut ntc = simplest_after(&[], 4096);
     ntc.family().set_stateful_step_count(2);
     let mut sm = machine_concurrent(&mut ntc, 2, 3);
     for _ in 0..2 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());
         for worker in 0..3 {
-            assert_eq!(sm.next_rule(&mut ntc, worker).unwrap(), Some(0));
             assert_eq!(sm.next_rule(&mut ntc, worker).unwrap(), None);
         }
     }
@@ -377,8 +396,8 @@ fn concurrent_worker_continue_decision_is_a_recorded_hazard_boolean() {
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     assert!(
-        ntc.nodes[3].was_forced,
-        "the first rule is a forced continue"
+        !ntc.nodes[3].was_forced,
+        "the first continue is a free draw: a worker can run zero rules"
     );
     assert_eq!(ntc.nodes[3].value(), ChoiceValue::Boolean(true));
     assert!(
@@ -403,7 +422,7 @@ fn concurrent_rounds_stop_at_the_step_count() {
 
 #[test]
 fn concurrent_rejections_refund_the_worker_round_budget() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = simplest_after(&[int(0), int(0), go(), ChoiceValue::Boolean(true)], 4096);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     for _ in 0..10 {
@@ -416,7 +435,7 @@ fn concurrent_rejections_refund_the_worker_round_budget() {
 
 #[test]
 fn concurrent_worker_attempts_are_capped_per_round() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = simplest_after(&[int(0), int(0), go(), ChoiceValue::Boolean(true)], 4096);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     for _ in 0..(MAX_ROUND_RULES * ATTEMPT_MULTIPLIER) {
@@ -495,7 +514,7 @@ fn rule_rejected_without_an_outstanding_rule_is_an_error() {
 
 #[test]
 fn rule_rejected_for_an_out_of_range_worker_is_an_error() {
-    let mut ntc = simplest_after(&[], 64);
+    let mut ntc = simplest_after(&[int(0), int(0), go(), ChoiceValue::Boolean(true)], 64);
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));

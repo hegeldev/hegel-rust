@@ -453,13 +453,9 @@ fn state_machines_are_shared_across_cloned_streams() {
         .unwrap();
     assert_eq!(ds.state_machine_next_group(&mut machine).unwrap(), Some(0));
     let child = ds.clone_stream().unwrap();
-    assert!(
-        child
-            .state_machine_next_rule(&mut machine, 1)
-            .unwrap()
-            .unwrap()
-            < 3
-    );
+    if let Some(index) = child.state_machine_next_rule(&mut machine, 1).unwrap() {
+        assert!(index < 3);
+    }
     if let Some(index) = ds.state_machine_next_rule(&mut machine, 0).unwrap() {
         assert!(index < 3);
     }

@@ -34,7 +34,7 @@ while (true) {
 }
 ```
 
-Each rule is assigned to a *concurrency group* at machine creation, and for each round the engine draws a random group: only that group's rules are handed out for the round, so rules in the same group may run concurrently with each other and rules in different groups never overlap. A sequential machine is a degenerate case — all-zero `rule_groups`, concurrency bounds `1, 1`, no worker threads at all, and the root handle drives everything: the engine hands out exactly one rule per round, so the two loops collapse into the old rule loop on one thread with a `hegel_state_machine_next_group` call between rules.
+Each rule is assigned to a concurrency group at machine creation, and for each round the engine draws a random group: only that group's rules are handed out for the round, so rules in the same group may run concurrently with each other and rules in different groups never overlap. A sequential machine is a degenerate case — all-zero `rule_groups`, concurrency bounds `1, 1`, no worker threads at all, and the root handle drives everything: the engine hands out exactly one rule per round, so the two loops collapse into the old rule loop on one thread with a `hegel_state_machine_next_group` call between rules.
 
 This is a breaking C ABI change:
 

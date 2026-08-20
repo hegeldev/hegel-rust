@@ -29,7 +29,7 @@ const ATTEMPT_MULTIPLIER: i64 = 10;
 const MIN_ATTEMPTS_WITHOUT_SUCCESS: i64 = 1000;
 
 /// Upper bound on the rules each worker runs per round at concurrency > 1.
-/// The count is uniform in `[1, MAX_ROUND_RULES]`, decided one boolean draw
+/// The count is uniform in `[0, MAX_ROUND_RULES]`, decided one boolean draw
 /// at a time (see [`NativeStateMachine::next_rule`]).
 const MAX_ROUND_RULES: i64 = 5;
 
@@ -155,7 +155,7 @@ struct WorkerState {
     /// Whether this worker's most recent hand-out was rejected, so the next
     /// `next_rule` call is a retry: it skips the continue/stop decision
     /// (recording a forced continue) rather than re-drawing it, keeping
-    /// exactly one random stop decision per completed rule. Cleared on the
+    /// exactly one random stop decision per rule slot. Cleared on the
     /// next hand-out and at every join point.
     retry_pending: bool,
 }
@@ -328,16 +328,16 @@ impl NativeStateMachine {
     /// At concurrency 1 every round is exactly one rule, so a join point
     /// follows each rule and the per-round stop decision in
     /// [`Self::next_group`] carries the whole step budget. At higher
-    /// concurrency each worker runs between one and [`MAX_ROUND_RULES`]
-    /// rules per round, distributed uniformly: each call past the first
-    /// makes a continue/stop decision as a boolean draw from the worker's
-    /// own stream, drawn as a *continue* probability
+    /// concurrency each worker runs between zero and [`MAX_ROUND_RULES`]
+    /// rules per round, distributed uniformly: every call makes a
+    /// continue/stop decision as a boolean draw from the worker's own
+    /// stream, drawn as a *continue* probability
     /// (`(MAX_ROUND_RULES - completed) / (MAX_ROUND_RULES - completed + 1)`)
     /// so that the simplest value stops the round — the shrinker shortens a
     /// worker's round by simplifying any boundary's draw, and the forced
-    /// simplest test case runs exactly one rule per worker per round. Rules
-    /// reported as rejected ([`Self::rule_rejected`]) do not advance that
-    /// decision, and total hand-outs per worker per round are bounded by
+    /// simplest test case runs no rules at all. Rules reported as rejected
+    /// ([`Self::rule_rejected`]) do not advance that decision, and total
+    /// hand-outs per worker per round are bounded by
     /// [`ATTEMPT_MULTIPLIER`] times [`MAX_ROUND_RULES`].
     ///
     /// Consults only per-worker state (plus the machine's current group), so
@@ -364,7 +364,7 @@ impl NativeStateMachine {
             let attempt_cap = MAX_ROUND_RULES.saturating_mul(ATTEMPT_MULTIPLIER);
             let p_continue = if worker.steps_drawn >= attempt_cap || completed >= MAX_ROUND_RULES {
                 0.0
-            } else if worker.retry_pending || completed == 0 {
+            } else if worker.retry_pending {
                 1.0
             } else {
                 (MAX_ROUND_RULES - completed) as f64 / (MAX_ROUND_RULES - completed + 1) as f64

@@ -802,8 +802,8 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 
 /// Execute a concurrent stateful test. Execution proceeds in *rounds*. For
 /// each round, the engine picks a random concurrency group; every worker
-/// thread then runs a short random sequence of rules from that group — and
-/// only that group — concurrently with the other workers. Rules in the same
+/// thread then runs a short (possibly empty) random sequence of rules from
+/// that group — and only that group — concurrently with the other workers. Rules in the same
 /// group may overlap each other, and rules in different groups never
 /// overlap. Once every worker has finished its rules for the round, we run
 /// all invariants.
