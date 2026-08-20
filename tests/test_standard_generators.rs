@@ -167,6 +167,16 @@ draw_example_tests_with_predicate!(
 draw_example_tests!(text, gs::text());
 draw_example_tests!(binary, gs::binary());
 draw_example_tests!(booleans, gs::booleans());
+draw_example_tests_with_predicate!(
+    weighted_booleans_p0,
+    gs::weighted_booleans(0.0),
+    |b: &bool| !*b
+);
+draw_example_tests_with_predicate!(
+    weighted_booleans_p1,
+    gs::weighted_booleans(1.0),
+    |b: &bool| *b
+);
 draw_example_tests!(tuple_booleans, gs::tuples!(gs::booleans(), gs::booleans()));
 draw_example_tests!(hashsets_integers, gs::hashsets(gs::integers::<i64>()));
 draw_example_tests!(nested_lists, gs::vecs(gs::vecs(gs::booleans())));

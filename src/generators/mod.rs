@@ -29,7 +29,15 @@ pub use collections::{
     vecs,
 };
 pub use combinators::{
-    OneOfGenerator, OptionalGenerator, SampledFromGenerator, one_of, optional, sampled_from,
+    OneOf1Generator, OneOf2Generator, OneOf3Generator, OneOf4Generator, OneOf5Generator,
+    OneOf6Generator, OneOf7Generator, OneOf8Generator, OneOf9Generator, OneOf10Generator,
+    OneOf11Generator, OneOf12Generator, OneOfGenerator, OptionalGenerator, SampledFromGenerator,
+    one_of, optional, sampled_from,
+};
+#[doc(hidden)]
+pub use combinators::{
+    one_of1, one_of2, one_of3, one_of4, one_of5, one_of6, one_of7, one_of8, one_of9, one_of10,
+    one_of11, one_of12,
 };
 pub use compose::ComposedGenerator;
 #[doc(hidden)]
@@ -37,7 +45,7 @@ pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred};
 pub use generators::{BoxedGenerator, Filtered, FlatMapped, Generator, Mapped};
-pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit};
+pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
@@ -47,6 +55,11 @@ pub use strings::{
     from_regex, ip_addresses, text, time_strings, urls, uuids,
 };
 pub use time::{DurationGenerator, durations};
+pub use tuples::{
+    Tuple0Generator, Tuple1Generator, Tuple2Generator, Tuple3Generator, Tuple4Generator,
+    Tuple5Generator, Tuple6Generator, Tuple7Generator, Tuple8Generator, Tuple9Generator,
+    Tuple10Generator, Tuple11Generator, Tuple12Generator,
+};
 #[doc(hidden)]
 pub use tuples::{
     tuples0, tuples1, tuples2, tuples3, tuples4, tuples5, tuples6, tuples7, tuples8, tuples9,

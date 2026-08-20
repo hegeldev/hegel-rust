@@ -561,14 +561,20 @@ pub(crate) fn generate_novel_prefix(
 /// Returns `Some(status)` when the walk reaches a recorded conclusion
 /// (either because a previous run terminated exactly here, or because it
 /// terminated at a prefix of `choices` whose trailing values are never
-/// read). Returns `None` — Hypothesis's `PreviouslyUnseenBehaviour` — when
-/// the realised path diverges from anything seen before, or when `choices`
-/// runs out while the tree still expects another draw (a real run would
-/// overrun, which `for_choices` never records as a conclusion); in both
-/// cases the caller must actually execute to learn the outcome.
+/// read). Also returns `Some(EarlyStop)` — a *predicted overrun*, exactly as
+/// Hypothesis's `simulate_test_function` concludes `Status.OVERRUN` — when
+/// `choices` runs out while the tree still expects another draw: a
+/// `for_choices` replay caps `max_size` at `choices.len()`, so its next
+/// `pre_choice` would conclude `EarlyStop` without the value being resolved.
+/// Returns `None` — Hypothesis's `PreviouslyUnseenBehaviour` — when the
+/// realised path diverges from anything seen before, and the caller must
+/// actually execute to learn the outcome.
 ///
 /// Only `Status >= Invalid` is ever recorded as a conclusion (see
-/// [`record_tree`]), so `EarlyStop` is never returned.
+/// [`record_tree`]), so an `EarlyStop` result is always a predicted overrun,
+/// never a recorded one. It predicts `for_choices` semantics specifically:
+/// a caller that extends past `choices` with random draws (`for_probe`)
+/// must ignore it and execute.
 #[cfg(test)]
 pub(crate) fn simulate(tree_root: &DataTreeNode, choices: &[ChoiceValue]) -> Option<Status> {
     simulate_full(tree_root, choices, None)
@@ -613,7 +619,14 @@ pub(crate) fn simulate_full(
             return Ok(None);
         };
         if i >= choices.len() {
-            return Ok(None);
+            close_open_spans(pos, &mut spans, &mut span_stack);
+            return Ok(Some(SimulatedOutcome {
+                status: Status::EarlyStop,
+                nodes,
+                spans,
+                origin: None,
+                target_observations: HashMap::default(),
+            }));
         }
         let step = if current.forced {
             current.children.iter().next().and_then(|(key, next)| {

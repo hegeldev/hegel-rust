@@ -233,3 +233,96 @@ mod composite_kwonlyargs {
         check_can_generate_examples(gs::vecs(kwonlyargs_composites("test")));
     }
 }
+
+mod composite_borrowed_data {
+    //! Composite generators can take borrowed parameters. A `&T` parameter may
+    //! leave its lifetime elided, and the macro supplies one for the generated
+    //! generator struct. If the lifetime is used in the result it must be specified.
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Object {
+        name: String,
+        x: u8,
+        y: u8,
+    }
+
+    #[hegel::composite]
+    fn object_from_borrowed_name(tc: &TestCase, name: &str) -> Object {
+        let x = tc.draw(gs::integers().max_value(3));
+        let y = tc.draw(gs::integers().max_value(3));
+
+        Object {
+            name: name.to_owned(),
+            x,
+            y,
+        }
+    }
+
+    #[hegel::test]
+    fn test_elided_borrow_can_be_copied_into_generated_value(tc: TestCase) {
+        let object = tc.draw(object_from_borrowed_name("hello"));
+        assert_eq!(object.name, "hello");
+        assert!(object.x <= 3 && object.y <= 3);
+    }
+
+    #[derive(Debug)]
+    struct Config {
+        min: u8,
+        max: u8,
+    }
+
+    #[hegel::composite]
+    fn int_bounded_by_borrowed_config(tc: &TestCase, config: &Config) -> u8 {
+        tc.draw(gs::integers().min_value(config.min).max_value(config.max))
+    }
+
+    #[hegel::test]
+    fn test_elided_borrow_can_configure_draws(tc: TestCase) {
+        let config = Config { min: 5, max: 10 };
+        let x = tc.draw(int_bounded_by_borrowed_config(&config));
+        assert!((5..=10).contains(&x));
+    }
+
+    #[derive(Debug)]
+    struct BorrowedObject<'a> {
+        name: &'a str,
+        x: u8,
+    }
+
+    #[hegel::composite]
+    fn borrowed_object_from_name<'a>(
+        tc: &TestCase,
+        name: &'a str,
+        config: &Config,
+    ) -> BorrowedObject<'a> {
+        BorrowedObject {
+            name,
+            x: tc.draw(gs::integers().min_value(config.min).max_value(config.max)),
+        }
+    }
+
+    #[hegel::test]
+    fn test_explicit_lifetime_borrow_is_stored_in_generated_value(tc: TestCase) {
+        let config = Config { min: 5, max: 10 };
+        let object = tc.draw(borrowed_object_from_name("hello", &config));
+
+        assert_eq!(object.name, "hello");
+        assert!((5..=10).contains(&object.x));
+    }
+}
+
+#[deny(clippy::items_after_statements)]
+#[allow(unused)]
+mod item_after_statement_lint {
+    use super::*;
+
+    #[hegel::composite]
+    fn link_metric(tc: &TestCase) -> u32 {
+        const MAX_METRIC: u32 = 1000;
+
+        let x = tc.draw(gs::integers().max_value(MAX_METRIC));
+        x + 1
+    }
+}

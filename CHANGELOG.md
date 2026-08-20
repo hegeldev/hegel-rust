@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.30.0 - 2026-08-14
+
+This release changes `one_of!` to expand to arity-specific generator types
+(`OneOf1Generator` through `OneOf12Generator`, mirroring the `tuples!`
+design) instead of boxing every alternative into a `OneOfGenerator`. The
+component generators keep their concrete types, so the macro's result is a
+nameable type that can be stored in a struct field or returned from a
+function, and building it no longer allocates per alternative. The drawn
+choice sequence (a ONE_OF span around one index draw) is unchanged, so
+saved failures replay identically.
+
+Two things can break. Code that annotated the macro's result as
+`OneOfGenerator` must now name the arity-specific type (or box the
+alternatives explicitly and call `one_of()`):
+
+```rust
+// before
+let g: gs::OneOfGenerator<i64> = hegel::one_of!(gs::integers(), gs::just(7));
+
+// after
+let g: gs::OneOf2Generator<gs::IntegerGenerator<i64>, gs::JustGenerator<i64>, i64> =
+    hegel::one_of!(gs::integers(), gs::just(7));
+```
+
+And `one_of!` now supports at most 12 alternatives; a longer list is a
+compile error pointing at the vec-based `one_of()`, which remains the way
+to choose among a runtime-sized (or very large) collection of boxed
+generators. `one_of()` itself now accepts any iterable of generators of
+one type — `OneOfGenerator` is generic over the stored generator type,
+defaulting to `BoxedGenerator`, so most existing uses keep compiling
+unchanged. The exception is calls that spelled out the type arguments:
+`one_of` gained a type parameter, so e.g. `one_of::<i64, _>(gens)` must
+drop the turbofish (plain `one_of(gens)` infers everything).
+
+For parity, the arity-specific tuple generator types (`Tuple0Generator`
+through `Tuple12Generator`) are now exported as well, so `tuples!` results
+can be named the same way, and `tuples!` reports the same clear compile
+error as `one_of!` when given more than 12 generators.
+
+## 0.29.10 - 2026-08-13
+
+This patch significantly improves shrinking for stateful tests that use `stateful::Pool`.
+
+## 0.29.9 - 2026-08-13
+
+This patch improves shrinking: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before.
+
+## 0.29.8 - 2026-08-11
+
+This patch adds `weighted_booleans` for generating boolean values with probability 
+`p` in `[0.0, 1.0]` of true.
+
+## 0.29.7 - 2026-08-11
+
+This patch fixes the replay of stateful counterexamples that need more than 50 steps ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). Previously, the replay of the shrunk counterexample stopped at 50 steps and incorrectly triggered a flaky test error.
+
+## 0.29.6 - 2026-08-11
+
+This patch brings various minor improvements to the `#[composite]` macro.
+
+- Adds support for passing parameters by reference without an explicit lifetime, if the lifetime is not used in the return type.
+- Stops the items_after_statements clippy lint from firing if constants/ functions are defined in the function body.
+- Tries to output generator even if errors are found as to not raise errors elsewhere
+
+## 0.29.5 - 2026-08-11
+
+This patch adds two environment variables that override settings at runtime, so a whole test suite's behavior can be adjusted without editing source:
+
+- `HEGEL_TEST_CASES` overrides the number of test cases each test runs, taking precedence over values configured in source (including explicit `test_cases` settings). For example, `HEGEL_TEST_CASES=10000 cargo test` runs a deep exploration of every property test.
+- `HEGEL_DATABASE` overrides the failure database location: `HEGEL_DATABASE=disabled` turns the database off (the same keyword the `--database` CLI flag uses), and any other non-empty value relocates the database to that path.
+
 ## 0.29.4 - 2026-08-10
 
 This patch improves random generation for tests with repeated structure (recursive generators, collections, state machines). The engine proposes new test cases by splicing the choices of one span over another with the same label; a spliced sequence that diverged from its donor's path was previously discarded, and is now completed with fresh random draws instead, so every such proposal becomes a real test case seeded with the mutation.

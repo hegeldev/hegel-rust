@@ -153,6 +153,25 @@ fn test_draw_domain(tc: TestCase) {
     hegel::stateful::run(m, tc);
 }
 
+/// `Pool::add` draws a fresh identifier from the engine, so it stops the
+/// test case (rather than panicking) once the choice budget is exhausted.
+#[test]
+fn test_pool_add_stops_the_test_case_when_out_of_data() {
+    common::utils::expect_panic(
+        || {
+            hegel::Hegel::new(|tc| {
+                let mut bundle = pool(&tc);
+                loop {
+                    bundle.add(0u8);
+                }
+            })
+            .settings(hegel::Settings::new().database(None).test_cases(5))
+            .run();
+        },
+        "LargeInitialTestCase",
+    );
+}
+
 /// Regression test: the module docs promise invariants can take `&self`,
 /// but the macro used to register methods as bare `fn(&mut M, TestCase)`
 /// pointers, so a `&self` invariant failed to compile inside generated code.
@@ -819,6 +838,44 @@ mod stateful {
             full > counts.len() / 2,
             "expected most of {} test cases to run exactly 7 steps, got {full}",
             counts.len()
+        );
+    }
+
+    struct LongCounterMachine {
+        counter: u64,
+    }
+
+    impl StateMachine for LongCounterMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new("increment", |m: &mut LongCounterMachine, _tc| {
+                m.counter += 1;
+                assert!(m.counter <= 60, "counter exceeded threshold");
+            })]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![]
+        }
+    }
+
+    /// Regression test for #396: the failing case is replayed from its
+    /// reproduce blob, and that replay respects the stateful step count
+    #[test]
+    fn test_long_counterexample_replays_under_the_configured_step_count() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: TestCase| {
+                    hegel::stateful::run(LongCounterMachine { counter: 0 }, tc);
+                })
+                .settings(
+                    Settings::new()
+                        .test_cases(100)
+                        .database(None)
+                        .derandomize(true)
+                        .stateful_step_count(100),
+                )
+                .run();
+            },
+            "counter exceeded threshold",
         );
     }
 
