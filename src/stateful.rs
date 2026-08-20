@@ -9,13 +9,6 @@
 //!
 //! To run a state machine, call [`run()`] inside a Hegel test.
 //!
-//! For *concurrent* stateful testing — rules applied to a shared model from
-//! several worker threads at once — define the machine with the
-//! [`concurrent_state_machine`](crate::concurrent_state_machine) attribute
-//! macro instead and call [`run_concurrent()`]. See [`run_concurrent()`]
-//! for the execution model and how such a run handles its inherent
-//! nondeterminism.
-//!
 //! Example:
 //! ```rust
 //! use hegel::TestCase;
@@ -70,6 +63,65 @@
 //! fn test_integer_stack(tc: TestCase) {
 //!     let stack = IntegerStack { stack: Vec::new() };
 //!     hegel::stateful::run(stack, tc);
+//! }
+//! ```
+//!
+//! Concurrent state machines are defined using the
+//! [`concurrent_state_machine`](crate::concurrent_state_machine) attribute macro. These work
+//! similarly, but the rules are run concurrently from a number of worker threads. See
+//! [`run_concurrent()`] for a detailed explanation of the execution model.
+//!
+//! Example:
+//! ```rust
+//! use std::sync::Mutex;
+//! use std::sync::atomic::{AtomicUsize, Ordering};
+//! use hegel::TestCase;
+//! use hegel::generators as gs;
+//!
+//! struct SharedStack {
+//!     stack: Mutex<Vec<i32>>,
+//!     pushes: AtomicUsize,
+//! }
+//!
+//! #[hegel::concurrent_state_machine]
+//! impl SharedStack {
+//!     #[rule(group = "ops")]
+//!     fn push(&self, tc: TestCase) {
+//!         let element = tc.draw(gs::integers::<i32>());
+//!         self.stack.lock().unwrap_or_else(|e| e.into_inner()).push(element);
+//!         self.pushes.fetch_add(1, Ordering::SeqCst);
+//!     }
+//!
+//!     #[rule(group = "ops")]
+//!     fn pop(&self, _: TestCase) {
+//!         self.stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
+//!     }
+//!
+//!     #[rule(group = "audit")]
+//!     fn audit(&self, tc: TestCase) {
+//!         let stack = self.stack.lock().unwrap_or_else(|e| e.into_inner());
+//!         tc.note(&format!("stack holds {} elements", stack.len()));
+//!     }
+//!
+//!     #[invariant]
+//!     fn never_grows_past_pushes(&self, _: TestCase) {
+//!         let len = self.stack.lock().unwrap_or_else(|e| e.into_inner()).len();
+//!         assert!(len <= self.pushes.load(Ordering::SeqCst));
+//!     }
+//! }
+//!
+//! #[hegel::test]
+//! fn test_shared_stack(tc: TestCase) {
+//!     let stack = SharedStack {
+//!         stack: Mutex::new(Vec::new()),
+//!         pushes: AtomicUsize::new(0),
+//!     };
+//!     hegel::stateful::run_concurrent(
+//!         stack,
+//!         tc,
+//!         1,          // minimum concurrency
+//!         3           // maximum concurrency
+//!     );
 //! }
 //! ```
 
@@ -748,64 +800,32 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     });
 }
 
-/// Execute a concurrent stateful test: repeatedly run rounds of rules from
-/// the current concurrency group on `concurrency` worker threads, checking
-/// invariants at the join points between rounds.
+/// Execute a concurrent stateful test. Execution proceeds in *rounds*. For
+/// each round, the engine picks a random concurrency group; every worker
+/// thread then runs a short random sequence of rules from that group — and
+/// only that group — concurrently with the other workers. Rules in the same
+/// group may overlap each other, and rules in different groups never
+/// overlap. Once every worker has finished its rules for the round, we run
+/// all invariants.
 ///
-/// The engine draws the actual concurrency level for each test case when
-/// the state machine is created, in `[min_concurrency, max_concurrency]`
-/// and weighted toward `max_concurrency` (concurrency bugs need
-/// concurrency); pass `min_concurrency == max_concurrency` for a fixed
-/// level. The model is shared by reference across the worker threads, so
-/// rules and invariants take `&self` and any mutable model state needs
-/// interior mutability (locks, atomics, a [`ConcurrentPool`], ...).
+/// The number of worker threads is drawn per test case, when the state
+/// machine is created, in `[min_concurrency, max_concurrency]` and weighted
+/// toward `max_concurrency` (concurrency bugs need concurrency); pass
+/// `min_concurrency == max_concurrency` for a fixed level.
 ///
-/// A failure's trace shows each round's lines grouped by worker — each
-/// worker's draws and notes in program order, one worker after another,
-/// between markers naming each round's concurrency group. Worker lines
-/// are tagged `[worker N +X.XXXms]` with the time offset from the start
-/// of the test case, so the wall-clock arrival order across workers stays
-/// recoverable even though the report reads worker by worker. Verbose
-/// runs additionally stream every line live, in arrival order.
-///
-/// # The run becomes nondeterministic
+/// # Nondeterminism
 ///
 /// Concurrency bugs are nondeterministic — thread scheduling is outside
 /// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
-/// makes the whole run nondeterministic, automatically. The first test
-/// case to reach the machine is discarded like a failed assumption and
-/// flips the run; every later case then captures its entire trace up
-/// front — draws and notes made *before* `run_concurrent` included — so
-/// failures are reported faithfully from the discovering execution, with
-/// no replay, shrinking, flakiness complaints, database persistence, or
-/// reproduce blob — and at most one failure per run. A notice explaining
-/// this is printed once per run (unless the run is quiet). The declared
-/// bound is what counts: a test case that happens to draw a concurrency
-/// level of 1 is still part of a nondeterministic run. With
-/// `max_concurrency == 1` the run stays deterministic and shrinks and
-/// replays as usual.
+/// makes the whole run nondeterministic. Failures are reported from the
+/// discovering execution, with no replay, shrinking, database persistence,
+/// or reproduce blob, with at most one failure per run.
 ///
 /// # Abandoned rules and lock poisoning
 ///
-/// A rule abandoned mid-execution by an unwind — most routinely a rejected
-/// assumption: an empty-pool draw *is* an assume violation by design — can
-/// poison any `std::sync::Mutex` it was holding, and every other worker's
-/// `lock().unwrap()` then panics with a `PoisonError` that no real schedule
-/// of your rules could produce. Two rules of thumb prevent those fake
-/// failures:
-///
-/// - **Draw before locking**: complete all of a rule's draws (including
-///   pool draws, which reject when the pool is empty) before taking any
-///   lock, so a rejection can never unwind through a held guard.
-/// - **Make model locks poison-tolerant**: recover with
-///   `lock().unwrap_or_else(|e| e.into_inner())`, or use a non-poisoning
-///   lock (e.g. `parking_lot`). Then even a mid-rule *panic* can't turn
-///   later lock acquisitions into fake `PoisonError` failures; the
-///   half-mutated state a recovered lock may expose is precisely what the
-///   invariants are there to catch, and the original panic is still the one
-///   reported.
-///
-/// [`ConcurrentPool`] follows both rules itself.
+/// A rule abandoned mid-execution by a rejected assumption or a failed draw
+/// can poison any lock `std::sync::Mutex` it was holding. To avoid this,
+/// perform all draws upfront within each rule.
 ///
 /// # Example
 ///

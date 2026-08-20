@@ -1,20 +1,52 @@
 RELEASE_TYPE: minor
 
-This release replaces the stateful-testing interface with one that also supports concurrent stateful testing, and makes the engine treat any run that asks for real concurrency as nondeterministic.
+This release replaces the stateful-testing interface with one that also supports concurrent stateful testing.
 
-State machines now carry concurrency groups, per-rule group assignments, and a concurrency level. Execution proceeds in rounds: the root handle asks `hegel_state_machine_next_group` (new) whether to run another round — it reports the round's current group id, or the `HEGEL_STATE_MACHINE_DONE` sentinel for termination — then each worker pulls rules for that round with `hegel_state_machine_next_rule` until it signals a join point. Rules in the same group may run concurrently; rules in different groups never overlap. Swarm selection is now per worker, with the "at least one rule enabled" guarantee applying within each group.
+Every state machine — sequential or concurrent — is now driven by the same round-based protocol. Creating the machine draws the number of workers the caller must run; the owning thread advances rounds on the root test-case handle and checks the machine's invariants at the join points between rounds, while no rule is running:
+
+```c
+hegel_new_state_machine(ctx, tc, rule_names, rule_groups, num_rules,
+                        invariant_names, num_invariants,
+                        min_concurrency, max_concurrency,
+                        &machine, &concurrency);
+/* spawn `concurrency` worker threads, each holding its own clone handle */
+
+while (true) {
+    /* root handle: ask whether to run another round, and for which group */
+    hegel_state_machine_next_group(ctx, tc, machine, &group);
+    if (group == HEGEL_STATE_MACHINE_DONE) break;
+
+    /* wake every worker, then wait for all of them to finish the round */
+
+    /* the join point: every worker is parked — check the invariants */
+}
+/* tell the workers to exit */
+```
+
+Each worker thread `w`, woken once per round, pulls rules on its own clone handle `tc_w` until the engine signals its join point, then parks until the next round:
+
+```c
+while (true) {
+    hegel_state_machine_next_rule(ctx, tc_w, machine, w, &rule);
+    if (rule == HEGEL_STATE_MACHINE_DONE) break;  /* w's round is over */
+    /* apply rules[rule]; if it fails an assumption, report it with
+       hegel_state_machine_rule_rejected(ctx, tc_w, machine, w) */
+}
+```
+
+Each rule is assigned to a *concurrency group* at machine creation, and for each round the engine draws a random group: only that group's rules are handed out for the round, so rules in the same group may run concurrently with each other and rules in different groups never overlap. A sequential machine is a degenerate case — all-zero `rule_groups`, concurrency bounds `1, 1`, no worker threads at all, and the root handle drives everything: the engine hands out exactly one rule per round, so the two loops collapse into the old rule loop on one thread with a `hegel_state_machine_next_group` call between rules.
 
 This is a breaking C ABI change:
 
-- `hegel_new_state_machine` gains `rule_groups` (group ids parallel to `rule_names`) and `min_concurrency`/`max_concurrency` parameters, plus an `out_concurrency` out-parameter: the engine draws the machine's concurrency level in `[min_concurrency, max_concurrency]` and writes it to `*out_concurrency`. The caller must run exactly that many workers. Passing `min_concurrency == max_concurrency` fixes the level without consuming entropy. Groups are identified by arbitrary `int64_t` ids and carry no names: the machine has one concurrency group per distinct value of `rule_groups` (`INT64_MIN` is rejected — it is reserved as the `HEGEL_STATE_MACHINE_DONE` sentinel). A sequential machine passes all-zero `rule_groups` and concurrency bounds `1, 1`. Creating the machine now draws from the calling handle's stream, so it can return `HEGEL_E_STOP_TEST`, which the caller should report as an overrun.
-- `hegel_state_machine_next_rule` gains a `worker_index` parameter and now hands out rules for one round at a time; the frontend must advance rounds with `hegel_state_machine_next_group`, even for sequential machines.
+- `hegel_new_state_machine` gains `rule_groups` (group ids parallel to `rule_names`) and `min_concurrency`/`max_concurrency` parameters, plus an `out_concurrency` out-parameter: the engine draws the machine's concurrency level in `[min_concurrency, max_concurrency]` and writes it to `*out_concurrency`. The caller must run exactly that many workers. Passing `min_concurrency == max_concurrency` fixes the level. Groups are identified by arbitrary `int64_t` ids and carry no names: the machine has one concurrency group per distinct value of `rule_groups` (`INT64_MIN` is rejected — it is reserved as the `HEGEL_STATE_MACHINE_DONE` sentinel). Creating the machine now draws from the calling handle's stream, so it can return `HEGEL_E_STOP_TEST`, which the caller should report as an overrun.
+- `hegel_state_machine_next_rule` gains a `worker_index` parameter and now hands out rules for one round at a time; the frontend must advance rounds with `hegel_state_machine_next_group` (new), even for sequential machines.
 - `hegel_state_machine_rule_rejected` gains the same `worker_index` parameter, and its accounting is per worker: it refers to the rule most recently handed to that worker.
 - `HEGEL_STATE_MACHINE_DONE` changes value from `-1` to `INT64_MIN`, so the sentinel sits outside the group-id space callers plausibly use. A frontend that compares `hegel_state_machine_next_rule`'s `out_rule_index` against a hard-coded `-1` instead of the named constant must update.
 
-The `stateful_step_count` setting now bounds *rounds*: `hegel_state_machine_next_group` makes the per-round stop decision — a recorded boolean draw, exactly like the previous per-step decision — and most test cases run exactly `stateful_step_count` rounds. At concurrency 1 each round is exactly one rule and a round whose rule was rejected does not count, so sequential budgets behave as before (including the attempt caps on machines whose rules keep rejecting). At concurrency > 1 each worker runs between one and five rules per round, distributed uniformly by per-rule continue/stop draws from the worker's own stream; a rejected rule does not advance that decision, and per-worker attempts per round are capped at ten times the maximum.
+Creating a state machine with `max_concurrency > 1` declares the run nondeterministic. The engine detects this itself, so frontends have nothing to set up front. A nondeterministic run can't be replayed, so discovery is the only chance to capture. Frontends should check for nondeterminism at test case start, with the new `hegel_test_case_is_nondeterministic`, and capture a nondeterministic case's whole trace — draws, notes, and any failure's diagnostics — while it runs. Only the most recent capture needs to be stored, because the run will end as soon as a failure is found. The engine skips everything that assumes deterministic replay: data-tree recording (and with it novel-prefix generation and the nondeterminism mismatch check), span mutation, the verify and shrink pass (and with it the flakiness check), targeting, and database persistence and reuse.
+
+A failing nondeterministic run reports itself with a new run status, `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` (other `hegel_run_status_t` values are unchanged). Frontends should skip any final replay they normally perform, print no reproducer, and report the bug from what they captured at discovery. A failing single-test-case run still reports plain `HEGEL_RUN_STATUS_FAILED`, since its caller reports from the case's own execution anyway.
+
+The `stateful_step_count` setting now bounds *rounds*. At concurrency 1 each round is exactly one rule and a round whose rule was rejected does not count, so sequential budgets behave as before.
 
 The choice-sequence shape of sequential stateful tests changes as a result (the stop decision moves to the round boundary, and the swarm disabling probability is drawn at machine creation rather than at the first selection), so stored database entries and reproduce blobs for stateful tests are invalidated: stale database entries replay as invalid or overrun and are deleted quietly, while stale blobs fail loudly.
-
-Creating a state machine with `max_concurrency > 1` declares the run nondeterministic — the engine detects it itself, so frontends have nothing to set up front. On a run not already known to be nondeterministic, the first such creation is rejected with `HEGEL_E_ASSUME`: the caller reports that case `HEGEL_STATUS_INVALID` like any failed assumption, the case is discarded, and the engine flips the run at its end. Every later test case is marked nondeterministic before it starts — queryable with the new `hegel_test_case_is_nondeterministic`, so a frontend can capture the case's whole trace for the failure report, including draws made before the machine is created — and its creations succeed. From the flip on, the run reports failures faithfully from the discovering execution and skips everything that assumes deterministic replay: data-tree recording (and with it novel-prefix generation and the nondeterminism mismatch check), span mutation, the per-origin verify and shrink pass (and with it the flakiness check — generation stops at the first bug, so at most one failure is reported), targeting, and database persistence and reuse. Failures from such a run carry no reproduce blob, and a one-line notice explaining all this is printed once per run on the run's output (suppressed at quiet verbosity). The declared bound is what counts, even for test cases whose drawn concurrency level is 1; a machine created with `max_concurrency == 1` leaves the run deterministic, and standalone test cases (single-test-case runs, blob replays) are never rejected.
-
-A failing nondeterministic run reports itself with a new run status, `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`: the property failed, there is no reproduce blob to replay, and the caller should report the bug from the output it captured while running the discovering test case. `hegel_run_status_t` values are otherwise unchanged; a frontend that matches run statuses exhaustively must add the new one. A failing single-test-case run still reports plain `HEGEL_RUN_STATUS_FAILED`, since its caller reports from the case's own execution anyway.

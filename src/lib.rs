@@ -451,27 +451,18 @@ pub use hegel_macros::state_machine;
 /// named concurrency group; methods annotated `#[invariant]` become
 /// invariants, checked at the join points between rounds. Rules in the same
 /// group may run concurrently with each other; rules in different groups
-/// never overlap. Groups cannot express asymmetric overlap ("put may
-/// overlap get but not delete"); that expressiveness limit is deliberate.
+/// never overlap.
 ///
 /// A bare `#[rule]` with no `group = "..."` argument is assigned to a
-/// single shared *anonymous* group, so a machine with no group annotations
+/// single shared anonymous group, so a machine with no group annotations
 /// is maximally concurrent: any rule may overlap with any other, and naming
-/// groups is how overlap gets *restricted*.
-///
-/// **Warning:** in a machine that mixes annotated and unannotated rules,
-/// the unannotated rules form their own group and therefore **never overlap
-/// with any named group's rules**. The natural misreading of "no group" as
-/// "unconstrained" is exactly backwards there — annotate every rule once
-/// you name any group.
+/// groups is how overlap gets restricted.
 ///
 /// The model is shared by reference across worker threads, so rules and
 /// invariants must take `&self` (mutable state needs interior mutability),
 /// and the model type must be `Sync`. See
 /// [`run_concurrent`](crate::stateful::run_concurrent) for the full
-/// execution model, how a concurrent run's inherent nondeterminism is
-/// handled, and the lock-poisoning guidance for rules that hold locks
-/// across draws.
+/// execution model.
 ///
 /// ```no_run
 /// use std::sync::Mutex;
