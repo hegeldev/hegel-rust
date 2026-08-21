@@ -220,6 +220,7 @@
 //!
 //! - Browse the [`generators`] module for the full list of available generators.
 //! - See [`Settings`] for more configuration settings to customise how your test runs.
+//! - Use [`prelude`] (`use hegel::prelude::*;`) to import the items most tests need.
 
 #![forbid(future_incompatible)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -234,6 +235,7 @@ pub mod explicit_test_case;
 pub mod extras;
 pub(crate) mod ffi;
 pub mod generators;
+pub mod prelude;
 #[doc(hidden)]
 pub mod run_lifecycle;
 pub(crate) mod runner;
