@@ -408,9 +408,9 @@ jobs:
       # id-token: "enables the workflow to request and use an OIDC token from GitHub's OIDC provider".
       # Used by our trusted publishing flow
       id-token: write
-    # Expose the hegel-c release to `release-binaries` (cross-platform cdylib
+    # Expose the hegel-c release to `release-binaries` (cross-platform library
     # builds). `c_released` lets those jobs run only when hegel-c changed — a
-    # hegel-rust-only release ships no new shared libraries. `version` is the
+    # hegel-rust-only release ships no new binaries. `version` is the
     # post-bump hegel-c version they tag / upload against.
     outputs:
       c_released: ${{ steps.check.outputs.c_release == 'true' }}
@@ -426,7 +426,7 @@ jobs:
           if [ ! -f RELEASE.md ] && [ ! -f hegel-c/RELEASE.md ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-          # A hegel-c/RELEASE.md means the libhegel shared libraries are
+          # A hegel-c/RELEASE.md means the libhegel binaries are
           # released: hegeltest-c is republished and a tagged GitHub release
           # with cross-platform binaries is cut. Captured here, before the
           # release commit consumes the file.
@@ -497,7 +497,7 @@ jobs:
         # The engine crate. hegeltest now depends on it, so it must be
         # published (and indexed) before hegeltest. Its other role is to
         # reserve the name; the useful artefact for non-Rust consumers is the
-        # `libhegel-<goos>-<goarch>.<ext>` cdylib uploaded by the
+        # `libhegel-<goos>-<goarch>.<ext>` binaries uploaded by the
         # `release-binaries` job, not this source crate. Only published when
         # hegel-c actually changed — its version is independent of hegeltest's,
         # so a hegel-rust-only release leaves it at its already-published version.
@@ -531,14 +531,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/release.py push-or-pr
 
-  # Cross-platform cdylib builds for libhegel (the C-ABI shared library
-  # produced by the `hegeltest-c` crate). Triggers after the `release` job
-  # has tagged a new version; each matrix entry builds for one Go-style
-  # (GOOS, GOARCH) target, renames the cdylib to the
-  # `libhegel-<goos>-<goarch>.<ext>` shape that hegel-go's downloader
-  # expects, computes a SHA-256 sidecar, and uploads both to the GitHub
-  # Release for the just-pushed tag. The first racer creates the release;
-  # the rest upload into it with --clobber so re-runs are idempotent.
+  # Cross-platform shared and static library builds for libhegel. Triggers
+  # after the `release` job has tagged a new version; each matrix entry builds
+  # for one Go-style (GOOS, GOARCH) target, gives both libraries stable release
+  # names, computes SHA-256 sidecars, and uploads them to the GitHub Release.
   release-binaries:
     # `platform` is the primary matrix dimension; the include entries
     # specialise the runner / Rust target / file extension for each
@@ -563,18 +559,18 @@ jobs:
           - windows-amd64
           - windows-arm64
         include:
-          - { platform: linux-amd64,   runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, ext: so }
-          - { platform: linux-arm64,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, ext: so }
+          - { platform: linux-amd64,   runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,    goos: linux,   goarch: amd64, shared_ext: so,    static_ext: a }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,   goos: linux,   goarch: arm64, shared_ext: so,    static_ext: a }
           # Intel macOS (darwin-amd64) is intentionally not built: the
           # macos-13 (x86_64) runners are scarce and routinely leave the
           # release job stuck for hours waiting for a runner, and we do not
           # support Intel Macs. Apple-silicon macOS is covered below.
-          - { platform: darwin-arm64,  runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, ext: dylib }
-          - { platform: windows-amd64, runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, ext: dll }
+          - { platform: darwin-arm64,  runner: macos-14,         target: aarch64-apple-darwin,        goos: darwin,  goarch: arm64, shared_ext: dylib, static_ext: a }
+          - { platform: windows-amd64, runner: windows-latest,   target: x86_64-pc-windows-msvc,      goos: windows, goarch: amd64, shared_ext: dll,   static_ext: lib }
           # aarch64-pc-windows-msvc is cross-compiled from the x86_64 runner.
           # MSVC has had built-in arm64 cross since VS 2017+ and
           # windows-latest ships the toolchain.
-          - { platform: windows-arm64, runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, ext: dll }
+          - { platform: windows-arm64, runner: windows-latest,   target: aarch64-pc-windows-msvc,     goos: windows, goarch: arm64, shared_ext: dll,   static_ext: lib }
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
@@ -596,44 +592,70 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.target }}
 
-      - name: Build cdylib
+      - name: Build libraries
         run: cargo build -p hegeltest-c --release --target ${{ matrix.target }}
 
-      - name: Stage asset + sha256
+      - name: Stage assets + sha256
         id: stage
         shell: bash
         run: |
           set -euo pipefail
-          asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          shared_asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.shared_ext }}"
+          static_asset="libhegel-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.static_ext }}"
           case "${{ matrix.goos }}" in
-            windows) built="target/${{ matrix.target }}/release/hegel_c.dll" ;;
-            darwin)  built="target/${{ matrix.target }}/release/libhegel_c.dylib" ;;
-            linux)   built="target/${{ matrix.target }}/release/libhegel_c.so" ;;
+            windows)
+              shared_built="target/${{ matrix.target }}/release/hegel_c.dll"
+              static_built="target/${{ matrix.target }}/release/hegel_c.lib"
+              ;;
+            darwin)
+              shared_built="target/${{ matrix.target }}/release/libhegel_c.dylib"
+              static_built="target/${{ matrix.target }}/release/libhegel_c.a"
+              ;;
+            linux)
+              shared_built="target/${{ matrix.target }}/release/libhegel_c.so"
+              static_built="target/${{ matrix.target }}/release/libhegel_c.a"
+              ;;
             *) echo "unknown goos: ${{ matrix.goos }}" >&2; exit 1 ;;
           esac
-          if [ ! -f "$built" ]; then
-            echo "expected cdylib output $built missing" >&2
-            ls -la "target/${{ matrix.target }}/release/" || true
-            exit 1
-          fi
-          cp "$built" "$asset"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$asset" > "$asset.sha256"
-          else
-            # macOS doesn't ship sha256sum but ships shasum.
-            shasum -a 256 "$asset" > "$asset.sha256"
-          fi
-          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          for built in "$shared_built" "$static_built"; do
+            if [ ! -f "$built" ]; then
+              echo "expected library output $built missing" >&2
+              ls -la "target/${{ matrix.target }}/release/" || true
+              exit 1
+            fi
+          done
+          cp "$shared_built" "$shared_asset"
+          cp "$static_built" "$static_asset"
+          for asset in "$shared_asset" "$static_asset"; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$asset" > "$asset.sha256"
+            else
+              shasum -a 256 "$asset" > "$asset.sha256"
+            fi
+          done
+          echo "shared_asset=$shared_asset" >> "$GITHUB_OUTPUT"
+          echo "static_asset=$static_asset" >> "$GITHUB_OUTPUT"
 
       - name: Upload to GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ASSET: ${{ steps.stage.outputs.asset }}
+          SHARED_ASSET: ${{ steps.stage.outputs.shared_asset }}
+          STATIC_ASSET: ${{ steps.stage.outputs.static_asset }}
         run: |
           set -euo pipefail
           tag="v${VERSION}"
-          asset="$ASSET"
+          assets=(
+            "$SHARED_ASSET"
+            "$SHARED_ASSET.sha256"
+            "$STATIC_ASSET"
+            "$STATIC_ASSET.sha256"
+          )
+          if [ "${{ matrix.platform }}" = linux-amd64 ]; then
+            cp hegel-c/include/hegel.h hegel.h
+            sha256sum hegel.h > hegel.h.sha256
+            assets+=(hegel.h hegel.h.sha256)
+          fi
           # The `release` job creates the Release as a draft up front, so
           # normally `gh release view` finds it and we go straight to upload.
           # The `--draft` fallback only fires if that release is somehow
@@ -648,7 +670,7 @@ jobs:
               --notes "libhegel binaries for $tag. See CHANGELOG.md for the full changelog." \
               || true
           fi
-          gh release upload "$tag" "$asset" "$asset.sha256" --clobber
+          gh release upload "$tag" "${assets[@]}" --clobber
 
   # Independent post-condition check that every expected libhegel asset is
   # present on the Release. `release-binaries` uses `fail-fast: false` so
@@ -677,11 +699,17 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           expected=(
+            hegel.h
             libhegel-linux-amd64.so
+            libhegel-linux-amd64.a
             libhegel-linux-arm64.so
+            libhegel-linux-arm64.a
             libhegel-darwin-arm64.dylib
+            libhegel-darwin-arm64.a
             libhegel-windows-amd64.dll
+            libhegel-windows-amd64.lib
             libhegel-windows-arm64.dll
+            libhegel-windows-arm64.lib
           )
           actual=$(gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name')
           missing=()
