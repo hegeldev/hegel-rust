@@ -246,8 +246,6 @@ pub use generators::Generator;
 pub use test_case::TestCase;
 
 #[doc(hidden)]
-pub use paste;
-#[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
@@ -261,6 +259,9 @@ pub use hegel_c::__bench;
 ///
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
 /// allowing it to be used with [`default`](generators::default) via `default::<T>()`.
+///
+/// Deriving only works on type definitions you own; for a struct defined in
+/// another crate, see [`derive_generator!`](crate::derive_generator) instead.
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator

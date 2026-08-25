@@ -95,7 +95,6 @@ name = "fixture_threaded_rejects"
 path = "tests/fixtures/threaded_rejects.rs"
 
 [dependencies]
-paste = "1.0"
 tempfile = "3.0"
 crc32fast = "1.4"
 parking_lot = "0.12"

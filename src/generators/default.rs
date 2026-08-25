@@ -282,103 +282,99 @@ where
     }
 }
 
-/// Derive a generator for a struct type defined externally.
+/// Derive a generator for a struct defined in another crate.
 ///
-/// This macro creates a hidden generator struct with builder methods for each field,
-/// and implements [`DefaultGenerator`] for the type
-/// so it can be used with [`default`].
+/// [`#[derive(DefaultGenerator)]`](crate::DefaultGenerator) only works on
+/// struct definitions you own. For an external struct whose fields are
+/// public, `derive_generator!` instead generates a standalone generator
+/// struct, named by the first argument, with:
+/// - `new()` - construct the generator, using [`default`] for every field
+/// - `<field>(generator)` - builder method to customize each field's generator
+///
+/// Rust's orphan rule prevents implementing [`DefaultGenerator`] for a type
+/// from another crate, so [`default`] cannot support external types; draw
+/// from the generated generator directly instead.
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Externally defined
-/// pub struct Person {
-///     pub name: String,
-///     pub age: u32,
+/// ```no_run
+/// // Defined in another crate, so #[derive(DefaultGenerator)] can't be
+/// // added to it:
+/// pub mod production_crate {
+///     #[derive(Debug)]
+///     pub struct Person {
+///         pub name: String,
+///         pub age: u32,
+///     }
 /// }
-///
-/// // In your tests:
-/// use hegel::derive_generator;
-/// use hegel::generators::{self as gs, DefaultGenerator, Generator};
 /// use production_crate::Person;
 ///
-/// derive_generator!(Person {
+/// use hegel::derive_generator;
+/// use hegel::generators as gs;
+///
+/// derive_generator!(PersonGenerator for Person {
 ///     name: String,
 ///     age: u32,
 /// });
 ///
-/// // default now supports Person:
-/// let generator = gs::default::<Person>()
-///     .name(gs::from_regex("[A-Z][a-z]+"))
-///     .age(gs::integers::<u32>().min_value(0).max_value(120));
-///
-/// let person: Person = tc.draw(generator);
+/// #[hegel::test]
+/// fn generates_people(tc: hegel::TestCase) {
+///     let person: Person = tc.draw(
+///         PersonGenerator::new()
+///             .name(gs::from_regex("[A-Z][a-z]+"))
+///             .age(gs::integers::<u32>().min_value(0).max_value(120)),
+///     );
+/// }
 /// ```
 #[macro_export]
 macro_rules! derive_generator {
-    ($struct_name:ident { $($field_name:ident : $field_type:ty),* $(,)? }) => {
-        const _: () = {
-            $crate::paste::paste! {
-                pub struct [<$struct_name Generator>]<'a> {
-                    $(
-                        $field_name: $crate::generators::BoxedGenerator<'a, $field_type>,
-                    )*
-                }
+    ($gen_name:ident for $struct_type:path { $($field_name:ident : $field_type:ty),+ $(,)? }) => {
+        pub struct $gen_name<'a> {
+            $(
+                $field_name: $crate::generators::BoxedGenerator<'a, $field_type>,
+            )*
+        }
 
-                impl<'a> [<$struct_name Generator>]<'a> {
-                    pub fn new() -> Self
-                    where
-                        $($field_type: $crate::generators::DefaultGenerator,)*
-                        $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
-                    {
-                        use $crate::generators::{DefaultGenerator, Generator};
-                        Self {
-                            $($field_name: <$field_type as DefaultGenerator>::default_generator().boxed(),)*
-                        }
-                    }
-
-                    $(
-                        pub fn $field_name<G>(mut self, generator: G) -> Self
-                        where
-                            G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
-                        {
-                            use $crate::generators::Generator;
-                            self.$field_name = generator.boxed();
-                            self
-                        }
-                    )*
-                }
-
-                impl<'a> Default for [<$struct_name Generator>]<'a>
-                where
-                    $($field_type: $crate::generators::DefaultGenerator,)*
-                    $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
-                {
-                    fn default() -> Self {
-                        Self::new()
-                    }
-                }
-
-                impl<'a> $crate::generators::Generator<$struct_name> for [<$struct_name Generator>]<'a> {
-                    fn do_draw(&self, __tc: &$crate::TestCase) -> $struct_name {
-                        use $crate::generators::Generator;
-                        $struct_name {
-                            $($field_name: self.$field_name.do_draw(__tc),)*
-                        }
-                    }
-                }
-
-                impl $crate::generators::DefaultGenerator for $struct_name
-                where
-                    $($field_type: $crate::generators::DefaultGenerator,)*
-                    $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'static,)*
-                {
-                    type Generator = [<$struct_name Generator>]<'static>;
-                    fn default_generator() -> Self::Generator {
-                        [<$struct_name Generator>]::new()
-                    }
+        impl<'a> $gen_name<'a> {
+            pub fn new() -> Self
+            where
+                $($field_type: $crate::generators::DefaultGenerator,)*
+                $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+            {
+                Self {
+                    $($field_name: $crate::generators::Generator::boxed(
+                        <$field_type as $crate::generators::DefaultGenerator>::default_generator(),
+                    ),)*
                 }
             }
-        };
+
+            $(
+                pub fn $field_name<G>(mut self, generator: G) -> Self
+                where
+                    G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
+                {
+                    self.$field_name = $crate::generators::Generator::boxed(generator);
+                    self
+                }
+            )*
+        }
+
+        impl<'a> Default for $gen_name<'a>
+        where
+            $($field_type: $crate::generators::DefaultGenerator,)*
+            $(<$field_type as $crate::generators::DefaultGenerator>::Generator: Send + Sync + 'a,)*
+        {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl<'a> $crate::generators::Generator<$struct_type> for $gen_name<'a> {
+            fn do_draw(&self, __tc: &$crate::TestCase) -> $struct_type {
+                $struct_type {
+                    $($field_name: $crate::generators::Generator::do_draw(&self.$field_name, __tc),)*
+                }
+            }
+        }
     };
 }
