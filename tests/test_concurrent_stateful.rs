@@ -117,8 +117,15 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
         "the join points must note the round's concurrency group:\n{text}"
     );
-    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\] Rule: boom");
-    assert_matches_regex(&text, r"\[worker 0 \+\d+\.\d{3}ms\]   let draw_\d");
+    assert_matches_regex(&text, r"\[worker \d+ \+\d+\.\d{3}ms\] Rule: boom");
+    let worker = &regex::Regex::new(r"\[worker (\d+) \+\d+\.\d{3}ms\] Rule: boom")
+        .unwrap()
+        .captures(&text)
+        .unwrap()[1];
+    assert_matches_regex(
+        &text,
+        &format!(r"\[worker {worker} \+\d+\.\d{{3}}ms\]   let draw_\d"),
+    );
     assert!(
         text.contains("test_concurrent_stateful.rs"),
         "the diagnostic must carry the worker's real panic location:\n{text}"
