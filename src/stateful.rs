@@ -66,6 +66,18 @@
 //! }
 //! ```
 //!
+//! # Assumptions in rules
+//!
+//! A violated assumption inside a rule is not transactional: anything the
+//! rule did before the assumption failed has already happened and is not
+//! rolled back. Always place assumptions at the start of the rule, before
+//! mutating the state machine or the system under test. This applies
+//! equally to draws from [`filter`](crate::generators::Generator::filter)ed
+//! generators, which reject the rule like a failed assumption when they run
+//! out of retries.
+//!
+//! # Concurrent state machines
+//!
 //! Concurrent state machines are defined using the
 //! [`concurrent_state_machine`](crate::concurrent_state_machine) attribute macro. These work
 //! similarly, but the rules are run concurrently from a number of worker threads. See
