@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.1 - 2026-08-25
+
+This patch documents that a violated assumption inside a state machine rule is not transactional. Place assumptions at the start of the rule.
+
 ## 0.32.0 - 2026-08-25
 
 This release redesigns the `derive_generator!` macro for externally defined structs. Previously the macro implemented `DefaultGenerator` for the target type, which Rust's orphan rule rejects whenever that type comes from another crate, so every use the macro was designed for failed to compile. The only invocations that did compile were those in the same crate as the type definition, where `#[derive(DefaultGenerator)]` already works, so the macro was entirely redundant with the derive.
