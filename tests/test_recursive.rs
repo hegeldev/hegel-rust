@@ -1,8 +1,11 @@
 mod common;
 
-use common::utils::{assert_all_examples, check_can_generate_examples, find_any, minimal};
-use hegel::TestCase;
+use common::utils::{
+    assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
+    find_any, minimal,
+};
 use hegel::generators::{self as gs, Generator, RecursiveGenerator};
+use hegel::{Hegel, Settings, TestCase};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tree {
@@ -15,6 +18,13 @@ impl Tree {
         match self {
             Tree::Leaf(_) => 0,
             Tree::Branch(children) => 1 + children.iter().map(Tree::height).max().unwrap_or(0),
+        }
+    }
+
+    fn leaf_count(&self) -> usize {
+        match self {
+            Tree::Leaf(_) => 1,
+            Tree::Branch(children) => children.iter().map(Tree::leaf_count).sum(),
         }
     }
 }
@@ -66,9 +76,51 @@ fn test_recursive_max_depth() {
 
 #[test]
 fn test_recursive_max_leaves() {
-    assert_all_examples(bin_trees().max_leaves(4).max_depth(6), |t| {
-        t.leaf_count() <= 10
-    });
+    assert_all_examples(bin_trees().max_leaves(4), |t| t.leaf_count() <= 4);
+}
+
+#[test]
+fn test_recursive_max_leaves_with_collection_branches() {
+    assert_all_examples(trees().max_leaves(5), |t| t.leaf_count() <= 5);
+}
+
+#[test]
+fn test_recursive_zero_max_leaves_generates_leafless_values() {
+    assert_simple_property(trees().max_leaves(0), |t| t.leaf_count() == 0);
+}
+
+#[test]
+fn test_recursive_rejects_when_leaves_are_unavoidable_on_zero_budget() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                tc.draw_silent(bin_trees().max_leaves(0));
+            })
+            .settings(Settings::new().database(None).seed(Some(0)))
+            .run();
+        },
+        "FilterTooMuch",
+    );
+}
+
+#[test]
+fn test_recursive_propagates_rejection_from_the_leaf_generator() {
+    expect_panic(
+        || {
+            Hegel::new(|tc| {
+                tc.draw_silent(gs::recursive(
+                    gs::just(BinTree::Leaf).filter(|_| false),
+                    |subtrees| {
+                        hegel::tuples!(subtrees.clone(), subtrees)
+                            .map(|(left, right)| BinTree::Branch(Box::new(left), Box::new(right)))
+                    },
+                ));
+            })
+            .settings(Settings::new().database(None).seed(Some(0)))
+            .run();
+        },
+        "FilterTooMuch",
+    );
 }
 
 #[test]
@@ -109,11 +161,24 @@ fn test_recursive_minimal_binary_branch_is_two_leaves() {
     );
 }
 
+#[test]
+fn test_recursive_shrinks_a_saturated_budget_to_an_exact_tree() {
+    let t = minimal(bin_trees().max_leaves(8), |t| t.leaf_count() >= 8);
+    assert_eq!(t.leaf_count(), 8);
+    assert_eq!(t.height(), 7);
+}
+
+#[test]
+fn test_recursive_can_generate_and_shrink_large_trees() {
+    let t = minimal(trees(), |t| t.leaf_count() >= 30);
+    assert_eq!(t.leaf_count(), 30);
+}
+
 #[hegel::test]
 fn test_recursive_respects_randomized_bounds(tc: TestCase) {
     let max_depth = tc.draw(gs::integers::<usize>().max_value(5));
-    let max_leaves = tc.draw(gs::integers::<usize>().max_value(20));
+    let max_leaves = tc.draw(gs::integers::<usize>().min_value(1).max_value(20));
     let t = tc.draw(bin_trees().max_depth(max_depth).max_leaves(max_leaves));
     assert!(t.height() <= max_depth);
-    assert!(t.leaf_count() <= (max_leaves + max_depth).max(1));
+    assert!(t.leaf_count() <= max_leaves);
 }

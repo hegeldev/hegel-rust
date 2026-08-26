@@ -1,5 +1,7 @@
 use super::{Generator, TestCase, fnv1a_hash};
+use crate::control::raise_control;
 use std::marker::PhantomData;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -7,7 +9,26 @@ const RECURSIVE_LABEL: u64 = fnv1a_hash(b"hegel::generators::recursive");
 
 const DEFAULT_MAX_DEPTH: usize = 32;
 const DEFAULT_MAX_LEAVES: usize = 100;
-const BRANCH_PROBABILITY: f64 = 0.8;
+const MAX_ATTEMPTS: usize = 9;
+
+/// The branch probability for the given generation attempt: `1 / (attempt + 2)`,
+/// the critical probability for a tree whose branches have `attempt + 2`
+/// children each. A branching process at its critical probability stays
+/// finite while covering a heavy-tailed spread of sizes, so the first
+/// attempt prices branches as if the tree were binary; each retry assumes
+/// one more child per branch, so branch functions that actually produce
+/// many children quickly reach a probability at which they fit inside
+/// `max_leaves`. The probability is fixed for the whole attempt — scaling
+/// it by the budget already spent would make earlier (left) subtrees
+/// systematically branchier than later ones.
+fn branch_probability(attempt: usize) -> f64 {
+    1.0 / (attempt as f64 + 2.0)
+}
+
+/// Control payload unwound when a generation attempt draws more than
+/// `max_leaves` leaves. Caught by `RecursiveGenerator::do_draw`, which
+/// discards the attempt's spans and retries with a lower branch probability.
+struct LeafBudgetExceeded;
 
 /// The leaf generator and branch function of a [`recursive()`] generator,
 /// type-erased so that [`SubtreeGenerator`] (which appears in the branch
@@ -38,24 +59,24 @@ where
     }
 }
 
-/// The size budget for one value drawn from a [`RecursiveGenerator`]: a
-/// fresh scope is created per top-level draw and shared by every
-/// [`SubtreeGenerator`] taking part in that draw, so drawn leaves are
-/// counted across the whole value without any state outliving the draw.
+/// The state of one generation attempt: a fresh scope is created per attempt
+/// and shared by every [`SubtreeGenerator`] taking part in it, so drawn
+/// leaves are counted across the whole value without any state outliving
+/// the draw call.
 struct DrawScope {
     max_depth: usize,
     max_leaves: usize,
+    branch_probability: f64,
     leaves: AtomicUsize,
 }
 
 /// The generator a [`recursive()`] branch function receives, producing the
 /// recursive sub-values of the value under construction.
 ///
-/// Each value it generates is itself either a leaf or a further branch, with
-/// the probability of branching shrinking as the value gets deeper and
-/// larger. It is `Clone`, so a branch function needing several independent
-/// sub-value generators (e.g. for the fields of a [`tuples!`](crate::tuples))
-/// can clone it.
+/// Each value it generates is itself either a leaf or a further branch. It
+/// is `Clone`, so a branch function needing several independent sub-value
+/// generators (e.g. for the fields of a [`tuples!`](crate::tuples)) can
+/// clone it.
 pub struct SubtreeGenerator<T> {
     core: Arc<dyn SubtreeDraw<T>>,
     scope: Arc<DrawScope>,
@@ -81,16 +102,17 @@ impl<T> SubtreeGenerator<T> {
         }
     }
 
+    /// At the depth limit the decision is still drawn, with probability
+    /// zero: the engine records it as a forced choice, so the choice
+    /// sequence has the same shape whether or not the limit was hit and the
+    /// shrinker can move subtrees across the boundary without misaligning
+    /// every draw that follows.
     fn draw_should_branch(&self, tc: &TestCase) -> bool {
-        if self.depth >= self.scope.max_depth {
-            return false;
-        }
-        let leaves = self.scope.leaves.load(Ordering::Relaxed);
-        if leaves >= self.scope.max_leaves {
-            return false;
-        }
-        let remaining = (self.scope.max_leaves - leaves) as f64 / self.scope.max_leaves as f64;
-        let p = BRANCH_PROBABILITY.powf(self.depth as f64 + 1.0) * remaining;
+        let p = if self.depth >= self.scope.max_depth {
+            0.0
+        } else {
+            self.scope.branch_probability
+        };
         tc.generate_boolean(p)
     }
 }
@@ -101,7 +123,9 @@ impl<T> Generator<T> for SubtreeGenerator<T> {
         let result = if self.draw_should_branch(tc) {
             self.core.draw_branch(tc, self.child())
         } else {
-            self.scope.leaves.fetch_add(1, Ordering::Relaxed);
+            if self.scope.leaves.fetch_add(1, Ordering::Relaxed) >= self.scope.max_leaves {
+                raise_control(LeafBudgetExceeded);
+            }
             self.core.draw_leaf(tc)
         };
         tc.stop_span(false);
@@ -126,14 +150,13 @@ impl<T> RecursiveGenerator<T> {
         self
     }
 
-    /// Set a soft limit on the number of leaf values in one generated value
+    /// Set the maximum number of leaf values in one generated value
     /// (default 100).
     ///
-    /// Once this many leaves have been generated, no further branches are
-    /// introduced. Sub-values already begun still complete — each becoming a
-    /// single leaf — so for a branch producing at most `c` sub-values the
-    /// total number of leaves can exceed the limit by up to
-    /// `max_depth * (c - 1)`.
+    /// A generation attempt that draws more than `max_leaves` leaves is
+    /// discarded and retried with a lower branching probability; if several
+    /// retries in a row fail to fit, the test case is rejected as if by
+    /// [`assume`](crate::TestCase::assume).
     pub fn max_leaves(mut self, max_leaves: usize) -> Self {
         self.max_leaves = max_leaves;
         self
@@ -142,16 +165,29 @@ impl<T> RecursiveGenerator<T> {
 
 impl<T> Generator<T> for RecursiveGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        let root = SubtreeGenerator {
-            core: Arc::clone(&self.core),
-            scope: Arc::new(DrawScope {
-                max_depth: self.max_depth,
-                max_leaves: self.max_leaves,
-                leaves: AtomicUsize::new(0),
-            }),
-            depth: 0,
-        };
-        root.do_draw(tc)
+        let base_span_depth = tc.open_span_depth();
+        for attempt in 0..MAX_ATTEMPTS {
+            let root = SubtreeGenerator {
+                core: Arc::clone(&self.core),
+                scope: Arc::new(DrawScope {
+                    max_depth: self.max_depth,
+                    max_leaves: self.max_leaves,
+                    branch_probability: branch_probability(attempt),
+                    leaves: AtomicUsize::new(0),
+                }),
+                depth: 0,
+            };
+            match catch_unwind(AssertUnwindSafe(|| root.do_draw(tc))) {
+                Ok(value) => return value,
+                Err(payload) if payload.downcast_ref::<LeafBudgetExceeded>().is_some() => {
+                    while tc.open_span_depth() > base_span_depth {
+                        tc.stop_span(true);
+                    }
+                }
+                Err(payload) => resume_unwind(payload),
+            }
+        }
+        tc.reject()
     }
 }
 
@@ -165,11 +201,11 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
 /// called afresh for each branch node generated.
 ///
 /// Generated values are leaves or branches of leaves, branches of those, and
-/// so on, with the probability of further branching falling off as a value
-/// gets deeper and larger. Use
-/// [`max_depth`](RecursiveGenerator::max_depth) and
-/// [`max_leaves`](RecursiveGenerator::max_leaves) to bound how large values
-/// can grow.
+/// so on. Sizes vary from a single leaf up to the limits set by
+/// [`max_depth`](RecursiveGenerator::max_depth) (a hard depth cap) and
+/// [`max_leaves`](RecursiveGenerator::max_leaves) (attempts that draw more
+/// leaves than this are discarded and retried with a lower branching
+/// probability).
 ///
 /// # Example
 ///

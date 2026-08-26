@@ -9,4 +9,4 @@ let json = gs::recursive(
 );
 ```
 
-Generated values start from single leaves and branch with decreasing probability as they grow deeper and larger; the `max_depth` and `max_leaves` builder methods bound how large they can get.
+Generated sizes cover everything the caps allow, from a single leaf up to the limits set by the `max_depth` and `max_leaves` builder methods; a generation attempt that outgrows `max_leaves` is discarded and retried with a lower branching probability.

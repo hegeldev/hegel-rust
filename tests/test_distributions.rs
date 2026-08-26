@@ -593,6 +593,75 @@ mod collections {
     }
 }
 
+mod recursive {
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    enum Tree {
+        Leaf(#[allow(dead_code)] i32),
+        Branch(Box<Tree>, Box<Tree>),
+    }
+
+    impl Tree {
+        fn leaf_count(&self) -> usize {
+            match self {
+                Tree::Leaf(_) => 1,
+                Tree::Branch(left, right) => left.leaf_count() + right.leaf_count(),
+            }
+        }
+    }
+
+    fn trees() -> gs::RecursiveGenerator<Tree> {
+        gs::recursive(gs::integers::<i32>().map(Tree::Leaf), |subtrees| {
+            hegel::tuples!(subtrees.clone(), subtrees)
+                .map(|(left, right)| Tree::Branch(Box::new(left), Box::new(right)))
+        })
+    }
+
+    /// Sizes must cover the whole range the default caps allow: bare leaves,
+    /// mid-size trees, and trees close to the 100-leaf cap.
+    #[test]
+    fn recursive_trees_have_diverse_sizes() {
+        let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees()));
+        assert_min_rate(&vs, |t| t.leaf_count() == 1, 0.1, "single leaf");
+        assert_min_rate(&vs, |t| t.leaf_count() >= 25, 0.07, "25+ leaves");
+        assert_min_rate(&vs, |t| t.leaf_count() >= 90, 0.005, "near the leaf cap");
+    }
+
+    /// The branch probability is fixed for a whole generation attempt rather
+    /// than decaying as the leaf budget is consumed, so subtrees drawn first
+    /// (on the left) must not be systematically bigger or branchier than
+    /// their later siblings.
+    #[test]
+    fn recursive_trees_are_not_left_biased() {
+        let vs = sample(4000, 0xE2, |tc| tc.draw_silent(trees().max_leaves(8)));
+        let mut roots = 0usize;
+        let mut left_leaves = 0usize;
+        let mut right_leaves = 0usize;
+        let mut left_branches = 0usize;
+        let mut right_branches = 0usize;
+        for t in &vs {
+            if let Tree::Branch(left, right) = t {
+                roots += 1;
+                left_leaves += left.leaf_count();
+                right_leaves += right.leaf_count();
+                left_branches += usize::from(matches!(**left, Tree::Branch(_, _)));
+                right_branches += usize::from(matches!(**right, Tree::Branch(_, _)));
+            }
+        }
+        let branch_rate_gap = (left_branches as f64 - right_branches as f64).abs() / roots as f64;
+        assert!(
+            branch_rate_gap < 0.08,
+            "left children branched at a rate {branch_rate_gap:.4} apart from right children"
+        );
+        let leaf_ratio = left_leaves as f64 / right_leaves as f64;
+        assert!(
+            (0.85..1.18).contains(&leaf_ratio),
+            "left/right leaf ratio {leaf_ratio:.4}; expected close to 1"
+        );
+    }
+}
+
 mod strings {
     use super::*;
 

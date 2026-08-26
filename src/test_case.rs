@@ -751,6 +751,14 @@ impl TestCase {
         f(&self.handle)
     }
 
+    /// The number of currently-open spans on this instance. Lets a generator
+    /// that catches an unwind mid-draw (e.g. `recursive()` abandoning an
+    /// oversized attempt) discard exactly the spans the unwound draw left
+    /// open.
+    pub(crate) fn open_span_depth(&self) -> usize {
+        self.local.borrow().span_depth
+    }
+
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
