@@ -74,9 +74,11 @@ struct DrawScope {
 /// recursive sub-values of the value under construction.
 ///
 /// Each value it generates is itself either a leaf or a further branch. It
-/// is `Clone`, so a branch function needing several independent sub-value
-/// generators (e.g. for the fields of a [`tuples!`](crate::tuples)) can
-/// clone it.
+/// is `Clone`, so a branch function needing several sub-value generators
+/// (e.g. for the fields of a [`tuples!`](crate::tuples)) can clone it.
+/// Cloning is needed rather than borrowing (`tuples!(&subtrees, &subtrees)`)
+/// because the generator the branch function returns would otherwise borrow
+/// the function's own parameter.
 pub struct SubtreeGenerator<T> {
     core: Arc<dyn SubtreeDraw<T>>,
     scope: Arc<DrawScope>,
