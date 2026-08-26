@@ -161,6 +161,57 @@ fn test_recursive_minimal_binary_branch_is_two_leaves() {
     );
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum IntTree {
+    Leaf(i32),
+    Branch(Box<IntTree>, Box<IntTree>),
+}
+
+impl IntTree {
+    fn has_leaf_pair(&self, pair: impl Fn(i32, i32) -> bool + Copy) -> bool {
+        match self {
+            IntTree::Leaf(_) => false,
+            IntTree::Branch(left, right) => {
+                if let (IntTree::Leaf(a), IntTree::Leaf(b)) = (&**left, &**right) {
+                    if pair(*a, *b) {
+                        return true;
+                    }
+                }
+                left.has_leaf_pair(pair) || right.has_leaf_pair(pair)
+            }
+        }
+    }
+}
+
+fn int_trees() -> RecursiveGenerator<IntTree> {
+    gs::recursive(gs::integers::<i32>().map(IntTree::Leaf), |subtrees| {
+        hegel::tuples!(subtrees.clone(), subtrees)
+            .map(|(left, right)| IntTree::Branch(Box::new(left), Box::new(right)))
+    })
+}
+
+#[test]
+fn test_recursive_hoists_a_deep_witness_to_the_root() {
+    let t = minimal(int_trees().max_depth(3), |t| {
+        t.has_leaf_pair(|a, b| a & 1 == 1 && b & 1 == 1)
+    });
+    assert_eq!(
+        t,
+        IntTree::Branch(Box::new(IntTree::Leaf(1)), Box::new(IntTree::Leaf(1)))
+    );
+}
+
+#[test]
+fn test_recursive_hoists_a_rare_deep_witness_to_the_root() {
+    let t = minimal(int_trees().max_depth(4), |t| {
+        t.has_leaf_pair(|a, b| a % 8 == 7 && b % 8 == 7)
+    });
+    assert_eq!(
+        t,
+        IntTree::Branch(Box::new(IntTree::Leaf(7)), Box::new(IntTree::Leaf(7)))
+    );
+}
+
 #[test]
 fn test_recursive_shrinks_a_saturated_budget_to_an_exact_tree() {
     let t = minimal(bin_trees().max_leaves(8), |t| t.leaf_count() >= 8);
