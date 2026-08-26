@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.32.2 - 2026-08-26
+
+This patch improves the distribution of `generators::integers` for large and full-width ranges, by way of an engine update. Each test case now draws its own mix of value categories (a form of swarm testing), so the values that property tests rely on to surface off-by-one, overflow, and sign bugs — the range endpoints and their neighbours, zero, ±1, and small magnitudes — appear several times more often than before (boundary values on about 2% of full-width draws, up from about 0.3%) and cluster within test cases, so several operands go extreme at once: a full-width `x + y` now overflows about 1.5% of the time. The middle of the range stays well covered. See the `hegeltest-c` changelog for measurements and details.
+
+This patch also fixes the distribution of `generators::floats::<f32>()`, which previously generated infinities on about a third of unbounded draws and produced large finite values essentially never. Unbounded `f32` draws now match the `f64` shape: infinities are rare (about 2%) and large finite magnitudes are common. The underlying clamp fix also affects `f64` generators configured with `allow_nan(false)` or `allow_subnormal(false)`, which previously produced `-inf` on a small fraction of unbounded draws.
+
 ## 0.32.1 - 2026-08-25
 
 This patch documents that a violated assumption inside a state machine rule is not transactional. Place assumptions at the start of the rule.
