@@ -6,7 +6,7 @@ use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
 
 fn fresh_ntc(seed: u64) -> NativeTestCase {
-    NativeTestCase::new_random(EngineRng::seeded(seed))
+    NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap()
 }
 
 fn date(year: i32, month: u8, day: u8) -> Date {

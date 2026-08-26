@@ -92,7 +92,10 @@ impl<'a> Shrinker<'a> {
 
     /// Try replacing the value at `idx`. If the result is interesting, done.
     /// If the result is valid but used fewer nodes than `expected_len`, try
-    /// deleting regions after `idx` to recover an interesting result.
+    /// deleting a region after `idx` to recover an interesting result. Only
+    /// regions of exactly the realised deficit are tried — the aligned
+    /// candidates — keeping each probe linear in the sequence length so a
+    /// large binding can't exhaust the stall window on a single probe.
     pub(super) async fn try_replace_with_deletion(
         &mut self,
         idx: usize,
@@ -117,18 +120,16 @@ impl<'a> Shrinker<'a> {
             return Ok(false);
         }
 
-        let k = expected_len - actual_nodes.len();
-        for size in (1..=k).rev() {
-            let start = attempt.len().saturating_sub(size);
-            if start <= idx {
-                continue;
-            }
-            for j in (idx + 1..=start).rev() {
-                let mut candidate = attempt[..j].to_vec();
-                candidate.extend_from_slice(&attempt[j + size..]);
-                if self.consider(&candidate).await? {
-                    return Ok(true);
-                }
+        let deficit = expected_len - actual_nodes.len();
+        let start = attempt.len().saturating_sub(deficit);
+        if start <= idx {
+            return Ok(false);
+        }
+        for j in (idx + 1..=start).rev() {
+            let mut candidate = attempt[..j].to_vec();
+            candidate.extend_from_slice(&attempt[j + deficit..]);
+            if self.consider(&candidate).await? {
+                return Ok(true);
             }
         }
         Ok(false)

@@ -148,7 +148,7 @@ fn sequential_machine_hands_out_exactly_one_rule_per_round() {
 
 #[test]
 fn unbounded_families_never_halt() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(&mut ntc, 2);
     for _ in 0..100 {
@@ -160,7 +160,7 @@ fn unbounded_families_never_halt() {
 
 #[test]
 fn p_disabled_is_drawn_at_creation_only() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let mut sm = machine(&mut ntc, 3);
     assert_eq!(count_draws_with_max(&ntc, 254), 1);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
@@ -295,7 +295,7 @@ fn group_ids_are_arbitrary_and_deduplicated_by_first_appearance() {
 #[test]
 fn selection_stays_in_the_current_group() {
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         ntc.family().set_state_machine_steps_unbounded();
         let mut sm = grouped_machine(&mut ntc, &[0, 1, 0, 1, 1]);
         for _ in 0..30 {
@@ -572,7 +572,7 @@ fn concurrency_draw_falls_back_to_a_uniform_level() {
 #[test]
 fn drawn_concurrency_respects_bounds() {
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let sm = NativeStateMachine::new(&mut ntc, vec![0], 2, 5).unwrap();
         assert!((2..=5).contains(&sm.concurrency()));
     }
@@ -589,7 +589,7 @@ fn overrun_while_drawing_the_concurrency_level_propagates() {
 
 #[test]
 fn next_rule_before_next_group_is_an_invalid_argument() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let mut sm = machine(&mut ntc, 2);
     assert!(matches!(
         sm.next_rule(&mut ntc, 0),
@@ -599,7 +599,7 @@ fn next_rule_before_next_group_is_an_invalid_argument() {
 
 #[test]
 fn out_of_range_worker_index_is_an_invalid_argument() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let mut sm = machine_concurrent(&mut ntc, 2, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
@@ -722,7 +722,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
 #[test]
 fn all_selected_rules_are_in_range() {
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         ntc.family().set_state_machine_steps_unbounded();
         let mut sm = machine(&mut ntc, 5);
         for _ in 0..30 {
@@ -746,20 +746,20 @@ fn simplest_template_always_selects_rule_zero() {
 #[test]
 #[should_panic(expected = "Stateful testing: there must be at least one rule")]
 fn no_rules_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     try_machine(&mut ntc, 0).unwrap();
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn zero_min_concurrency_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     NativeStateMachine::new(&mut ntc, vec![0], 0, 1).unwrap();
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn inverted_concurrency_bounds_is_error() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     NativeStateMachine::new(&mut ntc, vec![0], 2, 1).unwrap();
 }

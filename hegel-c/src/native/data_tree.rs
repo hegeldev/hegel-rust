@@ -23,8 +23,8 @@ use rand::seq::SliceRandom;
 use crate::control::{InternalError, hegel_internal_debug_assert, hegel_internal_unwrap};
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    ChoiceData, ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Span, SpanEvent,
-    Status,
+    ChoiceData, ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, GenerationParameters,
+    RealizedStream, Span, SpanEvent, Status,
 };
 use crate::native::rng::EngineRng;
 
@@ -433,9 +433,10 @@ fn pick_non_exhausted_value(
     kind: &ChoiceKind,
     children: &HashMap<ChoiceValueKey, Box<DataTreeNode>>,
     rng: &mut EngineRng,
+    params: GenerationParameters,
 ) -> Result<Option<ChoiceValue>, InternalError> {
     for _ in 0..10 {
-        let Some(value) = kind.random_value(rng)? else {
+        let Some(value) = kind.random_value(rng, params)? else {
             return Ok(None);
         };
         let key = ChoiceValueKey::from(&value);
@@ -477,6 +478,7 @@ fn pick_non_exhausted_value(
 pub(crate) fn generate_novel_prefix(
     tree_root: &DataTreeNode,
     rng: &mut EngineRng,
+    params: GenerationParameters,
 ) -> Result<Vec<ChoiceValue>, InternalError> {
     if tree_root.is_exhausted {
         return Ok(Vec::new());
@@ -511,7 +513,7 @@ pub(crate) fn generate_novel_prefix(
                 .collect();
             if let Some(subtree) = inside {
                 if continuations.is_empty() || rng.random::<f64>() < 0.5 {
-                    let sub_prefix = generate_novel_prefix(subtree, rng)?;
+                    let sub_prefix = generate_novel_prefix(subtree, rng, params)?;
                     prefix.push(ChoiceValue::Clone(Arc::new(CloneRecord::from_values(
                         sub_prefix,
                     ))));
@@ -526,7 +528,7 @@ pub(crate) fn generate_novel_prefix(
             current = child;
             continue;
         }
-        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng)? else {
+        let Some(value) = pick_non_exhausted_value(kind, &current.children, rng, params)? else {
             break;
         };
         let key = ChoiceValueKey::from(&value);

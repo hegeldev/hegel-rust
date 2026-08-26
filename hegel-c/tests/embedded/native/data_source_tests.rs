@@ -7,7 +7,7 @@ use crate::native::rng::EngineRng;
 use alloc::vec;
 
 fn random_source() -> (NativeDataSource, NativeTestCaseHandle) {
-    let ntc = NativeTestCase::new_random(EngineRng::seeded(7));
+    let ntc = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
     NativeDataSource::new(ntc)
 }
 

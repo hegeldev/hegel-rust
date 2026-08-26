@@ -7,7 +7,9 @@ pub mod text;
 
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
-use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
+use crate::native::core::{
+    EngineError, FloatChoice, ManyState, NativeTestCase, Status, float_clamp,
+};
 use crate::native::intervalsets::IntervalSet;
 use alloc::boxed::Box;
 use alloc::format;
@@ -136,10 +138,30 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
         )
     })?;
     Ok(if spec.width == 32 && v.is_finite() {
-        f64::from(v as f32)
+        narrow_to_f32(min_value, max_value, snm, v)
     } else {
         v
     })
+}
+
+/// Round a finite width-32 draw through `f32`. A finite `f64` magnitude
+/// beyond `f32::MAX` would round to infinity, so it is instead remapped
+/// into the finite `f32` range (via the same mantissa-fraction clamp used
+/// for out-of-range draws), keeping large *finite* `f32` values in the
+/// distribution.
+fn narrow_to_f32(min_value: f64, max_value: f64, snm: f64, v: f64) -> f64 {
+    let narrowed = f64::from(v as f32);
+    if narrowed.is_finite() {
+        return narrowed;
+    }
+    let fc = FloatChoice {
+        min_value: min_value.max(f64::from(f32::MIN)),
+        max_value: max_value.min(f64::from(f32::MAX)),
+        allow_nan: false,
+        allow_infinity: false,
+        smallest_nonzero_magnitude: snm,
+    };
+    f64::from(float_clamp(&fc, v) as f32)
 }
 
 /// Draw an integer in `[min_value, max_value]`, validating the bounds.
