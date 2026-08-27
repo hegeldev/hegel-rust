@@ -235,13 +235,13 @@ fn test_apply_cli_args_help() {
 #[test]
 fn test_single_test_case_flag() {
     let parsed = apply(&["--single-test-case"]);
-    assert_eq!(parsed.mode, Mode::SingleTestCase);
+    assert_eq!(parsed.mode, Some(Mode::SingleTestCase));
 }
 
 #[test]
-fn test_single_test_case_default_is_test_run() {
+fn test_single_test_case_default_is_unset() {
     let parsed = apply(&[]);
-    assert_eq!(parsed.mode, Mode::TestRun);
+    assert_eq!(parsed.mode, None);
 }
 
 #[test]

@@ -66,7 +66,8 @@ pub enum Phase {
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Run a full test (multiple test cases with shrinking). This is the default.
+    /// Run a full test (multiple test cases with shrinking). This is the
+    /// default outside Antithesis.
     TestRun,
     /// Run a single test case with no shrinking or replay. Useful for
     /// Antithesis workloads and other contexts where you want pure data
@@ -122,7 +123,11 @@ pub enum Verbosity {
 /// and tests are derandomized by default.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub(crate) mode: Mode,
+    /// The execution mode, or `None` to let it be chosen automatically
+    /// ([`Mode::SingleTestCase`] under Antithesis, [`Mode::TestRun`]
+    /// otherwise). An explicit [`Settings::mode`] always wins over the
+    /// automatic choice.
+    pub(crate) mode: Option<Mode>,
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
@@ -147,7 +152,7 @@ impl Settings {
 
     fn for_ci(in_ci: bool) -> Self {
         Self {
-            mode: Mode::TestRun,
+            mode: None,
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
@@ -172,10 +177,27 @@ impl Settings {
         }
     }
 
-    /// Set the execution mode. Defaults to [`Mode::TestRun`].
+    /// Set the execution mode.
+    ///
+    /// By default the mode is chosen automatically: [`Mode::SingleTestCase`]
+    /// when running inside Antithesis, and [`Mode::TestRun`] otherwise.
+    /// Calling this pins the choice, overriding the automatic detection.
     pub fn mode(mut self, mode: Mode) -> Self {
-        self.mode = mode;
+        self.mode = Some(mode);
         self
+    }
+
+    /// Resolve the effective mode, given whether the process is running
+    /// inside Antithesis.
+    ///
+    /// An explicit [`Settings::mode`] always wins; otherwise a single test
+    /// case is run under Antithesis and a full test run elsewhere.
+    pub(crate) fn resolved_mode(&self, in_antithesis: bool) -> Mode {
+        match self.mode {
+            Some(mode) => mode,
+            None if in_antithesis => Mode::SingleTestCase,
+            None => Mode::TestRun,
+        }
     }
 
     /// Select the randomness backend.

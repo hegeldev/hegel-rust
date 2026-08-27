@@ -551,7 +551,7 @@ pub(crate) fn drive<F>(
 {
     init_panic_hook();
     let mut test_fn = test_fn;
-    let mode = settings.mode;
+    let mode = settings.resolved_mode(crate::antithesis::is_running_in_antithesis());
     let verbosity = settings.verbosity;
     let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
@@ -741,7 +741,7 @@ pub(crate) fn drive_blob_replay<F>(
         c_tc,
         &mut test_fn,
         true,
-        settings.mode,
+        settings.resolved_mode(crate::antithesis::is_running_in_antithesis()),
         settings.verbosity,
         &output,
         None,

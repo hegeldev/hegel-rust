@@ -140,7 +140,7 @@ impl SettingsHandle {
                 require_ok(hegel_c::hegel_settings_set_mode(
                     ctx,
                     raw,
-                    map_mode(settings.mode),
+                    map_mode(settings.resolved_mode(crate::antithesis::is_running_in_antithesis())),
                 ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
                     ctx,

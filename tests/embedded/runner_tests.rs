@@ -51,6 +51,29 @@ fn test_settings_backend_setter() {
 }
 
 #[test]
+fn test_settings_mode_default_unset() {
+    let s = Settings::new();
+    assert_eq!(s.mode, None);
+}
+
+#[test]
+fn test_settings_resolved_mode_explicit_wins() {
+    let s = Settings::new().mode(Mode::TestRun);
+    assert_eq!(s.resolved_mode(true), Mode::TestRun);
+    assert_eq!(s.resolved_mode(false), Mode::TestRun);
+    let s = s.mode(Mode::SingleTestCase);
+    assert_eq!(s.resolved_mode(true), Mode::SingleTestCase);
+    assert_eq!(s.resolved_mode(false), Mode::SingleTestCase);
+}
+
+#[test]
+fn test_settings_resolved_mode_single_test_case_under_antithesis() {
+    let s = Settings::new();
+    assert_eq!(s.resolved_mode(true), Mode::SingleTestCase);
+    assert_eq!(s.resolved_mode(false), Mode::TestRun);
+}
+
+#[test]
 fn test_settings_has_phase() {
     let s = Settings::new().phases([Phase::Generate, Phase::Shrink]);
     assert!(s.has_phase(Phase::Generate));
