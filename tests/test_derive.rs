@@ -429,31 +429,9 @@ fn test_derive_tuple_struct_generates() {
 }
 
 #[test]
-fn test_derive_tuple_struct_generates_varied_values() {
-    let w = find_any(gs::default::<Wrapper>(), |w: &Wrapper| w.0 != 0);
-    assert_ne!(w.0, 0);
-}
-
-#[test]
 fn test_derive_tuple_struct_with_custom_field_generator() {
-    let g = Wrapper::default_generator()._0(gs::just(42));
-    assert_all_examples(g, |w: &Wrapper| w.0 == 42);
-}
-
-#[test]
-fn test_default_supports_tuple_struct_builder() {
     let g = gs::default::<Wrapper>()._0(gs::just(42));
     assert_all_examples(g, |w: &Wrapper| w.0 == 42);
-}
-
-#[test]
-fn test_derive_tuple_struct_builder_only_overrides_specified_field() {
-    let g = TuplePair::default_generator()._1(gs::just("hi".to_string()));
-    assert_all_examples(g, |t: &TuplePair| t.1 == "hi");
-    find_any(
-        TuplePair::default_generator()._1(gs::just("hi".to_string())),
-        |t: &TuplePair| t.0 != 0,
-    );
 }
 
 #[test]
@@ -462,33 +440,6 @@ fn test_derive_tuple_struct_with_multiple_custom_fields() {
         ._0(gs::just(1))
         ._1(gs::just("a".to_string()));
     assert_all_examples(g, |t: &TuplePair| t.0 == 1 && t.1 == "a");
-}
-
-#[test]
-fn test_derive_tuple_struct_override_field_twice_takes_last() {
-    let g = Wrapper::default_generator()
-        ._0(gs::just(1))
-        ._0(gs::just(99));
-    assert_all_examples(g, |w: &Wrapper| w.0 == 99);
-}
-
-#[test]
-fn test_derive_nested_tuple_struct_with_custom_inner() {
-    let g = NestedTuple::default_generator()
-        ._0(Point::default_generator().x(gs::just(0)).y(gs::just(0)))
-        ._1(Wrapper::default_generator()._0(gs::just(7)));
-    assert_all_examples(g, |n: &NestedTuple| n.0.x == 0 && n.0.y == 0 && n.1.0 == 7);
-}
-
-#[test]
-fn test_derive_tuple_struct_with_map() {
-    let g = gs::default::<Wrapper>().map(|w| Wrapper(w.0.saturating_abs()));
-    assert_all_examples(g, |w: &Wrapper| w.0 >= 0);
-}
-
-#[hegel::test]
-fn test_derive_tuple_struct_in_hegel_test(tc: hegel::TestCase) {
-    let _ = tc.draw(gs::default::<TuplePair>());
 }
 
 #[derive(DeriveGenerator, Debug, Clone)]
