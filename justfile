@@ -7,12 +7,6 @@ check-tests:
 check-tests-all-features:
     RUST_BACKTRACE=1 cargo test --all-features
 
-# Same as `check-tests-all-features` but drops `antithesis`, which
-# emits a `compile_error!` on Windows because the upstream SDK is
-# Linux-only.
-check-tests-all-features-windows:
-    RUST_BACKTRACE=1 cargo test --features rand,chrono,jiff,serde_json,serde_json_raw_value
-
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.

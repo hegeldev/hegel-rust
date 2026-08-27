@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The engine now suppresses every health check when running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`, the same signal that selects the urandom backend). Health checks are heuristics tuned for ordinary environments; under Antithesis, thread pausing and CPU throttling stretch wall-clock time so `TooSlow` fires on healthy tests, and the platform's steering of `/dev/urandom` similarly skews the statistics the other checks rely on. Explicit `suppress_health_check` settings continue to apply outside Antithesis.
+
 ## 0.33.1 - 2026-08-26
 
 This patch improves the value distribution of bounded integer generation for large and full-width ranges, so that property tests surface off-by-one, overflow, and sign bugs far more readily.

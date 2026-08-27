@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The Antithesis integration is now always compiled in; the `antithesis` feature flag is gone. Hegel detects Antithesis at runtime (via `ANTITHESIS_OUTPUT_DIR`) and automatically does the right thing: the urandom backend is selected, per-test assertions are emitted, and — new in this release — every health check is suppressed. Health checks are heuristics tuned for ordinary environments; under Antithesis, thread pausing and CPU throttling distort wall-clock time so checks like `TooSlow` misfire on healthy tests. Explicit `suppress_health_check` settings still apply outside Antithesis. Enabling the former `antithesis` feature is now a no-op error: remove `features = ["antithesis"]` from your `Cargo.toml`. As part of this change `serde_json` became a non-optional dependency.
+
 ## 0.32.3 - 2026-08-27
 
 This patch adds support for `#[derive(DefaultGenerator)]` on tuple structs ([#183](https://github.com/hegeldev/hegel-rust/issues/183)). The generated builder methods are positional, matching the `._0(...)` field builders already used by enum tuple variants:

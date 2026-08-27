@@ -303,8 +303,7 @@ impl<'a> Engine<'a> {
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
                 settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::LargeInitialTestCase),
+                    .health_check_suppressed(HealthCheck::LargeInitialTestCase, self.in_antithesis),
             ) {
                 return Err(RunError::HealthCheck(msg));
             }
@@ -382,8 +381,7 @@ impl<'a> Engine<'a> {
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
                         && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
+                            .health_check_suppressed(HealthCheck::FilterTooMuch, self.in_antithesis)
                     {
                         return Err(RunError::HealthCheck(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
@@ -398,9 +396,10 @@ impl<'a> Engine<'a> {
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
                         self.overrun_test_cases,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TestCasesTooLarge),
+                        settings.health_check_suppressed(
+                            HealthCheck::TestCasesTooLarge,
+                            self.in_antithesis,
+                        ),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -409,9 +408,7 @@ impl<'a> Engine<'a> {
                         self.valid_test_cases,
                         self.total_test_time,
                         too_slow_threshold,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TooSlow),
+                        settings.health_check_suppressed(HealthCheck::TooSlow, self.in_antithesis),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -445,9 +442,7 @@ impl<'a> Engine<'a> {
             && self.valid_test_cases == 0
             && self.interesting.is_empty()
             && !self.test_is_trivial
-            && !settings
-                .suppress_health_check
-                .contains(&HealthCheck::FilterTooMuch)
+            && !settings.health_check_suppressed(HealthCheck::FilterTooMuch, self.in_antithesis)
             && self.invalid_test_cases > 0
         {
             return Err(RunError::HealthCheck(format!(
@@ -977,6 +972,10 @@ pub(crate) struct Engine<'a> {
     /// persistence and reuse, and reproduce-blob emission — failures are
     /// reported faithfully from the execution that discovered them.
     pub(crate) nondeterministic: bool,
+    /// Whether the process is running inside Antithesis, resolved once at
+    /// engine construction; used to suppress every health check there (see
+    /// [`Settings::health_check_suppressed`]).
+    in_antithesis: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -995,6 +994,7 @@ impl<'a> Engine<'a> {
             database_key,
             exchange,
             rng: create_rng(settings, database_key)?,
+            in_antithesis: crate::antithesis_detect::is_running_in_antithesis()?,
             persister: Persister::new(db, database_key),
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::default(),

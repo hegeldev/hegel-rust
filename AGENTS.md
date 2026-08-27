@@ -51,8 +51,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 ### Feature Flags (root crate)
 
-- **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules
-- **`antithesis`**: Antithesis SDK integration (Linux-only; `compile_error!` on Windows)
+- **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules. The Antithesis integration (`src/antithesis.rs`) is not feature-gated: it is always compiled in and activates automatically when `ANTITHESIS_OUTPUT_DIR` is set.
 - **`__bench`**: internal, re-exports engine internals for `benches/`; not part of the public API
 
 ## Architecture

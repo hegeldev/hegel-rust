@@ -227,6 +227,18 @@ impl Settings {
         }
     }
 
+    /// Whether a health check is suppressed, given whether the process is
+    /// running inside Antithesis.
+    ///
+    /// Under Antithesis every health check is suppressed automatically:
+    /// the platform deliberately distorts timing (thread pausing, CPU
+    /// throttling) and steers generation through `/dev/urandom`, so the
+    /// heuristics behind the checks misfire on healthy tests. Outside
+    /// Antithesis only the explicitly configured suppressions apply.
+    pub(crate) fn health_check_suppressed(&self, check: HealthCheck, in_antithesis: bool) -> bool {
+        in_antithesis || self.suppress_health_check.contains(&check)
+    }
+
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;

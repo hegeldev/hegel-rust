@@ -23,6 +23,24 @@ fn resolved_backend_picks_urandom_under_antithesis() {
 }
 
 #[test]
+fn health_checks_are_all_suppressed_under_antithesis() {
+    let s = Settings::new();
+    for check in [
+        HealthCheck::FilterTooMuch,
+        HealthCheck::TooSlow,
+        HealthCheck::TestCasesTooLarge,
+        HealthCheck::LargeInitialTestCase,
+    ] {
+        assert!(s.health_check_suppressed(check, true));
+        assert!(!s.health_check_suppressed(check, false));
+    }
+    let s = s.suppress_health_check([HealthCheck::TooSlow]);
+    assert!(s.health_check_suppressed(HealthCheck::TooSlow, false));
+    assert!(!s.health_check_suppressed(HealthCheck::FilterTooMuch, false));
+    assert!(s.health_check_suppressed(HealthCheck::FilterTooMuch, true));
+}
+
+#[test]
 fn suppress_health_check_replaces() {
     let s = Settings::new()
         .suppress_health_check([HealthCheck::TooSlow])
