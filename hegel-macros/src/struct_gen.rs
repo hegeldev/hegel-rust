@@ -9,38 +9,47 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
     let name = &input.ident;
     let generator_name = format_ident!("{}Generator", name);
 
-    let fields = match &data.fields {
-        Fields::Named(fields) => &fields.named,
-        Fields::Unnamed(_) => {
-            return syn::Error::new_spanned(
-                input,
-                "Generator can only be derived for structs with named fields",
-            )
-            .to_compile_error()
-            .into();
-        }
-        Fields::Unit => {
-            return syn::Error::new_spanned(input, "Generator cannot be derived for unit structs")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
-    for field_name in &field_names {
-        if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
-            return syn::Error::new_spanned(
-                field_name,
-                format!(
-                    "field name `{field_name}` collides with the generated builder API of \
-                     #[derive(DefaultGenerator)]; rename the field or implement \
-                     DefaultGenerator by hand"
-                ),
-            )
-            .to_compile_error()
-            .into();
-        }
+    if data.fields.is_empty() {
+        return syn::Error::new_spanned(
+            name,
+            "DefaultGenerator cannot be derived for structs with no fields: \
+             there is nothing to configure; use gs::just(...) instead",
+        )
+        .to_compile_error()
+        .into();
     }
+
+    let (field_names, is_tuple): (Vec<syn::Ident>, bool) = match &data.fields {
+        Fields::Named(fields) => {
+            let names: Vec<_> = fields
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().unwrap().clone())
+                .collect();
+            for field_name in &names {
+                if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
+                    return syn::Error::new_spanned(
+                        field_name,
+                        format!(
+                            "field name `{field_name}` collides with the generated builder API \
+                             of #[derive(DefaultGenerator)]; rename the field or implement \
+                             DefaultGenerator by hand"
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+            (names, false)
+        }
+        Fields::Unnamed(fields) => {
+            let names = (0..fields.unnamed.len())
+                .map(|i| format_ident!("_{}", i))
+                .collect();
+            (names, true)
+        }
+        Fields::Unit => unreachable!(),
+    };
 
     let GenericsParts {
         gen_params,
@@ -64,7 +73,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         quote! { __phantom: ::core::marker::PhantomData, }
     };
 
-    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+    let field_types: Vec<_> = data.fields.iter().map(|f| &f.ty).collect();
 
     let generator_fields = field_names
         .iter()
@@ -104,11 +113,23 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 }
             });
 
-    let generate_fields = field_names.iter().map(|name| {
-        quote! {
-            #name: self.#name.do_draw(__tc)
-        }
-    });
+    let (span_label, construct) = if is_tuple {
+        let draws = field_names.iter().map(|name| {
+            quote! { self.#name.do_draw(__tc) }
+        });
+        (
+            quote! { ::hegel::generators::labels::TUPLE },
+            quote! { #name(#(#draws,)*) },
+        )
+    } else {
+        let generate_fields = field_names.iter().map(|name| {
+            quote! { #name: self.#name.do_draw(__tc) }
+        });
+        (
+            quote! { ::hegel::generators::labels::FIXED_DICT },
+            quote! { #name { #(#generate_fields,)* } },
+        )
+    };
 
     let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
 
@@ -161,10 +182,8 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 #(#type_param_idents: 'a,)*
             {
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::FIXED_DICT);
-                    let __result = #name {
-                        #(#generate_fields,)*
-                    };
+                    __tc.start_span(#span_label);
+                    let __result = #construct;
                     __tc.stop_span(false);
                     __result
                 }

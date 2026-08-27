@@ -265,6 +265,8 @@ pub use hegel_c::__bench;
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
+/// - for tuple structs, the builder methods are positional: `._0(generator)`,
+///   `._1(generator)`, etc.
 ///
 /// For enums, the generated generator draws one of the variants at random.
 /// Unit variants need no configuration; every data-carrying variant gets
@@ -291,11 +293,17 @@ pub use hegel_c::__bench;
 ///     age: u32,
 /// }
 ///
+/// #[derive(Debug, DefaultGenerator)]
+/// struct Meters(f64);
+///
 /// #[hegel::test]
 /// fn generates_people(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Person>()
 ///         .age(gs::integers::<u32>().min_value(0).max_value(120));
 ///     let person: Person = tc.draw(generator);
+///     let height: Meters = tc.draw(
+///         gs::default::<Meters>()._0(gs::floats().min_value(0.0).max_value(3.0)),
+///     );
 /// }
 /// ```
 ///
