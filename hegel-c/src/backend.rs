@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ManyState, NativeStateMachine, NativeVariables};
+use crate::native::core::{ManyState, NativeStateMachine, NativeVariables, RecursionState};
 use crate::native::draws::special::{Date, DateTime, Time};
 use crate::native::draws::{FloatSpec, StringSpec};
 
@@ -147,6 +147,33 @@ pub trait DataSource: Send + Sync {
         state: &mut ManyState,
         why: Option<&str>,
     ) -> Result<(), DataSourceError>;
+
+    /// Create the engine-side state for one draw of a recursive generator:
+    /// the `max_leaves` budget, retry bookkeeping, and the span depth to
+    /// unwind to when an attempt is discarded. The caller owns the returned
+    /// [`RecursionState`] and passes it back to the `recursion_*` methods.
+    fn new_recursion(
+        &self,
+        max_depth: u64,
+        max_leaves: u64,
+    ) -> Result<RecursionState, DataSourceError>;
+
+    /// Draw the leaf-or-branch decision for a recursive sub-value at
+    /// `depth`, from this stream. At `max_depth` the decision is forced to
+    /// false but still recorded as a choice.
+    fn recursion_branch(&self, state: &RecursionState, depth: u64)
+    -> Result<bool, DataSourceError>;
+
+    /// Count one leaf against the current attempt's budget. `Ok(false)`
+    /// means the budget is exhausted: the caller must unwind the attempt
+    /// without drawing the leaf and call
+    /// [`recursion_retry`](Self::recursion_retry).
+    fn recursion_leaf(&self, state: &mut RecursionState) -> Result<bool, DataSourceError>;
+
+    /// Discard a failed generation attempt — closing the spans it left open
+    /// as discarded — and prepare the next one, or reject the test case as
+    /// invalid when the attempts are exhausted.
+    fn recursion_retry(&self, state: &mut RecursionState) -> Result<(), DataSourceError>;
 
     /// Register a state machine for engine-owned (swarm) rule selection:
     /// rules (each assigned to a concurrency group via `rule_groups`,

@@ -1,6 +1,6 @@
 use crate::control::{
-    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, hegel_internal_assert,
-    hegel_internal_error, raise_control,
+    AssumeFailed, InternalError, InvalidArgument, LeafBudgetExceeded, LoopDone, StopTest,
+    hegel_internal_assert, hegel_internal_error, raise_control,
 };
 use crate::ffi::CTestCase;
 use crate::generators::Generator;
@@ -62,6 +62,9 @@ pub(crate) use invalid_argument;
 ///
 /// - `HEGEL_E_STOP_TEST` — the engine ran out of data for this case.
 /// - `HEGEL_E_ASSUME` — the engine rejected the draw (an assumption failed).
+/// - `HEGEL_E_RETRY` — a recursive generation attempt outgrew its leaf
+///   budget; unwinds to the `RecursiveGenerator` draw that opened the
+///   recursion scope, which discards the attempt and retries.
 /// - `HEGEL_E_INVALID_ARG` — a caller-supplied argument (typically a
 ///   generator argument) was semantically invalid; the diagnostic is read
 ///   synchronously from this thread's libhegel error context.
@@ -81,6 +84,7 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     match rc {
         HEGEL_E_STOP_TEST => raise_control(StopTest),
         HEGEL_E_ASSUME => raise_control(AssumeFailed),
+        HEGEL_E_RETRY => raise_control(LeafBudgetExceeded),
         HEGEL_E_INVALID_ARG => invalid_argument!("{}", crate::ffi::last_error_string()),
         HEGEL_E_ALREADY_COMPLETE => panic!(
             "this test case has already finished; was the TestCase moved to a \
@@ -751,6 +755,23 @@ impl TestCase {
         f(&self.handle)
     }
 
+    /// The number of currently-open spans on this instance. Lets a generator
+    /// that catches an unwind mid-draw (e.g. `recursive()` abandoning an
+    /// oversized attempt) discard exactly the spans the unwound draw left
+    /// open.
+    pub(crate) fn open_span_depth(&self) -> usize {
+        self.local.borrow().span_depth
+    }
+
+    /// Reset this instance's open-span count to `depth` after the engine has
+    /// discarded the spans above it (e.g. `hegel_recursion_retry` closing an
+    /// abandoned attempt's spans engine-side).
+    pub(crate) fn reset_open_spans_to(&self, depth: usize) {
+        let mut local = self.local.borrow_mut();
+        hegel_internal_assert!(local.span_depth >= depth);
+        local.span_depth = depth;
+    }
+
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
@@ -971,6 +992,7 @@ pub mod labels {
     pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
     pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
     pub const STATEFUL_RULE: u64 = hegel_label_t::HEGEL_LABEL_STATEFUL_RULE as u64;
+    pub const RECURSIVE: u64 = hegel_label_t::HEGEL_LABEL_RECURSIVE as u64;
 }
 
 #[cfg(test)]
