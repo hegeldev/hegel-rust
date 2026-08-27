@@ -8,7 +8,7 @@ pub mod text;
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    EngineError, FloatChoice, ManyState, NativeTestCase, Status, float_clamp,
+    EngineError, FloatChoice, ManyState, NativeTestCase, RecursionState, Status, float_clamp,
 };
 use crate::native::intervalsets::IntervalSet;
 use alloc::boxed::Box;
@@ -410,6 +410,59 @@ pub(crate) fn many_reject(
         } else {
             state.force_stop = true;
         }
+    }
+    Ok(())
+}
+
+/// The number of generation attempts one recursive draw gets before the
+/// test case is rejected: attempt `k` prices branches for a `(k + 2)`-ary
+/// tree, so nine attempts cover branch factors 2 through 10.
+pub(crate) const RECURSION_MAX_ATTEMPTS: u64 = 9;
+
+/// Draw the leaf-or-branch decision for one sub-value of a recursive
+/// generator.
+///
+/// The probability is `1 / (attempt + 2)`: the critical branching
+/// probability for a tree whose branches have `attempt + 2` children each,
+/// which keeps trees finite while covering a heavy-tailed spread of sizes.
+/// It is fixed for the whole attempt — scaling it by the budget already
+/// spent would make earlier subtrees systematically branchier than their
+/// later siblings — and each retry assumes one more child per branch, so
+/// branch functions that produce many children quickly reach a probability
+/// at which they fit inside `max_leaves`. At the depth limit the decision
+/// is still drawn, at probability zero: the engine records it as a forced
+/// choice, so the choice sequence has the same shape whether or not the
+/// limit was hit.
+pub(crate) fn recursion_branch(
+    ntc: &mut NativeTestCase,
+    state: &RecursionState,
+    depth: u64,
+) -> Result<bool, EngineError> {
+    let p = if depth >= state.max_depth {
+        0.0
+    } else {
+        1.0 / (state.attempt as f64 + 2.0)
+    };
+    spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, None))
+}
+
+/// Discard a generation attempt that exceeded its leaf budget: close the
+/// spans the attempt left open (marking them discarded), reset the budget,
+/// and move to the next attempt's lower branch probability. Concludes the
+/// test case as invalid once [`RECURSION_MAX_ATTEMPTS`] attempts have
+/// failed.
+pub(crate) fn recursion_retry(
+    ntc: &mut NativeTestCase,
+    state: &mut RecursionState,
+) -> Result<(), EngineError> {
+    while ntc.span_depth() > state.base_span_depth {
+        ntc.stop_span(true);
+    }
+    state.leaves = 0;
+    state.attempt += 1;
+    if state.attempt >= RECURSION_MAX_ATTEMPTS {
+        ntc.conclude(Status::Invalid, None);
+        return Err(EngineError::InvalidTestCase);
     }
     Ok(())
 }

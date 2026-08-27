@@ -11,7 +11,7 @@ use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseRes
 use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
-    NativeTestCaseHandle, NativeVariables, Span, SpanEvent, Status,
+    NativeTestCaseHandle, NativeVariables, RecursionState, Span, SpanEvent, Status,
 };
 use crate::native::draws;
 
@@ -258,6 +258,30 @@ impl DataSource for NativeDataSource {
         _why: Option<&str>,
     ) -> Result<(), DataSourceError> {
         self.with_ntc(|ntc| draws::many_reject(ntc, state))
+    }
+
+    fn new_recursion(
+        &self,
+        max_depth: u64,
+        max_leaves: u64,
+    ) -> Result<RecursionState, DataSourceError> {
+        self.with_ntc(|ntc| Ok(RecursionState::new(max_depth, max_leaves, ntc.span_depth())))
+    }
+
+    fn recursion_branch(
+        &self,
+        state: &RecursionState,
+        depth: u64,
+    ) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::recursion_branch(ntc, state, depth))
+    }
+
+    fn recursion_leaf(&self, state: &mut RecursionState) -> Result<bool, DataSourceError> {
+        self.with_ntc(|_| Ok(state.count_leaf()))
+    }
+
+    fn recursion_retry(&self, state: &mut RecursionState) -> Result<(), DataSourceError> {
+        self.with_ntc(|ntc| draws::recursion_retry(ntc, state))
     }
 
     fn new_state_machine(

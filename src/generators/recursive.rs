@@ -1,34 +1,13 @@
-use super::{Generator, TestCase, fnv1a_hash};
-use crate::control::raise_control;
+use super::{Generator, TestCase};
+use crate::control::LeafBudgetExceeded;
+use crate::ffi::RecursionHandle;
+use crate::test_case::{labels, raise_for_rc};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-const RECURSIVE_LABEL: u64 = fnv1a_hash(b"hegel::generators::recursive");
 
 const DEFAULT_MAX_DEPTH: usize = 32;
 const DEFAULT_MAX_LEAVES: usize = 100;
-const MAX_ATTEMPTS: usize = 9;
-
-/// The branch probability for the given generation attempt: `1 / (attempt + 2)`,
-/// the critical probability for a tree whose branches have `attempt + 2`
-/// children each. A branching process at its critical probability stays
-/// finite while covering a heavy-tailed spread of sizes, so the first
-/// attempt prices branches as if the tree were binary; each retry assumes
-/// one more child per branch, so branch functions that actually produce
-/// many children quickly reach a probability at which they fit inside
-/// `max_leaves`. The probability is fixed for the whole attempt — scaling
-/// it by the budget already spent would make earlier (left) subtrees
-/// systematically branchier than later ones.
-fn branch_probability(attempt: usize) -> f64 {
-    1.0 / (attempt as f64 + 2.0)
-}
-
-/// Control payload unwound when a generation attempt draws more than
-/// `max_leaves` leaves. Caught by `RecursiveGenerator::do_draw`, which
-/// discards the attempt's spans and retries with a lower branch probability.
-struct LeafBudgetExceeded;
 
 /// The leaf generator and branch function of a [`recursive()`] generator,
 /// type-erased so that [`SubtreeGenerator`] (which appears in the branch
@@ -59,17 +38,6 @@ where
     }
 }
 
-/// The state of one generation attempt: a fresh scope is created per attempt
-/// and shared by every [`SubtreeGenerator`] taking part in it, so drawn
-/// leaves are counted across the whole value without any state outliving
-/// the draw call.
-struct DrawScope {
-    max_depth: usize,
-    max_leaves: usize,
-    branch_probability: f64,
-    leaves: AtomicUsize,
-}
-
 /// The generator a [`recursive()`] branch function receives, producing the
 /// recursive sub-values of the value under construction.
 ///
@@ -81,15 +49,15 @@ struct DrawScope {
 /// the function's own parameter.
 pub struct SubtreeGenerator<T> {
     core: Arc<dyn SubtreeDraw<T>>,
-    scope: Arc<DrawScope>,
-    depth: usize,
+    recursion: Arc<RecursionHandle>,
+    depth: u64,
 }
 
 impl<T> Clone for SubtreeGenerator<T> {
     fn clone(&self) -> Self {
         SubtreeGenerator {
             core: Arc::clone(&self.core),
-            scope: Arc::clone(&self.scope),
+            recursion: Arc::clone(&self.recursion),
             depth: self.depth,
         }
     }
@@ -99,34 +67,24 @@ impl<T> SubtreeGenerator<T> {
     fn child(&self) -> Self {
         SubtreeGenerator {
             core: Arc::clone(&self.core),
-            scope: Arc::clone(&self.scope),
+            recursion: Arc::clone(&self.recursion),
             depth: self.depth + 1,
         }
-    }
-
-    /// At the depth limit the decision is still drawn, with probability
-    /// zero: the engine records it as a forced choice, so the choice
-    /// sequence has the same shape whether or not the limit was hit and the
-    /// shrinker can move subtrees across the boundary without misaligning
-    /// every draw that follows.
-    fn draw_should_branch(&self, tc: &TestCase) -> bool {
-        let p = if self.depth >= self.scope.max_depth {
-            0.0
-        } else {
-            self.scope.branch_probability
-        };
-        tc.generate_boolean(p)
     }
 }
 
 impl<T> Generator<T> for SubtreeGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(RECURSIVE_LABEL);
-        let result = if self.draw_should_branch(tc) {
+        tc.start_span(labels::RECURSIVE);
+        let branch = match tc.with_ctc(|ctc| ctc.recursion_branch(&self.recursion, self.depth)) {
+            Ok(branch) => branch,
+            Err(rc) => raise_for_rc(rc),
+        };
+        let result = if branch {
             self.core.draw_branch(tc, self.child())
         } else {
-            if self.scope.leaves.fetch_add(1, Ordering::Relaxed) >= self.scope.max_leaves {
-                raise_control(LeafBudgetExceeded);
+            if let Err(rc) = tc.with_ctc(|ctc| ctc.recursion_leaf(&self.recursion)) {
+                raise_for_rc(rc);
             }
             self.core.draw_leaf(tc)
         };
@@ -168,28 +126,29 @@ impl<T> RecursiveGenerator<T> {
 impl<T> Generator<T> for RecursiveGenerator<T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         let base_span_depth = tc.open_span_depth();
-        for attempt in 0..MAX_ATTEMPTS {
+        let recursion = match tc
+            .with_ctc(|ctc| ctc.new_recursion(self.max_depth as u64, self.max_leaves as u64))
+        {
+            Ok(recursion) => Arc::new(recursion),
+            Err(rc) => raise_for_rc(rc),
+        };
+        loop {
             let root = SubtreeGenerator {
                 core: Arc::clone(&self.core),
-                scope: Arc::new(DrawScope {
-                    max_depth: self.max_depth,
-                    max_leaves: self.max_leaves,
-                    branch_probability: branch_probability(attempt),
-                    leaves: AtomicUsize::new(0),
-                }),
+                recursion: Arc::clone(&recursion),
                 depth: 0,
             };
             match catch_unwind(AssertUnwindSafe(|| root.do_draw(tc))) {
                 Ok(value) => return value,
                 Err(payload) if payload.downcast_ref::<LeafBudgetExceeded>().is_some() => {
-                    while tc.open_span_depth() > base_span_depth {
-                        tc.stop_span(true);
+                    match tc.with_ctc(|ctc| ctc.recursion_retry(&recursion)) {
+                        Ok(()) => tc.reset_open_spans_to(base_span_depth),
+                        Err(rc) => raise_for_rc(rc),
                     }
                 }
                 Err(payload) => resume_unwind(payload),
             }
         }
-        tc.reject()
     }
 }
 

@@ -124,6 +124,27 @@ fn test_recursive_propagates_rejection_from_the_leaf_generator() {
 }
 
 #[test]
+fn test_recursive_on_an_exhausted_stream_is_an_overrun() {
+    expect_panic(
+        || {
+            Hegel::new(|tc: TestCase| {
+                let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    loop {
+                        tc.draw_silent(gs::integers::<i64>());
+                    }
+                }));
+                assert!(exhausted.is_err(), "the draw budget is finite");
+                tc.draw_silent(trees());
+                unreachable!("a recursive draw on an exhausted stream must overrun");
+            })
+            .settings(Settings::new().database(None).seed(Some(0)))
+            .run();
+        },
+        "LargeInitialTestCase",
+    );
+}
+
+#[test]
 fn test_recursive_in_vec() {
     assert_all_examples(gs::vecs(trees().max_depth(2)).max_size(3), |v| {
         v.iter().all(|t| t.height() <= 2)

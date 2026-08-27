@@ -7,6 +7,12 @@ pub(crate) struct AssumeFailed;
 /// The engine ran out of data for this test case: conclude it as `Overrun`.
 pub(crate) struct StopTest;
 
+/// A recursive generation attempt drew more than its `max_leaves` budget
+/// (`HEGEL_E_RETRY` from the engine): unwind back to the
+/// `RecursiveGenerator` draw that opened the recursion scope, which
+/// discards the attempt and retries with a lower branching probability.
+pub(crate) struct LeafBudgetExceeded;
+
 /// `TestCase::repeat`'s loop completed naturally. Because `repeat` returns
 /// `!`, it has no normal-return path; this unwind is how it tells the
 /// lifecycle "this test case finished successfully, record it as `Valid`".
