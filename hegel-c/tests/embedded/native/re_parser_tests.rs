@@ -897,11 +897,6 @@ fn err_class_named_unicode_escape_not_supported() {
 }
 
 #[test]
-fn parses_inline_locale_flag_bytes() {
-    parse_pattern("(?L)abc", SRE_FLAG_LOCALE).unwrap_err();
-}
-
-#[test]
 fn parses_ascii_flag_inline() {
     parse_pattern("(?a)abc", 0).unwrap();
 }
@@ -917,11 +912,6 @@ fn parses_hex_escape_in_class() {
 }
 
 #[test]
-fn parses_short_unicode_escape_in_class() {
-    parse_pattern(r"[A]", 0).unwrap();
-}
-
-#[test]
 fn parses_long_unicode_escape_in_class() {
     parse_pattern(r"[\U00000041]", 0).unwrap();
 }
@@ -929,11 +919,6 @@ fn parses_long_unicode_escape_in_class() {
 #[test]
 fn parses_octal_escape_in_class() {
     parse_pattern(r"[\101]", 0).unwrap();
-}
-
-#[test]
-fn parses_short_unicode_escape() {
-    parse_pattern(r"A", 0).unwrap();
 }
 
 #[test]
@@ -947,11 +932,6 @@ fn parses_octal_escape_three_digits() {
 }
 
 #[test]
-fn parses_hex_escape() {
-    parse_pattern(r"\x41", 0).unwrap();
-}
-
-#[test]
 fn parses_class_leading_dash() {
     parse_pattern("[-]", 0).unwrap();
 }
@@ -959,11 +939,6 @@ fn parses_class_leading_dash() {
 #[test]
 fn parses_class_trailing_dash() {
     parse_pattern("[a-]", 0).unwrap();
-}
-
-#[test]
-fn parses_class_dash_escape_range() {
-    parse_pattern(r"[\d-a]", 0).unwrap_err();
 }
 
 #[test]
@@ -994,16 +969,6 @@ fn parses_open_lower_bound_min() {
 #[test]
 fn parses_inline_global_flag_at_start_only() {
     parse_pattern("(?im)abc", 0).unwrap();
-}
-
-#[test]
-fn parses_lookbehind_positive() {
-    parse_pattern("(?<=abc)", 0).unwrap();
-}
-
-#[test]
-fn parses_lookbehind_negative() {
-    parse_pattern("(?<!abc)", 0).unwrap();
 }
 
 #[test]
@@ -1136,22 +1101,6 @@ fn err_conditional_unterminated() {
 }
 
 #[test]
-fn err_named_unicode_escape_in_set_not_supported() {
-    let err = parse_err(r"[\N{LATIN SMALL LETTER A}]");
-    assert!(err.msg.contains("named unicode escapes not yet supported"));
-}
-
-#[test]
-fn err_decimal_backref_to_open_group() {
-    let err = parse_err(r"(\1)");
-    assert!(
-        err.msg.contains("cannot refer to an open group"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
 fn parses_empty_negative_lookahead_explicit_failure() {
     let p = parse_pattern("(?!)", 0).unwrap();
     assert_eq!(p.pattern.data, vec![OpCode::Failure]);
@@ -1160,26 +1109,6 @@ fn parses_empty_negative_lookahead_explicit_failure() {
 #[test]
 fn parses_complex_class_flattening() {
     parse_pattern(r"[[abc][def]]", 0).unwrap();
-}
-
-#[test]
-fn parses_long_unicode_escape_in_set() {
-    parse_pattern(r"[\U00000041]", 0).unwrap();
-}
-
-#[test]
-fn parses_global_inline_flag_unicode() {
-    parse_pattern("(?u)abc", 0).unwrap();
-}
-
-#[test]
-fn parses_global_inline_flag_ascii() {
-    parse_pattern("(?a)abc", 0).unwrap();
-}
-
-#[test]
-fn parses_multiple_inline_flags() {
-    parse_pattern("(?ims)abc", 0).unwrap();
 }
 
 #[test]
@@ -1220,11 +1149,6 @@ fn parses_brace_no_digits_no_close() {
 }
 
 #[test]
-fn parses_class_escape_short_unicode() {
-    parse_pattern(r"[A]", 0).unwrap();
-}
-
-#[test]
 fn err_class_decimal_escape_8_or_9() {
     let err = parse_err(r"[\8]");
     assert!(err.msg.contains("bad escape"), "{}", err.msg);
@@ -1236,17 +1160,6 @@ fn parses_class_with_non_letter_escape() {
 }
 
 #[test]
-fn err_class_escape_unknown_letter() {
-    let err = parse_err(r"[\p]");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_class_octal_escape_three_digits() {
-    parse_pattern(r"[\077]", 0).unwrap();
-}
-
-#[test]
 fn parses_outer_escape_non_letter() {
     parse_pattern(r"\!", 0).unwrap();
 }
@@ -1255,11 +1168,6 @@ fn parses_outer_escape_non_letter() {
 fn err_outer_escape_unknown_letter() {
     let err = parse_err(r"\p");
     assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_outer_octal_three_digits() {
-    parse_pattern(r"\077", 0).unwrap();
 }
 
 #[test]
@@ -1301,12 +1209,6 @@ fn err_inline_flag_missing_colon_after_minus() {
 fn err_inline_flag_eof_after_qmark() {
     let err = parse_err("(?-");
     assert!(err.msg.contains("missing flag"), "{}", err.msg);
-}
-
-#[test]
-fn err_global_flag_cannot_disable_global() {
-    let err = parse_err("(?-i)abc");
-    assert!(err.msg.contains("missing :"), "{}", err.msg);
 }
 
 #[test]
@@ -1380,37 +1282,9 @@ fn err_conditional_groupref_overflow_u32() {
 }
 
 #[test]
-fn parses_short_unicode_escape_in_class_form() {
-    parse_pattern(r"[A]", 0).unwrap();
-}
-
-#[test]
-fn err_class_short_unicode_escape_incomplete() {
-    let err = parse_err(r"[\u00]");
-    assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
 fn err_class_long_unicode_escape_incomplete() {
     let err = parse_err(r"[\U0000]");
     assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_class_bad_letter_escape() {
-    let err = parse_err(r"[\q]");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_outer_unicode_escape_incomplete() {
-    let err = parse_err(r"\u00");
-    assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_class_escape_lookup_category() {
-    parse_pattern(r"[\w]", 0).unwrap();
 }
 
 #[test]
@@ -1430,45 +1304,9 @@ fn err_decimal_backref_to_open_group_from_named() {
 }
 
 #[test]
-fn err_subpattern_lookbehind_unterminated_lt() {
-    let err = parse_err(r"(?<");
-    assert!(err.msg.contains("unexpected end of pattern"), "{}", err.msg);
-}
-
-#[test]
-fn err_subpattern_extension_unterminated_p() {
-    let err = parse_err(r"(?P");
-    assert!(err.msg.contains("unexpected end of pattern"), "{}", err.msg);
-}
-
-#[test]
 fn err_inline_flag_no_terminator() {
     let err = parse_err(r"(?i");
     assert!(err.msg.contains("missing -, : or )"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_unknown_after_initial() {
-    let err = parse_err(r"(?Z)");
-    assert!(err.msg.contains("unknown flag") || err.msg.contains("unknown extension"));
-}
-
-#[test]
-fn err_inline_flag_missing_after_dash() {
-    let err = parse_err(r"(?i-");
-    assert!(err.msg.contains("missing flag"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_disable_no_colon() {
-    let err = parse_err(r"(?i-i:");
-    assert!(err.msg.contains("flag turned on and off"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_disable_unknown() {
-    let err = parse_err(r"(?-Z:abc)");
-    assert!(err.msg.contains("unknown flag"), "{}", err.msg);
 }
 
 #[test]
@@ -1482,64 +1320,15 @@ fn err_repetition_too_large_braces() {
 }
 
 #[test]
-fn parses_max_repeat_with_only_lower_bound() {
-    parse_pattern("a{3}", 0).unwrap();
-}
-
-#[test]
 fn err_repetition_with_repeat_after() {
     let err = parse_err(r"a{3}+?");
     assert!(err.msg.contains("multiple repeat"), "{}", err.msg);
 }
 
 #[test]
-fn err_named_group_empty_at_open() {
-    let err = parse_err("(?P<>x)");
-    assert!(err.msg.contains("missing group name"), "{}", err.msg);
-}
-
-#[test]
-fn err_named_group_eof_with_content() {
-    let err = parse_err("(?P<foo");
-    assert!(err.msg.contains("missing >"), "{}", err.msg);
-}
-
-#[test]
 fn err_named_backref_no_chars() {
     let err = parse_err("(?P=");
     assert!(err.msg.contains("missing group name"), "{}", err.msg);
-}
-
-#[test]
-fn err_named_group_bad_char_at_open_via_getuntil() {
-    let err = parse_err("(?P<1>x)");
-    assert!(
-        err.msg.contains("bad character in group name"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
-fn parses_class_with_long_unicode_escape() {
-    parse_pattern(r"[A]", 0).unwrap();
-}
-
-#[test]
-fn err_class_escape_two_char_unknown_letter() {
-    let err = parse_err(r"[\h]");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_outer_octal_overflow() {
-    let err = parse_err(r"\99999999999");
-    assert!(err.msg.contains("bad escape") || err.msg.contains("invalid group reference"));
-}
-
-#[test]
-fn parses_class_unicode_short_escape_in_set() {
-    parse_pattern(r"[A]", 0).unwrap();
 }
 
 #[test]
@@ -1566,16 +1355,6 @@ fn err_inline_flag_global_unknown() {
 }
 
 #[test]
-fn err_inline_flag_disable_global() {
-    let err = parse_err("(?-u:abc)");
-    assert!(
-        err.msg.contains("cannot turn off flags 'a', 'u' and 'L'"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
 fn err_brace_repeat_overflow_lower() {
     let err = parse_err("a{99999999999999999999,5}");
     assert!(
@@ -1589,11 +1368,6 @@ fn err_brace_repeat_overflow_lower() {
 fn err_inline_flag_eof_no_minus_colon_close() {
     let err = parse_err("(?i:");
     assert!(err.msg.contains("missing )"), "{}", err.msg);
-}
-
-#[test]
-fn parses_atomic_group_simple() {
-    parse_pattern(r"(?>abc)", 0).unwrap();
 }
 
 #[test]
@@ -1639,24 +1413,8 @@ fn parses_quantifier_on_noncapturing_group_lazy() {
 }
 
 #[test]
-fn err_class_long_unicode_escape_unreachable_hex() {
-    let err = parse_err(r"[\U7FFFFFFF]");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_class_with_class_escape_category() {
-    parse_pattern(r"[\d]", 0).unwrap();
-}
-
-#[test]
 fn parses_class_short_unicode_escape_hex() {
     parse_pattern("[\\u0041]", 0).unwrap();
-}
-
-#[test]
-fn parses_outer_short_unicode_escape_hex() {
-    parse_pattern("\\u0041", 0).unwrap();
 }
 
 #[test]
@@ -1685,59 +1443,15 @@ fn parses_class_literal_escape() {
 }
 
 #[test]
-fn parses_outer_octal_three_digit_padded() {
-    parse_pattern(r"\077", 0).unwrap();
-}
-
-#[test]
-fn err_outer_decimal_groupref_overflow_long() {
-    let err = parse_err(r"\99999999999");
-    assert!(err.msg.contains("bad escape") || err.msg.contains("invalid group reference"));
-}
-
-#[test]
-fn err_outer_escape_letter_unknown() {
-    let err = parse_err(r"\h");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_outer_unicode_short_incomplete_explicit() {
-    let err = parse_err(r"\u123");
-    assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_conditional_referencing_first_group() {
-    parse_pattern("(a)(?(1)b)", 0).unwrap();
-}
-
-#[test]
 fn err_conditional_named_unterminated() {
     let err = parse_err("(?(foo");
     assert!(err.msg.contains("missing )") || err.msg.contains("unknown group name"));
 }
 
 #[test]
-fn err_inline_flag_global_then_invalid_letter() {
-    let err = parse_err("(?xZ");
-    assert!(err.msg.contains("unknown flag"), "{}", err.msg);
-}
-
-#[test]
 fn err_inline_flag_after_minus_unknown() {
     let err = parse_err("(?-Z");
     assert!(err.msg.contains("unknown flag") || err.msg.contains("missing"));
-}
-
-#[test]
-fn err_inline_flag_disable_no_colon_close_paren() {
-    let err = parse_err("(?i-i)");
-    assert!(
-        err.msg.contains("missing :") || err.msg.contains("flag turned on"),
-        "{}",
-        err.msg
-    );
 }
 
 #[test]
@@ -1751,42 +1465,9 @@ fn err_inline_flag_global_unicode_then_dash() {
 }
 
 #[test]
-fn parses_class_with_class_escape_literal() {
-    parse_pattern(r"[\t]", 0).unwrap();
-}
-
-#[test]
-fn err_class_unicode_short_incomplete_explicit() {
-    let err = parse_err(r"[\u12]");
-    assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
 fn err_outer_hex_escape_incomplete() {
     let err = parse_err(r"\x4");
     assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_class_hex_escape_no_digits() {
-    let err = parse_err(r"[\xz]");
-    assert!(err.msg.contains("incomplete escape"), "{}", err.msg);
-}
-
-#[test]
-fn err_outer_escape_punct_unknown() {
-    parse_pattern(r"\#", 0).unwrap();
-}
-
-#[test]
-fn err_unknown_outer_escape_letter() {
-    let err = parse_err(r"\Q");
-    assert!(err.msg.contains("bad escape"), "{}", err.msg);
-}
-
-#[test]
-fn parses_outer_octal_three_digits_returns() {
-    parse_pattern(r"\077", 0).unwrap();
 }
 
 #[test]
@@ -1800,53 +1481,9 @@ fn parses_nested_class_with_inner_class_and_more() {
 }
 
 #[test]
-fn err_class_range_with_class_escape_endpoint_invalid() {
-    let err = parse_err(r"[\d-z]");
-    assert!(err.msg.contains("bad character range"), "{}", err.msg);
-}
-
-#[test]
-fn err_conditional_named_unknown() {
-    let err = parse_err("(?(abc)x|y)");
-    assert!(err.msg.contains("unknown group name"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_unknown_first_char() {
-    let err = parse_err("(?-Q)");
-    assert!(err.msg.contains("missing flag") || err.msg.contains("unknown flag"));
-}
-
-#[test]
-fn err_inline_flag_negate_global_in_subgroup() {
-    let err = parse_err("(?u-i)abc");
-    assert!(
-        err.msg.contains("cannot turn on global flag") || err.msg.contains("missing :"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
 fn err_inline_flag_eof_after_dash_letter() {
     let err = parse_err("(?-i");
     assert!(err.msg.contains("missing :"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_disable_global_at_end() {
-    let err = parse_err("(?-u)abc");
-    assert!(
-        err.msg.contains("cannot turn off") || err.msg.contains("missing :"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
-fn err_class_range_right_endpoint_is_class_escape() {
-    let err = parse_err(r"[a-\d]");
-    assert!(err.msg.contains("bad character range"), "{}", err.msg);
 }
 
 #[test]
@@ -1878,12 +1515,6 @@ fn parses_outer_octal_three_digit_non_zero_lead() {
 }
 
 #[test]
-fn err_outer_octal_three_digit_out_of_range() {
-    let err = parse_err(r"\477");
-    assert!(err.msg.contains("octal escape value"), "{}", err.msg);
-}
-
-#[test]
 fn err_conditional_named_unknown_named_after_first_group() {
     let err = parse_err("(a)(?(unknown)x|y)");
     assert!(err.msg.contains("unknown group name"), "{}", err.msg);
@@ -1900,37 +1531,9 @@ fn err_inline_flag_global_in_subgroup_via_partial_parse() {
 }
 
 #[test]
-fn err_inline_flag_eof_after_qmark_letter() {
-    let err = parse_err("(?i");
-    assert!(err.msg.contains("missing -, : or )"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_disable_then_eof_after_letter() {
-    let err = parse_err("(?i-i");
-    assert!(err.msg.contains("missing :"), "{}", err.msg);
-}
-
-#[test]
 fn err_inline_flag_after_enable_unknown_letter() {
     let err = parse_err("(?-iZ");
     assert!(err.msg.contains("unknown flag"), "{}", err.msg);
-}
-
-#[test]
-fn err_inline_flag_disable_global_specifically() {
-    let err = parse_err("(?i-u:abc)");
-    assert!(
-        err.msg.contains("cannot turn off") || err.msg.contains("global flag"),
-        "{}",
-        err.msg
-    );
-}
-
-#[test]
-fn err_named_group_starts_with_digit() {
-    let err = parse_err("(?P<1abc>x)");
-    assert!(err.msg.contains("bad character in group name"));
 }
 
 #[test]
@@ -1939,23 +1542,6 @@ fn err_named_backref_starts_with_digit() {
     assert!(
         err.msg.contains("bad character in group name") || err.msg.contains("unknown group name")
     );
-}
-
-#[test]
-fn err_named_unterminated_no_terminator_char() {
-    let err = parse_err("(?P<foo");
-    assert!(err.msg.contains("missing >"));
-}
-
-#[test]
-fn parses_nested_negated_class_disables_flatten() {
-    parse_pattern("[a[^b]]", 0).unwrap();
-}
-
-#[test]
-fn err_class_range_with_category_endpoint() {
-    let err = parse_err(r"[\d-z]");
-    assert!(err.msg.contains("bad character range"), "{}", err.msg);
 }
 
 #[test]

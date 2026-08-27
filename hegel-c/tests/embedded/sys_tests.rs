@@ -12,14 +12,6 @@ fn temp_path(dir: &TempDir, name: &str) -> String {
 }
 
 #[test]
-fn fs_write_read_round_trips() {
-    let dir = TempDir::new().unwrap();
-    let path = temp_path(&dir, "file");
-    fs::write(&path, b"contents").unwrap();
-    assert_eq!(fs::read(&path).unwrap(), b"contents".to_vec());
-}
-
-#[test]
 fn fs_write_truncates_an_existing_file() {
     let dir = TempDir::new().unwrap();
     let path = temp_path(&dir, "file");

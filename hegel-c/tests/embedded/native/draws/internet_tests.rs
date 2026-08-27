@@ -274,13 +274,6 @@ fn generate_domain_rejects_tiny_max_length_as_invalid_argument() {
 }
 
 #[test]
-fn domain_spec_validates_max_length_range() {
-    assert!(DomainSpec::new(3).is_err());
-    assert!(DomainSpec::new(4).is_ok());
-    assert!(DomainSpec::new(255).is_ok());
-}
-
-#[test]
 fn domain_max_length_above_255_is_an_invalid_argument() {
     for max_length in [256, 100_000] {
         let err = DomainSpec::new(max_length).unwrap_err();

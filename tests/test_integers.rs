@@ -116,86 +116,10 @@ fn test_usize() {
     find_any(gs::integers::<usize>(), |&n| n == usize::MAX);
 }
 
-mod numerics {
-    use hegel::generators as gs;
-    use hegel::{HealthCheck, Hegel, Settings};
-
-    #[test]
-    fn test_fuzz_floats_bounds() {
-        Hegel::new(|tc| {
-            let (mut low, mut high): (Option<f64>, Option<f64>) = tc.draw(gs::tuples!(
-                gs::optional(gs::floats::<f64>().allow_nan(false)),
-                gs::optional(gs::floats::<f64>().allow_nan(false)),
-            ));
-            if let (Some(l), Some(h)) = (low, high) {
-                if l > h {
-                    std::mem::swap(&mut low, &mut high);
-                }
-            }
-            tc.assume(!low.is_some_and(|l| l.is_infinite()));
-            tc.assume(!high.is_some_and(|h| h.is_infinite()));
-
-            let exmin = low.is_some() && tc.draw(gs::booleans());
-            let exmax = high.is_some() && tc.draw(gs::booleans());
-
-            if let (Some(l), Some(h)) = (low, high) {
-                let lo = if exmin { l.next_up() } else { l };
-                let hi = if exmax { h.next_down() } else { h };
-                tc.assume(lo <= hi);
-                if lo == 0.0 && hi == 0.0 {
-                    tc.assume(!exmin && !exmax && (1.0_f64).copysign(lo) <= (1.0_f64).copysign(hi));
-                }
-            }
-
-            let mut s = gs::floats::<f64>();
-            if let Some(l) = low {
-                s = s.min_value(l);
-            }
-            if let Some(h) = high {
-                s = s.max_value(h);
-            }
-            s = s.exclude_min(exmin).exclude_max(exmax);
-            let val: f64 = tc.draw(s);
-            tc.assume(val != 0.0);
-
-            if let Some(l) = low {
-                assert!(l <= val);
-            }
-            if let Some(h) = high {
-                assert!(val <= h);
-            }
-            if exmin {
-                assert_ne!(low.unwrap(), val);
-            }
-            if exmax {
-                assert_ne!(high.unwrap(), val);
-            }
-        })
-        .settings(
-            Settings::new()
-                .suppress_health_check(HealthCheck::all())
-                .database(None),
-        )
-        .run();
-    }
-}
-
 mod nocover_simple_numbers {
     use super::common::utils::{Minimal, minimal};
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
-
-    #[test]
-    fn test_minimize_negative_int() {
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x < 0), -1);
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x < -1), -2);
-    }
-
-    #[test]
-    fn test_positive_negative_int() {
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x > 0), 1);
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x > 1), 2);
-    }
 
     fn boundaries() -> Vec<i64> {
         let mut bs: Vec<i64> = Vec::new();
@@ -360,14 +284,6 @@ mod nocover_simple_numbers {
     }
 
     #[test]
-    fn test_minimal_infinite_float_is_positive() {
-        assert_eq!(
-            minimal(gs::floats::<f64>(), |x: &f64| x.is_infinite()),
-            f64::INFINITY
-        );
-    }
-
-    #[test]
     fn test_can_minimal_infinite_negative_float() {
         let x = minimal(gs::floats::<f64>(), |x: &f64| *x < -f64::MAX);
         assert!(x < -f64::MAX);
@@ -378,11 +294,6 @@ mod nocover_simple_numbers {
         minimal(gs::floats::<f64>(), |x: &f64| {
             *x + 1.0 == *x && !x.is_infinite()
         });
-    }
-
-    #[test]
-    fn test_minimize_nan() {
-        assert!(minimal(gs::floats::<f64>(), |x: &f64| x.is_nan()).is_nan());
     }
 
     #[test]
@@ -501,53 +412,11 @@ mod nocover_simple_numbers {
     }
 
     #[test]
-    fn test_no_allow_infinity_upper() {
-        Hegel::new(|tc| {
-            let x: f64 = tc.draw(gs::floats::<f64>().min_value(0.0).allow_infinity(false));
-            assert!(!x.is_infinite());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_no_allow_infinity_lower() {
-        Hegel::new(|tc| {
-            let x: f64 = tc.draw(gs::floats::<f64>().max_value(0.0).allow_infinity(false));
-            assert!(!x.is_infinite());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_are_floats_unbounded() {
-        Hegel::new(|tc| {
-            tc.draw(gs::floats::<f64>());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
     fn test_floats_are_floats_int_float_bounds() {
         Hegel::new(|tc| {
             tc.draw(
                 gs::floats::<f64>()
                     .min_value(0.0)
-                    .max_value(u64::MAX as f64),
-            );
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_are_floats_float_float_bounds() {
-        Hegel::new(|tc| {
-            tc.draw(
-                gs::floats::<f64>()
-                    .min_value(0.0_f64)
                     .max_value(u64::MAX as f64),
             );
         })

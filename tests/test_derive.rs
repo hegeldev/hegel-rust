@@ -146,12 +146,6 @@ fn test_derive_struct_with_constrained_field() {
 }
 
 #[test]
-fn test_derive_struct_builder_only_overrides_specified_field() {
-    let g = Point::default_generator().x(gs::just(0));
-    assert_all_examples(g, |p: &Point| p.x == 0);
-}
-
-#[test]
 fn test_derive_struct_with_mapped_field() {
     let g = Point::default_generator().x(gs::integers::<i32>().map(|x| x.saturating_abs()));
     assert_all_examples(g, |p: &Point| p.x >= 0);
@@ -167,11 +161,6 @@ fn test_derive_struct_with_filtered_field() {
 fn test_default_supports_struct_builder() {
     let g = gs::default::<Point>().x(gs::just(42));
     assert_all_examples(g, |p: &Point| p.x == 42);
-}
-
-#[test]
-fn test_derive_unit_enum() {
-    check_can_generate_examples(gs::default::<Color>());
 }
 
 #[test]

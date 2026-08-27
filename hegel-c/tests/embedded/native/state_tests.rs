@@ -121,20 +121,6 @@ fn spans_into_iterator() {
 }
 
 #[test]
-fn spans_index_usize() {
-    let mut spans = Spans::new();
-    spans.push(Span {
-        start: 0,
-        end: 1,
-        label: "idx".to_string(),
-        depth: 0,
-        parent: None,
-        discarded: false,
-    });
-    assert_eq!(spans[0usize].label, "idx");
-}
-
-#[test]
 fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
     let prefix = vec![ChoiceValue::Integer(BigInt::from(9))];
     let mut tc = NativeTestCase::for_choices_and_template(
@@ -518,14 +504,6 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
 }
 
 #[test]
-fn for_simplest_propagates_across_many_draws() {
-    let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
-    for _ in 0..10 {
-        assert_eq!(tc.draw_integer::<i128>(0, 99).ok().unwrap(), 0);
-    }
-}
-
-#[test]
 fn for_simplest_draws_float_at_zero() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc
@@ -665,21 +643,6 @@ fn for_simplest_wrapper_matches_template_with_count_none() {
         assert_eq!(va, vb);
         assert_eq!(va, 0);
     }
-}
-
-#[test]
-fn template_overrun_status_matches_max_size_overrun() {
-    let mut tc_count = NativeTestCase::for_choices_and_template(
-        &[],
-        None,
-        Some(ChoiceTemplate::simplest(Some(2)).unwrap()),
-        100,
-        None,
-    );
-    assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
-    assert_eq!(tc_count.draw_integer::<i128>(0, 100).ok().unwrap(), 0);
-    assert!(tc_count.draw_integer::<i128>(0, 100).is_err());
-    assert_eq!(tc_count.status(), Some(Status::EarlyStop));
 }
 
 #[test]

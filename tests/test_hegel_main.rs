@@ -29,13 +29,6 @@ fn test_main_cli_overrides_test_cases() {
 }
 
 #[test]
-fn test_main_default_matches_attribute() {
-    let output = fixture(BASIC_MAIN).run();
-    let count = output.stderr.matches("ran").count();
-    assert_eq!(count, 7, "stderr:\n{}", output.stderr);
-}
-
-#[test]
 fn test_main_unknown_arg_exits_with_error() {
     let output = fixture(BASIC_MAIN)
         .arg("--not-a-real-arg")

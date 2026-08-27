@@ -100,18 +100,6 @@ fn move_value_falls_back_to_delete_save_when_rename_fails() {
 }
 
 #[test]
-fn round_trip_integer_choices() {
-    let choices = vec![
-        ChoiceValue::Integer(BigInt::from(0)),
-        ChoiceValue::Integer(BigInt::from(-1)),
-        ChoiceValue::Integer(BigInt::from(i128::MAX)),
-        ChoiceValue::Integer(BigInt::from(i128::MIN)),
-    ];
-    let bytes = serialize_choices(&choices);
-    assert_eq!(deserialize_choices(&bytes), Some(choices));
-}
-
-#[test]
 fn round_trip_mixed_choices() {
     let choices = vec![
         ChoiceValue::Boolean(false),

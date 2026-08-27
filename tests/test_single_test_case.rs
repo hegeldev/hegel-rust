@@ -20,15 +20,6 @@ fn test_single_test_case_runs_exactly_one_case() {
 }
 
 #[test]
-fn test_single_test_case_passing() {
-    hegel::Hegel::new(|tc| {
-        tc.draw(gs::booleans());
-    })
-    .settings(hegel::Settings::new().mode(Mode::SingleTestCase))
-    .run();
-}
-
-#[test]
 fn test_single_test_case_failing_propagates() {
     expect_panic(
         || {

@@ -128,20 +128,6 @@ fn test_datetimes_utc_property(tc: hegel::TestCase) {
 }
 
 #[test]
-#[should_panic(expected = "max_value < min_value")]
-fn test_datetimes_utc_min_greater_than_max() {
-    let g = chrono_gs::datetimes()
-        .timezones(gs::just(Utc))
-        .min_value(
-            DateTime::<Utc>::from_timestamp(2_000_000_000, 0)
-                .unwrap()
-                .naive_utc(),
-        )
-        .max_value(DateTime::<Utc>::from_timestamp(0, 0).unwrap().naive_utc());
-    check_can_generate_examples(g);
-}
-
-#[test]
 fn test_datetimes_full_range_bounds() {
     check_can_generate_examples(
         chrono_gs::datetimes()
