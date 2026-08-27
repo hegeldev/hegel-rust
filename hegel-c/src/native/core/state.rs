@@ -71,19 +71,13 @@ pub struct RecursionState {
     pub attempt: u64,
     pub leaves: u64,
     pub base_span_depth: usize,
+    /// The branch probability for the current attempt, computed once per
+    /// attempt by `draws::recursion_branch_probability` (at creation and on
+    /// each retry) rather than at every branch decision.
+    pub branch_probability: f64,
 }
 
 impl RecursionState {
-    pub fn new(max_depth: u64, max_leaves: u64, base_span_depth: usize) -> Self {
-        RecursionState {
-            max_depth,
-            max_leaves,
-            attempt: 0,
-            leaves: 0,
-            base_span_depth,
-        }
-    }
-
     /// Count one leaf against the current attempt's budget. Returns false
     /// when the attempt has already produced `max_leaves` leaves, in which
     /// case the attempt must be discarded and retried instead of drawing

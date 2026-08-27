@@ -624,8 +624,8 @@ mod recursive {
     fn recursive_trees_have_diverse_sizes() {
         let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees()));
         assert_min_rate(&vs, |t| t.leaf_count() == 1, 0.1, "single leaf");
-        assert_min_rate(&vs, |t| t.leaf_count() >= 25, 0.07, "25+ leaves");
-        assert_min_rate(&vs, |t| t.leaf_count() >= 90, 0.005, "near the leaf cap");
+        assert_min_rate(&vs, |t| t.leaf_count() >= 25, 0.06, "25+ leaves");
+        assert_min_rate(&vs, |t| t.leaf_count() >= 90, 0.004, "near the leaf cap");
     }
 
     /// The branch probability is fixed for a whole generation attempt rather

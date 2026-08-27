@@ -265,7 +265,13 @@ impl DataSource for NativeDataSource {
         max_depth: u64,
         max_leaves: u64,
     ) -> Result<RecursionState, DataSourceError> {
-        self.with_ntc(|ntc| Ok(RecursionState::new(max_depth, max_leaves, ntc.span_depth())))
+        self.with_ntc(|ntc| {
+            Ok(draws::new_recursion_state(
+                max_depth,
+                max_leaves,
+                ntc.span_depth(),
+            ))
+        })
     }
 
     fn recursion_branch(
