@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.32.3 - 2026-08-27
+
+This patch adds support for `#[derive(DefaultGenerator)]` on tuple structs ([#183](https://github.com/hegeldev/hegel-rust/issues/183)). The generated builder methods are positional, matching the `._0(...)` field builders already used by enum tuple variants:
+
+```rust
+#[derive(DefaultGenerator)]
+struct Meters(f64);
+
+let g = gs::default::<Meters>()._0(gs::floats().min_value(0.0).max_value(3.0));
+```
+
+Deriving on a struct with no fields (unit, empty named, or empty tuple) now produces a clear error in all three cases. Empty named structs previously failed with a confusing "unused lifetime parameter" error from inside the generated code.
+
 ## 0.32.2 - 2026-08-26
 
 This patch improves the distribution of `generators::integers` for large and full-width ranges, by way of an engine update. Each test case now draws its own mix of value categories (a form of swarm testing), so the values that property tests rely on to surface off-by-one, overflow, and sign bugs — the range endpoints and their neighbours, zero, ±1, and small magnitudes — appear several times more often than before (boundary values on about 2% of full-width draws, up from about 0.3%) and cluster within test cases, so several operands go extreme at once: a full-width `x + y` now overflows about 1.5% of the time. The middle of the range stays well covered. See the `hegeltest-c` changelog for measurements and details.
