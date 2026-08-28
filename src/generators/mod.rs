@@ -16,6 +16,7 @@ mod generators;
 mod misc;
 mod numeric;
 mod recursive;
+mod sequences;
 mod strings;
 mod time;
 mod tuples;
@@ -53,6 +54,7 @@ pub use generators::{
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use recursive::{RecursiveGenerator, SubtreeGenerator, recursive};
+pub use sequences::{PermutationGenerator, SubsequenceGenerator, permutations, subsequences};
 pub use strings::{
     BinaryGenerator, CharactersGenerator, DateStringGenerator, DateTimeStringGenerator,
     DomainGenerator, EmailGenerator, IpAddressGenerator, Ipv4AddressGenerator,

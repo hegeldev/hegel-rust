@@ -201,6 +201,38 @@ fn test_hashmaps_min_greater_than_max() {
 }
 
 #[test]
+fn test_permutations_min_greater_than_max() {
+    expect_draw_panic(
+        gs::permutations(vec![1, 2, 3]).min_size(3).max_size(2),
+        "max_size < min_size",
+    );
+}
+
+#[test]
+fn test_permutations_min_size_too_large() {
+    expect_draw_panic(
+        gs::permutations(vec![1, 2, 3]).min_size(4),
+        "min_size 4 is larger than the 3 elements",
+    );
+}
+
+#[test]
+fn test_subsequences_min_greater_than_max() {
+    expect_draw_panic(
+        gs::subsequences(vec![1, 2, 3]).min_size(3).max_size(2),
+        "max_size < min_size",
+    );
+}
+
+#[test]
+fn test_subsequences_min_size_too_large() {
+    expect_draw_panic(
+        gs::subsequences(vec![1, 2, 3]).min_size(4),
+        "min_size 4 is larger than the 3 elements",
+    );
+}
+
+#[test]
 fn test_domains_max_length_too_small() {
     expect_draw_panic(
         gs::domains().max_length(2),
