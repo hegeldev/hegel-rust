@@ -871,16 +871,13 @@ fn pretty_seq<'a, T: PrettyPrintable + ?Sized + 'a>(
     items: impl Iterator<Item = &'a T>,
 ) {
     printer.begin_group(open.chars().count(), open);
-    let mut index = 0usize;
-    for item in items {
+    for (index, item) in items.enumerate() {
         if index > 0 {
             printer.text(",");
             printer.breakable(" ");
         }
-        index += 1;
         item.pretty_print(printer);
     }
-    let _ = index;
     printer.end_group(close);
 }
 
@@ -922,20 +919,17 @@ fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
     entries: impl Iterator<Item = (&'a K, &'a V)>,
 ) {
     printer.begin_group(open.chars().count(), open);
-    let mut index = 0usize;
-    for (key, value) in entries {
+    for (index, (key, value)) in entries.enumerate() {
         if index > 0 {
             printer.text(",");
             printer.breakable(" ");
         }
-        index += 1;
         printer.text("(");
         key.pretty_print(printer);
         printer.text(", ");
         value.pretty_print(printer);
         printer.text(")");
     }
-    let _ = index;
     printer.end_group("])");
 }
 
