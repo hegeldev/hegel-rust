@@ -165,9 +165,7 @@ impl Generator<WeekdaySet> for WeekdaySetGenerator {
 
 impl PrintableGenerator<WeekdaySet> for WeekdaySetGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> WeekdaySet {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -225,9 +223,7 @@ impl Generator<FixedOffset> for FixedOffsetGenerator {
 
 impl PrintableGenerator<FixedOffset> for FixedOffsetGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> FixedOffset {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -304,9 +300,7 @@ impl Generator<TimeDelta> for TimeDeltaGenerator {
 
 impl PrintableGenerator<TimeDelta> for TimeDeltaGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> TimeDelta {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -370,9 +364,7 @@ impl Generator<NaiveDate> for NaiveDateGenerator {
 
 impl PrintableGenerator<NaiveDate> for NaiveDateGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveDate {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -451,9 +443,7 @@ impl Generator<NaiveTime> for NaiveTimeGenerator {
 
 impl PrintableGenerator<NaiveTime> for NaiveTimeGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveTime {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -522,9 +512,7 @@ impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
 
 impl PrintableGenerator<NaiveDateTime> for NaiveDateTimeGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveDateTime {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -600,9 +588,7 @@ impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
 
 impl<S: Generator<Weekday>> PrintableGenerator<NaiveWeek> for NaiveWeekGenerator<S> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveWeek {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -731,9 +717,7 @@ where
     Tz::Offset: std::fmt::Display,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime<Tz> {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 

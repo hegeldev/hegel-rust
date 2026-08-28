@@ -144,9 +144,7 @@ impl Generator<Date> for DateGenerator {
 
 impl PrintableGenerator<Date> for DateGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Date {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -245,9 +243,7 @@ impl Generator<Time> for TimeGenerator {
 
 impl PrintableGenerator<Time> for TimeGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Time {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -337,9 +333,7 @@ impl Generator<DateTime> for DateTimeGenerator {
 
 impl PrintableGenerator<DateTime> for DateTimeGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -402,9 +396,7 @@ impl Generator<Timestamp> for TimestampGenerator {
 
 impl PrintableGenerator<Timestamp> for TimestampGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Timestamp {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -473,9 +465,7 @@ impl Generator<Span> for SpanGenerator {
 
 impl PrintableGenerator<Span> for SpanGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Span {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -543,9 +533,7 @@ impl Generator<SignedDuration> for SignedDurationGenerator {
 
 impl PrintableGenerator<SignedDuration> for SignedDurationGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> SignedDuration {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -610,9 +598,7 @@ impl Generator<Offset> for OffsetGenerator {
 
 impl PrintableGenerator<Offset> for OffsetGenerator {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Offset {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -688,9 +674,7 @@ where
     TZ: Generator<TimeZone>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Zoned {
-        let value = self.do_draw(tc);
-        PrettyPrintable::pretty_print(&value, printer);
-        value
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
