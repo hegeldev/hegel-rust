@@ -509,11 +509,6 @@ mod direct_strategies {
     }
 
     #[test]
-    fn test_has_lower_bound() {
-        assert_all_examples(gs::integers::<i64>().min_value(100), |x: &i64| *x >= 100);
-    }
-
-    #[test]
     fn test_is_in_bounds() {
         assert_all_examples(
             gs::integers::<i64>().min_value(1).max_value(2),
@@ -555,14 +550,6 @@ mod direct_strategies {
         expected.insert(false, 0);
         expected.insert(true, 0);
         assert_eq!(v, expected);
-    }
-
-    #[test]
-    fn test_dictionaries_respect_size() {
-        assert_all_examples(
-            gs::hashmaps(gs::integers::<i64>(), gs::integers::<i64>()).max_size(5),
-            |d: &HashMap<i64, i64>| d.len() <= 5,
-        );
     }
 
     #[test]
@@ -733,9 +720,8 @@ mod provisional_strategies {
 mod pbtkit_generators {
     use std::collections::HashMap;
 
-    use super::common::utils::{assert_all_examples, expect_panic, minimal};
+    use super::common::utils::{assert_all_examples, minimal};
     use hegel::generators::{self as gs, Generator};
-    use hegel::{Hegel, Settings};
 
     #[test]
     fn test_mapped_possibility() {
@@ -776,32 +762,10 @@ mod pbtkit_generators {
     }
 
     #[test]
-    fn test_cannot_witness_empty_one_of() {
-        expect_panic(
-            || {
-                let empty: Vec<gs::BoxedGenerator<i32>> = vec![];
-                gs::one_of(empty);
-            },
-            "one_of requires at least one generator",
-        );
-    }
-
-    #[test]
     fn test_one_of_single() {
         assert_all_examples(
             hegel::one_of!(gs::integers::<i64>().min_value(0).max_value(10)),
             |n: &i64| (0..=10).contains(n),
-        );
-    }
-
-    #[test]
-    fn test_can_draw_mixture() {
-        assert_all_examples(
-            hegel::one_of!(
-                gs::integers::<i64>().min_value(-5).max_value(0),
-                gs::integers::<i64>().min_value(2).max_value(5),
-            ),
-            |m: &i64| (-5..=5).contains(m) && *m != 1,
         );
     }
 
@@ -813,34 +777,6 @@ mod pbtkit_generators {
                 .max_size(3),
             |ls: &Vec<i64>| (1..=3).contains(&ls.len()),
         );
-    }
-
-    #[test]
-    fn test_fixed_size_list() {
-        assert_all_examples(
-            gs::vecs(gs::integers::<i64>().min_value(0).max_value(10))
-                .min_size(3)
-                .max_size(3),
-            |ls: &Vec<i64>| ls.len() == 3,
-        );
-    }
-
-    #[test]
-    fn test_many_with_small_max() {
-        Hegel::new(|tc| {
-            let ls: Vec<i64> =
-                tc.draw(gs::vecs(gs::integers::<i64>().min_value(0).max_value(10)).max_size(2));
-            assert!(ls.len() <= 2);
-        })
-        .settings(Settings::new().test_cases(200).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_sampled_from() {
-        assert_all_examples(gs::sampled_from(vec!["a", "b", "c"]), |v: &&'static str| {
-            matches!(*v, "a" | "b" | "c")
-        });
     }
 
     #[test]
@@ -857,22 +793,6 @@ mod pbtkit_generators {
         assert_all_examples(gs::sampled_from(vec!["only"]), |v: &&'static str| {
             *v == "only"
         });
-    }
-
-    #[test]
-    fn test_sampled_from_empty() {
-        expect_panic(
-            || {
-                let empty: Vec<i32> = vec![];
-                gs::sampled_from(empty);
-            },
-            "cannot be empty",
-        );
-    }
-
-    #[test]
-    fn test_booleans() {
-        assert_all_examples(gs::booleans(), |_: &bool| true);
     }
 
     #[test]

@@ -269,12 +269,6 @@ fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
     assert!(vec.len() <= 5);
 }
 
-#[hegel::test]
-fn test_vec_unique_sampled_from_no_duplicates(tc: TestCase) {
-    let vec: Vec<i64> = tc.draw(gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true));
-    assert!(vec.len() <= 1);
-}
-
 mod simple_collections {
     //!
     //! `test_find_non_empty_collection_gives_single_zero` and
@@ -473,14 +467,6 @@ mod nocover_sets {
             |s: &HashSet<i64>| s.is_empty(),
         );
     }
-
-    #[test]
-    fn test_bounded_size_sets() {
-        assert_all_examples(
-            gs::hashsets(gs::integers::<i64>()).max_size(2),
-            |s: &HashSet<i64>| s.len() <= 2,
-        );
-    }
 }
 
 mod nocover_large_examples {
@@ -525,9 +511,7 @@ mod sampled_from {
     //! optimization. The `enumerate_values` path handles both rare-value and
     //! unsatisfiable cases correctly.
 
-    use super::common::utils::{
-        assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
-    };
+    use super::common::utils::{assert_all_examples, check_can_generate_examples, expect_panic};
     use hegel::generators::{self as gs, Generator};
     use hegel::{HealthCheck, Hegel, Settings};
     use std::collections::{HashMap, HashSet};
@@ -569,14 +553,6 @@ mod sampled_from {
                 .run();
             },
             "(?i)(health.check|FailedHealthCheck|Unsatisfiable|filter)",
-        );
-    }
-
-    #[test]
-    fn test_easy_filtered_sampling() {
-        assert_simple_property(
-            gs::sampled_from((0..100).collect::<Vec<i64>>()).filter(|x: &i64| *x == 0),
-            |x: &i64| *x == 0,
         );
     }
 

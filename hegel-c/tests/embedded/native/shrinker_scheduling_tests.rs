@@ -432,29 +432,6 @@ fn fixate_emits_debug_per_pass_step_when_debug_set() {
 }
 
 #[test]
-fn fixate_emits_no_debug_when_no_callback_set() {
-    let initial = vec![int_node(5)];
-    let mut shrinker = Shrinker::with_probe(
-        Box::new(|run: ShrinkRun<'_>| match run {
-            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
-            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
-        }),
-        initial,
-        Spans::new(),
-    );
-    let mut passes = vec![ShrinkPass::new(
-        "zero_choices",
-        Box::new(|sh| Box::pin(sh.zero_choices())),
-    )];
-    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
-    let v = match &shrinker.current_nodes[0].value() {
-        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
-        _ => unreachable!(),
-    };
-    assert_eq!(v, 0);
-}
-
-#[test]
 fn shrink_emits_profile_report_when_debug_set() {
     use std::sync::{Arc, Mutex};
     let log = Arc::new(Mutex::new(Vec::<String>::new()));

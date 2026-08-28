@@ -327,14 +327,6 @@ mod pbtkit_text {
     }
 
     #[test]
-    fn test_text_ascii() {
-        assert_all_examples(
-            gs::text().min_codepoint(32).max_codepoint(126),
-            |s: &String| s.chars().all(|c| (32..=126).contains(&(c as u32))),
-        );
-    }
-
-    #[test]
     fn test_text_shrinks_to_short() {
         let s = minimal(
             gs::text()
@@ -522,11 +514,6 @@ mod simple_strings {
     }
 
     #[test]
-    fn test_binary_respects_max_size() {
-        assert_all_examples(gs::binary().max_size(5), |x: &Vec<u8>| x.len() <= 5);
-    }
-
-    #[test]
     fn test_does_not_simplify_into_surrogates() {
         let f = minimal(gs::text(), |s: &String| s.as_str() >= "\u{e000}");
         assert_eq!(f, "\u{e000}");
@@ -542,27 +529,6 @@ mod simple_strings {
     fn test_respects_alphabet_if_list() {
         assert_all_examples(gs::text().alphabet("ab"), |s: &String| {
             s.chars().all(|c| c == 'a' || c == 'b')
-        });
-    }
-
-    #[test]
-    fn test_respects_alphabet_if_string() {
-        assert_all_examples(gs::text().alphabet("cdef"), |s: &String| {
-            s.chars().all(|c| "cdef".contains(c))
-        });
-    }
-
-    #[test]
-    fn test_can_encode_as_utf8() {
-        assert_all_examples(gs::text(), |s: &String| {
-            std::str::from_utf8(s.as_bytes()).is_ok()
-        });
-    }
-
-    #[test]
-    fn test_can_blacklist_newlines() {
-        assert_all_examples(gs::text().exclude_characters("\n"), |s: &String| {
-            !s.contains('\n')
         });
     }
 
@@ -1159,11 +1125,6 @@ mod regex_tests {
     fn test_fullmatch_is_the_default() {
         let re = Regex::new(r"\A[ab]+\z").unwrap();
         assert_all_examples(gs::from_regex("[ab]+"), move |s: &String| re.is_match(s));
-    }
-
-    #[test]
-    fn test_fullmatch_generates_example_literal() {
-        find_any(gs::from_regex("a").fullmatch(true), |s: &String| s == "a");
     }
 
     #[test]

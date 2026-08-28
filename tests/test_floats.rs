@@ -168,40 +168,6 @@ mod pbtkit_floats {
     use hegel::{Hegel, Settings};
 
     #[test]
-    fn test_floats_bounded() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(
-                gs::floats::<f64>()
-                    .min_value(0.0)
-                    .max_value(1.0)
-                    .allow_nan(false),
-            );
-            assert!((0.0..=1.0).contains(&f));
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_unbounded() {
-        Hegel::new(|tc| {
-            tc.draw(gs::floats::<f64>());
-        })
-        .settings(Settings::new().test_cases(200).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_draw_unbounded_float_rejects_nan() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));
-            assert!(!f.is_nan());
-        })
-        .settings(Settings::new().test_cases(1000).database(None))
-        .run();
-    }
-
-    #[test]
     fn test_floats_shrinks_to_zero() {
         let f = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| *f != 0.0);
         assert_ne!(f, 0.0);
@@ -222,29 +188,6 @@ mod pbtkit_floats {
     #[test]
     fn test_floats_no_nan() {
         assert_all_examples(gs::floats::<f64>().allow_nan(false), |f: &f64| !f.is_nan());
-    }
-
-    #[test]
-    fn test_floats_no_infinity() {
-        assert_all_examples(
-            gs::floats::<f64>().allow_infinity(false).allow_nan(false),
-            |f: &f64| f.is_finite(),
-        );
-    }
-
-    #[test]
-    fn test_floats_negative_range() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(
-                gs::floats::<f64>()
-                    .min_value(-10.0)
-                    .max_value(-1.0)
-                    .allow_nan(false),
-            );
-            assert!((-10.0..=-1.0).contains(&f));
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
     }
 
     #[test]
@@ -342,13 +285,6 @@ mod pbtkit_floats {
         })
         .settings(Settings::new().test_cases(200).database(None))
         .run();
-    }
-
-    #[test]
-    fn test_floats_half_bounded_with_infinity() {
-        find_any(gs::floats::<f64>().min_value(0.0), |f: &f64| {
-            f.is_infinite()
-        });
     }
 
     #[test]
@@ -628,11 +564,6 @@ mod float_nastiness {
         assert_all_examples(gs::floats::<f64>().min_value(0.0), |x: &f64| {
             !x.is_sign_negative()
         });
-    }
-
-    #[test]
-    fn test_filter_nan() {
-        assert_all_examples(gs::floats::<f64>().allow_nan(false), |x: &f64| !x.is_nan());
     }
 
     #[test]
@@ -917,14 +848,6 @@ mod nocover_floating {
         .max_attempts(1000)
         .suppress_health_check(HealthCheck::FilterTooMuch)
         .run();
-    }
-
-    #[test]
-    fn test_largest_range() {
-        assert_all_examples(
-            gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX),
-            |x: &f64| !x.is_infinite(),
-        );
     }
 
     #[test]

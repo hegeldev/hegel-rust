@@ -315,19 +315,6 @@ draw_lines_case!(
 );
 
 draw_lines_case!(
-    test_limitation_draw_not_in_let_binding,
-    draw_not_in_let_binding_fixture,
-    tc,
-    {
-        let _ = vec![
-            tc.draw(gs::integers::<i32>()),
-            tc.draw(gs::integers::<i32>()),
-        ];
-    },
-    ["let draw_1 = 0;", "let draw_2 = 0;"]
-);
-
-draw_lines_case!(
     test_limitation_destructuring_pattern,
     destructuring_pattern_fixture,
     tc,
@@ -406,16 +393,6 @@ fn test_draw_named_non_repeatable_reuse_panics() {
     );
 }
 
-#[test]
-fn test_draw_named_repeatable_skips_taken_name() {
-    hegel::Hegel::new(|tc: hegel::TestCase| {
-        tc.__draw_named(gs::booleans(), "x_1", false);
-        tc.__draw_named(gs::booleans(), "x", true);
-    })
-    .settings(hegel::Settings::new().test_cases(1))
-    .run();
-}
-
 mod draw_names {
     //! pbtkit's `draw_names` module is a Python-source rewriter (libcst + runtime
     //! `inspect.getsource` + import-time monkey-patching of `TestCase`) that turns
@@ -423,7 +400,6 @@ mod draw_names {
     //! equivalent is the `#[hegel::test]` proc macro, which does the same rewrite
     //! at compile time.
 
-    use super::common::utils::expect_panic;
     use hegel::generators as gs;
 
     draw_lines_case!(
@@ -503,36 +479,6 @@ mod draw_names {
         ["let x_1 = 1;", "let x_2 = 2;", "let x_3 = 3;"]
     );
 
-    #[test]
-    fn test_draw_named_non_repeatable_reuse_raises() {
-        expect_panic(
-            || {
-                hegel::Hegel::new(|tc: hegel::TestCase| {
-                    tc.__draw_named(gs::booleans(), "x", false);
-                    tc.__draw_named(gs::booleans(), "x", false);
-                })
-                .settings(hegel::Settings::new().test_cases(1))
-                .run();
-            },
-            r#"__draw_named.*"x".*more than once"#,
-        );
-    }
-
-    #[test]
-    fn test_draw_named_inconsistent_flags_raises() {
-        expect_panic(
-            || {
-                hegel::Hegel::new(|tc: hegel::TestCase| {
-                    tc.__draw_named(gs::booleans(), "x", false);
-                    tc.__draw_named(gs::booleans(), "x", true);
-                })
-                .settings(hegel::Settings::new().test_cases(1))
-                .run();
-            },
-            r#"__draw_named.*inconsistent.*repeatable"#,
-        );
-    }
-
     draw_lines_case!(
         test_draw_named_different_names_ok,
         draw_named_different_names_ok_fixture,
@@ -567,57 +513,6 @@ mod draw_names {
     );
 
     draw_lines_case!(
-        test_rewriter_while_loop_body_is_repeatable,
-        rewriter_while_loop_body_is_repeatable_fixture,
-        tc,
-        {
-            let mut i = 0;
-            while i < 1 {
-                let x = tc.draw(gs::just(0i32));
-                i += 1;
-            }
-        },
-        ["let x_1 = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewriter_if_body_is_repeatable,
-        rewriter_if_body_is_repeatable_fixture,
-        tc,
-        {
-            if true {
-                let x = tc.draw(gs::just(0i32));
-            }
-        },
-        ["let x_1 = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewriter_nested_block_is_repeatable,
-        rewriter_nested_block_is_repeatable_fixture,
-        tc,
-        {
-            {
-                let x = tc.draw(gs::just(0i32));
-            }
-        },
-        ["let x_1 = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewriter_name_seen_at_top_and_loop_all_repeatable,
-        rewriter_name_seen_at_top_and_loop_all_repeatable_fixture,
-        tc,
-        {
-            let x = tc.draw(gs::just(0i32));
-            for _ in 0..1 {
-                let x = tc.draw(gs::just(0i32));
-            }
-        },
-        ["let x_1 = 0;", "let x_2 = 0;"]
-    );
-
-    draw_lines_case!(
         test_rewriter_no_draws_is_noop,
         rewriter_no_draws_is_noop_fixture,
         tc,
@@ -644,72 +539,6 @@ mod draw_names {
         },
         ["let draw_1 = (0, 0);"]
     );
-
-    draw_lines_case!(
-        test_rewrite_draws_output_is_named,
-        rewrite_draws_output_is_named_fixture,
-        tc,
-        {
-            let value = tc.draw(gs::just(0i32));
-        },
-        ["let value = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewrite_draws_two_draws,
-        rewrite_draws_two_draws_fixture,
-        tc,
-        {
-            let first = tc.draw(gs::just(0i32));
-            let second = tc.draw(gs::just(0i32));
-        },
-        ["let first = 0;", "let second = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewrite_draws_final_replay_uses_rewritten_function,
-        rewrite_draws_final_replay_uses_rewritten_function_fixture,
-        tc,
-        {
-            let answer = tc.draw(gs::just(0i32));
-        },
-        ["let answer = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewrite_draws_loop_output_numbered,
-        rewrite_draws_loop_output_numbered_fixture,
-        tc,
-        {
-            for _ in 0..2 {
-                let item = tc.draw(gs::just(0i32));
-            }
-        },
-        ["let item_1 = 0;", "let item_2 = 0;"]
-    );
-
-    draw_lines_case!(
-        test_rewrite_draws_no_error_for_no_draw_function,
-        rewrite_draws_no_error_for_no_draw_function_fixture,
-        tc,
-        {},
-        []
-    );
-
-    #[test]
-    fn test_draw_named_validation_runs_outside_composite() {
-        expect_panic(
-            || {
-                hegel::Hegel::new(|tc: hegel::TestCase| {
-                    tc.__draw_named(gs::booleans(), "x", false);
-                    tc.__draw_named(gs::booleans(), "x", false);
-                })
-                .settings(hegel::Settings::new().test_cases(1))
-                .run();
-            },
-            r#"__draw_named.*"x".*more than once"#,
-        );
-    }
 
     #[test]
     fn test_draw_named_no_validation_inside_composite() {

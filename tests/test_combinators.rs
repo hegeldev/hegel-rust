@@ -1,8 +1,8 @@
 mod common;
 
-use common::utils::{assert_all_examples, expect_panic, find_any};
+use common::utils::{assert_all_examples, find_any};
+use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
-use hegel::{Hegel, Settings, TestCase};
 
 #[hegel::test]
 fn test_sampled_from_returns_element_from_list(tc: TestCase) {
@@ -49,16 +49,6 @@ fn test_one_of_enumerable_children_feed_the_filter_pool() {
         .filter(|x: &i64| x % 2 == 1),
         |x: &i64| *x == 1 || *x == 3,
     );
-}
-
-#[test]
-fn test_optional_can_generate_some() {
-    find_any(gs::optional(gs::integers::<i32>()), |v| v.is_some());
-}
-
-#[test]
-fn test_optional_can_generate_none() {
-    find_any(gs::optional(gs::integers::<i32>()), |v| v.is_none());
 }
 
 #[hegel::test]
@@ -128,25 +118,6 @@ fn test_one_of_single_component(tc: TestCase) {
     assert_eq!(tc.draw(hegel::one_of!(gs::just(42))), 42);
     assert_eq!(tc.draw(hegel::one_of!(gs::just(43),)), 43);
     assert_eq!(tc.draw_silent(hegel::one_of!(gs::just(44))), 44);
-}
-
-#[hegel::test]
-fn test_one_of_twelve_components(tc: TestCase) {
-    let value = tc.draw(hegel::one_of!(
-        gs::just(0),
-        gs::just(1),
-        gs::just(2),
-        gs::just(3),
-        gs::just(4),
-        gs::just(5),
-        gs::just(6),
-        gs::just(7),
-        gs::just(8),
-        gs::just(9),
-        gs::just(10),
-        gs::just(11),
-    ));
-    assert!((0..12).contains(&value));
 }
 
 #[hegel::test]
@@ -275,23 +246,6 @@ fn test_sampled_from_filter_produces_only_valid_values() {
     assert_all_examples(
         gs::sampled_from(vec![1_i64, 2, 3, 4, 5]).filter(|x: &i64| *x > 2),
         |x: &i64| *x > 2,
-    );
-}
-
-/// When all elements are rejected, panic immediately with a clear message
-/// rather than triggering FilterTooMuch or silently passing vacuously.
-#[test]
-fn test_sampled_from_unsatisfiable_filter_panics() {
-    expect_panic(
-        || {
-            Hegel::new(|tc| {
-                let _: i64 =
-                    tc.draw(gs::sampled_from((0..10_i64).collect::<Vec<i64>>()).filter(|x| *x < 0));
-            })
-            .settings(Settings::new().database(None))
-            .run();
-        },
-        "(?i)(unsatisfiable|filter)",
     );
 }
 

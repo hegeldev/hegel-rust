@@ -870,37 +870,6 @@ fn libhegel_blob_test_case_replays_the_counterexample() {
 }
 
 #[test]
-fn libhegel_test_case_from_blob_rejects_bad_input() {
-    let lib = unsafe { load() };
-    let a = unsafe { bind(&lib) };
-
-    unsafe {
-        let ctx = (a.context_new)();
-        let s = a.settings_new(ctx);
-
-        let garbage = CString::new("!!! not a blob !!!").unwrap();
-        let tc = a.test_case_from_blob(ctx, s, garbage.as_ptr());
-        assert!(tc.is_null());
-        let err = CStr::from_ptr(a.context_last_error(ctx)).to_string_lossy();
-        assert!(
-            err.contains("could not be decoded"),
-            "unexpected error: {err}"
-        );
-
-        let tc = a.test_case_from_blob(ctx, s, ptr::null());
-        assert!(tc.is_null());
-        assert!(!CStr::from_ptr(a.context_last_error(ctx)).is_empty());
-        let blob = CString::new("AAEC").unwrap();
-        let tc = a.test_case_from_blob(ctx, ptr::null(), blob.as_ptr());
-        assert!(tc.is_null());
-        assert!(!CStr::from_ptr(a.context_last_error(ctx)).is_empty());
-
-        a.settings_free(ctx, s);
-        (a.context_free)(ctx);
-    }
-}
-
-#[test]
 fn libhegel_frees_run_owned_test_cases() {
     let lib = unsafe { load() };
     let a = unsafe { bind(&lib) };

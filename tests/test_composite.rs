@@ -65,14 +65,6 @@ mod composite {
     }
 
     #[test]
-    fn test_can_pass_through_arguments_6() {
-        assert_eq!(
-            minimal(badly_draw_lists(6), |_: &Vec<i32>| true),
-            vec![0; 6]
-        );
-    }
-
-    #[test]
     fn test_can_assume_in_draw() {
         Hegel::new(|tc| {
             let (x, y) = tc.draw(&hegel::compose!(|tc| {

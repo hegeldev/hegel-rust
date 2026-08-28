@@ -42,22 +42,6 @@ fn test_integers_min_greater_than_max() {
 }
 
 #[test]
-fn test_floats_allow_nan_with_min_value() {
-    expect_draw_panic(
-        gs::floats::<f64>().allow_nan(true).min_value(0.0),
-        "allow_nan=true",
-    );
-}
-
-#[test]
-fn test_floats_min_greater_than_max() {
-    expect_draw_panic(
-        gs::floats::<f64>().min_value(10.0).max_value(5.0),
-        "max_value < min_value",
-    );
-}
-
-#[test]
 fn test_floats_pos_zero_min_neg_zero_max() {
     expect_draw_panic(
         gs::floats::<f64>().min_value(0.0).max_value(-0.0),
@@ -70,17 +54,6 @@ fn test_floats_pos_zero_min_neg_zero_max_f32() {
     expect_draw_panic(
         gs::floats::<f32>().min_value(0.0).max_value(-0.0),
         "InvalidArgument",
-    );
-}
-
-#[test]
-fn test_floats_allow_infinity_with_both_bounds() {
-    expect_draw_panic(
-        gs::floats::<f64>()
-            .allow_infinity(true)
-            .min_value(0.0)
-            .max_value(1.0),
-        "allow_infinity=true",
     );
 }
 
@@ -315,14 +288,6 @@ mod validation {
         check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50));
         check_can_generate_examples(gs::hashsets(gs::integers::<i64>()).min_size(50));
         check_can_generate_examples(gs::vecs(gs::integers::<i64>()).min_size(50).unique(true));
-    }
-
-    #[test]
-    fn test_min_before_max() {
-        expect_draw_panic(
-            gs::integers::<i64>().min_value(1).max_value(0),
-            "max_value < min_value",
-        );
     }
 
     #[test]

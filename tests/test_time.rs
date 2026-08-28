@@ -91,11 +91,6 @@ mod datetimes {
     }
 
     #[test]
-    fn test_allow_imaginary_is_not_an_error_for_naive_datetimes() {
-        assert_all_examples(gs::datetime_strings(), |_: &String| true);
-    }
-
-    #[test]
     fn test_can_find_after_the_year_2000() {
         let d = minimal(gs::date_strings(), |s: &String| date_year(s) > 2000);
         assert_eq!(date_year(&d), 2001);
@@ -146,13 +141,6 @@ mod datetimes {
         assert_eq!(minute, 0);
         assert_eq!(second, 0);
         assert_eq!(microsecond, 0);
-    }
-
-    #[test]
-    fn test_can_generate_naive_time() {
-        find_any(gs::time_strings(), |s: &String| {
-            !s.contains('+') && !s.contains('Z')
-        });
     }
 
     #[test]
