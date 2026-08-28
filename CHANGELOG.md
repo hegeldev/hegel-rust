@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.5 - 2026-08-28
+
+This patch fixes the distribution of `generators::recursive` to cover a broader range of leaves up to `max_leaves`. Previously for some uses (especially ones where the branch case often drew 0 or 1 leaves) the recursive generator ended up biased very heavily towards small values.
+
 ## 0.32.4 - 2026-08-27
 
 This patch adds `generators::recursive`, a combinator for generating recursively defined data such as trees or JSON documents. It takes a generator for the leaf values and a function that builds one level of branch structure from a generator of subtrees:

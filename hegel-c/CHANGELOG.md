@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.33.3 - 2026-08-28
+
+This patch fixes the recursion protocol generating far smaller values than the leaf budget allows. Branch decisions were priced as if every branch had exactly two children, so grammars averaging fewer collapsed to a handful of nodes; and even at a correct price, the induced size distribution keeps its median at a few nodes regardless of the budget. `hegel_new_recursion` now draws a target size for each value from the test case's stream and steers branch decisions toward it, adapting to the arities the branch function actually produces, so typical sizes span the whole leaf budget and unary-only chains spread up to the depth limit.
+
+The protocol gains a new call, `hegel_recursion_finish`, made once a value has been fully generated: it reports `HEGEL_E_RETRY` when the finished value turns out to have been badly mispriced, in which case the client drops the value and regenerates it from the root (at most twice per draw). Clients that never call it keep the previous accept-everything behavior.
+
 ## 0.33.2 - 2026-08-27
 
 This patch adds engine support for generating recursively defined data (trees, JSON documents, ...), so every language frontend gets identically distributed recursive values from the same protocol: `hegel_new_recursion` opens a recursive generation scope on a test case, `hegel_recursion_branch` draws each sub-value's leaf-or-branch decision, and `hegel_recursion_leaf` counts each leaf against the scope's budget. The engine owns all of the policy — branch probabilities, the depth limit (which forces the decision as a recorded choice, keeping the choice sequence aligned for the shrinker), and the leaf budget. An attempt that outgrows `max_leaves` reports the new `HEGEL_E_RETRY` result code; the client unwinds it and calls `hegel_recursion_retry`, which discards the attempt's spans and retries with a lower branching probability, concluding the test case invalid when too many attempts in a row fail to fit. Sub-values are expected to be wrapped in spans with the new `HEGEL_LABEL_RECURSIVE` label, which lets the shrinker replace a tree with one of its own subtrees.

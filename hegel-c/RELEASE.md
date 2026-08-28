@@ -1,5 +1,0 @@
-RELEASE_TYPE: patch
-
-This patch fixes the recursion protocol generating far smaller values than the leaf budget allows. Branch decisions were priced as if every branch had exactly two children, so grammars averaging fewer collapsed to a handful of nodes; and even at a correct price, the induced size distribution keeps its median at a few nodes regardless of the budget. `hegel_new_recursion` now draws a target size for each value from the test case's stream and steers branch decisions toward it, adapting to the arities the branch function actually produces, so typical sizes span the whole leaf budget and unary-only chains spread up to the depth limit.
-
-The protocol gains a new call, `hegel_recursion_finish`, made once a value has been fully generated: it reports `HEGEL_E_RETRY` when the finished value turns out to have been badly mispriced, in which case the client drops the value and regenerates it from the root (at most twice per draw). Clients that never call it keep the previous accept-everything behavior.
