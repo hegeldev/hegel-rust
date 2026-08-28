@@ -57,12 +57,24 @@ fn chrono_values_print_as_constructor_expressions() {
         render(&week),
         "NaiveDate::from_ymd_opt(2024, 6, 3).unwrap().week(Weekday::Mon)"
     );
-    let datetime = FixedOffset::east_opt(0)
+    let datetime = FixedOffset::east_opt(3600)
         .unwrap()
         .with_ymd_and_hms(2020, 1, 1, 0, 0, 0)
         .unwrap();
     assert_eq!(
         render(&datetime),
-        "DateTime::parse_from_rfc3339(\"2020-01-01T00:00:00+00:00\").unwrap()"
+        "NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()\
+         .and_hms_nano_opt(0, 0, 0, 0).unwrap()\
+         .and_local_timezone(FixedOffset::east_opt(3600).unwrap()).unwrap()"
+    );
+    let far_future = FixedOffset::east_opt(0)
+        .unwrap()
+        .with_ymd_and_hms(20_000, 1, 1, 0, 0, 0)
+        .unwrap();
+    assert_eq!(
+        render(&far_future),
+        "NaiveDate::from_ymd_opt(20000, 1, 1).unwrap()\
+         .and_hms_nano_opt(0, 0, 0, 0).unwrap()\
+         .and_local_timezone(FixedOffset::east_opt(0).unwrap()).unwrap()"
     );
 }

@@ -88,21 +88,25 @@ impl PrettyPrintable for NaiveWeek {
     }
 }
 
-impl<Tz: TimeZone> PrettyPrintable for DateTime<Tz>
-where
-    Tz::Offset: std::fmt::Display,
-{
+/// Prints as a `NaiveDateTime` constructor localized with
+/// `and_local_timezone` rather than an RFC 3339 string: the string form
+/// only parses back for years 0000–9999, a sliver of chrono's
+/// ±262143-year range, while the constructor form is valid for every
+/// representable value. A fixed offset never makes a local time ambiguous,
+/// so the trailing `unwrap` always succeeds.
+impl<Tz: TimeZone> PrettyPrintable for DateTime<Tz> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.naive_local().pretty_print(printer);
         printer.text(&format!(
-            "DateTime::parse_from_rfc3339({:?}).unwrap()",
-            self.to_rfc3339()
+            ".and_local_timezone(FixedOffset::east_opt({}).unwrap()).unwrap()",
+            self.offset().fix().local_minus_utc()
         ));
     }
 }
 use crate::test_case::invalid_argument;
 use chrono::{
-    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, TimeDelta,
-    TimeZone, Timelike, Utc, Weekday, WeekdaySet,
+    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, Offset,
+    TimeDelta, TimeZone, Timelike, Utc, Weekday, WeekdaySet,
 };
 use std::marker::PhantomData;
 
@@ -714,7 +718,6 @@ impl<G, Tz> PrintableGenerator<DateTime<Tz>> for DateTimeGenerator<G, Tz>
 where
     G: Generator<Tz>,
     Tz: TimeZone + Send + Sync + 'static,
-    Tz::Offset: std::fmt::Display,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime<Tz> {
         crate::generators::draw_and_print_value(self, tc, printer)
