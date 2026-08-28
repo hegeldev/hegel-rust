@@ -401,6 +401,37 @@ fn test_derive_struct_override_field_twice_takes_last() {
 }
 
 #[derive(DeriveGenerator, Debug, Clone)]
+struct Wrapper(i32);
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct TuplePair(i32, String);
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct NestedTuple(Point, Wrapper);
+
+#[test]
+fn test_derive_tuple_struct_generates() {
+    check_can_generate_examples(gs::default::<Wrapper>());
+    check_can_generate_examples(gs::default::<TuplePair>());
+    check_can_generate_examples(gs::default::<NestedTuple>());
+    check_can_generate_examples(gs::vecs(gs::default::<Wrapper>()));
+}
+
+#[test]
+fn test_derive_tuple_struct_with_custom_field_generator() {
+    let g = gs::default::<Wrapper>()._0(gs::just(42));
+    assert_all_examples(g, |w: &Wrapper| w.0 == 42);
+}
+
+#[test]
+fn test_derive_tuple_struct_with_multiple_custom_fields() {
+    let g = TuplePair::default_generator()
+        ._0(gs::just(1))
+        ._1(gs::just("a".to_string()));
+    assert_all_examples(g, |t: &TuplePair| t.0 == 1 && t.1 == "a");
+}
+
+#[derive(DeriveGenerator, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum NameConflict {
     FieldName(i32),

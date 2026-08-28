@@ -1,0 +1,17 @@
+error: DefaultGenerator cannot be derived for structs with no fields: there is nothing to configure; use gs::just(...) instead
+ --> tests/ui/derive_zero_field_struct.rs:5:8
+  |
+5 | struct Unit;
+  |        ^^^^
+
+error: DefaultGenerator cannot be derived for structs with no fields: there is nothing to configure; use gs::just(...) instead
+ --> tests/ui/derive_zero_field_struct.rs:8:8
+  |
+8 | struct EmptyNamed {}
+  |        ^^^^^^^^^^
+
+error: DefaultGenerator cannot be derived for structs with no fields: there is nothing to configure; use gs::just(...) instead
+  --> tests/ui/derive_zero_field_struct.rs:11:8
+   |
+11 | struct EmptyTuple();
+   |        ^^^^^^^^^^

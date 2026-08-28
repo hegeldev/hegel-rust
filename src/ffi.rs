@@ -689,6 +689,48 @@ impl CTestCase {
         }))
     }
 
+    pub(crate) fn new_recursion(
+        &self,
+        max_depth: u64,
+        max_leaves: u64,
+    ) -> Result<RecursionHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelRecursion = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_new_recursion(ctx, self.raw, max_depth, max_leaves, &mut raw)
+        });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(RecursionHandle { raw })
+    }
+
+    pub(crate) fn recursion_branch(
+        &self,
+        recursion: &RecursionHandle,
+        depth: u64,
+    ) -> Result<bool, hegel_result_t> {
+        let mut branch = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_branch(ctx, self.raw, recursion.raw, depth, &mut branch)
+        });
+        rc_to_value(rc, branch)
+    }
+
+    pub(crate) fn recursion_leaf(&self, recursion: &RecursionHandle) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_leaf(ctx, self.raw, recursion.raw)
+        }))
+    }
+
+    pub(crate) fn recursion_retry(
+        &self,
+        recursion: &RecursionHandle,
+    ) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_retry(ctx, self.raw, recursion.raw)
+        }))
+    }
+
     pub(crate) fn new_pool(&self) -> Result<PoolHandle, hegel_result_t> {
         let mut raw: *mut hegel_c::HegelPool = ptr::null_mut();
         let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut raw) });
@@ -880,6 +922,33 @@ impl Drop for CollectionHandle {
         // SAFETY: `raw` came from a successful hegel_new_collection call and
         // is freed exactly once here.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_collection_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel recursion handle (`hegel_recursion_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_recursion`] and driven through
+/// [`CTestCase::recursion_branch`] / [`CTestCase::recursion_leaf`] /
+/// [`CTestCase::recursion_retry`] with any handle of the same test-case
+/// family. The scope serializes concurrent use internally, so it may be
+/// shared between clone handles on parallel threads; it is independent of
+/// the test case and run it was created under, so dropping it is safe in
+/// any order.
+pub(crate) struct RecursionHandle {
+    raw: *mut hegel_c::HegelRecursion,
+}
+
+// SAFETY: libhegel guards the recursion scope's state with its own lock
+// (serializing concurrent operations), so moving or sharing the handle
+// across threads is sound.
+unsafe impl Send for RecursionHandle {}
+unsafe impl Sync for RecursionHandle {}
+
+impl Drop for RecursionHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_recursion call and
+        // is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_recursion_free(ctx, self.raw) });
     }
 }
 

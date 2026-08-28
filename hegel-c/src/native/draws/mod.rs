@@ -8,7 +8,7 @@ pub mod text;
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    EngineError, FloatChoice, ManyState, NativeTestCase, Status, float_clamp,
+    EngineError, FloatChoice, ManyState, NativeTestCase, RecursionState, Status, float_clamp,
 };
 use crate::native::intervalsets::IntervalSet;
 use alloc::boxed::Box;
@@ -411,6 +411,110 @@ pub(crate) fn many_reject(
             state.force_stop = true;
         }
     }
+    Ok(())
+}
+
+/// The number of generation attempts one recursive draw gets before the
+/// test case is rejected: attempt `k` prices branches for a `(k + 2)`-ary
+/// tree, so nine attempts cover branch factors 2 through 10.
+pub(crate) const RECURSION_MAX_ATTEMPTS: u64 = 9;
+
+/// The branch probability for one attempt of a recursive draw: the `p` at
+/// which a tree whose branches have `arity` children each has *expected*
+/// leaf count exactly `max_leaves`.
+///
+/// Model an attempt as a branching process where every node independently
+/// branches into `arity` children with probability `p` or is a leaf. With
+/// `k = arity`, the expected leaf count is `E[L] = (1 - p) / (1 - kp)`
+/// (from the standard total-progeny mean `E[N] = 1 / (1 - kp)` and
+/// `L = (k - 1)(N - 1)/k + 1`), and solving `E[L] = max_leaves` gives
+///
+/// ```text
+/// p = (max_leaves - 1) / (max_leaves * k - 1)
+/// ```
+///
+/// This sits just below the critical probability `1/k`, so sizes spread
+/// over the whole budget — the distribution is heavily skewed, with most
+/// attempts far below the mean and a heavy tail reaching (and past) it —
+/// while the mean stays pinned to the budget instead of diverging the way
+/// it does at criticality. Attempts in the tail beyond `max_leaves` are
+/// discarded and retried by the protocol. Budgets below 2 use 2: at a
+/// budget of 1 the solution degenerates to `p = 0`, which would make the
+/// single leaf the only generable value (and make a budget of 0, whose only
+/// valid values are leafless, unsatisfiable), while the hard budget stays
+/// enforced by the retry protocol regardless of `p`. Budgets above 2^32 use
+/// 2^32, keeping `p` strictly subcritical where the exact solution would
+/// round to `1/k` in floating point; the probabilities it would round away
+/// from differ by under 1e-10, far below anything observable.
+pub(crate) fn recursion_branch_probability(arity: u64, max_leaves: u64) -> f64 {
+    let k = arity as f64;
+    let budget = max_leaves.clamp(2, 1 << 32) as f64;
+    (budget - 1.0) / (budget * k - 1.0)
+}
+
+/// Create the state for one recursive draw, with the first attempt's
+/// branch probability priced for a binary tree.
+pub(crate) fn new_recursion_state(
+    max_depth: u64,
+    max_leaves: u64,
+    base_span_depth: usize,
+) -> RecursionState {
+    RecursionState {
+        max_depth,
+        max_leaves,
+        attempt: 0,
+        leaves: 0,
+        base_span_depth,
+        branch_probability: recursion_branch_probability(2, max_leaves),
+    }
+}
+
+/// Draw the leaf-or-branch decision for one sub-value of a recursive
+/// generator.
+///
+/// The probability comes from [`recursion_branch_probability`]: the value
+/// at which an `(attempt + 2)`-ary tree's expected leaf count equals the
+/// leaf budget. It is computed once per attempt and fixed
+/// for the whole attempt — scaling it by the budget already spent would
+/// make earlier subtrees systematically branchier than their later
+/// siblings — and each retry assumes one more child per branch, so branch
+/// functions that actually produce many children quickly reach a
+/// probability at which they fit inside `max_leaves`. At the depth limit
+/// the decision is still drawn, at probability zero: the engine records it
+/// as a forced choice, so the choice sequence has the same shape whether or
+/// not the limit was hit.
+pub(crate) fn recursion_branch(
+    ntc: &mut NativeTestCase,
+    state: &RecursionState,
+    depth: u64,
+) -> Result<bool, EngineError> {
+    let p = if depth >= state.max_depth {
+        0.0
+    } else {
+        state.branch_probability
+    };
+    spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, None))
+}
+
+/// Discard a generation attempt that exceeded its leaf budget: close the
+/// spans the attempt left open (marking them discarded), reset the budget,
+/// and move to the next attempt's lower branch probability. Concludes the
+/// test case as invalid once [`RECURSION_MAX_ATTEMPTS`] attempts have
+/// failed.
+pub(crate) fn recursion_retry(
+    ntc: &mut NativeTestCase,
+    state: &mut RecursionState,
+) -> Result<(), EngineError> {
+    while ntc.span_depth() > state.base_span_depth {
+        ntc.stop_span(true);
+    }
+    state.leaves = 0;
+    state.attempt += 1;
+    if state.attempt >= RECURSION_MAX_ATTEMPTS {
+        ntc.conclude(Status::Invalid, None);
+        return Err(EngineError::InvalidTestCase);
+    }
+    state.branch_probability = recursion_branch_probability(state.attempt + 2, state.max_leaves);
     Ok(())
 }
 

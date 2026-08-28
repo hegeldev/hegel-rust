@@ -60,6 +60,37 @@ impl ManyState {
     }
 }
 
+/// State for an engine-managed recursive generator: the leaf budget and
+/// retry bookkeeping for one recursive draw. All generation policy — branch
+/// probabilities, budget enforcement, and the give-up rule — lives on the
+/// engine side (see `draws::recursion_branch` / `draws::recursion_retry`),
+/// so every language frontend generates identically distributed trees.
+pub struct RecursionState {
+    pub max_depth: u64,
+    pub max_leaves: u64,
+    pub attempt: u64,
+    pub leaves: u64,
+    pub base_span_depth: usize,
+    /// The branch probability for the current attempt, computed once per
+    /// attempt by `draws::recursion_branch_probability` (at creation and on
+    /// each retry) rather than at every branch decision.
+    pub branch_probability: f64,
+}
+
+impl RecursionState {
+    /// Count one leaf against the current attempt's budget. Returns false
+    /// when the attempt has already produced `max_leaves` leaves, in which
+    /// case the attempt must be discarded and retried instead of drawing
+    /// the leaf.
+    pub fn count_leaf(&mut self) -> bool {
+        if self.leaves >= self.max_leaves {
+            return false;
+        }
+        self.leaves += 1;
+        true
+    }
+}
+
 /// Probability of extending a length draw beyond its current size. Length
 /// clusters around an `average_size` derived from
 /// `min(max(min_size * 2, min_size + 5), 0.5 * (min_size + max_size))`.
@@ -1805,6 +1836,11 @@ impl NativeTestCase {
             self.freeze();
         }
         idx
+    }
+
+    /// The number of currently-open spans.
+    pub fn span_depth(&self) -> usize {
+        self.span_stack.len()
     }
 
     /// Close the innermost currently-open span.

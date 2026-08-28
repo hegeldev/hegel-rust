@@ -94,3 +94,44 @@ fn many_more_respects_fixed_and_bounded_sizes() {
     }
     assert!((1..=4).contains(&count));
 }
+
+#[test]
+fn recursion_branch_probability_pins_the_expected_leaf_count_to_the_budget() {
+    for arity in [2u64, 3, 4, 10] {
+        for max_leaves in [2u64, 8, 100, 1_000_000] {
+            let p = recursion_branch_probability(arity, max_leaves);
+            let k = arity as f64;
+            assert!(p > 0.0 && p < 1.0 / k);
+            let expected = (1.0 - p) / (1.0 - k * p);
+            let budget = max_leaves as f64;
+            assert!(
+                (expected - budget).abs() < budget * 1e-9,
+                "arity {arity}, max_leaves {max_leaves}: E[L] = {expected} != {budget}"
+            );
+        }
+    }
+}
+
+#[test]
+fn recursion_branch_probability_decreases_with_arity_and_grows_with_budget() {
+    for arity in 2..10 {
+        assert!(
+            recursion_branch_probability(arity + 1, 100) < recursion_branch_probability(arity, 100)
+        );
+    }
+    assert!(recursion_branch_probability(2, 100) < recursion_branch_probability(2, 1000));
+}
+
+#[test]
+fn recursion_branch_probability_clamps_tiny_budgets_to_two_leaves() {
+    let floor = recursion_branch_probability(2, 2);
+    assert!(floor > 0.0);
+    assert_eq!(recursion_branch_probability(2, 0), floor);
+    assert_eq!(recursion_branch_probability(2, 1), floor);
+}
+
+#[test]
+fn recursion_branch_probability_stays_finite_at_a_maximal_budget() {
+    let p = recursion_branch_probability(2, u64::MAX);
+    assert!(p > 0.49 && p < 0.5);
+}

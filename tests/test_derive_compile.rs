@@ -58,6 +58,9 @@ struct Fixed<const N: usize> {
     xs: [u8; N],
 }
 
+#[derive(Debug, hegel::DefaultGenerator)]
+struct Wrap<T>(T, i32);
+
 #[test]
 fn test_derive_on_generic_types_compiles_and_generates() {
     use hegel::generators as gs;
@@ -71,6 +74,8 @@ fn test_derive_on_generic_types_compiles_and_generates() {
         assert_eq!(f.xs.len(), 3);
         let q: Point<u8> = tc.draw(gs::default::<Point<u8>>());
         let _ = q;
+        let w: Wrap<bool> = tc.draw(gs::default::<Wrap<bool>>()._1(gs::just(3)));
+        assert_eq!(w.1, 3);
     })
     .settings(hegel::Settings::new().test_cases(5).database(None))
     .run();

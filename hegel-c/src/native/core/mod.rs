@@ -10,8 +10,8 @@ pub use choices::{
 pub use float_index::{float_to_index, index_to_float};
 pub(crate) use state::float_clamp;
 pub use state::{
-    GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Span,
-    SpanEvent, Spans,
+    GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables,
+    RecursionState, Span, SpanEvent, Spans,
 };
 pub use state_machine::NativeStateMachine;
 
