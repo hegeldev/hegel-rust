@@ -201,15 +201,10 @@ pub(crate) fn default_gen_bounds(types: &[&syn::Type]) -> Vec<proc_macro2::Token
 /// prefix keeps the parameter out of the way of the derived type's own
 /// generics.
 pub(crate) fn generator_param_ident(field_name: &str) -> syn::Ident {
-    let mut name = String::from("__G");
-    for segment in field_name.trim_start_matches("r#").split('_') {
-        let mut chars = segment.chars();
-        if let Some(first) = chars.next() {
-            name.extend(first.to_uppercase());
-            name.push_str(chars.as_str());
-        }
-    }
-    quote::format_ident!("{}", name)
+    quote::format_ident!(
+        "__G{}",
+        snake_to_pascal(field_name.trim_start_matches("r#"))
+    )
 }
 
 /// Emit the printing statements for one struct or enum-variant shape,
