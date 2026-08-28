@@ -47,7 +47,9 @@ fn sample_pairs<T: std::fmt::Debug + Send + 'static>(
     first: impl Generator<T> + Send + Sync + 'static,
     second: impl Generator<T> + Send + Sync + 'static,
 ) -> Vec<(T, T)> {
-    sample(20_000, seed, move |tc| (tc.draw(&first), tc.draw(&second)))
+    sample(20_000, seed, move |tc| {
+        (tc.draw_silent(&first), tc.draw_silent(&second))
+    })
 }
 
 /// Like [`sample_pairs`] for claims about a non-numeric value: the deliberate
@@ -57,7 +59,7 @@ fn sample_with_u64_companion<T: std::fmt::Debug + Send + 'static>(
     g: impl Generator<T> + Send + Sync + 'static,
 ) -> Vec<T> {
     sample(20_000, seed, move |tc| {
-        let v = tc.draw(&g);
+        let v = tc.draw_silent(&g);
         tc.draw(gs::integers::<u64>());
         v
     })
@@ -498,7 +500,7 @@ mod booleans {
         let vs = sample(2_000, seed, move |tc| {
             let mut trues = 0u32;
             for _ in 0..64 {
-                if tc.draw(&g) {
+                if tc.draw_silent(&g) {
                     trues += 1;
                 }
             }
@@ -668,9 +670,12 @@ mod recursive {
             tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
                 hegel::compose!(|tc| {
                     if tc.draw(gs::integers::<u8>().max_value(23)) < 17 {
-                        Expr::Negate(Box::new(tc.draw(&exprs)))
+                        Expr::Negate(Box::new(tc.draw_silent(&exprs)))
                     } else {
-                        Expr::Add(Box::new(tc.draw(&exprs)), Box::new(tc.draw(&exprs)))
+                        Expr::Add(
+                            Box::new(tc.draw_silent(&exprs)),
+                            Box::new(tc.draw_silent(&exprs)),
+                        )
                     }
                 })
             }))
@@ -707,10 +712,10 @@ mod recursive {
             tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
                 hegel::compose!(|tc| {
                     Expr::Add(
-                        Box::new(tc.draw(&exprs)),
+                        Box::new(tc.draw_silent(&exprs)),
                         Box::new(Expr::Add(
-                            Box::new(tc.draw(&exprs)),
-                            Box::new(tc.draw(&exprs)),
+                            Box::new(tc.draw_silent(&exprs)),
+                            Box::new(tc.draw_silent(&exprs)),
                         )),
                     )
                 })

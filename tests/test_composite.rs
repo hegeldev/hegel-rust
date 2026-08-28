@@ -240,6 +240,8 @@ mod composite_borrowed_data {
         y: u8,
     }
 
+    hegel::pretty_print_as_debug!(Object);
+
     #[hegel::composite]
     fn object_from_borrowed_name(tc: &TestCase, name: &str) -> Object {
         let x = tc.draw(gs::integers().max_value(3));
@@ -282,6 +284,8 @@ mod composite_borrowed_data {
         name: &'a str,
         x: u8,
     }
+
+    hegel::pretty_print_as_debug!(BorrowedObject<'_>);
 
     #[hegel::composite]
     fn borrowed_object_from_name<'a>(
