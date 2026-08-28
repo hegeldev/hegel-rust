@@ -27,7 +27,7 @@ value combinators (`map`, `filter`, composites) whenever the produced type
 is `PrettyPrintable`. `Document` and `PrettyPrinter` expose the layout
 engine directly for custom representations.
 
-The headline breaking change: [`TestCase::draw`] now takes an
+The headline breaking change: `TestCase::draw` now takes an
 `impl PrintableGenerator<T>` instead of any generator of a `Debug` type.
 Most call sites compile unchanged. A hand-written `Generator`
 implementation passed to `tc.draw` needs one of the escape hatches —
@@ -35,7 +35,19 @@ implementation passed to `tc.draw` needs one of the escape hatches —
 representation, `.print_as_debug()` prints any `Debug` type,
 `.print_with(f)` prints a custom representation (and can mask secrets) —
 or can switch to `tc.draw_silent`, which accepts any `Generator` and skips
-reporting. To make a hand-written generator printable itself, implement
+reporting:
+
+```rust
+// before
+let value = tc.draw(my_generator);
+
+// after: say how the drawn value should be reported ...
+let value = tc.draw(my_generator.print_as_debug());
+// ... or skip reporting it
+let value = tc.draw_silent(my_generator);
+```
+
+To make a hand-written generator printable itself, implement
 `PrintableGenerator::do_draw_and_print` and define `do_draw` as
 `self.do_draw_and_print(tc, &mut PrettyPrinter::noop())`, so both draw
 paths share one body and consume identical choices by construction.
@@ -61,4 +73,7 @@ Other breaking changes, all small:
   unique collections always rejection-sample; a set or map whose
   `min_size` exceeds what its element or key generator can produce now
   surfaces as a `FilterTooMuch` health check at run time instead of an
-  eager argument error.
+  eager argument error. Draws that are satisfiable but that rejection
+  sampling rarely satisfies — a filter that keeps one value in a hundred,
+  a set that must contain most of a small alphabet — fail the same health
+  check, where the fast path used to make them reliable.
