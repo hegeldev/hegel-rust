@@ -20,17 +20,18 @@ use hegel_c::{
     hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
     hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
     hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free,
-    hegel_pool_generate, hegel_recursion_branch, hegel_recursion_free, hegel_recursion_leaf,
-    hegel_recursion_retry, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_mode, hegel_settings_set_phases,
-    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
-    hegel_state_machine_next_rule, hegel_state_machine_rule_rejected, hegel_status_t,
-    hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_test_case_is_nondeterministic, hegel_version,
+    hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
+    hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
+    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_free,
+    hegel_state_machine_next_group, hegel_state_machine_next_rule,
+    hegel_state_machine_rule_rejected, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_test_case_is_nondeterministic, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -294,6 +295,10 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_recursion_retry(ctx, tc, ptr::null_mut()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_recursion_finish(ctx, tc, ptr::null_mut()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_recursion_free(ctx, ptr::null_mut()), HEGEL_OK);
@@ -855,6 +860,10 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_recursion_finish(ctx, tc, ptr::null_mut()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_new_recursion(ctx, tc, 4, 100, &mut recursion),
             HEGEL_OK
         );
@@ -947,9 +956,10 @@ fn live_test_case_argument_validation() {
 /// Drives the recursion protocol at the C level: the depth limit forces the
 /// branch decision to `false`, the leaf budget trips `HEGEL_E_RETRY`,
 /// `hegel_recursion_retry` discards the attempt (closing the spans it left
-/// open) and resets the leaf budget, and exhausting the retries concludes
-/// the test case invalid, after which every recursion call reports
-/// `HEGEL_E_ASSUME`.
+/// open) and resets the leaf budget, `hegel_recursion_finish` accepts a
+/// value whose pricing matches its observed arities, and exhausting the
+/// retries concludes the test case invalid, after which every recursion
+/// call reports `HEGEL_E_ASSUME`.
 #[test]
 fn recursion_budget_retry_and_depth_limit() {
     let ctx = hegel_context_new();
@@ -985,12 +995,14 @@ fn recursion_budget_retry_and_depth_limit() {
         ok(hegel_recursion_retry(ctx, tc, recursion));
 
         ok(hegel_recursion_leaf(ctx, tc, recursion));
+        ok(hegel_recursion_finish(ctx, tc, recursion));
 
         for _ in 0..7 {
             ok(hegel_recursion_retry(ctx, tc, recursion));
         }
         assert_eq!(hegel_recursion_retry(ctx, tc, recursion), HEGEL_E_ASSUME);
         assert_eq!(hegel_recursion_leaf(ctx, tc, recursion), HEGEL_E_ASSUME);
+        assert_eq!(hegel_recursion_finish(ctx, tc, recursion), HEGEL_E_ASSUME);
         assert_eq!(hegel_recursion_free(ctx, recursion), HEGEL_OK);
 
         let mut recursion2: *mut HegelRecursion = ptr::null_mut();

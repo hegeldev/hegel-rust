@@ -414,20 +414,51 @@ pub(crate) fn many_reject(
     Ok(())
 }
 
-/// The number of generation attempts one recursive draw gets before the
-/// test case is rejected: attempt `k` prices branches for a `(k + 2)`-ary
-/// tree, so nine attempts cover branch factors 2 through 10.
+/// The number of budget-exceeded retries one recursive draw gets before
+/// the test case is rejected: attempt `k` prices branches as if each had
+/// `k` more children than observed, so nine attempts push any branch
+/// function down to a fitting probability.
 pub(crate) const RECURSION_MAX_ATTEMPTS: u64 = 9;
 
-/// The branch probability for one attempt of a recursive draw: the `p` at
-/// which a tree whose branches have `arity` children each has *expected*
-/// leaf count exactly `max_leaves`.
+/// The number of completed-but-mispriced attempts one recursive draw
+/// discards (see [`recursion_finish`]) before accepting whatever the
+/// current price produces. One retry fixes the common case (the first
+/// attempt priced with no arity evidence); the second covers a first
+/// attempt so small its evidence was still badly noisy.
+pub(crate) const RECURSION_MAX_REPRICES: u64 = 2;
+
+/// The mean branch arity assumed before any branches have been observed.
+const RECURSION_PRIOR_ARITY: f64 = 2.0;
+
+/// The weight of [`RECURSION_PRIOR_ARITY`] in the arity estimate, in
+/// observed-branch units. Small, so a handful of closed branches dominate
+/// the prior; a branch function that always has two children matches the
+/// prior and keeps the estimate pinned at exactly 2 regardless.
+const RECURSION_PRIOR_WEIGHT: f64 = 0.25;
+
+/// Ceiling on the branch probability. The pricing formula asks for `p = 1`
+/// as the mean arity approaches 1 (a chain can never reach a leaf budget
+/// above 1), and this cap is what bounds chain-like values instead:
+/// unary runs end within a few dozen nodes rather than always slamming
+/// into `max_depth`.
+const RECURSION_MAX_BRANCH_PROBABILITY: f64 = 0.95;
+
+/// How far above an attempt's starting branch probability the repriced
+/// probability must sit before [`recursion_finish`] discards the attempt
+/// as mispriced. Large enough that estimate noise around a correct price
+/// never triggers it, small enough that pricing a mean arity of 1.5 as 2
+/// (probability 0.66 as 0.50) does.
+const RECURSION_REPRICE_THRESHOLD: f64 = 0.05;
+
+/// The branch probability at which a tree whose branches average
+/// `mean_arity` children has *expected* leaf count `max_leaves`.
 ///
 /// Model an attempt as a branching process where every node independently
-/// branches into `arity` children with probability `p` or is a leaf. With
-/// `k = arity`, the expected leaf count is `E[L] = (1 - p) / (1 - kp)`
-/// (from the standard total-progeny mean `E[N] = 1 / (1 - kp)` and
-/// `L = (k - 1)(N - 1)/k + 1`), and solving `E[L] = max_leaves` gives
+/// branches with probability `p` or is a leaf. Only the mean number of
+/// children per branch matters for the expectation; with `k = mean_arity`,
+/// the expected leaf count is `E[L] = (1 - p) / (1 - kp)` (from the
+/// standard total-progeny mean `E[N] = 1 / (1 - kp)`), and solving
+/// `E[L] = max_leaves` gives
 ///
 /// ```text
 /// p = (max_leaves - 1) / (max_leaves * k - 1)
@@ -438,69 +469,112 @@ pub(crate) const RECURSION_MAX_ATTEMPTS: u64 = 9;
 /// attempts far below the mean and a heavy tail reaching (and past) it —
 /// while the mean stays pinned to the budget instead of diverging the way
 /// it does at criticality. Attempts in the tail beyond `max_leaves` are
-/// discarded and retried by the protocol. Budgets below 2 use 2: at a
-/// budget of 1 the solution degenerates to `p = 0`, which would make the
-/// single leaf the only generable value (and make a budget of 0, whose only
-/// valid values are leafless, unsatisfiable), while the hard budget stays
-/// enforced by the retry protocol regardless of `p`. Budgets above 2^32 use
-/// 2^32, keeping `p` strictly subcritical where the exact solution would
-/// round to `1/k` in floating point; the probabilities it would round away
-/// from differ by under 1e-10, far below anything observable.
-pub(crate) fn recursion_branch_probability(arity: u64, max_leaves: u64) -> f64 {
-    let k = arity as f64;
+/// discarded and retried by the protocol.
+///
+/// Boundary handling. Budgets below 2 use 2: at a budget of 1 the solution
+/// degenerates to `p = 0`, which would make the single leaf the only
+/// generable value (and make a budget of 0, whose only valid values are
+/// leafless, unsatisfiable), while the hard budget stays enforced by the
+/// retry protocol regardless of `p`. Budgets above 2^32 use 2^32, keeping
+/// `p` strictly subcritical where the exact solution would round to `1/k`
+/// in floating point; the probabilities it would round away from differ by
+/// under 1e-10, far below anything observable. Mean arities at or below 1
+/// use 1, where the solution reaches `p = 1` (no arity that low can grow
+/// to any budget); the result is capped at
+/// [`RECURSION_MAX_BRANCH_PROBABILITY`], which is what keeps that case —
+/// and every near-1 arity whose exact solution exceeds the cap — finite.
+pub(crate) fn recursion_branch_probability(mean_arity: f64, max_leaves: u64) -> f64 {
+    let k = mean_arity.max(1.0);
     let budget = max_leaves.clamp(2, 1 << 32) as f64;
-    (budget - 1.0) / (budget * k - 1.0)
+    ((budget - 1.0) / (budget * k - 1.0)).min(RECURSION_MAX_BRANCH_PROBABILITY)
+}
+
+/// The mean branch arity suggested by the branches observed so far, blended
+/// with [`RECURSION_PRIOR_ARITY`] at [`RECURSION_PRIOR_WEIGHT`]. Only
+/// *closed* branches count: a branch still awaiting children would
+/// understate its arity, and on the deep left spine of a wide tree that
+/// understatement would briefly (and wrongly) price the grammar as
+/// chain-like.
+fn recursion_arity_estimate(state: &RecursionState) -> f64 {
+    (RECURSION_PRIOR_ARITY * RECURSION_PRIOR_WEIGHT + state.closed_children as f64)
+        / (RECURSION_PRIOR_WEIGHT + state.closed_branches as f64)
+}
+
+/// The branch probability priced from the draw's current arity evidence:
+/// [`recursion_branch_probability`] at the estimated mean arity, plus one
+/// assumed extra child per branch for each budget-exceeded retry so far so
+/// that repeated overruns drive the probability down even when the arity
+/// estimate has stopped moving. With no evidence beyond the prior this is
+/// exactly the binary-tree price, and for a branch function whose branches
+/// all have two children it never moves — every closed branch confirms the
+/// prior.
+fn recursion_priced_probability(state: &RecursionState) -> f64 {
+    recursion_branch_probability(
+        recursion_arity_estimate(state) + state.attempt as f64,
+        state.max_leaves,
+    )
 }
 
 /// Create the state for one recursive draw, with the first attempt's
-/// branch probability priced for a binary tree.
+/// branch probability priced for a binary tree (the prior: no branches
+/// have been observed yet).
 pub(crate) fn new_recursion_state(
     max_depth: u64,
     max_leaves: u64,
     base_span_depth: usize,
 ) -> RecursionState {
-    RecursionState {
+    let mut state = RecursionState {
         max_depth,
         max_leaves,
         attempt: 0,
         leaves: 0,
         base_span_depth,
-        branch_probability: recursion_branch_probability(2, max_leaves),
-    }
+        branch_probability: 0.0,
+        closed_children: 0,
+        closed_branches: 0,
+        open_branches: Vec::new(),
+        reprices: 0,
+    };
+    state.branch_probability = recursion_priced_probability(&state);
+    state
 }
 
 /// Draw the leaf-or-branch decision for one sub-value of a recursive
 /// generator.
 ///
-/// The probability comes from [`recursion_branch_probability`]: the value
-/// at which an `(attempt + 2)`-ary tree's expected leaf count equals the
-/// leaf budget. It is computed once per attempt and fixed
-/// for the whole attempt — scaling it by the budget already spent would
-/// make earlier subtrees systematically branchier than their later
-/// siblings — and each retry assumes one more child per branch, so branch
-/// functions that actually produce many children quickly reach a
-/// probability at which they fit inside `max_leaves`. At the depth limit
-/// the decision is still drawn, at probability zero: the engine records it
-/// as a forced choice, so the choice sequence has the same shape whether or
-/// not the limit was hit.
+/// The probability comes from [`recursion_priced_probability`]: the value
+/// at which a tree of the arity observed so far has expected leaf count
+/// equal to the leaf budget. It is recomputed at every decision as branches
+/// close and sharpen the arity estimate — for a branch function whose
+/// branches always have two children the estimate never moves, so the
+/// probability stays constant across the attempt — and it deliberately
+/// does *not* depend on the budget already spent, which would make earlier
+/// subtrees systematically branchier than their later siblings. At the depth limit the decision is still drawn, at
+/// probability zero: the engine records it as a forced choice, so the
+/// choice sequence has the same shape whether or not the limit was hit.
 pub(crate) fn recursion_branch(
     ntc: &mut NativeTestCase,
-    state: &RecursionState,
+    state: &mut RecursionState,
     depth: u64,
 ) -> Result<bool, EngineError> {
+    state.observe_decision(depth);
     let p = if depth >= state.max_depth {
         0.0
     } else {
-        state.branch_probability
+        recursion_priced_probability(state)
     };
-    spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, None))
+    let branch = spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, None))?;
+    if branch {
+        state.observe_branch(depth);
+    }
+    Ok(branch)
 }
 
 /// Discard a generation attempt that exceeded its leaf budget: close the
-/// spans the attempt left open (marking them discarded), reset the budget,
-/// and move to the next attempt's lower branch probability. Concludes the
-/// test case as invalid once [`RECURSION_MAX_ATTEMPTS`] attempts have
-/// failed.
+/// spans the attempt left open (marking them discarded), drop the
+/// observations the unwind cut short, reset the budget, and move to the
+/// next attempt's lower branch probability. Concludes the test case as
+/// invalid once [`RECURSION_MAX_ATTEMPTS`] attempts have failed.
 pub(crate) fn recursion_retry(
     ntc: &mut NativeTestCase,
     state: &mut RecursionState,
@@ -508,14 +582,58 @@ pub(crate) fn recursion_retry(
     while ntc.span_depth() > state.base_span_depth {
         ntc.stop_span(true);
     }
+    state.discard_open_branches();
     state.leaves = 0;
     state.attempt += 1;
     if state.attempt >= RECURSION_MAX_ATTEMPTS {
         ntc.conclude(Status::Invalid, None);
         return Err(EngineError::InvalidTestCase);
     }
-    state.branch_probability = recursion_branch_probability(state.attempt + 2, state.max_leaves);
+    state.branch_probability = recursion_priced_probability(state);
     Ok(())
+}
+
+/// Decide whether a completed generation attempt was priced fairly, now
+/// that the finished value's branch arities are known exactly. Returns
+/// `Ok(true)` to accept the value, or `Ok(false)` when the attempt was
+/// mispriced and has been discarded (its spans closed as discarded, like a
+/// budget retry): the caller regenerates the whole value from the root.
+///
+/// The first attempt of every draw is priced from the prior alone, and for
+/// a branch function averaging fewer than two children per branch that
+/// price is too low: the branching process it induces is firmly
+/// subcritical, so values collapse to a handful of nodes, never exceed the
+/// leaf budget, and the budget-retry path never gets a chance to correct
+/// anything. The completed value is itself the evidence: when the
+/// probability repriced from its observed arities exceeds the price the
+/// attempt started from by more than [`RECURSION_REPRICE_THRESHOLD`], the
+/// attempt is discarded and regenerated at the corrected price, at most
+/// [`RECURSION_MAX_REPRICES`] times per draw. A price that was too *high*
+/// never triggers this — over-branching attempts correct themselves
+/// through the budget-retry path. Values whose price was consistent with
+/// their observed arity — every value of a fixed-binary branch function,
+/// and any value with no branches at all — are always accepted, so
+/// adaptation costs nothing where pricing was already right and never
+/// biases against small values.
+pub(crate) fn recursion_finish(
+    ntc: &mut NativeTestCase,
+    state: &mut RecursionState,
+) -> Result<bool, EngineError> {
+    state.close_remaining_branches();
+    if state.reprices >= RECURSION_MAX_REPRICES {
+        return Ok(true);
+    }
+    let repriced = recursion_priced_probability(state);
+    if repriced - state.branch_probability <= RECURSION_REPRICE_THRESHOLD {
+        return Ok(true);
+    }
+    while ntc.span_depth() > state.base_span_depth {
+        ntc.stop_span(true);
+    }
+    state.leaves = 0;
+    state.reprices += 1;
+    state.branch_probability = repriced;
+    Ok(false)
 }
 
 #[cfg(test)]

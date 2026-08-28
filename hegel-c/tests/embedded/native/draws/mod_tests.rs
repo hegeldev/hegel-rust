@@ -97,16 +97,15 @@ fn many_more_respects_fixed_and_bounded_sizes() {
 
 #[test]
 fn recursion_branch_probability_pins_the_expected_leaf_count_to_the_budget() {
-    for arity in [2u64, 3, 4, 10] {
-        for max_leaves in [2u64, 8, 100, 1_000_000] {
-            let p = recursion_branch_probability(arity, max_leaves);
-            let k = arity as f64;
+    for k in [1.3, 2.0, 3.0, 4.0, 10.0] {
+        for max_leaves in [8u64, 100, 1_000_000] {
+            let p = recursion_branch_probability(k, max_leaves);
             assert!(p > 0.0 && p < 1.0 / k);
             let expected = (1.0 - p) / (1.0 - k * p);
             let budget = max_leaves as f64;
             assert!(
                 (expected - budget).abs() < budget * 1e-9,
-                "arity {arity}, max_leaves {max_leaves}: E[L] = {expected} != {budget}"
+                "arity {k}, max_leaves {max_leaves}: E[L] = {expected} != {budget}"
             );
         }
     }
@@ -115,23 +114,161 @@ fn recursion_branch_probability_pins_the_expected_leaf_count_to_the_budget() {
 #[test]
 fn recursion_branch_probability_decreases_with_arity_and_grows_with_budget() {
     for arity in 2..10 {
-        assert!(
-            recursion_branch_probability(arity + 1, 100) < recursion_branch_probability(arity, 100)
-        );
+        let k = arity as f64;
+        assert!(recursion_branch_probability(k + 1.0, 100) < recursion_branch_probability(k, 100));
     }
-    assert!(recursion_branch_probability(2, 100) < recursion_branch_probability(2, 1000));
+    assert!(recursion_branch_probability(2.0, 100) < recursion_branch_probability(2.0, 1000));
 }
 
 #[test]
 fn recursion_branch_probability_clamps_tiny_budgets_to_two_leaves() {
-    let floor = recursion_branch_probability(2, 2);
+    let floor = recursion_branch_probability(2.0, 2);
     assert!(floor > 0.0);
-    assert_eq!(recursion_branch_probability(2, 0), floor);
-    assert_eq!(recursion_branch_probability(2, 1), floor);
+    assert_eq!(recursion_branch_probability(2.0, 0), floor);
+    assert_eq!(recursion_branch_probability(2.0, 1), floor);
 }
 
 #[test]
 fn recursion_branch_probability_stays_finite_at_a_maximal_budget() {
-    let p = recursion_branch_probability(2, u64::MAX);
+    let p = recursion_branch_probability(2.0, u64::MAX);
     assert!(p > 0.49 && p < 0.5);
+}
+
+#[test]
+fn recursion_branch_probability_caps_chain_like_arities() {
+    assert_eq!(
+        recursion_branch_probability(1.0, 100),
+        RECURSION_MAX_BRANCH_PROBABILITY
+    );
+    assert_eq!(
+        recursion_branch_probability(0.5, 100),
+        RECURSION_MAX_BRANCH_PROBABILITY
+    );
+    assert_eq!(
+        recursion_branch_probability(1.01, 100),
+        RECURSION_MAX_BRANCH_PROBABILITY
+    );
+    assert!(recursion_branch_probability(1.3, 100) < RECURSION_MAX_BRANCH_PROBABILITY);
+}
+
+#[test]
+fn recursion_pricing_never_moves_for_a_binary_branch_function() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
+    let mut state = new_recursion_state(32, 100, ntc.span_depth());
+    let priced = state.branch_probability;
+    assert_eq!(priced, recursion_branch_probability(2.0, 100));
+
+    let mut pending = Vec::from([0u64]);
+    let mut leaves = 0;
+    while let Some(depth) = pending.pop() {
+        if recursion_branch(&mut ntc, &mut state, depth).unwrap() {
+            pending.push(depth + 1);
+            pending.push(depth + 1);
+        } else {
+            assert!(state.count_leaf());
+            leaves += 1;
+        }
+    }
+    assert!(leaves >= 1);
+    assert!(recursion_finish(&mut ntc, &mut state).unwrap());
+    assert_eq!(state.branch_probability, priced);
+    assert_eq!(state.reprices, 0);
+    assert_eq!(state.closed_children, 2 * state.closed_branches);
+}
+
+#[test]
+fn recursion_finish_reprices_a_chain_heavy_value_and_accepts_the_redraw() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(11)).unwrap();
+    let base = ntc.span_depth();
+    let mut state = new_recursion_state(32, 100, base);
+    let priced = state.branch_probability;
+
+    for depth in 0..6 {
+        state.observe_decision(depth);
+        state.observe_branch(depth);
+    }
+    state.observe_decision(6);
+    state.leaves = 1;
+    ntc.start_span(17);
+
+    assert!(!recursion_finish(&mut ntc, &mut state).unwrap());
+    assert_eq!(ntc.span_depth(), base);
+    assert_eq!(state.leaves, 0);
+    assert_eq!(state.reprices, 1);
+    assert!(state.branch_probability > priced);
+    assert_eq!(state.closed_branches, 6);
+    assert_eq!(state.closed_children, 6);
+
+    let repriced = state.branch_probability;
+    for depth in 0..6 {
+        state.observe_decision(depth);
+        state.observe_branch(depth);
+    }
+    state.observe_decision(6);
+    state.leaves = 1;
+    assert!(recursion_finish(&mut ntc, &mut state).unwrap());
+    assert_eq!(state.reprices, 1);
+    assert_eq!(state.branch_probability, repriced);
+}
+
+#[test]
+fn recursion_finish_stops_repricing_at_the_cap() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(13)).unwrap();
+    let mut state = new_recursion_state(32, 100, ntc.span_depth());
+
+    for round in 0..RECURSION_MAX_REPRICES {
+        state.observe_decision(0);
+        state.observe_branch(0);
+        state.observe_decision(1);
+        state.leaves = 1;
+        let accepted = recursion_finish(&mut ntc, &mut state).unwrap();
+        assert!(!accepted, "round {round} should have repriced");
+    }
+    assert_eq!(state.reprices, RECURSION_MAX_REPRICES);
+
+    state.observe_decision(0);
+    state.observe_branch(0);
+    state.observe_decision(1);
+    state.leaves = 1;
+    assert!(recursion_finish(&mut ntc, &mut state).unwrap());
+    assert_eq!(state.reprices, RECURSION_MAX_REPRICES);
+}
+
+#[test]
+fn recursion_finish_accepts_a_branchless_value_at_first_sight() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(17)).unwrap();
+    let mut state = new_recursion_state(32, 100, ntc.span_depth());
+    let priced = state.branch_probability;
+    state.observe_decision(0);
+    state.leaves = 1;
+    assert!(recursion_finish(&mut ntc, &mut state).unwrap());
+    assert_eq!(state.branch_probability, priced);
+    assert_eq!(state.reprices, 0);
+}
+
+#[test]
+fn recursion_retry_discards_partial_observations_and_lowers_the_price() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(19)).unwrap();
+    let base = ntc.span_depth();
+    let mut state = new_recursion_state(32, 100, base);
+    let priced = state.branch_probability;
+
+    state.observe_decision(0);
+    state.observe_branch(0);
+    state.observe_decision(1);
+    state.observe_branch(1);
+    state.leaves = 3;
+    ntc.start_span(17);
+
+    recursion_retry(&mut ntc, &mut state).unwrap();
+    assert_eq!(ntc.span_depth(), base);
+    assert_eq!(state.leaves, 0);
+    assert_eq!(state.attempt, 1);
+    assert!(state.open_branches.is_empty());
+    assert_eq!(state.closed_branches, 0);
+    assert!(state.branch_probability < priced);
+    assert_eq!(
+        state.branch_probability,
+        recursion_branch_probability(3.0, 100)
+    );
 }

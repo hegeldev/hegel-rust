@@ -144,6 +144,45 @@ fn test_recursive_on_an_exhausted_stream_is_an_overrun() {
     );
 }
 
+/// Exhausts the stream *inside* the leaf generator (catching the unwind, as
+/// the test body itself may) so that the value still completes: the
+/// finished-value check then runs against an already-aborted stream and
+/// must surface the overrun rather than accept the value. The leaf is a
+/// hand-written generator so that no span bookkeeping runs between the
+/// exhaustion and the finished-value check.
+#[test]
+fn test_recursive_completing_on_an_exhausted_stream_is_an_overrun() {
+    struct ExhaustingLeaf;
+
+    impl Generator<Tree> for ExhaustingLeaf {
+        fn do_draw(&self, tc: &TestCase) -> Tree {
+            let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                loop {
+                    tc.draw_silent(gs::integers::<i64>());
+                }
+            }));
+            assert!(exhausted.is_err(), "the draw budget is finite");
+            Tree::Leaf(0)
+        }
+    }
+
+    expect_panic(
+        || {
+            Hegel::new(|tc: TestCase| {
+                let g = gs::recursive(ExhaustingLeaf, |subtrees| {
+                    gs::vecs(subtrees).max_size(3).map(Tree::Branch)
+                })
+                .max_depth(0);
+                tc.draw_silent(g);
+                unreachable!("completing a recursive draw on an exhausted stream must overrun");
+            })
+            .settings(Settings::new().database(None).seed(Some(0)))
+            .run();
+        },
+        "LargeInitialTestCase",
+    );
+}
+
 #[test]
 fn test_recursive_in_vec() {
     assert_all_examples(gs::vecs(trees().max_depth(2)).max_size(3), |v| {

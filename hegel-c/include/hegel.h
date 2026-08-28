@@ -166,10 +166,13 @@ typedef enum {
      */
     HEGEL_E_CONCURRENT_USE = -9,
     /*
-     A recursive draw exceeded its leaf budget (`hegel_recursion_leaf`).
-     Unwind the current generation attempt — drawing nothing further for
-     it — back to where `hegel_new_recursion` was called, then call
-     `hegel_recursion_retry` to discard the attempt and try again.
+     A recursive generation attempt must be regenerated from the root.
+     From `hegel_recursion_leaf`, the attempt exceeded its leaf budget:
+     unwind it — drawing nothing further for it — back to where
+     `hegel_new_recursion` was called, then call `hegel_recursion_retry`
+     to discard it. From `hegel_recursion_finish`, the completed value
+     was mispriced and the engine has already discarded it: drop it and
+     start again from the root directly.
      */
     HEGEL_E_RETRY = -10,
 } hegel_result_t;
@@ -593,10 +596,11 @@ typedef struct hegel_pool_t hegel_pool_t;
 
  Created by `hegel_new_recursion` on a test case, once per recursive
  value drawn; driven by `hegel_recursion_branch` / `hegel_recursion_leaf`
- / `hegel_recursion_retry` through any handle of the *same* test-case
- family (the root or any clone) — decisions are drawn from whichever
- handle makes the call. Like a pool, the scope holds an internal lock, so
- clone handles driven from parallel threads share the leaf budget safely.
+ / `hegel_recursion_retry` / `hegel_recursion_finish` through any handle
+ of the *same* test-case family (the root or any clone) — decisions are
+ drawn from whichever handle makes the call. Like a pool, the scope holds
+ an internal lock, so clone handles driven from parallel threads share
+ the leaf budget safely.
 
  The protocol, for one sub-value (starting with the root at depth 0):
  call `hegel_recursion_branch`; on `true` invoke the user's branch
@@ -605,10 +609,14 @@ typedef struct hegel_pool_t hegel_pool_t;
  When `hegel_recursion_leaf` returns `HEGEL_E_RETRY` the attempt has
  outgrown the leaf budget: unwind out of the user's generators without
  drawing anything further, call `hegel_recursion_retry`, and on `HEGEL_OK`
- start the whole value again from the root. All policy — the branch
- probabilities, the depth and leaf limits, and when to give up — lives in
- the engine, so recursive values are identically distributed in every
- language frontend.
+ start the whole value again from the root. Once the root sub-value has
+ finished, call `hegel_recursion_finish`: `HEGEL_OK` accepts the value,
+ while `HEGEL_E_RETRY` means the engine discarded the attempt as
+ mispriced — drop the value and start again from the root (without
+ calling `hegel_recursion_retry`). All policy — the branch probabilities
+ and their adaptation to the branch arities actually produced, the depth
+ and leaf limits, and when to give up — lives in the engine, so recursive
+ values are identically distributed in every language frontend.
 
  The handle is independent of the test case and run it was created under:
  free it with `hegel_recursion_free` exactly once, at any point — before
@@ -1262,6 +1270,22 @@ hegel_result_t hegel_recursion_leaf(hegel_context_t *ctx,
 hegel_result_t hegel_recursion_retry(hegel_context_t *ctx,
                                      hegel_test_case_t *tc,
                                      HegelRecursion *recursion);
+
+/*
+ Report that the recursive value has finished generating: its root
+ sub-value (and therefore the whole tree) is complete. The engine checks
+ the branch pricing the attempt started from against the branch arities
+ it actually produced.
+
+ Returns `HEGEL_OK` (the value is accepted — use it),
+ `HEGEL_E_RETRY` (the attempt was mispriced and has been discarded, its
+ spans closed as discarded: drop the value and start again from the
+ root, *without* calling `hegel_recursion_retry`), or
+ `HEGEL_E_STOP_TEST`.
+ */
+hegel_result_t hegel_recursion_finish(hegel_context_t *ctx,
+                                      hegel_test_case_t *tc,
+                                      HegelRecursion *recursion);
 
 /*
  Release a recursion handle from `hegel_new_recursion`. Safe to call with

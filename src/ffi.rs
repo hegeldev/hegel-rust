@@ -731,6 +731,15 @@ impl CTestCase {
         }))
     }
 
+    pub(crate) fn recursion_finish(
+        &self,
+        recursion: &RecursionHandle,
+    ) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_finish(ctx, self.raw, recursion.raw)
+        }))
+    }
+
     pub(crate) fn new_pool(&self) -> Result<PoolHandle, hegel_result_t> {
         let mut raw: *mut hegel_c::HegelPool = ptr::null_mut();
         let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut raw) });
@@ -929,7 +938,8 @@ impl Drop for CollectionHandle {
 ///
 /// Built by [`CTestCase::new_recursion`] and driven through
 /// [`CTestCase::recursion_branch`] / [`CTestCase::recursion_leaf`] /
-/// [`CTestCase::recursion_retry`] with any handle of the same test-case
+/// [`CTestCase::recursion_retry`] / [`CTestCase::recursion_finish`] with
+/// any handle of the same test-case
 /// family. The scope serializes concurrent use internally, so it may be
 /// shared between clone handles on parallel threads; it is independent of
 /// the test case and run it was created under, so dropping it is safe in

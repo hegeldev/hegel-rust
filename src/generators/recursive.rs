@@ -1,7 +1,8 @@
 use super::{Generator, TestCase};
-use crate::control::LeafBudgetExceeded;
+use crate::control::{AttemptMispriced, LeafBudgetExceeded, raise_control};
 use crate::ffi::RecursionHandle;
 use crate::test_case::{labels, raise_for_rc};
+use hegel_c::hegel_result_t;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -88,6 +89,14 @@ impl<T> Generator<T> for SubtreeGenerator<T> {
             }
             self.core.draw_leaf(tc)
         };
+        if self.depth == 0 {
+            if let Err(rc) = tc.with_ctc(|ctc| ctc.recursion_finish(&self.recursion)) {
+                if rc == hegel_result_t::HEGEL_E_RETRY {
+                    raise_control(AttemptMispriced);
+                }
+                raise_for_rc(rc);
+            }
+        }
         tc.stop_span(false);
         result
     }
@@ -113,10 +122,12 @@ impl<T> RecursiveGenerator<T> {
     /// Set the maximum number of leaf values in one generated value
     /// (default 100).
     ///
-    /// A generation attempt that draws more than `max_leaves` leaves is
-    /// discarded and retried with a lower branching probability; if several
-    /// retries in a row fail to fit, the test case is rejected as if by
-    /// [`assume`](crate::TestCase::assume).
+    /// The branching probability is priced so that expected sizes track
+    /// this budget, adapting to the number of sub-values the branch
+    /// function actually draws. A generation attempt that draws more than
+    /// `max_leaves` leaves is discarded and retried with a lower branching
+    /// probability; if several retries in a row fail to fit, the test case
+    /// is rejected as if by [`assume`](crate::TestCase::assume).
     pub fn max_leaves(mut self, max_leaves: usize) -> Self {
         self.max_leaves = max_leaves;
         self
@@ -145,6 +156,9 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
                         Ok(()) => tc.reset_open_spans_to(base_span_depth),
                         Err(rc) => raise_for_rc(rc),
                     }
+                }
+                Err(payload) if payload.downcast_ref::<AttemptMispriced>().is_some() => {
+                    tc.reset_open_spans_to(base_span_depth);
                 }
                 Err(payload) => resume_unwind(payload),
             }

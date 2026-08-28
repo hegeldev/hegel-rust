@@ -276,7 +276,7 @@ impl DataSource for NativeDataSource {
 
     fn recursion_branch(
         &self,
-        state: &RecursionState,
+        state: &mut RecursionState,
         depth: u64,
     ) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| draws::recursion_branch(ntc, state, depth))
@@ -288,6 +288,10 @@ impl DataSource for NativeDataSource {
 
     fn recursion_retry(&self, state: &mut RecursionState) -> Result<(), DataSourceError> {
         self.with_ntc(|ntc| draws::recursion_retry(ntc, state))
+    }
+
+    fn recursion_finish(&self, state: &mut RecursionState) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::recursion_finish(ntc, state))
     }
 
     fn new_state_machine(

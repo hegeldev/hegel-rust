@@ -1,0 +1,5 @@
+RELEASE_TYPE: patch
+
+This patch fixes `generators::recursive` generating far smaller values than `max_leaves` allows when the branch function draws fewer than two sub-values on average — for example an expression grammar with more unary than binary operators. The branching probability was priced assuming every branch has exactly two sub-values, which made large values of such grammars exponentially rare: a grammar of 17 unary and 7 binary operators with the default budget of 100 leaves generated values with a mean of about 2.5 leaves, and raising `max_leaves` changed nothing.
+
+Generation now adapts the branching probability to the number of sub-values the branch function actually draws, discarding and regenerating a value whose attempt turns out to have been priced badly wrong. That same grammar now generates sizes matching a purely binary grammar's, spanning the whole range up to `max_leaves`. Branch functions that always draw exactly two sub-values generate exactly the same distribution as before, and grammars whose branches only ever draw one sub-value (chains) now spread over the whole depth range up to `max_depth`.
