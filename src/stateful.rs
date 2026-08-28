@@ -444,6 +444,16 @@ impl<T: Clone> Generator<T> for ConcurrentValuesReusable<'_, T> {
     }
 }
 
+impl<T: Clone + crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+    for ConcurrentValuesReusable<'_, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        let value = self.do_draw(tc);
+        value.pretty_print(printer);
+        value
+    }
+}
+
 /// A generator that consumes values from a [`ConcurrentPool`], removing
 /// each value it yields. Returned by [`ConcurrentPool::values_consumed`].
 pub struct ConcurrentValuesConsumed<'a, T> {
@@ -460,6 +470,16 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
                 raise_for_rc(rc)
             }
         }
+    }
+}
+
+impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+    for ConcurrentValuesConsumed<'_, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        let value = self.do_draw(tc);
+        value.pretty_print(printer);
+        value
     }
 }
 

@@ -167,6 +167,12 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
     }
 }
 
+impl<T: crate::PrettyPrintable> super::PrintableGenerator<T> for RecursiveGenerator<T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        super::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate recursively defined data, such as trees or JSON documents.
 ///
 /// `leaf` generates the non-recursive base cases. `branch` builds one level
@@ -193,6 +199,8 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
 ///     Number(f64),
 ///     Array(Vec<Json>),
 /// }
+///
+/// hegel::pretty_print_as_debug!(Json);
 ///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {

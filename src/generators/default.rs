@@ -310,7 +310,7 @@ where
 /// use production_crate::Person;
 ///
 /// use hegel::derive_generator;
-/// use hegel::generators as gs;
+/// use hegel::generators::{self as gs, Generator};
 ///
 /// derive_generator!(PersonGenerator for Person {
 ///     name: String,
@@ -322,7 +322,8 @@ where
 ///     let person: Person = tc.draw(
 ///         PersonGenerator::new()
 ///             .name(gs::from_regex("[A-Z][a-z]+"))
-///             .age(gs::integers::<u32>().min_value(0).max_value(120)),
+///             .age(gs::integers::<u32>().min_value(0).max_value(120))
+///             .print_as_debug(),
 ///     );
 /// }
 /// ```

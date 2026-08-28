@@ -681,6 +681,37 @@ fn pool_draws_print_their_values() {
 }
 
 #[test]
+fn concurrent_pool_draws_print_their_values() {
+    let lines = failing_lines(|tc| {
+        let pool: hegel::stateful::ConcurrentPool<i64> = hegel::stateful::concurrent_pool(&tc);
+        pool.add(&tc, 5);
+        pool.add(&tc, 6);
+        let reused: i64 = tc.draw(pool.values_reusable());
+        let consumed: i64 = tc.draw(pool.values_consumed());
+        let _ = (reused, consumed);
+        panic!("boom");
+    });
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
+    assert!(lines[1].starts_with("let draw_2 = "), "{lines:?}");
+}
+
+#[test]
+fn recursive_draws_print_their_values() {
+    let lines = failing_lines(|tc| {
+        let total: i64 = tc.draw(
+            gs::recursive(gs::just(1i64), |sub| {
+                hegel::tuples!(sub.clone(), sub).map(|(a, b)| a + b)
+            })
+            .max_leaves(4),
+        );
+        assert!(total < 1);
+    });
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
+}
+
+#[test]
 fn clone_output_anchors_where_the_clone_was_made() {
     let lines = failing_lines(|tc| {
         let worker = tc.clone();
