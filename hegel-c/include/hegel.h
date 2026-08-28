@@ -1207,13 +1207,17 @@ hegel_result_t hegel_collection_free(hegel_context_t *ctx, hegel_collection_t *c
  Open a recursive generation scope: libhegel decides where the value
  branches, where it bottoms out in leaves, and when an attempt has grown
  too large and must be retried. See `hegel_recursion_t` for the protocol.
+ Draws the scope's target size from `tc`'s stream (when `max_leaves` is
+ at least 2), so it must be called at the point in the draw sequence
+ where the recursive value begins.
 
  Parameters:
  `max_depth`: Branches nest at most this deep; sub-values at this depth
    are always leaves, so 0 generates only leaves.
- `max_leaves`: The most leaves one generated value may contain. Attempts
-   that outgrow it are discarded and retried with a lower branching
-   probability, and the test case is rejected as invalid when several
+ `max_leaves`: The most leaves one generated value may contain. Each
+   value steers toward a target size drawn from this range. Attempts
+   that outgrow the budget are discarded and retried steering toward a
+   smaller target, and the test case is rejected as invalid when several
    attempts in a row fail to fit.
  `out_recursion`: Receives a caller-owned handle to pass to the calls
    below (through any handle of the same test-case family). Release it

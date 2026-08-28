@@ -122,12 +122,13 @@ impl<T> RecursiveGenerator<T> {
     /// Set the maximum number of leaf values in one generated value
     /// (default 100).
     ///
-    /// The branching probability is priced so that expected sizes track
+    /// Each generated value steers toward a target size drawn from across
     /// this budget, adapting to the number of sub-values the branch
-    /// function actually draws. A generation attempt that draws more than
-    /// `max_leaves` leaves is discarded and retried with a lower branching
-    /// probability; if several retries in a row fail to fit, the test case
-    /// is rejected as if by [`assume`](crate::TestCase::assume).
+    /// function actually draws, so typical sizes span the whole budget. A
+    /// generation attempt that draws more than `max_leaves` leaves is
+    /// discarded and retried steering toward a smaller target; if several
+    /// retries in a row fail to fit, the test case is rejected as if by
+    /// [`assume`](crate::TestCase::assume).
     pub fn max_leaves(mut self, max_leaves: usize) -> Self {
         self.max_leaves = max_leaves;
         self

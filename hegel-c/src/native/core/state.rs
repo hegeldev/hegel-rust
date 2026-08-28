@@ -72,11 +72,18 @@ pub struct RecursionState {
     pub attempt: u64,
     pub leaves: u64,
     pub base_span_depth: usize,
+    /// The leaf count this draw aims for, drawn once at creation (see
+    /// `draws::new_recursion_state`): 1 to aim for a minimal value, or a
+    /// uniform sample from `[2, max_leaves]` to aim for a value of that
+    /// size. Budget-exceeded retries steer toward `target >> attempt`
+    /// rather than redrawing it.
+    pub target: u64,
     /// The branch probability the current attempt started from, computed by
     /// `draws::recursion_priced_probability` at creation and on each retry.
     /// Individual decisions may be repriced below or above this as arity
-    /// evidence accumulates; `draws::recursion_finish` compares against it
-    /// to detect an attempt whose starting price was badly stale.
+    /// evidence accumulates; when the effective target is a single leaf,
+    /// `draws::recursion_finish` compares against it to detect an attempt
+    /// whose starting price was badly stale.
     pub branch_probability: f64,
     /// Children observed across all branches this draw has finished
     /// observing (over every attempt, including discarded ones).
@@ -2000,6 +2007,54 @@ impl NativeTestCase {
         };
 
         let params = self.family.generation_parameters();
+        let v =
+            self.draw_integer_from(&kind, |kind, rng| biased_integer_sample(kind, rng, params))?;
+
+        Ok(hegel_internal_unwrap!(
+            T::try_from(v).ok(),
+            "draw_integer: validated value does not fit the requested width"
+        ))
+    }
+
+    /// Draw a random integer *uniformly* from `[min_value, max_value]`,
+    /// without the boundary-and-distribution shaping of [`Self::draw_integer`].
+    /// For draws whose value parameterizes later generation — such as a
+    /// recursive draw's target size — where the shaped distribution's bias
+    /// toward small magnitudes would defeat the point of drawing at all.
+    pub fn draw_integer_uniform(
+        &mut self,
+        min_value: u64,
+        max_value: u64,
+    ) -> Result<u64, EngineError> {
+        hegel_internal_assert!(
+            min_value <= max_value,
+            "Invalid range [{min_value:?}, {max_value:?}]"
+        );
+
+        let kind = IntegerChoice {
+            min_value: min_value.into(),
+            max_value: max_value.into(),
+            shrink_towards: BigInt::zero(),
+        };
+
+        let v = self.draw_integer_from(&kind, |_, rng| {
+            Ok(BigInt::from(rng.random_range(min_value..=max_value)))
+        })?;
+
+        Ok(hegel_internal_unwrap!(
+            u64::try_from(v).ok(),
+            "draw_integer_uniform: validated value does not fit u64"
+        ))
+    }
+
+    /// Shared body of the integer draws: resolve the choice against the
+    /// prefix, falling back to `sample` for fresh generation, then record
+    /// and observe it.
+    fn draw_integer_from(
+        &mut self,
+        kind: &IntegerChoice,
+        sample: impl Fn(&IntegerChoice, &mut EngineRng) -> Result<BigInt, InternalError>,
+    ) -> Result<BigInt, EngineError> {
         let (v, was_forced) = self.resolve_choice(
             || Ok(kind.simplest()),
             || Ok(kind.unit()),
@@ -2007,7 +2062,7 @@ impl NativeTestCase {
                 ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
             },
-            |rng| biased_integer_sample(&kind, rng, params),
+            |rng| sample(kind, rng),
         )?;
 
         if let Some(ref mut obs) = self.observer {
@@ -2015,12 +2070,9 @@ impl NativeTestCase {
         }
 
         self.nodes
-            .push(ChoiceNode::integer(kind, v.clone(), was_forced));
+            .push(ChoiceNode::integer(kind.clone(), v.clone(), was_forced));
 
-        Ok(hegel_internal_unwrap!(
-            T::try_from(v).ok(),
-            "draw_integer: validated value does not fit the requested width"
-        ))
+        Ok(v)
     }
 
     /// Record a forced integer draw in `[min_value, max_value]`.

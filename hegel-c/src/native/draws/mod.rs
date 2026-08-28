@@ -427,6 +427,23 @@ pub(crate) const RECURSION_MAX_ATTEMPTS: u64 = 9;
 /// attempt so small its evidence was still badly noisy.
 pub(crate) const RECURSION_MAX_REPRICES: u64 = 2;
 
+/// The probability that one recursive draw aims for a large value: with
+/// this probability the draw's target size is sampled uniformly from
+/// `[2, max_leaves]`, and otherwise it is 1 (a single leaf). Without an
+/// explicit target, sizes near the critical branching probability follow
+/// a `n^(-3/2)` law — the *mean* tracks the budget but the *median* stays
+/// a handful of nodes — so most values would be tiny no matter how the
+/// branch probability is priced. Steering toward a uniform target spreads
+/// the sizes over the whole budget instead.
+const RECURSION_LARGE_TARGET_PROBABILITY: f64 = 0.75;
+
+/// Bound on the boundary depth [`recursion_profile`] will search. Only
+/// grammars hovering just above one child per branch solve to boundary
+/// depths anywhere near this; capping the search keeps a decision's cost
+/// bounded when `max_depth` is huge, at worst undershooting a target that
+/// such a grammar could not plausibly reach anyway.
+const RECURSION_PROFILE_HORIZON: u64 = 4096;
+
 /// The mean branch arity assumed before any branches have been observed.
 const RECURSION_PRIOR_ARITY: f64 = 2.0;
 
@@ -444,10 +461,10 @@ const RECURSION_PRIOR_WEIGHT: f64 = 0.25;
 const RECURSION_MAX_BRANCH_PROBABILITY: f64 = 0.95;
 
 /// How far above an attempt's starting branch probability the repriced
-/// probability must sit before [`recursion_finish`] discards the attempt
-/// as mispriced. Large enough that estimate noise around a correct price
-/// never triggers it, small enough that pricing a mean arity of 1.5 as 2
-/// (probability 0.66 as 0.50) does.
+/// probability must sit before [`recursion_finish`] discards a
+/// single-leaf-target attempt as mispriced. Large enough that estimate
+/// noise around a correct price never triggers it, small enough that
+/// pricing a mean arity of 1.5 as 2 (probability 0.66 as 0.50) does.
 const RECURSION_REPRICE_THRESHOLD: f64 = 0.05;
 
 /// The branch probability at which a tree whose branches average
@@ -500,35 +517,186 @@ fn recursion_arity_estimate(state: &RecursionState) -> f64 {
         / (RECURSION_PRIOR_WEIGHT + state.closed_branches as f64)
 }
 
+/// The leaf count the current attempt steers toward: the drawn target,
+/// halved for each budget-exceeded retry so far so that repeated overruns
+/// walk an over-ambitious target down toward something the budget can
+/// hold.
+fn recursion_effective_target(state: &RecursionState) -> u64 {
+    core::cmp::max(1, state.target >> state.attempt)
+}
+
 /// The branch probability priced from the draw's current arity evidence:
 /// [`recursion_branch_probability`] at the estimated mean arity, plus one
 /// assumed extra child per branch for each budget-exceeded retry so far so
 /// that repeated overruns drive the probability down even when the arity
-/// estimate has stopped moving. With no evidence beyond the prior this is
-/// exactly the binary-tree price, and for a branch function whose branches
-/// all have two children it never moves — every closed branch confirms the
-/// prior.
+/// estimate has stopped moving. Priced for the attempt's effective target;
+/// used directly when that target is a single leaf, and as the tail
+/// probability past the profile boundary (budget 2) otherwise.
 fn recursion_priced_probability(state: &RecursionState) -> f64 {
     recursion_branch_probability(
         recursion_arity_estimate(state) + state.attempt as f64,
-        state.max_leaves,
+        recursion_effective_target(state),
     )
 }
 
-/// Create the state for one recursive draw, with the first attempt's
-/// branch probability priced for a binary tree (the prior: no branches
-/// have been observed yet).
+/// [`recursion_branch_probability`] for a two-leaf budget at the current
+/// arity estimate: the probability decisions past the profile boundary
+/// use, so subtrees that outlive the growth phase wind down within a few
+/// nodes instead of stopping dead.
+fn recursion_tail_probability(state: &RecursionState) -> f64 {
+    recursion_branch_probability(recursion_arity_estimate(state) + state.attempt as f64, 2)
+}
+
+/// A depth-phased branch-probability profile solved so that a tree of the
+/// given mean arity has expected leaf count `target` (see
+/// [`recursion_profile`]): grow hard ([`RECURSION_MAX_BRANCH_PROBABILITY`])
+/// at depths before the boundary, `boundary_probability` at the boundary
+/// itself, and the tail probability beyond it.
+struct RecursionProfile {
+    boundary_depth: u64,
+    boundary_probability: f64,
+    /// The expected leaf count the profile actually reaches: `target`
+    /// when solvable, less when the arity or depth cap makes the target
+    /// unreachable.
+    expected_leaves: f64,
+}
+
+/// Solve for the depth-phased profile whose expected leaf count is
+/// `target`, for branches averaging `arity` children.
+///
+/// A single branch probability cannot make typical sizes track a target:
+/// near the critical probability the size distribution follows a
+/// `n^(-3/2)` law whose median is O(1) regardless of the mean. Branching
+/// *hard* down to a chosen depth and then stopping concentrates the sizes
+/// instead — the profile is `p = RECURSION_MAX_BRANCH_PROBABILITY` at
+/// depths before `boundary_depth`, an interpolated probability at the
+/// boundary, and `tail_probability` beyond it.
+///
+/// With `e` the expected leaves of a subtree rooted just past the
+/// boundary (the tail fixed point `(1 - pt) / (1 - pt * arity)`, which
+/// the tail probability keeps strictly below its pole), each level of
+/// growth lifts the root expectation by `f ← (1 - p) + p * arity * f`.
+/// The solver walks the boundary deeper one level at a time until the
+/// all-grow expectation `hi` reaches the target (stopping early at the
+/// depth cap, the [`RECURSION_PROFILE_HORIZON`], or when a subcritical
+/// grammar's expectation plateaus short of it), then interpolates the
+/// boundary probability between the tail-probability and all-grow
+/// expectations, which is exact: the root expectation is affine in the
+/// boundary probability.
+fn recursion_profile(
+    target: f64,
+    arity: f64,
+    tail_probability: f64,
+    max_depth: u64,
+) -> RecursionProfile {
+    let grow = RECURSION_MAX_BRANCH_PROBABILITY;
+    if max_depth == 0 {
+        return RecursionProfile {
+            boundary_depth: 0,
+            boundary_probability: tail_probability,
+            expected_leaves: 1.0,
+        };
+    }
+    let level = |f: f64| (1.0 - grow) + grow * arity * f;
+    let mut lo = (1.0 - tail_probability) / (1.0 - tail_probability * arity);
+    let mut hi = level(lo);
+    let mut boundary = 0u64;
+    let horizon = max_depth.min(RECURSION_PROFILE_HORIZON);
+    while hi < target && boundary < horizon {
+        let next = level(hi);
+        if next - hi < 1e-9 {
+            break;
+        }
+        lo = level(lo);
+        hi = next;
+        boundary += 1;
+    }
+    if hi <= target {
+        return RecursionProfile {
+            boundary_depth: boundary,
+            boundary_probability: grow,
+            expected_leaves: hi,
+        };
+    }
+    if lo >= target {
+        return RecursionProfile {
+            boundary_depth: boundary,
+            boundary_probability: tail_probability,
+            expected_leaves: lo,
+        };
+    }
+    let frac = (target - lo) / (hi - lo);
+    RecursionProfile {
+        boundary_depth: boundary,
+        boundary_probability: tail_probability + (grow - tail_probability) * frac,
+        expected_leaves: target,
+    }
+}
+
+/// The branch probability for a decision at `depth`, steering the attempt
+/// toward its effective target size. A target of one leaf uses
+/// [`recursion_priced_probability`] directly (its budget clamp prices for
+/// two leaves, keeping single-leaf aims cheap to draw and cheap to
+/// shrink); larger targets use the [`recursion_profile`] solved afresh
+/// from the current arity estimate. The probability deliberately does
+/// *not* depend on the budget already spent, which would make earlier
+/// subtrees systematically branchier than their later siblings.
+fn recursion_decision_probability(state: &RecursionState, depth: u64) -> f64 {
+    let target = recursion_effective_target(state);
+    if target == 1 {
+        return recursion_priced_probability(state);
+    }
+    let tail = recursion_tail_probability(state);
+    let profile = recursion_profile(
+        target as f64,
+        recursion_arity_estimate(state),
+        tail,
+        state.max_depth,
+    );
+    if depth < profile.boundary_depth {
+        RECURSION_MAX_BRANCH_PROBABILITY
+    } else if depth == profile.boundary_depth {
+        profile.boundary_probability
+    } else {
+        tail
+    }
+}
+
+/// Create the state for one recursive draw and draw its target size:
+/// 1 with probability `1 - `[`RECURSION_LARGE_TARGET_PROBABILITY`], else
+/// uniform over `[2, max_leaves]`. Budgets below 2 leave nothing to steer
+/// toward, so they draw nothing and aim for a single leaf. Both draws
+/// shrink toward the single-leaf aim, so shrinking a recursive value
+/// steers regeneration toward smaller trees. The first attempt's branch
+/// probability is priced for a binary tree (the prior: no branches have
+/// been observed yet).
 pub(crate) fn new_recursion_state(
+    ntc: &mut NativeTestCase,
     max_depth: u64,
     max_leaves: u64,
-    base_span_depth: usize,
-) -> RecursionState {
+) -> Result<RecursionState, EngineError> {
+    let base_span_depth = ntc.span_depth();
+    let target = if max_leaves < 2 {
+        1
+    } else {
+        let large = spanned(ntc, LABEL_BOOLEAN, |ntc| {
+            ntc.weighted_precise(RECURSION_LARGE_TARGET_PROBABILITY, None)
+        })?;
+        if large {
+            spanned(ntc, LABEL_INTEGER, |ntc| {
+                ntc.draw_integer_uniform(2, max_leaves)
+            })?
+        } else {
+            1
+        }
+    };
     let mut state = RecursionState {
         max_depth,
         max_leaves,
         attempt: 0,
         leaves: 0,
         base_span_depth,
+        target,
         branch_probability: 0.0,
         closed_children: 0,
         closed_branches: 0,
@@ -536,20 +704,15 @@ pub(crate) fn new_recursion_state(
         reprices: 0,
     };
     state.branch_probability = recursion_priced_probability(&state);
-    state
+    Ok(state)
 }
 
 /// Draw the leaf-or-branch decision for one sub-value of a recursive
 /// generator.
 ///
-/// The probability comes from [`recursion_priced_probability`]: the value
-/// at which a tree of the arity observed so far has expected leaf count
-/// equal to the leaf budget. It is recomputed at every decision as branches
-/// close and sharpen the arity estimate — for a branch function whose
-/// branches always have two children the estimate never moves, so the
-/// probability stays constant across the attempt — and it deliberately
-/// does *not* depend on the budget already spent, which would make earlier
-/// subtrees systematically branchier than their later siblings. At the depth limit the decision is still drawn, at
+/// The probability comes from [`recursion_decision_probability`],
+/// recomputed at every decision as branches close and sharpen the arity
+/// estimate. At the depth limit the decision is still drawn, at
 /// probability zero: the engine records it as a forced choice, so the
 /// choice sequence has the same shape whether or not the limit was hit.
 pub(crate) fn recursion_branch(
@@ -561,7 +724,7 @@ pub(crate) fn recursion_branch(
     let p = if depth >= state.max_depth {
         0.0
     } else {
-        recursion_priced_probability(state)
+        recursion_decision_probability(state, depth)
     };
     let branch = spanned(ntc, LABEL_BOOLEAN, |ntc| ntc.weighted_precise(p, None))?;
     if branch {
@@ -593,28 +756,31 @@ pub(crate) fn recursion_retry(
     Ok(())
 }
 
-/// Decide whether a completed generation attempt was priced fairly, now
-/// that the finished value's branch arities are known exactly. Returns
-/// `Ok(true)` to accept the value, or `Ok(false)` when the attempt was
-/// mispriced and has been discarded (its spans closed as discarded, like a
-/// budget retry): the caller regenerates the whole value from the root.
+/// Decide whether a completed generation attempt landed close enough to
+/// its target, now that the finished value's branch arities are known
+/// exactly. Returns `Ok(true)` to accept the value, or `Ok(false)` when
+/// the attempt was mispriced and has been discarded (its spans closed as
+/// discarded, like a budget retry): the caller regenerates the whole
+/// value from the root.
 ///
-/// The first attempt of every draw is priced from the prior alone, and for
-/// a branch function averaging fewer than two children per branch that
-/// price is too low: the branching process it induces is firmly
-/// subcritical, so values collapse to a handful of nodes, never exceed the
-/// leaf budget, and the budget-retry path never gets a chance to correct
-/// anything. The completed value is itself the evidence: when the
-/// probability repriced from its observed arities exceeds the price the
-/// attempt started from by more than [`RECURSION_REPRICE_THRESHOLD`], the
-/// attempt is discarded and regenerated at the corrected price, at most
-/// [`RECURSION_MAX_REPRICES`] times per draw. A price that was too *high*
-/// never triggers this — over-branching attempts correct themselves
-/// through the budget-retry path. Values whose price was consistent with
-/// their observed arity — every value of a fixed-binary branch function,
-/// and any value with no branches at all — are always accepted, so
-/// adaptation costs nothing where pricing was already right and never
-/// biases against small values.
+/// The first attempt of every draw is priced from the prior alone, and
+/// for a branch function whose mean arity differs from the prior that
+/// price steers wrong: too low, and the value collapses to a handful of
+/// nodes without ever exceeding the leaf budget, so the budget-retry path
+/// never gets a chance to correct anything. The completed value is itself
+/// the evidence. An attempt steering toward a target of two or more
+/// leaves is discarded when it produced less than half its target *and*
+/// the profile solved from the now-known arity says half the target was
+/// reachable — without that guard, grammars that genuinely cannot reach
+/// the target (a unary-heavy grammar against a tight depth cap) would
+/// burn their retries proving it. An attempt aiming for a single leaf is
+/// discarded when the probability repriced from its observed arities
+/// exceeds the price the attempt started from by more than
+/// [`RECURSION_REPRICE_THRESHOLD`]. In both cases regeneration happens at
+/// most [`RECURSION_MAX_REPRICES`] times per draw, and values consistent
+/// with their pricing — every value of a fixed-binary branch function
+/// near its target, and any single-leaf value aimed at one — are always
+/// accepted, so adaptation costs nothing where pricing was already right.
 pub(crate) fn recursion_finish(
     ntc: &mut NativeTestCase,
     state: &mut RecursionState,
@@ -623,8 +789,20 @@ pub(crate) fn recursion_finish(
     if state.reprices >= RECURSION_MAX_REPRICES {
         return Ok(true);
     }
-    let repriced = recursion_priced_probability(state);
-    if repriced - state.branch_probability <= RECURSION_REPRICE_THRESHOLD {
+    let target = recursion_effective_target(state);
+    let mispriced = if target == 1 {
+        recursion_priced_probability(state) - state.branch_probability > RECURSION_REPRICE_THRESHOLD
+    } else {
+        let reachable = recursion_profile(
+            target as f64,
+            recursion_arity_estimate(state),
+            0.0,
+            state.max_depth,
+        )
+        .expected_leaves;
+        state.leaves.saturating_mul(2) < target && 2.0 * reachable >= target as f64
+    };
+    if !mispriced {
         return Ok(true);
     }
     while ntc.span_depth() > state.base_span_depth {
@@ -632,7 +810,7 @@ pub(crate) fn recursion_finish(
     }
     state.leaves = 0;
     state.reprices += 1;
-    state.branch_probability = repriced;
+    state.branch_probability = recursion_priced_probability(state);
     Ok(false)
 }
 
