@@ -118,6 +118,10 @@ pub(crate) struct TestCaseGlobalData {
     /// frontend's own draw-name accounting, never backend traffic. No method
     /// holds it while calling back into `TestCase`.
     draw_state: Mutex<DrawState>,
+    /// When this test case started, shared by every clone so the
+    /// `[worker N +X.XXXms]` offsets stamped on concurrent workers' output
+    /// lines are comparable across workers.
+    case_start: std::time::Instant,
 }
 
 /// The width drawn-value documents are laid out to.
@@ -147,9 +151,11 @@ impl Drop for PrintingDrawScope<'_> {
     }
 }
 
-/// Emit one note line: an indent prefix, the message (with any embedded
+/// Emit one note line: the worker attribution `prefix` (empty outside
+/// concurrent workers), an indent prefix, the message (with any embedded
 /// newlines breaking at the note's indentation), and a closing line break.
-fn emit_note_line(printer: &mut PrettyPrinter, indent: usize, message: &str) {
+fn emit_note_line(printer: &mut PrettyPrinter, prefix: &str, indent: usize, message: &str) {
+    printer.text(prefix);
     printer.text(&" ".repeat(indent));
     printer.shift_indent(indent as isize);
     printer.text(message);
@@ -277,7 +283,7 @@ pub struct TestCase {
     /// every [`clone`](TestCase::clone), whose notes belong to its own
     /// region. The mutex is never contended: children live on their
     /// parent's thread.
-    pending_notes: Arc<Mutex<Vec<(usize, String)>>>,
+    pending_notes: Arc<Mutex<Vec<(String, usize, String)>>>,
 }
 
 impl Clone for TestCase {
@@ -419,17 +425,7 @@ impl TestCase {
         sink: Option<OutputSink>,
     ) -> Self {
         let on_draw: OutputSink = if emit {
-            let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
-            // Captured once per test case and shared by every worker's
-            // clone, so worker-line offsets are comparable across workers.
-            let case_start = std::time::Instant::now();
-            Arc::new(move |msg| match crate::stateful::current_worker_index() {
-                Some(worker) => {
-                    let ms = case_start.elapsed().as_secs_f64() * 1000.0;
-                    raw(&format!("[worker {worker} +{ms:.3}ms] {msg}"))
-                }
-                None => raw(msg),
-            })
+            sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)))
         } else {
             Arc::new(|_| {})
         };
@@ -442,6 +438,7 @@ impl TestCase {
                     named_draw_repeatable: HashMap::new(),
                     allocated_display_names: HashSet::new(),
                 }),
+                case_start: std::time::Instant::now(),
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
@@ -519,11 +516,13 @@ impl TestCase {
             return generator.do_draw(self);
         };
         let indent = self.local.borrow().indent;
+        let prefix = self.worker_line_prefix();
         let value = {
             let _printing = PrintingDrawScope::new(self);
             self.with_printer(|printer| {
                 let mut speculation = printer.speculate();
                 let printer = speculation.printer();
+                printer.text(&prefix);
                 printer.text(&" ".repeat(indent));
                 printer.shift_indent(indent as isize);
                 printer.text(&format!("let {display_name} = "));
@@ -638,12 +637,13 @@ impl TestCase {
             let local = self.local.borrow();
             (local.indent, local.span_depth > 0)
         };
+        let prefix = self.worker_line_prefix();
         if mid_draw {
             self.pending_notes
                 .lock()
-                .push((indent, message.to_string()));
+                .push((prefix, indent, message.to_string()));
         } else {
-            self.with_printer(|printer| emit_note_line(printer, indent, message));
+            self.with_printer(|printer| emit_note_line(printer, &prefix, indent, message));
         }
     }
 
@@ -804,6 +804,21 @@ impl TestCase {
         f(printer)
     }
 
+    /// The `[worker N +X.XXXms] ` attribution for output written from a
+    /// concurrent stateful worker thread, empty elsewhere. Computed when a
+    /// line is recorded — on the worker's own thread, against the case-wide
+    /// start time — so attribution and timing survive into the document
+    /// rendered after the case completes.
+    fn worker_line_prefix(&self) -> String {
+        match crate::stateful::current_worker_index() {
+            Some(worker) => {
+                let ms = self.global.case_start.elapsed().as_secs_f64() * 1000.0;
+                format!("[worker {worker} +{ms:.3}ms] ")
+            }
+            None => String::new(),
+        }
+    }
+
     /// Emit any notes recorded while a draw was in progress on this
     /// instance.
     fn flush_pending_notes(&self) {
@@ -812,8 +827,8 @@ impl TestCase {
             return;
         }
         self.with_printer(|printer| {
-            for (indent, message) in &notes {
-                emit_note_line(printer, *indent, message);
+            for (prefix, indent, message) in &notes {
+                emit_note_line(printer, prefix, *indent, message);
             }
         });
     }

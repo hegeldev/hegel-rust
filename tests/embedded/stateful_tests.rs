@@ -70,6 +70,7 @@ fn resolve_round_unwind(events: Vec<WorkerEvent>, tc: &TestCase) -> Box<dyn std:
 fn resolve_round_with_all_workers_done_returns_normally() {
     let (_run, tc, lines) = capturing_test_case();
     resolve_round(vec![WorkerEvent::RoundDone, WorkerEvent::RoundDone], &tc);
+    tc.emit_rendered_output();
     assert!(lines.lock().unwrap().is_empty());
 }
 
@@ -95,6 +96,7 @@ fn resolve_round_overrun_wins_over_panic_and_notes_the_dropped_panic() {
     ];
     let payload = resolve_round_unwind(events, &tc);
     assert!(payload.downcast_ref::<StopTest>().is_some());
+    tc.emit_rendered_output();
     let lines = lines.lock().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(
@@ -109,6 +111,7 @@ fn resolve_round_invalid_wins_over_panic_and_raises_assume_failed() {
     let events = vec![WorkerEvent::Invalid, panicked_event("induced panic", None)];
     let payload = resolve_round_unwind(events, &tc);
     assert!(payload.downcast_ref::<AssumeFailed>().is_some());
+    tc.emit_rendered_output();
     assert_eq!(lines.lock().unwrap().len(), 1);
 }
 
@@ -126,6 +129,7 @@ fn resolve_round_lowest_worker_index_panic_wins_and_losers_are_noted() {
     let (thread_name, _, location, _) = run_lifecycle::take_panic_info().unwrap();
     assert_eq!(thread_name, "worker-thread");
     assert_eq!(location, "winner.rs:1:1");
+    tc.emit_rendered_output();
     let lines = lines.lock().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(
@@ -215,6 +219,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
     let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, &machine));
     assert!(matches!(event, WorkerEvent::RoundDone));
     assert_eq!(m.hits.load(Ordering::SeqCst), 1);
+    tc.emit_rendered_output();
     assert!(
         lines
             .lock()
