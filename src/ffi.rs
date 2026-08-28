@@ -14,7 +14,7 @@
 //! invalid-argument unwind). Keeping that split means the unsafe boundary stays
 //! small and the control-flow policy stays with the test lifecycle.
 
-use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString, c_void};
@@ -137,11 +137,6 @@ impl SettingsHandle {
             // out-parameter.
             unsafe {
                 require_ok(hegel_c::hegel_settings_new(ctx, &mut raw));
-                require_ok(hegel_c::hegel_settings_set_mode(
-                    ctx,
-                    raw,
-                    map_mode(settings.mode),
-                ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
                     ctx,
                     raw,
@@ -1248,13 +1243,6 @@ fn cstr_opt(p: *const c_char) -> Option<String> {
         None
     } else {
         Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
-    }
-}
-
-fn map_mode(mode: Mode) -> u32 {
-    match mode {
-        Mode::TestRun => hegel_c::hegel_mode_t::HEGEL_MODE_TEST_RUN as u32,
-        Mode::SingleTestCase => hegel_c::hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32,
     }
 }
 

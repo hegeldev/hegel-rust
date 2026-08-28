@@ -191,15 +191,7 @@ fn run_one_case(
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    run_test_case(
-        c_tc,
-        body,
-        is_final,
-        Mode::TestRun,
-        verbosity,
-        &RunOutput::resolve(),
-        None,
-    )
+    run_test_case(c_tc, body, is_final, verbosity, &RunOutput::resolve(), None)
 }
 
 fn run_case_capturing(

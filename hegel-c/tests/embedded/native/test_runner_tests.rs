@@ -1,6 +1,6 @@
 //! Embedded tests for `src/native/test_runner.rs`.
 //!
-//! These drive the engine directly — `run_main`, `run_single_case`, `Engine`,
+//! These drive the engine directly — `run_main`, `Engine`,
 //! the health-check helpers, and the database reuse phase. Test bodies draw
 //! from the engine's own `DataSource` (the same interface the C ABI exposes)
 //! and report their outcome by returning a `TestCaseResult`, rather than going
@@ -15,7 +15,7 @@ use alloc::vec;
 
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::settings::{Mode, Phase};
+use crate::settings::Phase;
 use std::time::Duration;
 
 /// A drawn boolean, or `Err(())` if the case overran / was aborted.
@@ -137,22 +137,6 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     });
-}
-
-/// Drive [`run_single_case`] to completion with a synchronous `run_case`
-/// callback, the way the old pre-exchange entry point worked.
-fn run_single_case_sync(
-    settings: &Settings,
-    key: Option<&str>,
-    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
-) -> Option<Failure> {
-    let exchange = CaseExchange::new();
-    crate::exchange::drive(
-        &exchange,
-        run_single_case(settings, key, &exchange),
-        run_case,
-    )
-    .unwrap()
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -519,37 +503,6 @@ fn create_rng_urandom_backend_reads_urandom() {
         create_rng(&settings, None),
         Ok(EngineRng::Urandom(_))
     ));
-}
-
-#[test]
-fn run_single_case_returns_the_failure() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&boom("single-case bug"));
-        },
-    )
-    .unwrap();
-    assert!(failure.origin.contains("single-case bug"), "{failure:?}");
-}
-
-#[test]
-fn run_single_case_returns_none_for_a_passing_case() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&TestCaseResult::Valid);
-        },
-    );
-    assert!(failure.is_none(), "{failure:?}");
 }
 
 #[test]
@@ -1335,11 +1288,11 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
 }
 
 #[test]
-fn run_single_case_derandomize_is_keyed_by_test_identity() {
+fn derandomize_is_keyed_by_test_identity() {
     let settings = Settings::new()
+        .test_cases(5)
         .database(None)
         .derandomize(true)
-        .mode(Mode::SingleTestCase)
         .verbosity(Verbosity::Quiet);
     let draw_with_key = |key: Option<&str>| {
         let mut drawn: Vec<u64> = Vec::new();
@@ -1352,7 +1305,14 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
                 }
                 ds.mark_complete(&TestCaseResult::Valid);
             };
-            run_single_case_sync(&settings, key, &mut run_case);
+            run_main_sync(
+                &settings,
+                key,
+                &mut run_case,
+                Duration::from_secs(30),
+                Duration::ZERO,
+            )
+            .unwrap();
         }
         drawn
     };

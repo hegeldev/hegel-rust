@@ -568,15 +568,23 @@ pub use hegel_macros::test;
 /// producing a `#[test]` it produces a plain function body that parses CLI
 /// arguments and runs a [`Hegel`] driver.
 ///
+/// Each invocation of the binary runs exactly one test case: invalid cases
+/// (a failed [`assume`](TestCase::assume)) are retried until one valid case
+/// has run, and a failure is shrunk, reported, and persisted to the failure
+/// database as usual, so a failure found by one invocation is replayed by
+/// the next. The test-case count is the one thing that cannot be changed:
+/// `test_cases` is rejected as an attribute arg, `--test-cases` is not
+/// accepted on the command line, and `HEGEL_TEST_CASES` has no effect.
+///
 /// Supported CLI flags (with defaults taken from the attribute args):
-/// `--test-cases`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
-/// `--suppress-health-check`, `-h` / `--help`.
+/// `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `--backend`, `-h` / `--help`.
 ///
 /// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;
 ///
-/// #[hegel::main(test_cases = 500)]
+/// #[hegel::main]
 /// fn main(tc: TestCase) {
 ///     let n: i32 = tc.draw(gs::integers());
 ///     assert_eq!(n + 0, n);
@@ -615,4 +623,4 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{Backend, HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
+pub use runner::{Backend, HealthCheck, Hegel, Phase, Settings, Verbosity};

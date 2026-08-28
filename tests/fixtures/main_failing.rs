@@ -4,7 +4,7 @@
 use hegel::TestCase;
 use hegel::generators as gs;
 
-#[hegel::main(test_cases = 100)]
+#[hegel::main]
 fn main(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(50));
     assert!(x < 0, "got nonneg {}", x);

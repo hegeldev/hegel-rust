@@ -4,7 +4,6 @@ use crate::control::{
 };
 use crate::ffi::CTestCase;
 use crate::generators::Generator;
-use crate::runner::Mode;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -100,7 +99,6 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
 }
 
 pub(crate) struct TestCaseGlobalData {
-    mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
     /// verbose output is on, and for every non-final case of a run already
@@ -354,12 +352,7 @@ impl TestCase {
     /// output destination ([`RunOutput::sink`]) — passed in rather than read
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.
-    pub(crate) fn new(
-        handle: Arc<CTestCase>,
-        emit: bool,
-        mode: Mode,
-        sink: Option<OutputSink>,
-    ) -> Self {
+    pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, sink: Option<OutputSink>) -> Self {
         let on_draw: OutputSink = if emit {
             let raw: OutputSink = sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)));
             // Captured once per test case and shared by every worker's
@@ -377,7 +370,6 @@ impl TestCase {
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
-                mode,
                 emit,
                 draw_state: Mutex::new(DrawState {
                     named_draw_counts: HashMap::new(),
@@ -592,32 +584,6 @@ impl TestCase {
     /// }
     /// ```
     pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
-        if self.global.mode == Mode::SingleTestCase {
-            self.repeat_single_test_case(&mut body);
-        }
-        self.repeat_property_test(&mut body);
-    }
-
-    fn repeat_single_test_case(&self, body: &mut dyn FnMut()) -> ! {
-        let mut iteration: u64 = 0;
-        loop {
-            iteration += 1;
-            self.note(&format!("// Repetition #{}", iteration));
-
-            let prev_indent = self.local.borrow().indent;
-            self.local.borrow_mut().indent = prev_indent + 2;
-            let result = catch_unwind(AssertUnwindSafe(&mut *body));
-            self.local.borrow_mut().indent = prev_indent;
-
-            match result {
-                Ok(()) => {}
-                Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {}
-                Err(e) => resume_unwind(e),
-            }
-        }
-    }
-
-    fn repeat_property_test(&self, body: &mut dyn FnMut()) -> ! {
         use crate::generators::{booleans, integers};
 
         let max_safe_min_size = usize::try_from(1u64 << 40).unwrap_or(usize::MAX / 2);
@@ -632,7 +598,7 @@ impl TestCase {
 
             let prev_indent = self.local.borrow().indent;
             self.local.borrow_mut().indent = prev_indent + 2;
-            let result = catch_unwind(AssertUnwindSafe(&mut *body));
+            let result = catch_unwind(AssertUnwindSafe(&mut body));
             self.local.borrow_mut().indent = prev_indent;
 
             match result {

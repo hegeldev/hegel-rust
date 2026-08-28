@@ -147,18 +147,6 @@ fn sequential_machine_hands_out_exactly_one_rule_per_round() {
 }
 
 #[test]
-fn unbounded_families_never_halt() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
-    ntc.family().set_state_machine_steps_unbounded();
-    let mut sm = machine(&mut ntc, 2);
-    for _ in 0..100 {
-        assert!(sm.next_group(&mut ntc).unwrap().is_some());
-        assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
-        assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-    }
-}
-
-#[test]
 fn p_disabled_is_drawn_at_creation_only() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let mut sm = machine(&mut ntc, 3);
@@ -296,13 +284,17 @@ fn group_ids_are_arbitrary_and_deduplicated_by_first_appearance() {
 fn selection_stays_in_the_current_group() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
-        ntc.family().set_state_machine_steps_unbounded();
         let mut sm = grouped_machine(&mut ntc, &[0, 1, 0, 1, 1]);
+        let mut rounds = 0;
         for _ in 0..30 {
-            let group = sm.next_group(&mut ntc).unwrap().unwrap();
+            let Some(group) = sm.next_group(&mut ntc).unwrap() else {
+                break;
+            };
             let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap() as usize;
             assert_eq!([0, 1, 0, 1, 1][rule], group);
+            rounds += 1;
         }
+        assert!(rounds >= 1, "the first round is always forced to run");
     }
 }
 
@@ -723,19 +715,22 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
 fn all_selected_rules_are_in_range() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
-        ntc.family().set_state_machine_steps_unbounded();
         let mut sm = machine(&mut ntc, 5);
+        let mut rounds = 0;
         for _ in 0..30 {
-            assert!(sm.next_group(&mut ntc).unwrap().is_some());
+            if sm.next_group(&mut ntc).unwrap().is_none() {
+                break;
+            }
             assert!(sm.next_rule(&mut ntc, 0).unwrap().unwrap() < 5);
+            rounds += 1;
         }
+        assert!(rounds >= 1, "the first round is always forced to run");
     }
 }
 
 #[test]
 fn simplest_template_always_selects_rule_zero() {
     let mut ntc = simplest_after(&[], 64);
-    ntc.family().set_state_machine_steps_unbounded();
     let mut sm = machine(&mut ntc, 3);
     for _ in 0..5 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());

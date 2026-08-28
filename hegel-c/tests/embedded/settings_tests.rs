@@ -7,7 +7,6 @@ fn default_is_new() {
     let d = Settings::default();
     let n = Settings::new();
     assert_eq!(d.test_cases, n.test_cases);
-    assert_eq!(d.mode, n.mode);
 }
 
 #[test]

@@ -79,7 +79,7 @@ use crate::control::hegel_internal_unwrap;
 use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
-use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
+use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call. See "Calling convention" in the header
 /// preamble.
@@ -152,21 +152,6 @@ pub enum hegel_status_t {
     HEGEL_STATUS_INTERESTING = 3,
 }
 
-/// How the engine should treat the run: a full property-test loop or a
-/// single test case. Set via `hegel_settings_set_mode`.
-#[repr(C)]
-#[derive(Copy, Clone)]
-#[allow(non_camel_case_types)]
-pub enum hegel_mode_t {
-    /// libhegel drives a full generate / shrink / replay loop until the
-    /// test-case budget or the choice tree is exhausted. The default.
-    HEGEL_MODE_TEST_RUN = 0,
-    /// libhegel produces exactly one test case and stops, with no shrinking.
-    /// Useful for replaying a stored counterexample or running an
-    /// exploratory probe.
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-}
-
 /// Which source of randomness the engine draws from. Set via
 /// `hegel_settings_set_backend`.
 #[repr(C)]
@@ -207,11 +192,7 @@ pub enum hegel_run_status_t {
     /// whatever it captured while running the discovering test case (the
     /// engine stamps every case of such a run nondeterministic up front,
     /// see `hegel_test_case_is_nondeterministic`, precisely so the caller
-    /// captures each case's output as it runs). Only full test runs report
-    /// this status; a failing single-test-case run reports
-    /// `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-    /// machine, since the caller reports such a case from its own execution
-    /// anyway.
+    /// captures each case's output as it runs).
     HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 }
 
@@ -652,7 +633,7 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob (a
-    /// single-test-case run, or a nondeterministic run). Read via
+    /// nondeterministic run). Read via
     /// `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
@@ -778,44 +759,13 @@ unsafe fn settings_mut<'a>(
 }
 
 /// Parameters:
-/// `mode`: A full run loop or a single test case with no shrinking. See
-///   `hegel_mode_t`.
+/// `backend`: A `hegel_backend_t` value selecting the source of
+///   randomness.
 ///
 /// Returns `HEGEL_OK`.
 ///
 /// The enum-valued setters take `uint32_t` rather than the enum type so
 /// that an out-of-range value is an error instead of undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_mode(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    mode: u32,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_mode") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    let m = match mode {
-        x if x == hegel_mode_t::HEGEL_MODE_TEST_RUN as u32 => Mode::TestRun,
-        x if x == hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32 => Mode::SingleTestCase,
-        _ => {
-            set_last_error(
-                ctx,
-                &format!("hegel_settings_set_mode: unknown mode {mode}"),
-            );
-            return HEGEL_E_INVALID_ARG;
-        }
-    };
-    handle.inner = handle.inner.clone().mode(m);
-    HEGEL_OK
-}
-
-/// Parameters:
-/// `backend`: A `hegel_backend_t` value selecting the source of
-///   randomness.
-///
-/// Returns `HEGEL_OK`.
 ///
 /// Once an explicit backend has been set on a handle there is no way to
 /// change it within a run.
@@ -2469,8 +2419,8 @@ unsafe fn state_machine_ref<'a>(
 /// carry no reproduce blob. A notice explaining this is printed once, on
 /// the run's output, unless verbosity is quiet. This applies even to test
 /// cases whose drawn concurrency level is 1: the declared bound is what
-/// counts. Standalone test cases — single-test-case runs and
-/// `hegel_test_case_from_blob` replays — are never rejected.
+/// counts. Standalone test cases — `hegel_test_case_from_blob` replays —
+/// are never rejected.
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /
@@ -2603,9 +2553,7 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
 /// `hegel_state_machine_next_rule` stream is exhausted — including before the
 /// first rule is requested. This applies to sequential machines too: the
 /// frontend must advance the group when the rule stream is exhausted, even
-/// though there is only a single group. In single-test-case mode (steps
-/// unbounded, e.g. under Antithesis) `*out_group_id` is never set to
-/// `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
+/// though there is only a single group.
 ///
 /// `state_machine` must be a handle returned by `hegel_new_state_machine`
 /// on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
