@@ -755,6 +755,20 @@ fn a_root_handle_straggling_mid_draw_on_an_unjoined_thread_does_not_break_report
 }
 
 #[test]
+fn a_broken_printing_impl_degrades_the_report_instead_of_aborting_the_run() {
+    let lines = failing_lines(|tc| {
+        let _clone = tc.clone();
+        let _ = tc.draw(gs::booleans().print_with(|_, printer| printer.end_group(")")));
+        panic!("boom");
+    });
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("Failed to render this test case's drawn values"),
+        "{lines:?}"
+    );
+}
+
+#[test]
 fn straggling_clones_note_harmlessly_after_the_run() {
     let stash: Arc<Mutex<Option<hegel::TestCase>>> = Arc::new(Mutex::new(None));
     let stash_writer = stash.clone();

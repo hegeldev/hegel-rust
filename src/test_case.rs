@@ -845,10 +845,20 @@ impl TestCase {
             return;
         }
         self.flush_pending_notes();
-        let output = self.with_printer(|printer| printer.value());
+        let output = self.with_printer(|printer| printer.try_value());
         let local = self.local.borrow();
-        for line in output.lines() {
-            (local.on_draw)(line);
+        match output {
+            Ok(output) => {
+                for line in output.lines() {
+                    (local.on_draw)(line);
+                }
+            }
+            Err(message) => (local.on_draw)(&format!(
+                "Failed to render this test case's drawn values ({message}). This \
+                 indicates a bug in printing code the test uses: check any \
+                 hand-written PrettyPrintable impl or print_with closure for \
+                 unbalanced begin_group/end_group calls."
+            )),
         }
     }
 
