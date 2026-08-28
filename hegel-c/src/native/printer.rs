@@ -219,7 +219,10 @@ pub struct Printer {
     slots: Vec<Slot>,
     pending_resolve: bool,
     sealed: bool,
-    rendered: String,
+    /// The laid-out document, rendered once on the first [`Printer::resolve`]
+    /// / [`Printer::value`] after sealing and reused afterwards: sealing
+    /// freezes the command list, so the layout cannot change.
+    rendered: Option<String>,
 }
 
 impl Printer {
@@ -233,7 +236,7 @@ impl Printer {
             slots: Vec::new(),
             pending_resolve: false,
             sealed: false,
-            rendered: String::new(),
+            rendered: None,
         }
     }
 
@@ -247,6 +250,7 @@ impl Printer {
     /// is only consulted when the document is laid out.
     pub fn set_max_width(&mut self, max_width: usize) {
         self.max_width = max_width;
+        self.rendered = None;
     }
 
     /// Emit literal, unbreakable text. Must not contain newlines.
@@ -444,7 +448,7 @@ impl Printer {
         }
         self.seal();
         self.pending_resolve = false;
-        self.render()?;
+        self.rendered_output()?;
         Ok(())
     }
 
@@ -455,8 +459,16 @@ impl Printer {
             return Err(PrinterError::UnresolvedDeferred);
         }
         self.seal();
-        self.rendered = self.render()?;
-        Ok(&self.rendered)
+        self.rendered_output()
+    }
+
+    /// The rendered document, laying it out on the first call and reusing
+    /// the result afterwards.
+    fn rendered_output(&mut self) -> Result<&str, PrinterError> {
+        if self.rendered.is_none() {
+            self.rendered = Some(self.render()?);
+        }
+        Ok(self.rendered.as_deref().unwrap())
     }
 
     /// Seal the document: an open speculative region on any target — a

@@ -337,6 +337,30 @@ fn unfilled_deferred_splices_nothing() {
 }
 
 #[test]
+fn repeated_reads_reuse_one_rendering() {
+    let mut p = printer(79);
+    p.deferred(M).unwrap();
+    p.text(M, "a").unwrap();
+    p.resolve().unwrap();
+    let first = p.value().unwrap().as_ptr();
+    let second = p.value().unwrap().as_ptr();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn width_change_after_a_read_lays_the_document_out_again() {
+    let mut p = printer(79);
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "first,").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "second").unwrap();
+    p.end_group(M, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "[first, second]");
+    p.set_max_width(10);
+    assert_eq!(p.value().unwrap(), "[first,\n second]");
+}
+
+#[test]
 fn value_with_unresolved_deferred_is_an_error() {
     let mut p = printer(79);
     p.deferred(M).unwrap();
