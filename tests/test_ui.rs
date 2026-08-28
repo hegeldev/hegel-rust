@@ -296,6 +296,20 @@ fn derived_generator_non_printable_field_diagnostic() {
     check_against_golden(&actual, golden);
 }
 
+/// A `one_of!` over non-printable components passed to `tc.draw`. Checked by
+/// hand for the same reason as the E0283 case — the diagnostic enumerates
+/// `PrettyPrintable` implementors, which vary with the feature set and
+/// toolchain — but the rest of the wording is toolchain-stable, so a single
+/// golden suffices.
+#[test]
+fn one_of_non_printable_draw_diagnostic() {
+    let actual = compile_failing_case("tests/ui-printability/one_of_non_printable_draw.rs");
+    check_against_golden(
+        &actual,
+        "tests/ui-printability/one_of_non_printable_draw.stderr",
+    );
+}
+
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();
