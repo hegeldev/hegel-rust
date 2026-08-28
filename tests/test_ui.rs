@@ -276,6 +276,14 @@ fn compile_failing_case(case: &str) -> String {
             arg.push(&rlib);
             arg
         });
+    let rmeta = rlib.with_extension("rmeta");
+    if rmeta.exists() {
+        command.arg("--extern").arg({
+            let mut arg = std::ffi::OsString::from("hegel=");
+            arg.push(&rmeta);
+            arg
+        });
+    }
     for dir in &search_dirs {
         command.arg("-L").arg({
             let mut arg = std::ffi::OsString::from("dependency=");
@@ -299,14 +307,17 @@ fn compile_failing_case(case: &str) -> String {
 }
 
 /// Compare a hand-checked case's normalized diagnostic against its golden,
-/// or rewrite the golden under `TRYBUILD=overwrite`.
+/// or rewrite the golden under `TRYBUILD=overwrite`. Goldens are compared
+/// with `\n` endings — a Windows checkout under `core.autocrlf` hands them
+/// back with `\r\n`.
 fn check_against_golden(actual: &str, golden: &str) {
     if std::env::var_os("TRYBUILD").is_some_and(|v| v == "overwrite") {
         std::fs::write(golden, actual).unwrap();
         return;
     }
     let expected = std::fs::read_to_string(golden)
-        .unwrap_or_else(|_| panic!("missing golden {golden}; regenerate with TRYBUILD=overwrite"));
+        .unwrap_or_else(|_| panic!("missing golden {golden}; regenerate with TRYBUILD=overwrite"))
+        .replace("\r\n", "\n");
     assert_eq!(
         actual, expected,
         "normalized diagnostic does not match {golden}; \
