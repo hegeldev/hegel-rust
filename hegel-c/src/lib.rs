@@ -127,10 +127,13 @@ pub enum hegel_result_t {
     /// the handle instead.
     HEGEL_E_CONCURRENT_USE = -9,
 
-    /// A recursive draw exceeded its leaf budget (`hegel_recursion_leaf`).
-    /// Unwind the current generation attempt — drawing nothing further for
-    /// it — back to where `hegel_new_recursion` was called, then call
-    /// `hegel_recursion_retry` to discard the attempt and try again.
+    /// A recursive generation attempt must be regenerated from the root.
+    /// From `hegel_recursion_leaf`, the attempt exceeded its leaf budget:
+    /// unwind it — drawing nothing further for it — back to where
+    /// `hegel_new_recursion` was called, then call `hegel_recursion_retry`
+    /// to discard it. From `hegel_recursion_finish`, the completed value
+    /// was mispriced and the engine has already discarded it: drop it and
+    /// start again from the root directly.
     HEGEL_E_RETRY = -10,
 }
 
@@ -1953,10 +1956,11 @@ pub unsafe extern "C" fn hegel_collection_free(
 ///
 /// Created by `hegel_new_recursion` on a test case, once per recursive
 /// value drawn; driven by `hegel_recursion_branch` / `hegel_recursion_leaf`
-/// / `hegel_recursion_retry` through any handle of the *same* test-case
-/// family (the root or any clone) — decisions are drawn from whichever
-/// handle makes the call. Like a pool, the scope holds an internal lock, so
-/// clone handles driven from parallel threads share the leaf budget safely.
+/// / `hegel_recursion_retry` / `hegel_recursion_finish` through any handle
+/// of the *same* test-case family (the root or any clone) — decisions are
+/// drawn from whichever handle makes the call. Like a pool, the scope holds
+/// an internal lock, so clone handles driven from parallel threads share
+/// the leaf budget safely.
 ///
 /// The protocol, for one sub-value (starting with the root at depth 0):
 /// call `hegel_recursion_branch`; on `true` invoke the user's branch
@@ -1965,10 +1969,14 @@ pub unsafe extern "C" fn hegel_collection_free(
 /// When `hegel_recursion_leaf` returns `HEGEL_E_RETRY` the attempt has
 /// outgrown the leaf budget: unwind out of the user's generators without
 /// drawing anything further, call `hegel_recursion_retry`, and on `HEGEL_OK`
-/// start the whole value again from the root. All policy — the branch
-/// probabilities, the depth and leaf limits, and when to give up — lives in
-/// the engine, so recursive values are identically distributed in every
-/// language frontend.
+/// start the whole value again from the root. Once the root sub-value has
+/// finished, call `hegel_recursion_finish`: `HEGEL_OK` accepts the value,
+/// while `HEGEL_E_RETRY` means the engine discarded the attempt as
+/// mispriced — drop the value and start again from the root (without
+/// calling `hegel_recursion_retry`). All policy — the branch probabilities
+/// and their adaptation to the branch arities actually produced, the depth
+/// and leaf limits, and when to give up — lives in the engine, so recursive
+/// values are identically distributed in every language frontend.
 ///
 /// The handle is independent of the test case and run it was created under:
 /// free it with `hegel_recursion_free` exactly once, at any point — before
@@ -1997,13 +2005,17 @@ unsafe fn recursion_ref<'a>(
 /// Open a recursive generation scope: libhegel decides where the value
 /// branches, where it bottoms out in leaves, and when an attempt has grown
 /// too large and must be retried. See `hegel_recursion_t` for the protocol.
+/// Draws the scope's target size from `tc`'s stream (when `max_leaves` is
+/// at least 2), so it must be called at the point in the draw sequence
+/// where the recursive value begins.
 ///
 /// Parameters:
 /// `max_depth`: Branches nest at most this deep; sub-values at this depth
 ///   are always leaves, so 0 generates only leaves.
-/// `max_leaves`: The most leaves one generated value may contain. Attempts
-///   that outgrow it are discarded and retried with a lower branching
-///   probability, and the test case is rejected as invalid when several
+/// `max_leaves`: The most leaves one generated value may contain. Each
+///   value steers toward a target size drawn from this range. Attempts
+///   that outgrow the budget are discarded and retried steering toward a
+///   smaller target, and the test case is rejected as invalid when several
 ///   attempts in a row fail to fit.
 /// `out_recursion`: Receives a caller-owned handle to pass to the calls
 ///   below (through any handle of the same test-case family). Release it
@@ -2070,8 +2082,8 @@ pub unsafe extern "C" fn hegel_recursion_branch(
         set_last_error(ctx, "hegel_recursion_branch: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let state = recursion.state.lock();
-    match tc.stream.recursion_branch(&state, depth) {
+    let mut state = recursion.state.lock();
+    match tc.stream.recursion_branch(&mut state, depth) {
         Ok(b) => {
             unsafe { *out_branch = b };
             HEGEL_OK
@@ -2147,6 +2159,46 @@ pub unsafe extern "C" fn hegel_recursion_retry(
     let mut state = recursion.state.lock();
     match tc.stream.recursion_retry(&mut state) {
         Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Report that the recursive value has finished generating: its root
+/// sub-value (and therefore the whole tree) is complete. The engine checks
+/// the branch pricing the attempt started from against the branch arities
+/// it actually produced.
+///
+/// Returns `HEGEL_OK` (the value is accepted — use it),
+/// `HEGEL_E_RETRY` (the attempt was mispriced and has been discarded, its
+/// spans closed as discarded: drop the value and start again from the
+/// root, *without* calling `hegel_recursion_retry`), or
+/// `HEGEL_E_STOP_TEST`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_recursion_finish(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    recursion: *mut HegelRecursion,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_recursion_finish", tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let recursion = match unsafe { recursion_ref(ctx, "hegel_recursion_finish", recursion) } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    let mut state = recursion.state.lock();
+    match tc.stream.recursion_finish(&mut state) {
+        Ok(true) => HEGEL_OK,
+        Ok(false) => {
+            set_last_error(
+                ctx,
+                "recursive value was priced for branches with more children than its \
+                 branch function draws; regenerate it from the root",
+            );
+            HEGEL_E_RETRY
+        }
         Err(e) => translate_ds_error(ctx, e),
     }
 }
