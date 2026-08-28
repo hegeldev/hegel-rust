@@ -15,7 +15,6 @@ note: required for `ConfigGenerator<BoxedGenerator<'_, String>>` to implement `P
  |
 LL | #[derive(Debug, DefaultGenerator)]
  |                 ^^^^^^^^^^^^^^^^ type parameter would need to implement `PrintableGenerator<Config>`
- = help: consider manually implementing `PrintableGenerator<Config>` to avoid undesired bounds
 note: required by a bound in `TestCase::draw`
  --> src/test_case.rs
  |

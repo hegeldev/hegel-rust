@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
+static_assertions::assert_not_impl_any!(PrettyPrinter: Sync);
+
 fn render<T: PrettyPrintable + ?Sized>(value: &T, max_width: usize) -> String {
     let mut doc = Document::new().max_width(max_width);
     value.pretty_print(doc.printer());

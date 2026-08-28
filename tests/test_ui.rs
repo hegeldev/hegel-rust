@@ -98,20 +98,66 @@ fn rustc_binary() -> std::ffi::OsString {
     std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into())
 }
 
-/// The `target/<profile>/deps` directory this test binary was built into,
-/// which also holds the `libhegel-<hash>.rlib` the case must compile
-/// against.
-fn deps_dir() -> PathBuf {
+/// The directories holding the compiled crates of the build this test binary
+/// belongs to: the `libhegel-<hash>.rlib` the case must compile against and
+/// the dependency rlibs rustc needs to load alongside it. The classic cargo
+/// layout puts every compiled crate in `target/<profile>/deps` and runs this
+/// binary from there too; nightly cargo's per-unit layout runs it from a
+/// `target/<profile>/build/<pkg>/<hash>/out` directory and scatters the
+/// rlibs across such directories. Only the running binary's own layout is
+/// searched: crates laid out the other way were built by another toolchain,
+/// and its rlibs may not be loadable by the rustc compiling the case.
+fn crate_search_dirs() -> Vec<PathBuf> {
+    fn holds_compiled_crates(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.filter_map(|entry| entry.ok()).any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(".rlib")
+                    || name.ends_with(".rmeta")
+                    || name.ends_with(".dylib")
+                    || name.ends_with(".so")
+                    || name.ends_with(".dll")
+            })
+        })
+    }
     let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().to_path_buf()
+    let exe_dir = exe.parent().unwrap();
+    if exe_dir.file_name().is_some_and(|n| n == "deps") {
+        return vec![exe_dir.to_path_buf()];
+    }
+    let build_dir = exe_dir.ancestors().nth(3).filter(|dir| {
+        exe_dir.file_name().is_some_and(|n| n == "out")
+            && dir.file_name().is_some_and(|n| n == "build")
+    });
+    let build_dir = build_dir
+        .unwrap_or_else(|| panic!("unrecognized cargo target layout at {}", exe.display()));
+    let mut dirs = Vec::new();
+    for pkg in std::fs::read_dir(build_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+    {
+        for unit in std::fs::read_dir(pkg.path())
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+        {
+            let out = unit.path().join("out");
+            if holds_compiled_crates(&out) {
+                dirs.push(out);
+            }
+        }
+    }
+    dirs
 }
 
-/// The most recently built `libhegel` rlib in `deps`: stale rlibs from
+/// The most recently built `libhegel` rlib in `dirs`: stale rlibs from
 /// earlier builds (other feature sets, older sources) can sit alongside it,
 /// and the one cargo built or refreshed for this test run is the newest.
-fn newest_hegel_rlib(deps: &Path) -> PathBuf {
-    std::fs::read_dir(deps)
-        .unwrap()
+fn newest_hegel_rlib(dirs: &[PathBuf]) -> PathBuf {
+    dirs.iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| {
             path.file_name()
@@ -119,7 +165,7 @@ fn newest_hegel_rlib(deps: &Path) -> PathBuf {
                 .is_some_and(|n| n.starts_with("libhegel-") && n.ends_with(".rlib"))
         })
         .max_by_key(|path| std::fs::metadata(path).unwrap().modified().unwrap())
-        .unwrap_or_else(|| panic!("no libhegel rlib found in {}", deps.display()))
+        .unwrap_or_else(|| panic!("no libhegel rlib found under {dirs:?}"))
 }
 
 /// Normalize the raw rustc stderr for the E0283 case down to its stable
@@ -136,7 +182,10 @@ fn newest_hegel_rlib(deps: &Path) -> PathBuf {
 ///   its position);
 /// - rustc's trailing notes about the full type name written to a temp file
 ///   (a random path), the `--verbose` hint, the "aborting due to" line, and
-///   the `--explain` hint carry no information about hegel and are dropped.
+///   the `--explain` hint carry no information about hegel and are dropped,
+///   as are the "consider manually implementing" help for derive-introduced
+///   bounds and its "to learn more" link, whose wording is still evolving
+///   across toolchains.
 fn normalize_e0283_stderr(raw: &str) -> String {
     let mut out = Vec::new();
     let mut in_impl_list = false;
@@ -168,6 +217,8 @@ fn normalize_e0283_stderr(raw: &str) -> String {
         }
         if trimmed.starts_with("= note: the full name for the type has been written")
             || trimmed.starts_with("= note: consider using `--verbose`")
+            || trimmed.starts_with("= help: consider manually implementing")
+            || trimmed.starts_with("= note: to learn more, visit")
             || trimmed.starts_with("error: aborting due to")
             || trimmed.starts_with("For more information about this error")
         {
@@ -213,23 +264,26 @@ fn normalize_e0283_stderr(raw: &str) -> String {
 /// normalized stderr (see [`normalize_e0283_stderr`]). The case must fail to
 /// compile.
 fn compile_failing_case(case: &str) -> String {
-    let deps = deps_dir();
-    let rlib = newest_hegel_rlib(&deps);
+    let search_dirs = crate_search_dirs();
+    let rlib = newest_hegel_rlib(&search_dirs);
     let out_dir = tempfile::tempdir().unwrap();
-    let output = Command::new(rustc_binary())
+    let mut command = Command::new(rustc_binary());
+    command
         .args(["--edition", "2021", "--emit=metadata", "--color=never"])
         .arg("--extern")
         .arg({
             let mut arg = std::ffi::OsString::from("hegel=");
             arg.push(&rlib);
             arg
-        })
-        .arg("-L")
-        .arg({
+        });
+    for dir in &search_dirs {
+        command.arg("-L").arg({
             let mut arg = std::ffi::OsString::from("dependency=");
-            arg.push(&deps);
+            arg.push(dir);
             arg
-        })
+        });
+    }
+    let output = command
         .arg(case)
         .arg("-o")
         .arg(out_dir.path().join("case.rmeta"))

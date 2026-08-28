@@ -25,6 +25,7 @@
 
 use crate::ffi::{PrinterCallError, PrinterHandle};
 use std::cell::Cell;
+use std::marker::PhantomData;
 
 /// Accept a printer operation's outcome: misuse panics with libhegel's
 /// diagnostic, while writing to a dead region — a straggling thread printing
@@ -145,7 +146,7 @@ pub struct PrettyPrinter {
     /// region has a single writer.
     ///
     /// [`TestCase`]: crate::TestCase
-    _single_owner: Cell<()>,
+    _single_owner: PhantomData<Cell<()>>,
 }
 
 impl std::fmt::Debug for PrettyPrinter {
@@ -170,7 +171,7 @@ impl PrettyPrinter {
     pub fn noop() -> Self {
         PrettyPrinter {
             handle: None,
-            _single_owner: Cell::new(()),
+            _single_owner: PhantomData,
         }
     }
 
@@ -187,7 +188,7 @@ impl PrettyPrinter {
     pub(crate) fn from_handle(handle: PrinterHandle) -> Self {
         PrettyPrinter {
             handle: Some(handle),
-            _single_owner: Cell::new(()),
+            _single_owner: PhantomData,
         }
     }
 
@@ -342,7 +343,7 @@ impl Clone for PrettyPrinter {
         };
         PrettyPrinter {
             handle,
-            _single_owner: Cell::new(()),
+            _single_owner: PhantomData,
         }
     }
 }
