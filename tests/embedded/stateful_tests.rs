@@ -307,11 +307,11 @@ fn worker_loop_exits_when_the_event_channel_is_gone() {
     let (round_tx, round_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     drop(event_rx);
-    round_tx.send(()).unwrap();
+    round_tx.send(tc).unwrap();
     std::thread::scope(|scope| {
         let m = &m;
         let rules = &rules;
         let machine = &machine;
-        scope.spawn(move || worker_loop(0, tc, m, rules, machine, false, round_rx, event_tx));
+        scope.spawn(move || worker_loop(0, m, rules, machine, false, round_rx, event_tx));
     });
 }

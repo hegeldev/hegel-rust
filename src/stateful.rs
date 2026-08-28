@@ -814,6 +814,14 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// setting, then run one round per `rounds` message until the channel
 /// closes.
 ///
+/// Each `rounds` message carries a fresh [`TestCase`] clone made by the
+/// main thread right after it noted the round's header, so the clone's
+/// print region — where everything this worker draws or notes during the
+/// round lands — is anchored under the header that labels the round.
+/// Cloning once per worker up front would instead pool a worker's output
+/// across all rounds at its single anchor, detaching the headers from the
+/// rounds they label.
+///
 /// The closed channel is what terminates workers: the main thread holds
 /// the senders as locals of its `thread::scope` body, so *any* exit from
 /// that body — the normal end of the test case or an unwind from a join
@@ -822,18 +830,17 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// lets the scope's implicit join complete instead of hanging.
 fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     worker: usize,
-    tc: TestCase,
     m: &M,
     rules: &[ConcurrentRule<M>],
     machine: &StateMachineHandle,
     capture_backtraces: bool,
-    rounds: mpsc::Receiver<()>,
+    rounds: mpsc::Receiver<TestCase>,
     events: mpsc::Sender<WorkerEvent>,
 ) {
     WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
-        while rounds.recv().is_ok() {
+        while let Ok(tc) = rounds.recv() {
             let event = run_worker_round(worker, &tc, m, rules, machine);
             if events.send(event).is_err() {
                 break;
@@ -951,18 +958,16 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     let machine = &machine;
 
     std::thread::scope(|scope| {
-        let mut round_txs: Vec<mpsc::Sender<()>> = Vec::with_capacity(concurrency);
+        let mut round_txs: Vec<mpsc::Sender<TestCase>> = Vec::with_capacity(concurrency);
         let mut event_rxs: Vec<mpsc::Receiver<WorkerEvent>> = Vec::with_capacity(concurrency);
         for worker in 0..concurrency {
             let (round_tx, round_rx) = mpsc::channel();
             let (event_tx, event_rx) = mpsc::channel();
             round_txs.push(round_tx);
             event_rxs.push(event_rx);
-            let worker_tc = tc.clone();
             scope.spawn(move || {
                 worker_loop(
                     worker,
-                    worker_tc,
                     m,
                     rules,
                     machine,
@@ -986,7 +991,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             ));
 
             for tx in &round_txs {
-                let _ = tx.send(());
+                let _ = tx.send(tc.clone());
             }
             let events: Vec<WorkerEvent> = event_rxs
                 .iter()
