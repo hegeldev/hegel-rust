@@ -1028,6 +1028,29 @@ pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
 }
 
 /// Parameters:
+/// `yes`: When `true`, libhegel prints a statistics block on the run's
+///   output at the end of the run: for each label recorded with
+///   `hegel_event`, the fraction of generation-phase test cases it
+///   occurred in, and for each label recorded with `hegel_event_value`, a
+///   distribution summary of the observed values. Defaults to off.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_show_statistics(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_show_statistics") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().show_statistics(yes);
+    HEGEL_OK
+}
+
+/// Parameters:
 /// `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
 ///   disables the database entirely. Discovered failures will not be
 ///   stored. Anything else is used as the database root directory. The
@@ -3905,6 +3928,82 @@ pub unsafe extern "C" fn hegel_target(
         }
     };
     match tc.stream.target_observation(value, label) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Record an event for the current test case, for the end-of-run
+/// statistics report: the report shows, per label, the fraction of
+/// generation-phase test cases in which the label was recorded at least
+/// once. The report prints only when the `show_statistics` setting is on
+/// (`hegel_settings_set_show_statistics`); without it events cost almost
+/// nothing and report nothing.
+///
+/// Parameters:
+/// `label`: Non-NULL, valid UTF-8.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+/// label.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_event(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    label: *const c_char,
+) -> hegel_result_t {
+    unsafe { event_observation(ctx, tc, "hegel_event", label, None) }
+}
+
+/// Record a numeric observation under `label` for the current test case,
+/// for the end-of-run statistics report: the report shows, per label, a
+/// summary of the observed distribution (count, min, median, mean, p90,
+/// max) over generation-phase test cases. The report prints only when the
+/// `show_statistics` setting is on
+/// (`hegel_settings_set_show_statistics`); without it observations cost
+/// almost nothing and report nothing.
+///
+/// Parameters:
+/// `value`: The observation. Must be finite.
+/// `label`: Non-NULL, valid UTF-8. Unlike `hegel_target`, a label may be
+///   observed any number of times per test case.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+/// label or a non-finite value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_event_value(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    value: f64,
+    label: *const c_char,
+) -> hegel_result_t {
+    unsafe { event_observation(ctx, tc, "hegel_event_value", label, Some(value)) }
+}
+
+/// Shared body of `hegel_event` and `hegel_event_value`.
+unsafe fn event_observation(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    fn_name: &str,
+    label: *const c_char,
+    value: Option<f64>,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, fn_name, tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if label.is_null() {
+        set_last_error(ctx, &format!("{fn_name}: label is null"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    let label = match unsafe { CStr::from_ptr(label) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: label is not valid UTF-8"));
+            return HEGEL_E_INVALID_ARG;
+        }
+    };
+    match tc.stream.event_observation(label, value) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }

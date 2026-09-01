@@ -691,6 +691,70 @@ impl TestCase {
         }
     }
 
+    /// Record an event for the end-of-run statistics report.
+    ///
+    /// With statistics enabled
+    /// ([`Settings::show_statistics`](crate::Settings::show_statistics), or
+    /// the `HEGEL_STATISTICS` environment variable), the end of the run
+    /// reports, per label, the fraction of generation-phase test cases in
+    /// which the label was recorded at least once — a quick check that the
+    /// interesting situations in a test actually occur. With statistics
+    /// off, events cost almost nothing and report nothing.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let xs: Vec<u8> = tc.draw(gs::vecs(gs::integers()));
+    ///     if xs.is_empty() {
+    ///         tc.event("empty input");
+    ///     }
+    /// }
+    /// ```
+    pub fn event(&self, label: impl AsRef<str>) {
+        self.record_event(|ctc| ctc.event(label.as_ref()));
+    }
+
+    /// Record a numeric observation under `label` for the end-of-run
+    /// statistics report.
+    ///
+    /// With statistics enabled
+    /// ([`Settings::show_statistics`](crate::Settings::show_statistics), or
+    /// the `HEGEL_STATISTICS` environment variable), the end of the run
+    /// reports, per label, a summary of the observed distribution — count,
+    /// min, median, mean, p90, max — over generation-phase test cases, so a test
+    /// can check the sizes or shapes it actually exercises. Unlike
+    /// [`target`](Self::target), a label may be observed any number of
+    /// times per test case, and the observations do not steer generation.
+    ///
+    /// `value` must be finite.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let xs: Vec<u8> = tc.draw(gs::vecs(gs::integers()));
+    ///     tc.event_value("input length", xs.len() as f64);
+    /// }
+    /// ```
+    pub fn event_value(&self, label: impl AsRef<str>, value: f64) {
+        self.record_event(|ctc| ctc.event_value(label.as_ref(), value));
+    }
+
+    /// Shared body of [`event`](Self::event) and
+    /// [`event_value`](Self::event_value).
+    fn record_event(&self, record: impl FnOnce(&CTestCase) -> Result<(), hegel_c::hegel_result_t>) {
+        if let Err(rc) = self.with_ctc(record) {
+            raise_for_rc(rc);
+        }
+    }
+
     /// Run `body` in a loop that should runs "logically infinitely" or until
     /// error. Roughly equivalent to a `loop` but with better interaction with
     /// the test runner: This loop will never exit until the test case completes.
