@@ -528,6 +528,91 @@ mod stateful {
         }
     }
 
+    struct SampledInvariantMachine {
+        rules_run: Arc<Mutex<i64>>,
+        invariants_run: Arc<Mutex<i64>>,
+    }
+
+    impl StateMachine for SampledInvariantMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new(
+                "count_rule",
+                |m: &mut SampledInvariantMachine, _tc: TestCase| {
+                    *m.rules_run.lock().unwrap() += 1;
+                },
+            )]
+        }
+        fn invariants(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new(
+                "count_invariant",
+                |m: &mut SampledInvariantMachine, _tc: TestCase| {
+                    *m.invariants_run.lock().unwrap() += 1;
+                },
+            )]
+        }
+    }
+
+    #[test]
+    fn test_invariants_are_sampled_rather_than_run_after_every_rule() {
+        let rules_run = Arc::new(Mutex::new(0i64));
+        let invariants_run = Arc::new(Mutex::new(0i64));
+        let rules_in = Arc::clone(&rules_run);
+        let invariants_in = Arc::clone(&invariants_run);
+        Hegel::new(move |tc: TestCase| {
+            let m = SampledInvariantMachine {
+                rules_run: Arc::clone(&rules_in),
+                invariants_run: Arc::clone(&invariants_in),
+            };
+            hegel::stateful::run(m, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20)
+                .stateful_step_count(50)
+                .database(None),
+        )
+        .run();
+        let rules_run = *rules_run.lock().unwrap();
+        let invariants_run = *invariants_run.lock().unwrap();
+        assert!(invariants_run >= 2);
+        assert!(
+            invariants_run < rules_run / 4,
+            "expected sampled invariant runs ({invariants_run}) to stay far below \
+             rule runs ({rules_run})"
+        );
+    }
+
+    struct BreakOnceMachine {
+        broken: bool,
+    }
+
+    #[hegel::state_machine]
+    impl BreakOnceMachine {
+        #[rule]
+        fn break_it(&mut self, _tc: TestCase) {
+            self.broken = true;
+        }
+
+        #[invariant]
+        fn not_broken(&mut self, _tc: TestCase) {
+            assert!(!self.broken, "machine is broken");
+        }
+    }
+
+    #[test]
+    fn test_persistent_violations_are_always_caught_despite_sampling() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: TestCase| {
+                    hegel::stateful::run(BreakOnceMachine { broken: false }, tc);
+                })
+                .settings(Settings::new().database(None))
+                .run();
+            },
+            "machine is broken",
+        );
+    }
+
     #[test]
     fn test_always_runs_at_least_one_step() {
         Hegel::new(|tc: TestCase| {

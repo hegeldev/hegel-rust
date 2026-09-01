@@ -2,8 +2,10 @@
 //!
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
-//! methods annotated with `#[invariant]` become invariants (checked after each successful rule
-//! application). Both take a [`TestCase`] parameter and borrow the state machine: rules
+//! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
+//! and final state, and sampled in between — each invariant runs after any given rule with
+//! probability `1 / stateful_step_count`, so its expected cost per test case stays constant
+//! as the step count grows). Both take a [`TestCase`] parameter and borrow the state machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
@@ -496,12 +498,28 @@ pub fn concurrent_pool<T>(tc: &TestCase) -> ConcurrentPool<T> {
 pub trait StateMachine {
     /// The rules (actions) that can be applied to this state machine.
     fn rules(&self) -> Vec<Rule<Self>>;
-    /// Invariants checked after each successful rule application.
+    /// Invariants: checked on the machine's initial and final state, and
+    /// sampled after rules in between with probability
+    /// `1 / stateful_step_count` each.
     fn invariants(&self) -> Vec<Rule<Self>>;
 }
 
-fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &TestCase) {
-    for invariant in invariants {
+/// Run invariants at a join point. With a machine, each invariant runs only
+/// when the engine's sampling draw says to (see
+/// [`machine_should_check_invariant`]); with `None` — the guaranteed checks
+/// of the machine's initial and final state — every invariant runs.
+fn check_invariants<M: StateMachine>(
+    m: &mut M,
+    invariants: &[Rule<M>],
+    tc: &TestCase,
+    machine: Option<&StateMachineHandle>,
+) {
+    for (index, invariant) in invariants.iter().enumerate() {
+        if let Some(machine) = machine {
+            if !machine_should_check_invariant(tc, machine, index as i64) {
+                continue;
+            }
+        }
         let inv_tc = tc.child(2); // nocov
         (invariant.apply)(m, inv_tc); // nocov
     }
@@ -545,15 +563,34 @@ fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_ind
     }
 }
 
+/// Ask the engine whether invariant `invariant_index` should run at the
+/// current join point — a recorded draw that is true with probability
+/// `1 / stateful_step_count`, making an invariant's expected sampled runs
+/// per test case one regardless of step count.
+fn machine_should_check_invariant(
+    tc: &TestCase,
+    machine: &StateMachineHandle,
+    invariant_index: i64,
+) -> bool {
+    match tc.with_ctc(|ctc| ctc.state_machine_should_check_invariant(machine, invariant_index)) {
+        Ok(should_check) => should_check,
+        Err(rc) => raise_for_rc(rc),
+    }
+}
+
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 ///
 /// A sequential machine is the special case of the engine's concurrent
 /// state-machine protocol with a single group and concurrency 1: the engine
-/// hands out exactly one rule per round, so the join-point invariant check
-/// after each round runs after each rule. One consequence of the join-point
-/// timing: the invariants run after a rule that stopped on a violated
-/// assumption too (rules are expected to reject before mutating the model,
-/// and nothing restores model state on rejection anyway).
+/// hands out exactly one rule per round, so the join points where sampled
+/// invariant checks may run fall after each rule. Invariants run in full on
+/// the machine's initial and final state; in between, each invariant runs at
+/// a join point only when the engine's sampling draw (probability
+/// `1 / stateful_step_count`) says to, keeping an invariant's expected cost
+/// per test case constant as the step count grows. One consequence of the
+/// join-point timing: a sampled check can land after a rule that stopped on
+/// a violated assumption (rules are expected to reject before mutating the
+/// model, and nothing restores model state on rejection anyway).
 pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
@@ -568,7 +605,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     };
 
     tc.note("Initial invariant check.");
-    check_invariants(&mut m, &invariants, &tc);
+    check_invariants(&mut m, &invariants, &tc, None);
 
     let mut steps_attempted: i64 = 0;
 
@@ -614,8 +651,11 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         }
         tc.stop_span(round_rejected);
 
-        check_invariants(&mut m, &invariants, &tc);
+        check_invariants(&mut m, &invariants, &tc, Some(&machine));
     }
+
+    tc.note("Final invariant check.");
+    check_invariants(&mut m, &invariants, &tc, None);
 }
 
 /// A rule of a [`ConcurrentStateMachine`]: an action worker threads may
@@ -691,17 +731,27 @@ pub trait ConcurrentStateMachine {
     /// The rules (actions) that worker threads may apply to this state
     /// machine, each with its concurrency-group assignment.
     fn rules(&self) -> Vec<ConcurrentRule<Self>>;
-    /// Invariants checked at every join point, on the main thread, while
-    /// the worker threads are parked.
+    /// Invariants, run on the main thread while the worker threads are
+    /// parked: checked on the machine's initial and final state, and
+    /// sampled at the join points in between with probability
+    /// `1 / stateful_step_count` each.
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>>;
 }
 
+/// Concurrent counterpart of [`check_invariants`]: sampled per invariant
+/// when given a machine, a guaranteed full sweep with `None`.
 fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
     m: &M,
     invariants: &[ConcurrentInvariant<M>],
     tc: &TestCase,
+    machine: Option<&StateMachineHandle>,
 ) {
-    for invariant in invariants {
+    for (index, invariant) in invariants.iter().enumerate() {
+        if let Some(machine) = machine {
+            if !machine_should_check_invariant(tc, machine, index as i64) {
+                continue;
+            }
+        }
         let inv_tc = tc.child(2);
         (invariant.apply)(m, inv_tc);
     }
@@ -854,8 +904,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// thread then runs a short (possibly empty) random sequence of rules from
 /// that group — and only that group — concurrently with the other workers. Rules in the same
 /// group may overlap each other, and rules in different groups never
-/// overlap. Once every worker has finished its rules for the round, we run
-/// all invariants.
+/// overlap. Once every worker has finished its rules for the round, the
+/// main thread runs the invariants the engine's sampling draws select
+/// (probability `1 / stateful_step_count` each); every invariant runs in
+/// full on the machine's initial and final state.
 ///
 /// The number of worker threads is drawn per test case, when the state
 /// machine is created, in `[min_concurrency, max_concurrency]` and weighted
@@ -949,7 +1001,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     tc.note(&format!("Concurrency level: {concurrency}"));
 
     tc.note("Initial invariant check.");
-    check_concurrent_invariants(&m, &invariants, &tc);
+    check_concurrent_invariants(&m, &invariants, &tc, None);
 
     let capture_backtraces = run_lifecycle::backtrace_capture_enabled();
     let concurrency = concurrency as usize;
@@ -1000,8 +1052,11 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
 
             resolve_round(events, &tc);
 
-            check_concurrent_invariants(m, &invariants, &tc);
+            check_concurrent_invariants(m, &invariants, &tc, Some(machine));
         }
+
+        tc.note("Final invariant check.");
+        check_concurrent_invariants(m, &invariants, &tc, None);
     });
 }
 

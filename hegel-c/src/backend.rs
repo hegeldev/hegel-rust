@@ -243,6 +243,20 @@ pub trait DataSource: Send + Sync {
         worker_index: i64,
     ) -> Result<(), DataSourceError>;
 
+    /// Decide whether the caller should run invariant `invariant_index` at
+    /// the current join point: a recorded boolean draw that is `true` with
+    /// probability `1 / stateful_step_count`, so each invariant's expected
+    /// number of sampled runs over a full-length test case is one. The
+    /// caller runs its guaranteed checks — the machine's initial state and
+    /// its final state after the last round — without consulting this.
+    /// Errors with `InvalidArgument` when `invariant_index` is outside the
+    /// machine's registered invariants.
+    fn state_machine_should_check_invariant(
+        &self,
+        machine: &mut NativeStateMachine,
+        invariant_index: i64,
+    ) -> Result<bool, DataSourceError>;
+
     /// Draw a boolean that is `true` with probability `p`.
     ///
     /// If `forced` is `Some`, the choice is still recorded (so replay and

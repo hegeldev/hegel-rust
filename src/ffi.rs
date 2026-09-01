@@ -879,6 +879,28 @@ impl CTestCase {
         rc_to_value(rc, ())
     }
 
+    /// Ask the engine whether invariant `invariant_index` should run at the
+    /// current join point: a recorded draw that is true with probability
+    /// `1 / stateful_step_count`. The guaranteed initial and final checks
+    /// are the caller's and run without asking.
+    pub(crate) fn state_machine_should_check_invariant(
+        &self,
+        state_machine: &StateMachineHandle,
+        invariant_index: i64,
+    ) -> Result<bool, hegel_result_t> {
+        let mut out = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_should_check_invariant(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                invariant_index,
+                &mut out,
+            )
+        });
+        rc_to_value(rc, out)
+    }
+
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
         let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {

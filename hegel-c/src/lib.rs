@@ -2848,6 +2848,70 @@ pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
     }
 }
 
+/// Decide whether the caller should run invariant `invariant_index` at the
+/// current join point, writing the decision into `*out_should_check`: a
+/// recorded boolean draw that is true with probability
+/// `1 / stateful_step_count`, so each invariant's expected number of
+/// sampled runs over a full-length test case is one, regardless of the
+/// step count. The caller owns the machine's guaranteed invariant checks —
+/// its initial state, and its final state once
+/// `hegel_state_machine_next_group` signals termination — and should run
+/// those unconditionally, without calling this.
+///
+/// `invariant_index` identifies the invariant by its position in the
+/// creating `invariant_names`. Call once per invariant per join point,
+/// from the same handle that makes the `hegel_state_machine_next_group`
+/// calls.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_ARG` when `invariant_index` is
+/// outside the machine's registered invariants or `out_should_check` is
+/// null, or `HEGEL_E_STOP_TEST` when the engine's choice budget is
+/// exhausted (the caller should abort the body and call
+/// `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_should_check_invariant(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    state_machine: *mut HegelStateMachine,
+    invariant_index: i64,
+    out_should_check: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) =
+        match unsafe { tc_guard(ctx, "hegel_state_machine_should_check_invariant", tc) } {
+            Ok(t) => t,
+            Err(rc) => return rc,
+        };
+    let state_machine = match unsafe {
+        state_machine_ref(
+            ctx,
+            "hegel_state_machine_should_check_invariant",
+            state_machine,
+        )
+    } {
+        Ok(m) => m,
+        Err(rc) => return rc,
+    };
+    if out_should_check.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_state_machine_should_check_invariant: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    let mut machine = state_machine.machine.lock();
+    match tc
+        .stream
+        .state_machine_should_check_invariant(&mut machine, invariant_index)
+    {
+        Ok(should_check) => {
+            unsafe { *out_should_check = should_check };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
 /// Release a state-machine handle from `hegel_new_state_machine`. Safe to
 /// call with NULL (a no-op that returns `HEGEL_OK`), and safe at any point
 /// in any order relative to freeing the test case or the run. Each handle

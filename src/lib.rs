@@ -525,7 +525,8 @@ pub use hegel_macros::state_machine;
 ///
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
-/// invariants, checked at the join points between rounds. Rules in the same
+/// invariants, checked in full on the machine's initial and final state and
+/// sampled at the join points between rounds. Rules in the same
 /// group may run concurrently with each other; rules in different groups
 /// never overlap.
 ///
