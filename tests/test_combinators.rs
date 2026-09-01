@@ -128,6 +128,58 @@ fn test_one_of_twelve_components(tc: TestCase) {
 }
 
 #[hegel::test]
+fn test_one_of_thirty_components(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
+        gs::just(0),
+        gs::just(1),
+        gs::just(2),
+        gs::just(3),
+        gs::just(4),
+        gs::just(5),
+        gs::just(6),
+        gs::just(7),
+        gs::just(8),
+        gs::just(9),
+        gs::just(10),
+        gs::just(11),
+        gs::just(12),
+        gs::just(13),
+        gs::just(14),
+        gs::just(15),
+        gs::just(16),
+        gs::just(17),
+        gs::just(18),
+        gs::just(19),
+        gs::just(20),
+        gs::just(21),
+        gs::just(22),
+        gs::just(23),
+        gs::just(24),
+        gs::just(25),
+        gs::just(26),
+        gs::just(27),
+        gs::just(28),
+        gs::just(29),
+    ));
+    assert!((0..30).contains(&value));
+}
+
+mod custom_arity {
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
+    hegel::impl_one_of!(OneOf2Custom, one_of2_custom, 2, (0, gen1, G1); (gen2, G2));
+
+    #[hegel::test]
+    fn test_impl_one_of_defines_a_usable_generator(tc: TestCase) {
+        let value = tc.draw(one_of2_custom(gs::just(1), gs::just(2)));
+        assert!(value == 1 || value == 2);
+        let silent = tc.draw_silent(one_of2_custom(gs::just(3), gs::just(4)));
+        assert!(silent == 3 || silent == 4);
+    }
+}
+
+#[hegel::test]
 fn test_flat_map(tc: TestCase) {
     let value = tc.draw(
         gs::integers::<usize>()
@@ -1146,125 +1198,43 @@ mod one_of_arity_dispatch {
         assert_eq!(*seen.lock().unwrap(), (0..arity).collect::<HashSet<i32>>());
     }
 
+    macro_rules! assert_arity_reachable {
+        ($arity:literal: $($n:literal),+) => {
+            assert_every_alternative_reachable($arity, hegel::one_of!($(gs::just($n)),+));
+        };
+    }
+
     #[test]
     fn test_one_of_every_arity_reaches_every_alternative() {
-        assert_every_alternative_reachable(1, hegel::one_of!(gs::just(0)));
-        assert_every_alternative_reachable(2, hegel::one_of!(gs::just(0), gs::just(1)));
-        assert_every_alternative_reachable(
-            3,
-            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2)),
-        );
-        assert_every_alternative_reachable(
-            4,
-            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2), gs::just(3)),
-        );
-        assert_every_alternative_reachable(
-            5,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4)
-            ),
-        );
-        assert_every_alternative_reachable(
-            6,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5)
-            ),
-        );
-        assert_every_alternative_reachable(
-            7,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6)
-            ),
-        );
-        assert_every_alternative_reachable(
-            8,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6),
-                gs::just(7)
-            ),
-        );
-        assert_every_alternative_reachable(
-            9,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6),
-                gs::just(7),
-                gs::just(8)
-            ),
-        );
-        assert_every_alternative_reachable(
-            10,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6),
-                gs::just(7),
-                gs::just(8),
-                gs::just(9)
-            ),
-        );
-        assert_every_alternative_reachable(
-            11,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6),
-                gs::just(7),
-                gs::just(8),
-                gs::just(9),
-                gs::just(10)
-            ),
-        );
-        assert_every_alternative_reachable(
-            12,
-            hegel::one_of!(
-                gs::just(0),
-                gs::just(1),
-                gs::just(2),
-                gs::just(3),
-                gs::just(4),
-                gs::just(5),
-                gs::just(6),
-                gs::just(7),
-                gs::just(8),
-                gs::just(9),
-                gs::just(10),
-                gs::just(11)
-            ),
-        );
+        assert_arity_reachable!(1: 0);
+        assert_arity_reachable!(2: 0, 1);
+        assert_arity_reachable!(3: 0, 1, 2);
+        assert_arity_reachable!(4: 0, 1, 2, 3);
+        assert_arity_reachable!(5: 0, 1, 2, 3, 4);
+        assert_arity_reachable!(6: 0, 1, 2, 3, 4, 5);
+        assert_arity_reachable!(7: 0, 1, 2, 3, 4, 5, 6);
+        assert_arity_reachable!(8: 0, 1, 2, 3, 4, 5, 6, 7);
+        assert_arity_reachable!(9: 0, 1, 2, 3, 4, 5, 6, 7, 8);
+        assert_arity_reachable!(10: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+        assert_arity_reachable!(11: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        assert_arity_reachable!(12: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        assert_arity_reachable!(13: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+        assert_arity_reachable!(14: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+        assert_arity_reachable!(15: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14);
+        assert_arity_reachable!(16: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        assert_arity_reachable!(17: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+        assert_arity_reachable!(18: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+        assert_arity_reachable!(19: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18);
+        assert_arity_reachable!(20: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+        assert_arity_reachable!(21: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
+        assert_arity_reachable!(22: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
+        assert_arity_reachable!(23: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
+        assert_arity_reachable!(24: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+        assert_arity_reachable!(25: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
+        assert_arity_reachable!(26: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25);
+        assert_arity_reachable!(27: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26);
+        assert_arity_reachable!(28: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27);
+        assert_arity_reachable!(29: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28);
+        assert_arity_reachable!(30: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
     }
 }
