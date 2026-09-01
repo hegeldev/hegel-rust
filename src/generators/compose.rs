@@ -75,8 +75,8 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// other generators within the compose block.
 ///
 /// The closure captures its environment by move whether or not the `move`
-/// keyword is written; `compose!(move |tc| { .. })` is accepted and
-/// identical to `compose!(|tc| { .. })`.
+/// keyword is written; `compose!(move |tc| { .. })` and
+/// `compose!(|tc| { .. })` are identical.
 ///
 /// # Example
 ///
