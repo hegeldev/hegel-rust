@@ -191,7 +191,7 @@ pub trait Generator<T> {
 /// [`Generator`] can still be drawn with [`TestCase::draw_silent`]. Most
 /// generators in the library are printable — leaves unconditionally,
 /// structural combinators (collections, tuples, `optional`, `one_of!`,
-/// `flat_map`) whenever their component generators are, and value-transforming
+/// `flat_map`, `recursive`) whenever their component generators are, and value-transforming
 /// combinators (`map`, `filter`, `just`, `sampled_from`, composites) whenever
 /// the produced type implements [`PrettyPrintable`]. For everything else
 /// there are [`Generator::print_as_value`], [`Generator::print_as_debug`],

@@ -738,6 +738,62 @@ fn recursive_draws_print_their_values() {
     assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
 }
 
+/// Recursive values print through their component generators — here the
+/// leaf and branch `print_with` representations — not by the produced
+/// value's own `PrettyPrintable` impl (which would print `1` and `2`).
+#[test]
+fn recursive_draws_print_through_their_component_generators() {
+    let lines = failing_lines(|tc| {
+        let total: i64 = tc.draw(
+            gs::recursive(gs::just(1i64).print_with(|_, p| p.text("leaf")), |sub| {
+                hegel::one_of!(
+                    sub.clone(),
+                    hegel::tuples!(sub.clone(), sub)
+                        .map(|(a, b)| a + b)
+                        .print_with(|v, p| p.text(&format!("add({v})"))),
+                )
+            })
+            .max_leaves(4),
+        );
+        assert!(total < 1);
+    });
+    assert_eq!(lines, vec!["let draw_1 = leaf;"]);
+}
+
+/// The minimal example needing one branch prints that branch's own
+/// representation.
+#[test]
+fn recursive_branch_draws_print_through_the_branch_generator() {
+    let lines = failing_lines(|tc| {
+        let total: i64 = tc.draw(
+            gs::recursive(gs::just(1i64).print_with(|_, p| p.text("leaf")), |sub| {
+                hegel::tuples!(sub.clone(), sub)
+                    .map(|(a, b)| a + b)
+                    .print_with(|v, p| p.text(&format!("add({v})")))
+            })
+            .max_leaves(4),
+        );
+        assert!(total < 2);
+    });
+    assert_eq!(lines, vec!["let draw_1 = add(2);"]);
+}
+
+/// The printing path draws exactly like the silent one for every arm shape,
+/// including a bare subtree arm — the one shape that forwards the printer
+/// straight to a `SubtreeGenerator`.
+#[hegel::test]
+fn recursive_printing_path_draws_valid_values(tc: hegel::TestCase) {
+    let g = gs::recursive(gs::just(1i64), |sub| {
+        hegel::one_of!(
+            sub.clone(),
+            hegel::tuples!(sub.clone(), sub).map(|(a, b)| a + b),
+        )
+    })
+    .max_leaves(10);
+    let v = g.do_draw_and_print(&tc, &mut hegel::PrettyPrinter::noop());
+    assert!((1..=10).contains(&v));
+}
+
 #[test]
 fn clone_output_anchors_where_the_clone_was_made() {
     let lines = failing_lines(|tc| {
