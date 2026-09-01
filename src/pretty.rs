@@ -1,0 +1,1027 @@
+//! Pretty-printing of generated values.
+//!
+//! [`Document`] owns one pretty-printed document: its builder methods
+//! choose the layout options, [`Document::printer`] exposes the surface to
+//! write through, and [`Document::finish`] consumes it to render exactly
+//! once at the end.
+//!
+//! [`PrettyPrinter`] is that write surface, wrapping libhegel's layout
+//! engine (an Oppen-style pretty-printer ported from Hypothesis's
+//! `hypothesis.vendor.pretty`). Output is built from three primitives:
+//! [`PrettyPrinter::text`] emits literal text, [`PrettyPrinter::breakable`]
+//! marks a point that renders as a separator when the enclosing group fits
+//! on one line and as a newline plus indentation when it does not, and
+//! [`PrettyPrinter::begin_group`] / [`PrettyPrinter::end_group`] delimit
+//! the groups those decisions are made over. A group either fits — every
+//! breakable renders as its separator — or breaks as a whole, outermost
+//! groups first.
+//!
+//! [`PrettyPrintable`] is the protocol a value uses to describe its own
+//! representation, in Rust-expression syntax wherever possible. It is
+//! implemented for the standard types the generator library produces,
+//! derivable for user types with `#[derive(PrettyPrintable)]`, and
+//! available for any `Debug` type — without writing an implementation —
+//! through [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+
+use crate::ffi::{PrinterCallError, PrinterHandle};
+use std::cell::Cell;
+use std::marker::PhantomData;
+
+/// Accept a printer operation's outcome: misuse panics with libhegel's
+/// diagnostic, while writing to a dead region — a straggling thread printing
+/// after the document was read, or into a region whose anchor was retracted
+/// — is a silent no-op, so a writer that outlives its document never brings
+/// the process down.
+fn tolerate(result: Result<(), PrinterCallError>) {
+    match result {
+        Ok(()) | Err(PrinterCallError::DeadRegion) => {}
+        Err(PrinterCallError::Other(message)) => panic!("{message}"),
+    }
+}
+use crate::test_case::invalid_argument;
+
+/// The line width documents are laid out to when none is configured.
+pub(crate) const DEFAULT_MAX_WIDTH: u64 = 79;
+
+/// One pretty-printed document: the owner of its layout options, its
+/// content, and its rendering.
+///
+/// Configure the layout with the builder methods (before anything is
+/// printed), write content through [`printer`](Document::printer), and
+/// render by consuming the document with [`finish`](Document::finish) —
+/// rendering happens exactly once, at the end. The [`PrettyPrinter`] this
+/// hands out is write-only, so code that is *given* a printer (a
+/// [`PrettyPrintable`] implementation, a
+/// [`PrintableGenerator`](crate::PrintableGenerator)) can never render or
+/// otherwise observe the document it is contributing to.
+///
+/// # Example
+///
+/// ```
+/// use hegel::Document;
+///
+/// let mut doc = Document::new().max_width(10);
+/// let p = doc.printer();
+/// p.begin_group(1, "[");
+/// p.text("first");
+/// p.text(",");
+/// p.breakable(" ");
+/// p.text("second");
+/// p.end_group("]");
+/// assert_eq!(doc.finish(), "[first,\n second]");
+/// ```
+#[derive(Debug)]
+pub struct Document {
+    max_width: u64,
+    printer: Option<PrettyPrinter>,
+}
+
+impl Document {
+    /// Create an empty document with the default layout options (a maximum
+    /// line width of 79 characters).
+    pub fn new() -> Self {
+        Document {
+            max_width: DEFAULT_MAX_WIDTH,
+            printer: None,
+        }
+    }
+
+    /// Keep lines within `max_width` characters where the group structure
+    /// allows it. Defaults to 79.
+    ///
+    /// Layout options describe the whole document, so they must be chosen
+    /// up front: calling this after [`printer`](Document::printer) has been
+    /// used is an error, as is a `max_width` of 0.
+    pub fn max_width(mut self, max_width: usize) -> Self {
+        if self.printer.is_some() {
+            invalid_argument!("max_width must be set before the document is printed to");
+        }
+        if max_width == 0 {
+            invalid_argument!("max_width must be positive");
+        }
+        self.max_width = max_width as u64;
+        self
+    }
+
+    /// The printer to write this document's content through.
+    pub fn printer(&mut self) -> &mut PrettyPrinter {
+        self.printer
+            .get_or_insert_with(|| PrettyPrinter::from_handle(PrinterHandle::new(self.max_width)))
+    }
+
+    /// Splice any outstanding deferred content into place, lay the document
+    /// out, and return it.
+    ///
+    /// Consuming the document is what makes rendering a once-at-the-end
+    /// operation; there is no way to observe a partially built document.
+    pub fn finish(mut self) -> String {
+        match &mut self.printer {
+            Some(printer) => printer.value(),
+            None => String::new(),
+        }
+    }
+}
+
+impl Default for Document {
+    fn default() -> Self {
+        Document::new()
+    }
+}
+
+/// The write surface of a pretty-printed document.
+///
+/// See the [module docs](self) for the printing model. Obtained from
+/// [`Document::printer`] — or received, already positioned, by printing
+/// code such as a [`PrettyPrintable`] implementation. Rejections of the
+/// layout protocol (an [`end_group`](PrettyPrinter::end_group) with no open
+/// group) panic, since they indicate a bug in the calling printing code.
+pub struct PrettyPrinter {
+    /// `None` is the no-op printer: every emitting method returns without
+    /// doing anything, so one drawing body can serve both the silent and the
+    /// printing draw paths.
+    handle: Option<PrinterHandle>,
+    /// A printer belongs to one thread at a time (it may move — the type is
+    /// `Send` — but never be shared), exactly like [`TestCase`]: the region
+    /// model makes cross-thread output deterministic only because each
+    /// region has a single writer.
+    ///
+    /// [`TestCase`]: crate::TestCase
+    _single_owner: PhantomData<Cell<()>>,
+}
+
+impl std::fmt::Debug for PrettyPrinter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrettyPrinter")
+            .field("handle", &self.handle)
+            .finish()
+    }
+}
+
+impl PrettyPrinter {
+    /// Create a printer that discards everything printed to it.
+    ///
+    /// This is how a [`PrintableGenerator`](crate::PrintableGenerator) with
+    /// one shared drawing body implements its silent path:
+    /// [`Generator::do_draw`](crate::Generator::do_draw) simply calls
+    /// `self.do_draw_and_print(tc, &mut PrettyPrinter::noop())`. The
+    /// contract that both paths consume identical choices then holds by
+    /// construction. Guard any expensive formatting with
+    /// [`should_print`](PrettyPrinter::should_print) so the silent path
+    /// stays cheap.
+    pub fn noop() -> Self {
+        PrettyPrinter {
+            handle: None,
+            _single_owner: PhantomData,
+        }
+    }
+
+    /// Whether printing to this printer produces output: `false` for the
+    /// discarding printer returned by [`noop`](PrettyPrinter::noop). Use it
+    /// to skip work — formatting a value, say — whose only purpose is to be
+    /// printed.
+    pub fn should_print(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    /// Wrap an existing engine printer handle (e.g. a test case's shared
+    /// document).
+    pub(crate) fn from_handle(handle: PrinterHandle) -> Self {
+        PrettyPrinter {
+            handle: Some(handle),
+            _single_owner: PhantomData,
+        }
+    }
+
+    /// Emit literal, unbreakable text.
+    ///
+    /// Newlines in `s` are honored as unconditional line breaks (equivalent
+    /// to [`hard_break`](PrettyPrinter::hard_break), so the new line starts
+    /// at the current indentation).
+    pub fn text(&mut self, s: &str) {
+        let Some(handle) = &self.handle else { return };
+        let mut first = true;
+        for segment in s.split('\n') {
+            if !first {
+                tolerate(handle.hard_break());
+            }
+            first = false;
+            if !segment.is_empty() {
+                tolerate(handle.text(segment));
+            }
+        }
+    }
+
+    /// Emit a potential break point: renders as `sep` if the enclosing group
+    /// fits on the current line, and as a newline plus the current
+    /// indentation if the group breaks.
+    pub fn breakable(&mut self, sep: &str) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.breakable(sep));
+    }
+
+    /// Emit an unconditional newline followed by the current indentation.
+    pub fn hard_break(&mut self) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.hard_break());
+    }
+
+    /// Open a group: emit `open`, then increase the indentation applied by
+    /// subsequent break points by `indent` (conventionally the width of
+    /// `open`, so continuation lines align just inside the delimiter).
+    pub fn begin_group(&mut self, indent: usize, open: &str) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.begin_group(indent as u64, open));
+    }
+
+    /// Close the innermost group: undo the indentation its
+    /// [`begin_group`](PrettyPrinter::begin_group) added, then emit `close`.
+    /// Panics if no group is open.
+    pub fn end_group(&mut self, close: &str) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.end_group(close));
+    }
+
+    /// Adjust the indentation applied by subsequent break points by `delta`.
+    pub fn shift_indent(&mut self, delta: isize) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.shift_indent(delta as i64));
+    }
+
+    /// Attach a comment to the line currently being written: `text` is
+    /// rendered as `  // text` at the end of that line, every group open at
+    /// this position is forced to break — nothing else may share a line with
+    /// a comment — and the comment is excluded from line-width accounting. A
+    /// group forced to break by a comment also breaks before its closing
+    /// delimiter, so the delimiter is not caught up in a comment on the
+    /// group's last element.
+    ///
+    /// `text` must not contain newlines; a comment is a single-line
+    /// construct.
+    pub fn comment(&mut self, text: &str) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.comment(&format!("  // {text}")));
+    }
+
+    /// Splice in any outstanding deferred content, flush pending break
+    /// points, and return everything printed so far. Only ever called by an
+    /// owner of the document — [`Document::finish`], or the run lifecycle
+    /// reading a test case's document — never by printing code, which only
+    /// sees the write surface. Panics on a layout error in the printed
+    /// content (an unbalanced `end_group` that could only be detected once
+    /// the whole document was assembled).
+    pub(crate) fn value(&mut self) -> String {
+        self.try_value()
+            .unwrap_or_else(|message| panic!("{message}"))
+    }
+
+    /// [`value`](PrettyPrinter::value), reporting a layout error in the
+    /// printed content as an `Err` instead of panicking — for the run
+    /// lifecycle, which renders the output of user printing code after the
+    /// test body's panic handling has finished and must not let a printing
+    /// bug take down the whole run.
+    pub(crate) fn try_value(&mut self) -> Result<String, String> {
+        let Some(handle) = &self.handle else {
+            unreachable!("only rendering printers have their value read");
+        };
+        let _ = handle.resolve();
+        match handle.value() {
+            Ok(rendered) => Ok(rendered),
+            Err(PrinterCallError::Other(message)) => Err(message),
+            Err(PrinterCallError::DeadRegion) => {
+                unreachable!("a document's own region never dies before it renders")
+            }
+        }
+    }
+
+    /// Open a speculative region: output printed through the returned
+    /// [`Speculation`] is held back until [`Speculation::commit`] emits it or
+    /// [`Speculation::abort`] discards it. Dropping the `Speculation` without
+    /// committing (e.g. on unwind) aborts it.
+    ///
+    /// This is how draw-time printing survives rejection: a combinator that
+    /// may retract a draw — a filter retry, a rejected collection element —
+    /// prints each attempt inside a speculative region and only commits the
+    /// accepted one.
+    pub fn speculate(&mut self) -> Speculation<'_> {
+        if let Some(handle) = &self.handle {
+            tolerate(handle.begin_speculative());
+        }
+        Speculation {
+            printer: self,
+            resolved: false,
+        }
+    }
+}
+
+/// Cloning a printer opens a *child region*: a hole in the document,
+/// anchored at the printer's current position, that the clone writes into.
+///
+/// Whatever the clone prints — at any later point, from any thread that owns
+/// it — appears at the anchor when the document renders, with line-breaking
+/// behaving as if it had been printed inline. This is how output crosses
+/// threads deterministically (each clone's output lands where the clone was
+/// made, however the threads were scheduled), and how a generator whose
+/// value's representation is only known during test execution (a
+/// Hegel-controlled random number generator, say) prints: it clones the
+/// printer at draw time and records into the clone as the value is used.
+///
+/// A child region dies when the document renders, or when a speculative
+/// region its anchor sat inside is aborted; a dead region's writes are
+/// silent no-ops, so a clone that outlives its document can keep trying to
+/// record without consequence. Cloning a no-op printer yields a no-op
+/// printer, and cloning into a dead region yields a printer whose writes
+/// discard.
+impl Clone for PrettyPrinter {
+    fn clone(&self) -> Self {
+        let handle = match &self.handle {
+            None => None,
+            Some(handle) => match handle.deferred() {
+                Ok(child) => Some(child),
+                Err(PrinterCallError::DeadRegion) => None,
+                Err(PrinterCallError::Other(message)) => unreachable!("{message}"),
+            },
+        };
+        PrettyPrinter {
+            handle,
+            _single_owner: PhantomData,
+        }
+    }
+}
+
+/// An open speculative region on a [`PrettyPrinter`]; see
+/// [`PrettyPrinter::speculate`].
+#[derive(Debug)]
+pub struct Speculation<'a> {
+    printer: &'a mut PrettyPrinter,
+    resolved: bool,
+}
+
+impl Speculation<'_> {
+    /// The printer to print the speculative output through.
+    pub fn printer(&mut self) -> &mut PrettyPrinter {
+        self.printer
+    }
+
+    /// Close the region, keeping its output.
+    pub fn commit(mut self) {
+        self.resolved = true;
+        if let Some(handle) = &self.printer.handle {
+            tolerate(handle.commit_speculative());
+        }
+    }
+
+    /// Close the region, discarding its output.
+    pub fn abort(mut self) {
+        self.resolved = true;
+        if let Some(handle) = &self.printer.handle {
+            tolerate(handle.abort_speculative());
+        }
+    }
+}
+
+/// Dropping an uncommitted speculation — most importantly during an unwind
+/// out of a speculative draw, such as a budget-exhausted `StopTest` or a
+/// failed assumption mid-attempt — discards its output, so a partial attempt
+/// never corrupts the document. The result is deliberately ignored: this can
+/// run during a panic, where a second panic would abort the process.
+impl Drop for Speculation<'_> {
+    fn drop(&mut self) {
+        if !self.resolved {
+            if let Some(handle) = &self.printer.handle {
+                let _ = handle.abort_speculative();
+            }
+        }
+    }
+}
+
+/// Print a `{:?}` representation through the layout machinery.
+///
+/// The output of a derived `Debug` implementation follows a small grammar —
+/// `Name { field: value, … }`, `Name(…)`, `(…)`, `[…]`, `{key: value, …}`,
+/// string and character literals, atoms — and this function re-emits it
+/// through the printer's group and breakable primitives, so a large value
+/// wraps exactly like one printed by `#[derive(PrettyPrintable)]`. Anything
+/// that doesn't parse as that grammar (a hand-written `Debug` can produce
+/// arbitrary text) is emitted verbatim, with embedded newlines honored as
+/// hard breaks.
+///
+/// This is the engine behind [`pretty_print_as_debug!`](crate::pretty_print_as_debug)
+/// and [`print_as_debug`](crate::Generator::print_as_debug); it is exposed
+/// for hand-written [`PrettyPrintable`] implementations that want to embed a
+/// `Debug` representation in a larger layout.
+pub fn print_debug_repr(repr: &str, printer: &mut PrettyPrinter) {
+    match DebugRepr::parse(repr) {
+        Some(nodes) => emit_debug_nodes(&nodes, printer),
+        None => printer.text(repr),
+    }
+}
+
+/// One parsed piece of a `Debug` representation: literal text, or a
+/// delimited group laid out with a breakable point after each comma.
+enum DebugNode {
+    Leaf(String),
+    Group {
+        /// The atom glued to the open delimiter (`Some` in `Some(5)`, `Name`
+        /// in `Name { … }`); empty for bare tuples, lists, and map braces.
+        prefix: String,
+        delimiter: char,
+        /// Brace group in derived struct style (`Name { … }`, spaces inside
+        /// the braces) as opposed to map style (`{… }`).
+        named: bool,
+        items: Vec<Vec<DebugNode>>,
+    },
+}
+
+/// Recursive-descent parser over the derived-`Debug` grammar. Any input
+/// outside the grammar makes a parsing method return `None`, and the whole
+/// representation falls back to verbatim text.
+struct DebugRepr {
+    chars: Vec<char>,
+    pos: usize,
+    depth: usize,
+}
+
+/// How deeply groups may nest before [`DebugRepr::parse`] gives up. The
+/// parser, the emitter, and the parsed tree's destructor all recurse
+/// per nesting level, so an unbounded representation would overflow the
+/// stack during failure reporting; past this depth the representation is
+/// emitted verbatim instead.
+const MAX_DEBUG_DEPTH: usize = 64;
+
+impl DebugRepr {
+    fn parse(repr: &str) -> Option<Vec<DebugNode>> {
+        if repr.contains('\n') {
+            return None;
+        }
+        let mut parser = DebugRepr {
+            chars: repr.chars().collect(),
+            pos: 0,
+            depth: 0,
+        };
+        let nodes = parser.parse_item()?;
+        if parser.pos != parser.chars.len() {
+            return None;
+        }
+        Some(nodes)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.chars.get(self.pos + 1).copied()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.pos += 1;
+        Some(c)
+    }
+
+    /// Parse one comma-separated item — literal runs and nested groups —
+    /// stopping (without consuming) at a `", "`, a close delimiter, or the
+    /// end of the input.
+    fn parse_item(&mut self) -> Option<Vec<DebugNode>> {
+        let mut nodes = Vec::new();
+        let mut text = String::new();
+        loop {
+            match self.peek() {
+                None | Some(']' | ')' | '}') => break,
+                Some(',') if self.peek_next() == Some(' ') => break,
+                Some(' ') if self.peek_next() == Some('}') => break,
+                Some('"' | '\'') => {
+                    flush_text(&mut text, &mut nodes);
+                    nodes.push(DebugNode::Leaf(self.lex_quoted()?));
+                }
+                Some(delimiter @ ('[' | '(' | '{')) => {
+                    let prefix = take_group_prefix(&mut text, delimiter);
+                    flush_text(&mut text, &mut nodes);
+                    nodes.push(self.parse_group(prefix)?);
+                }
+                Some(c) => {
+                    text.push(c);
+                    self.bump();
+                }
+            }
+        }
+        flush_text(&mut text, &mut nodes);
+        Some(nodes)
+    }
+
+    /// Parse a delimited group whose open delimiter is the current char.
+    fn parse_group(&mut self, prefix: String) -> Option<DebugNode> {
+        if self.depth == MAX_DEBUG_DEPTH {
+            return None;
+        }
+        self.depth += 1;
+        let delimiter = self.bump()?;
+        let close = match delimiter {
+            '[' => ']',
+            '(' => ')',
+            _ => '}',
+        };
+        let named = delimiter == '{' && !prefix.is_empty() && self.peek() == Some(' ');
+        if named {
+            self.bump();
+        }
+        let mut items = Vec::new();
+        if !named && self.peek() == Some(close) {
+            self.bump();
+        } else {
+            loop {
+                items.push(self.parse_item()?);
+                match self.peek() {
+                    Some(',') if self.peek_next() == Some(' ') => {
+                        self.bump();
+                        self.bump();
+                    }
+                    Some(' ') if named && self.peek_next() == Some(close) => {
+                        self.bump();
+                        self.bump();
+                        break;
+                    }
+                    Some(c) if !named && c == close => {
+                        self.bump();
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        self.depth -= 1;
+        Some(DebugNode::Group {
+            prefix,
+            delimiter,
+            named,
+            items,
+        })
+    }
+
+    /// Lex a string or character literal, including its quotes. A backslash
+    /// escapes the following character, which is all the lexer needs: no
+    /// escape sequence contains an unescaped closing quote.
+    fn lex_quoted(&mut self) -> Option<String> {
+        let quote = self.bump()?;
+        let mut lit = String::new();
+        lit.push(quote);
+        loop {
+            let c = self.bump()?;
+            lit.push(c);
+            if c == '\\' {
+                lit.push(self.bump()?);
+            } else if c == quote {
+                return Some(lit);
+            }
+        }
+    }
+}
+
+/// Move accumulated literal text into a leaf node.
+fn flush_text(text: &mut String, nodes: &mut Vec<DebugNode>) {
+    if !text.is_empty() {
+        nodes.push(DebugNode::Leaf(std::mem::take(text)));
+    }
+}
+
+/// Split the atom glued to an open delimiter off the accumulated text:
+/// `Some` from `Some(`, and `Name` (dropping the joining space) from
+/// `Name {`. Brace groups only take a prefix across that space — a brace
+/// directly following text is not the derived-struct shape.
+fn take_group_prefix(text: &mut String, delimiter: char) -> String {
+    if delimiter == '{' {
+        let Some(without_space) = text.strip_suffix(' ') else {
+            return String::new();
+        };
+        let start = without_space.rfind(' ').map(|index| index + 1).unwrap_or(0);
+        let prefix = without_space[start..].to_string();
+        if prefix.is_empty() {
+            return String::new();
+        }
+        text.truncate(text.len() - prefix.len() - 1);
+        prefix
+    } else {
+        let start = text.rfind(' ').map(|index| index + 1).unwrap_or(0);
+        let prefix = text[start..].to_string();
+        text.truncate(start);
+        prefix
+    }
+}
+
+/// Emit parsed nodes, matching the layout `#[derive(PrettyPrintable)]`
+/// produces for the same shapes.
+fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
+    for node in nodes {
+        match node {
+            DebugNode::Leaf(text) => printer.text(text),
+            DebugNode::Group {
+                prefix,
+                delimiter,
+                named,
+                items,
+            } => {
+                let (open, close, indent) = match (delimiter, named) {
+                    ('{', true) => (format!("{prefix} {{"), " }", 4),
+                    ('{', false) if prefix.is_empty() => ("{".to_string(), "}", 1),
+                    ('{', false) => (format!("{prefix} {{"), "}", 1),
+                    ('[', _) => (format!("{prefix}["), "]", 1),
+                    _ => (format!("{prefix}("), ")", 1),
+                };
+                printer.begin_group(indent, &open);
+                if *named {
+                    printer.breakable(" ");
+                }
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        printer.text(",");
+                        printer.breakable(" ");
+                    }
+                    emit_debug_nodes(item, printer);
+                }
+                printer.end_group(close);
+            }
+        }
+    }
+}
+
+/// A value that can describe its own printed representation.
+///
+/// Implementations should print the value in Rust-expression syntax wherever
+/// possible, so a reported failing example can be pasted back into code, and
+/// should express any internal structure through the printer's group and
+/// breakable primitives so large values wrap readably.
+///
+/// Provided for the standard types the generator library produces. For user
+/// types, either `#[derive(PrettyPrintable)]` or — to reuse an existing
+/// `Debug` representation without writing anything —
+/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+///
+/// `HashMap` and `HashSet` print as `HashMap::from([…])` /
+/// `HashSet::from([…])`, expressions that only construct the default-hasher
+/// types, so maps and sets with a custom hasher are deliberately not
+/// printable — print those through
+/// [`print_as_debug`](crate::generators::Generator::print_as_debug) or
+/// [`print_with`](crate::generators::Generator::print_with) instead:
+///
+/// ```compile_fail,E0277
+/// use std::collections::{HashMap, HashSet};
+/// use std::hash::{BuildHasherDefault, DefaultHasher};
+///
+/// fn assert_printable<T: hegel::PrettyPrintable>() {}
+/// assert_printable::<HashSet<i32, BuildHasherDefault<DefaultHasher>>>();
+/// assert_printable::<HashMap<i32, bool, BuildHasherDefault<DefaultHasher>>>();
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no printed representation",
+    label = "`{Self}` does not implement `PrettyPrintable`",
+    note = "for your own type, add `#[derive(PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
+    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(..)` prints a custom representation",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`"
+)]
+pub trait PrettyPrintable {
+    /// Print this value's representation to `printer`.
+    fn pretty_print(&self, printer: &mut PrettyPrinter);
+}
+
+/// Implement [`PrettyPrintable`] for one or more local `Debug` types by
+/// printing their `{:?}` representation through
+/// [`print_debug_repr`](crate::pretty::print_debug_repr), so derived-`Debug`
+/// output wraps like a native implementation.
+///
+/// This is for **your own types** whose `Debug` output is already the
+/// representation you want: the orphan rule means it cannot implement a
+/// hegel trait for a type from another crate (including the standard
+/// library). To print a foreign type by its `Debug` representation, make
+/// the *generator* printable instead with
+/// [`print_as_debug`](crate::Generator::print_as_debug).
+///
+/// ```
+/// use hegel::{Document, PrettyPrintable};
+///
+/// #[derive(Debug)]
+/// struct Point {
+///     x: i32,
+///     y: i32,
+/// }
+/// hegel::pretty_print_as_debug!(Point);
+///
+/// let mut doc = Document::new();
+/// Point { x: 1, y: 2 }.pretty_print(doc.printer());
+/// assert_eq!(doc.finish(), "Point { x: 1, y: 2 }");
+/// ```
+#[macro_export]
+macro_rules! pretty_print_as_debug {
+    ($($t:ty),+ $(,)?) => {$(
+        impl $crate::PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut $crate::PrettyPrinter) {
+                $crate::pretty::print_debug_repr(&::std::format!("{:?}", self), printer);
+            }
+        }
+    )+};
+}
+
+macro_rules! pretty_via_display {
+    ($($t:ty),+) => {$(
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.text(&format!("{}", self));
+            }
+        }
+    )+};
+}
+
+pretty_via_display!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool
+);
+
+macro_rules! pretty_via_debug {
+    ($($t:ty),+) => {$(
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.text(&format!("{:?}", self));
+            }
+        }
+    )+};
+}
+
+pretty_via_debug!(char, str);
+
+impl PrettyPrintable for String {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!("{self:?}.to_string()"));
+    }
+}
+
+impl PrettyPrintable for std::time::Duration {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Duration::new({}, {})",
+            self.as_secs(),
+            self.subsec_nanos()
+        ));
+    }
+}
+
+impl PrettyPrintable for std::net::Ipv4Addr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let [a, b, c, d] = self.octets();
+        printer.text(&format!("Ipv4Addr::new({a}, {b}, {c}, {d})"));
+    }
+}
+
+impl PrettyPrintable for std::net::Ipv6Addr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let segments = self
+            .segments()
+            .map(|segment| format!("{segment:#x}"))
+            .join(", ");
+        printer.text(&format!("Ipv6Addr::new({segments})"));
+    }
+}
+
+impl PrettyPrintable for std::net::IpAddr {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::net::IpAddr::V4(addr) => {
+                printer.text("IpAddr::V4(");
+                addr.pretty_print(printer);
+                printer.text(")");
+            }
+            std::net::IpAddr::V6(addr) => {
+                printer.text("IpAddr::V6(");
+                addr.pretty_print(printer);
+                printer.text(")");
+            }
+        }
+    }
+}
+
+macro_rules! pretty_float {
+    ($t:ty, $name:literal) => {
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                if self.is_nan() {
+                    if self.to_bits() == <$t>::NAN.to_bits() {
+                        printer.text(concat!($name, "::NAN"));
+                    } else {
+                        printer.text(&format!(
+                            concat!($name, "::from_bits(0x{:x})"),
+                            self.to_bits()
+                        ));
+                    }
+                } else if *self == <$t>::INFINITY {
+                    printer.text(concat!($name, "::INFINITY"));
+                } else if *self == <$t>::NEG_INFINITY {
+                    printer.text(concat!($name, "::NEG_INFINITY"));
+                } else {
+                    printer.text(&format!("{:?}", self));
+                }
+            }
+        }
+    };
+}
+
+pretty_float!(f32, "f32");
+pretty_float!(f64, "f64");
+
+macro_rules! pretty_delegating {
+    ($($t:ty),+) => {$(
+        impl<T: PrettyPrintable + ?Sized> PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                (**self).pretty_print(printer);
+            }
+        }
+    )+};
+}
+
+pretty_delegating!(&T, &mut T);
+
+macro_rules! pretty_smart_pointer {
+    ($($t:ty, $open:literal);+) => {$(
+        impl<T: PrettyPrintable> PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.begin_group($open.len(), $open);
+                (**self).pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    )+};
+}
+
+pretty_smart_pointer!(
+    Box<T>, "Box::new(";
+    std::rc::Rc<T>, "Rc::new(";
+    std::sync::Arc<T>, "Arc::new("
+);
+
+/// `Box::new` cannot build a boxed unsized value, so `Box<str>` prints its
+/// target instead of a constructor.
+impl PrettyPrintable for Box<str> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        (**self).pretty_print(printer);
+    }
+}
+
+/// Print `items` as a delimited, comma-separated sequence: inline when it
+/// fits, one element per line (aligned just inside `open`) when it does not.
+fn pretty_seq<'a, T: PrettyPrintable + ?Sized + 'a>(
+    printer: &mut PrettyPrinter,
+    open: &str,
+    close: &str,
+    items: impl Iterator<Item = &'a T>,
+) {
+    printer.begin_group(open.chars().count(), open);
+    for (index, item) in items.enumerate() {
+        if index > 0 {
+            printer.text(",");
+            printer.breakable(" ");
+        }
+        item.pretty_print(printer);
+    }
+    printer.end_group(close);
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for [T] {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "[", "]", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for Vec<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "vec![", "]", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.as_slice().pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::HashSet<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "HashSet::from([", "])", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::BTreeSet<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "BTreeSet::from([", "])", self.iter());
+    }
+}
+
+/// Print `entries` as a `Name::from([(key, value), …])` map: inline when it
+/// fits, one entry per line when it does not.
+fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
+    printer: &mut PrettyPrinter,
+    open: &str,
+    entries: impl Iterator<Item = (&'a K, &'a V)>,
+) {
+    printer.begin_group(open.chars().count(), open);
+    for (index, (key, value)) in entries.enumerate() {
+        if index > 0 {
+            printer.text(",");
+            printer.breakable(" ");
+        }
+        printer.text("(");
+        key.pretty_print(printer);
+        printer.text(", ");
+        value.pretty_print(printer);
+        printer.text(")");
+    }
+    printer.end_group("])");
+}
+
+impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::HashMap<K, V> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_map(printer, "HashMap::from([", self.iter());
+    }
+}
+
+impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::BTreeMap<K, V> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_map(printer, "BTreeMap::from([", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for Option<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            None => printer.text("None"),
+            Some(value) => {
+                printer.begin_group(5, "Some(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+impl<T: PrettyPrintable, E: PrettyPrintable> PrettyPrintable for Result<T, E> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            Ok(value) => {
+                printer.begin_group(3, "Ok(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+            Err(error) => {
+                printer.begin_group(4, "Err(");
+                error.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+impl PrettyPrintable for () {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("()");
+    }
+}
+
+impl<A: PrettyPrintable> PrettyPrintable for (A,) {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.begin_group(1, "(");
+        self.0.pretty_print(printer);
+        printer.end_group(",)");
+    }
+}
+
+macro_rules! pretty_tuple {
+    ($(($($name:ident),+)),+ $(,)?) => {$(
+        #[allow(non_snake_case)]
+        impl<$($name: PrettyPrintable),+> PrettyPrintable for ($($name,)+) {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                let ($($name,)+) = self;
+                printer.begin_group(1, "(");
+                let mut index = 0usize;
+                $(
+                    if index > 0 {
+                        printer.text(",");
+                        printer.breakable(" ");
+                    }
+                    index += 1;
+                    $name.pretty_print(printer);
+                )+
+                let _ = index;
+                printer.end_group(")");
+            }
+        }
+    )+};
+}
+
+pretty_tuple!(
+    (A, B),
+    (A, B, C),
+    (A, B, C, D),
+    (A, B, C, D, E),
+    (A, B, C, D, E, F),
+    (A, B, C, D, E, F, G),
+    (A, B, C, D, E, F, G, H),
+    (A, B, C, D, E, F, G, H, I),
+    (A, B, C, D, E, F, G, H, I, J),
+    (A, B, C, D, E, F, G, H, I, J, K),
+    (A, B, C, D, E, F, G, H, I, J, K, L),
+);

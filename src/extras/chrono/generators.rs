@@ -1,8 +1,112 @@
-use crate::generators::{DefaultGenerator, Generator, TestCase, hashsets, integers};
+use crate::generators::{
+    DefaultGenerator, Generator, PrintableGenerator, TestCase, hashsets, integers,
+};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
+
+impl PrettyPrintable for Weekday {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!("Weekday::{self:?}"));
+    }
+}
+
+impl PrettyPrintable for WeekdaySet {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let days = self
+            .iter(Weekday::Mon)
+            .map(|day| format!("Weekday::{day:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        printer.text(&format!("WeekdaySet::from_array([{days}])"));
+    }
+}
+
+impl PrettyPrintable for FixedOffset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "FixedOffset::east_opt({}).unwrap()",
+            self.local_minus_utc()
+        ));
+    }
+}
+
+impl PrettyPrintable for TimeDelta {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let (secs, nanos) = {
+            let secs = self.num_seconds();
+            let nanos = self.subsec_nanos();
+            if nanos < 0 {
+                (secs - 1, nanos + 1_000_000_000)
+            } else {
+                (secs, nanos)
+            }
+        };
+        printer.text(&format!("TimeDelta::new({secs}, {nanos}).unwrap()"));
+    }
+}
+
+impl PrettyPrintable for NaiveDate {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "NaiveDate::from_ymd_opt({}, {}, {}).unwrap()",
+            self.year(),
+            self.month(),
+            self.day()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "NaiveTime::from_hms_nano_opt({}, {}, {}, {}).unwrap()",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveDateTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.date().pretty_print(printer);
+        printer.text(&format!(
+            ".and_hms_nano_opt({}, {}, {}, {}).unwrap()",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for NaiveWeek {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let first = self.first_day();
+        first.pretty_print(printer);
+        printer.text(&format!(".week(Weekday::{:?})", first.weekday()));
+    }
+}
+
+/// Prints as a `NaiveDateTime` constructor localized with
+/// `and_local_timezone` rather than an RFC 3339 string: the string form
+/// only parses back for years 0000–9999, a sliver of chrono's
+/// ±262143-year range, while the constructor form is valid for every
+/// representable value. A fixed offset never makes a local time ambiguous,
+/// so the trailing `unwrap` always succeeds.
+impl<Tz: TimeZone> PrettyPrintable for DateTime<Tz> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.naive_local().pretty_print(printer);
+        printer.text(&format!(
+            ".and_local_timezone(FixedOffset::east_opt({}).unwrap()).unwrap()",
+            self.offset().fix().local_minus_utc()
+        ));
+    }
+}
 use crate::test_case::invalid_argument;
 use chrono::{
-    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, TimeDelta,
-    TimeZone, Timelike, Utc, Weekday, WeekdaySet,
+    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, NaiveWeek, Offset,
+    TimeDelta, TimeZone, Timelike, Utc, Weekday, WeekdaySet,
 };
 use std::marker::PhantomData;
 
@@ -63,6 +167,12 @@ impl Generator<WeekdaySet> for WeekdaySetGenerator {
     }
 }
 
+impl PrintableGenerator<WeekdaySet> for WeekdaySetGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> WeekdaySet {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`chrono::WeekdaySet`] values.
 ///
 /// # Example
@@ -112,6 +222,12 @@ impl Generator<FixedOffset> for FixedOffsetGenerator {
             .max_value(max_secs)
             .do_draw(tc);
         FixedOffset::east_opt(secs).unwrap()
+    }
+}
+
+impl PrintableGenerator<FixedOffset> for FixedOffsetGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> FixedOffset {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -186,6 +302,12 @@ impl Generator<TimeDelta> for TimeDeltaGenerator {
     }
 }
 
+impl PrintableGenerator<TimeDelta> for TimeDeltaGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> TimeDelta {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`chrono::TimeDelta`] values.
 ///
 /// Defaults span the full `TimeDelta::MIN..=TimeDelta::MAX` range. Use the
@@ -241,6 +363,12 @@ impl Generator<NaiveDate> for NaiveDateGenerator {
         }
         let d = tc.generate_date(hegel_date(self.min_value), hegel_date(self.max_value));
         NaiveDate::from_ymd_opt(d.year, u32::from(d.month), u32::from(d.day)).unwrap()
+    }
+}
+
+impl PrintableGenerator<NaiveDate> for NaiveDateGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveDate {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -317,6 +445,12 @@ impl Generator<NaiveTime> for NaiveTimeGenerator {
     }
 }
 
+impl PrintableGenerator<NaiveTime> for NaiveTimeGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveTime {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`chrono::NaiveTime`] values.
 ///
 /// # Example
@@ -377,6 +511,12 @@ impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
             .max_value(datetime_to_nanos(&self.max_value.and_utc()))
             .do_draw(tc);
         nanos_to_utc_datetime(n).naive_utc()
+    }
+}
+
+impl PrintableGenerator<NaiveDateTime> for NaiveDateTimeGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveDateTime {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -447,6 +587,12 @@ impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
     fn do_draw(&self, tc: &TestCase) -> NaiveWeek {
         let (date, start) = crate::generators::tuples2(&self.date_gen, &self.start_gen).do_draw(tc);
         date.week(start)
+    }
+}
+
+impl<S: Generator<Weekday>> PrintableGenerator<NaiveWeek> for NaiveWeekGenerator<S> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> NaiveWeek {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -565,6 +711,16 @@ where
                 unreachable!()
             }
         }
+    }
+}
+
+impl<G, Tz> PrintableGenerator<DateTime<Tz>> for DateTimeGenerator<G, Tz>
+where
+    G: Generator<Tz>,
+    Tz: TimeZone + Send + Sync + 'static,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime<Tz> {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 

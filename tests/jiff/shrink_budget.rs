@@ -4,7 +4,7 @@
 //! span is negative with only fractional (sub-second) magnitude.
 
 use crate::common::utils::measure_failing_run;
-use hegel::generators as gs;
+use hegel::generators::{self as gs, Generator};
 use jiff::civil::DateTime;
 use jiff::{Span, SpanRelativeTo, SpanRound, Unit};
 
@@ -23,7 +23,7 @@ fn shrink_budget_jiff_negative_fractional_span() {
             Unit::Microsecond,
             Unit::Nanosecond,
         ];
-        let unit = tc.draw(gs::sampled_from(units));
+        let unit = tc.draw(gs::sampled_from(units).print_as_debug());
         let nanos = tc.draw(
             gs::integers::<i64>()
                 .min_value(-i64::MAX)

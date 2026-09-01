@@ -300,7 +300,9 @@ pub(crate) fn run_test_case(
         mode,
         case_sink.or_else(|| output.sink().cloned()),
     );
+    let reporter = tc.child(0);
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
+    reporter.emit_rendered_output();
 
     let (tc_result, payload, diagnostic) = match result {
         Ok(()) => (TestCaseResult::Valid, None, None),
@@ -463,50 +465,15 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
 /// reads the stash: its failures are replayed from their reproduce blobs.
 struct NondetStash {
     /// The buffered draw/note lines of the case (empty under
-    /// [`Verbosity::Quiet`], where nothing would be printed), regrouped by
-    /// [`group_concurrent_output`] so each round reads worker by worker.
+    /// [`Verbosity::Quiet`], where nothing would be printed), already in
+    /// report order: the case's document renders with each round's output
+    /// grouped worker by worker.
     lines: Vec<String>,
     /// The rendered panic diagnostic (thread, location, message, backtrace);
     /// `None` under quiet.
     diagnostic: Option<String>,
     /// The caught panic payload, re-raised as the run's closing unwind.
     payload: Box<dyn std::any::Any + Send>,
-}
-
-/// One buffered output line of a nondeterministic case, tagged with the
-/// emitting worker's index — `None` for main-thread lines (round markers,
-/// invariant notes).
-type WorkerLine = (Option<usize>, String);
-
-/// Regroup a nondeterministic case's buffered output so each round reads
-/// worker by worker.
-///
-/// Worker lines land in the buffer in wall-clock arrival order,
-/// interleaved across workers. Workers only emit between a round's marker
-/// note and its join point, and the main thread only emits outside rounds,
-/// so every maximal run of worker-tagged records is exactly one round's
-/// output. A stable sort by worker index groups each such run per worker
-/// while preserving each worker's own program order; main-thread lines
-/// stay where they are. The `[worker N +X.XXXms]` offsets carried in the
-/// line text are what remains of the arrival order.
-fn group_concurrent_output(records: Vec<WorkerLine>) -> Vec<String> {
-    fn flush(round: &mut Vec<(usize, String)>, lines: &mut Vec<String>) {
-        round.sort_by_key(|(worker, _)| *worker);
-        lines.extend(round.drain(..).map(|(_, line)| line));
-    }
-    let mut lines = Vec::with_capacity(records.len());
-    let mut round: Vec<(usize, String)> = Vec::new();
-    for (worker, line) in records {
-        match worker {
-            Some(worker) => round.push((worker, line)),
-            None => {
-                flush(&mut round, &mut lines);
-                lines.push(line);
-            }
-        }
-    }
-    flush(&mut round, &mut lines);
-    lines
 }
 
 /// Message for a flaky test — one whose outcome changed when re-run with the
@@ -571,7 +538,7 @@ pub(crate) fn drive<F>(
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
-        let buffer: Arc<std::sync::Mutex<Vec<WorkerLine>>> = Arc::default();
+        let buffer: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
         let case_sink: Option<crate::test_case::OutputSink> = if quiet {
             None
@@ -584,7 +551,7 @@ pub(crate) fn drive<F>(
                 buffer
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .push((crate::stateful::current_worker_index(), line.to_string()));
+                    .push(line.to_string());
             }))
         };
         let (tc_result, payload, diagnostic) = run_test_case(
@@ -599,7 +566,7 @@ pub(crate) fn drive<F>(
         if matches!(tc_result, TestCaseResult::Interesting(_)) {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             stash = Some(NondetStash {
-                lines: group_concurrent_output(records),
+                lines: records,
                 diagnostic,
                 payload: payload.expect("an interesting case carries the caught panic payload"),
             });

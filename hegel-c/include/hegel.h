@@ -72,6 +72,11 @@
  *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
+ *     hegel_printer_options_new  ->  hegel_printer_options_free
+ *     hegel_printer_new          ->  hegel_printer_free
+ *     hegel_printer_deferred     ->  hegel_printer_free
+ *     hegel_test_case_printer    ->  hegel_printer_free
+ *     hegel_printer_value        ->  hegel_printer_value_result_free
  *
  * Every other pointer libhegel hands back is a borrowed string. The caller
  * must not free it, and it is valid only until a documented point.
@@ -590,6 +595,63 @@ typedef struct hegel_failure_t hegel_failure_t;
 typedef struct hegel_pool_t hegel_pool_t;
 
 /*
+ A pretty-printer document.
+
+ Built from three primitives: `hegel_printer_text` emits unbreakable text,
+ `hegel_printer_breakable` marks a point that renders as a separator if the
+ enclosing group fits on one line and as a newline plus indentation if it
+ does not, and `hegel_printer_begin_group` / `hegel_printer_end_group`
+ delimit the groups those decisions are made over. Breaking is
+ all-or-nothing per group, decided outermost groups first. The engine only
+ provides the layout machinery; what gets printed — and in which language's
+ syntax — is entirely the client's choice.
+
+ Two facilities support printing values *while generating them*:
+ `hegel_printer_deferred` opens a hole whose content is written later
+ (while the test body runs) and spliced in by `hegel_printer_resolve`, and
+ `hegel_printer_begin_speculative` buffers output that a rejected draw
+ (a filter retry, a failed assumption) can retract.
+
+ Create a standalone document with `hegel_printer_new`, or fetch a handle
+ onto a test-case handle's region of the family document with
+ `hegel_test_case_printer`.
+
+ # Ownership and concurrency
+
+ A printer handle addresses one *region* of a document — the document
+ body for a root handle, or a hole for a handle from
+ `hegel_printer_deferred`. Handles follow the test-case handles' model: a
+ handle may move between threads, but belongs to one thread at a time —
+ concurrent operations on the *same* handle return
+ `HEGEL_E_CONCURRENT_USE`. To print from several threads, give each
+ thread its own region: `hegel_printer_deferred` opens a hole at the
+ handle's current position, and content written into it from any thread,
+ on any schedule, renders at that anchor point — so concurrent output is
+ deterministic, and two handles never interleave within one region.
+
+ Every handle — including those returned by `hegel_printer_deferred` —
+ must be released with `hegel_printer_free`.
+ */
+typedef struct hegel_printer_t hegel_printer_t;
+
+/*
+ Options for constructing a pretty-printer document.
+
+ Construct with `hegel_printer_options_new`, configure via the
+ `hegel_printer_options_set_*` functions, pass to `hegel_printer_new` /
+ `hegel_test_case_printer`, and free with `hegel_printer_options_free`.
+ Every option has a default, and a NULL options pointer means "all
+ defaults", so callers that are happy with the defaults never construct
+ one. New options are added as new setters, never by changing existing
+ signatures.
+
+ An options handle only parameterizes construction: it is read during the
+ construction call and may be freed (or reconfigured and reused)
+ immediately afterwards.
+ */
+typedef struct hegel_printer_options_t hegel_printer_options_t;
+
+/*
  Opaque handle to an engine-managed *recursive generation scope*: the
  leaf budget and retry bookkeeping for one draw of a recursively defined
  value (a tree, a document, ...).
@@ -768,6 +830,21 @@ typedef struct {
     hegel_date_t date;
     hegel_time_t time;
 } hegel_datetime_t;
+
+/*
+ An engine-allocated string buffer returned by `hegel_printer_value`.
+
+ `data` points to `len` bytes of UTF-8. The buffer is **not**
+ NUL-terminated (printed values can contain any character), so always use
+ `len`. The caller owns the buffer and must release it with
+ `hegel_printer_value_result_free` (freeing through any other allocator is
+ undefined behaviour). `data` is never NULL after a successful call, even
+ for `len == 0`.
+ */
+typedef struct {
+    char *data;
+    size_t len;
+} hegel_printer_value_result_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1876,6 +1953,338 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
                             hegel_test_case_t *tc,
                             double value,
                             const char *label);
+
+/*
+ Create a printer-options handle with every option at its default
+ (`max_width` 79).
+
+ On success writes a caller-owned handle into `*out_options` (release with
+ `hegel_printer_options_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+ */
+hegel_result_t hegel_printer_options_new(hegel_context_t *ctx,
+                                         hegel_printer_options_t **out_options);
+
+/*
+ Free an options handle previously returned by `hegel_printer_options_new`.
+ Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+ */
+hegel_result_t hegel_printer_options_free(hegel_context_t *ctx, hegel_printer_options_t *options);
+
+/*
+ Set the line width documents constructed with these options are laid out
+ to: lines stay within `max_width` characters where the group structure
+ allows it. The default is 79.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `options` and
+ `HEGEL_E_INVALID_ARG` for a `max_width` of 0 (a document cannot lay
+ anything out inside zero columns).
+ */
+hegel_result_t hegel_printer_options_set_max_width(hegel_context_t *ctx,
+                                                   hegel_printer_options_t *options,
+                                                   uint64_t max_width);
+
+/*
+ Create a standalone pretty-printer document laid out per `options`
+ (NULL for all defaults; see `hegel_printer_options_t`).
+
+ On success writes a caller-owned handle into `*out_printer` (release with
+ `hegel_printer_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+ */
+hegel_result_t hegel_printer_new(hegel_context_t *ctx,
+                                 const hegel_printer_options_t *options,
+                                 hegel_printer_t **out_printer);
+
+/*
+ Release a printer handle (from `hegel_printer_new`,
+ `hegel_printer_deferred`, or `hegel_test_case_printer`). Safe to call
+ with NULL (a no-op that returns `HEGEL_OK`). Freeing a handle never
+ discards document content — a deferred slot's content stays spliced in —
+ it only releases this reference to the shared document.
+ */
+hegel_result_t hegel_printer_free(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Emit `len` bytes of UTF-8 at `text` only if the innermost group open at
+ this point renders broken; a group that fits on one line renders nothing
+ here. The text never counts toward width (measurement uses the flat
+ form, which is empty).
+
+ This is how a layout expresses text that only the multi-line form needs
+ — e.g. Go's mandatory trailing comma before a composite literal's
+ closing brace: emit each element, then
+ `hegel_printer_if_break(",")` and an empty `hegel_printer_breakable`
+ before the `hegel_printer_end_group` that closes the literal.
+
+ The text must not contain newlines. Errors as `hegel_printer_text`.
+ */
+hegel_result_t hegel_printer_if_break(hegel_context_t *ctx,
+                                      hegel_printer_t *printer,
+                                      const uint8_t *text,
+                                      size_t len);
+
+/*
+ Emit `len` bytes of UTF-8 at `text` as literal, unbreakable text.
+
+ The text must not contain newlines: express line structure with
+ `hegel_printer_hard_break` (or breakable points) so column accounting
+ stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
+ `hegel_context_last_error` — for a NULL `printer` or a handle whose
+ deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+ or newline-containing text or a NULL `text` with `len > 0`.
+ */
+hegel_result_t hegel_printer_text(hegel_context_t *ctx,
+                                  hegel_printer_t *printer,
+                                  const uint8_t *text,
+                                  size_t len);
+
+/*
+ Emit a potential break point: renders as the given separator if the
+ enclosing group fits on one line, and as a newline plus the current
+ indentation if the group breaks.
+
+ `sep` follows the same rules as `hegel_printer_text` (UTF-8, no
+ newlines, NULL only with `len == 0`), and errors are reported the same
+ way.
+ */
+hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
+                                       hegel_printer_t *printer,
+                                       const uint8_t *sep,
+                                       size_t len);
+
+/*
+ Attach a comment to the line currently being written: the text is
+ emitted verbatim at the end of that line, every group open at this
+ position is forced to break — a comment poisons the rest of its line, so
+ nothing else may share it — and the text contributes nothing to width
+ accounting. A comment-forced group also breaks before its closing text,
+ so a trailing delimiter is not annotated by a comment on the group's last
+ element.
+
+ The engine stores the text verbatim: pass the full rendered form of the
+ comment, in the comment syntax of the language being printed (e.g.
+ `"  // like this"` or `"  (* like this *)"`), including any separating
+ whitespace.
+
+ `text` follows the same rules as `hegel_printer_text` (UTF-8, no
+ newlines, NULL only with `len == 0`), and errors are reported the same
+ way.
+ */
+hegel_result_t hegel_printer_comment(hegel_context_t *ctx,
+                                     hegel_printer_t *printer,
+                                     const uint8_t *text,
+                                     size_t len);
+
+/*
+ Emit an unconditional newline followed by the current indentation.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+ deferred slot is already dead.
+ */
+hegel_result_t hegel_printer_hard_break(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Open a group: emit `open` (same rules as `hegel_printer_text`), then
+ increase the indentation applied by subsequent break points by `indent`.
+ Whether to break is decided per group — a group either fits on the
+ current line or every one of its break points becomes a newline.
+
+ Errors as `hegel_printer_text`.
+ */
+hegel_result_t hegel_printer_begin_group(hegel_context_t *ctx,
+                                         hegel_printer_t *printer,
+                                         uint64_t indent,
+                                         const uint8_t *open,
+                                         size_t open_len);
+
+/*
+ Close the innermost group: undo the indentation its
+ `hegel_printer_begin_group` added, then emit `close` (same rules as
+ `hegel_printer_text`).
+
+ Errors as `hegel_printer_text`; closing with no group open is
+ `HEGEL_E_INVALID_ARG` (reported by `hegel_printer_resolve` instead when
+ the unbalanced close was recorded into a deferred session).
+ */
+hegel_result_t hegel_printer_end_group(hegel_context_t *ctx,
+                                       hegel_printer_t *printer,
+                                       const uint8_t *close,
+                                       size_t close_len);
+
+/*
+ Adjust the indentation applied by subsequent break points by `delta`
+ (may be negative to undo an earlier shift).
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+ deferred slot is already dead.
+ */
+hegel_result_t hegel_printer_shift_indent(hegel_context_t *ctx,
+                                          hegel_printer_t *printer,
+                                          int64_t delta);
+
+/*
+ Open a deferred hole at the handle's current position and write a
+ caller-owned handle for it into `*out_printer` (release with
+ `hegel_printer_free`).
+
+ Content written through the returned handle — at any later point, e.g.
+ while the test body runs — is spliced in at the hole's position when
+ `hegel_printer_resolve` runs on the document's root handle, with
+ line-breaking behaving exactly as if it had been printed inline. After
+ resolve the slot is dead and writes to it return
+ `HEGEL_E_INVALID_HANDLE`; use `hegel_printer_is_live` to probe. Holes
+ nest: calling this on a deferred handle opens a hole inside that slot.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+ */
+hegel_result_t hegel_printer_deferred(hegel_context_t *ctx,
+                                      hegel_printer_t *printer,
+                                      hegel_printer_t **out_printer);
+
+/*
+ Open a speculative region on this handle: subsequent writes through it
+ buffer until `hegel_printer_commit_speculative` emits them or
+ `hegel_printer_abort_speculative` discards them. Regions nest. This is
+ how draw-time printing survives rejection: print each attempt inside a
+ region, commit on acceptance, abort on rejection.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle.
+ */
+hegel_result_t hegel_printer_begin_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Close the innermost speculative region on this handle, keeping its
+ content.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+ open.
+ */
+hegel_result_t hegel_printer_commit_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Close the innermost speculative region on this handle, discarding its
+ content. Deferred slots opened inside the region die with it.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+ handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+ open.
+ */
+hegel_result_t hegel_printer_abort_speculative(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Splice every deferred hole's content in at its position and seal the
+ document. Must be called on the document's root handle (from
+ `hegel_printer_new` / `hegel_test_case_printer`). Sealing ends all
+ writing: every slot dies, a speculative region still open on any target —
+ a straggler thread caught mid-draw — is aborted (uncommitted content was
+ never part of the document), and every later write on any handle reports
+ `HEGEL_E_INVALID_HANDLE` like any other dead region, so a straggler's
+ late writes are harmless to tolerate.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — when called on a deferred
+ handle, with no deferred session outstanding, or when a recorded
+ `hegel_printer_end_group` turns out to be unbalanced at replay.
+ */
+hegel_result_t hegel_printer_resolve(hegel_context_t *ctx, hegel_printer_t *printer);
+
+/*
+ Write whether this handle can still be written to into `*out_live`:
+ `true` for a root handle, and for a deferred handle whose session has not
+ yet been resolved or aborted.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_live`.
+ */
+hegel_result_t hegel_printer_is_live(hegel_context_t *ctx,
+                                     hegel_printer_t *printer,
+                                     bool *out_live);
+
+/*
+ Read everything printed to the document, flushing pending break points.
+ Must be called on the document's root handle. Reading seals the document
+ exactly like `hegel_printer_resolve` does: open speculative regions on
+ any target are aborted and every later write on any handle reports
+ `HEGEL_E_INVALID_HANDLE`. Reading again is fine and returns the same
+ document.
+
+ On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+ caller owns (release with `hegel_printer_value_result_free`) and returns
+ `HEGEL_OK`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_result`, a
+ deferred handle, or an unresolved deferred session (call
+ `hegel_printer_resolve` first).
+ */
+hegel_result_t hegel_printer_value(hegel_context_t *ctx,
+                                   hegel_printer_t *printer,
+                                   hegel_printer_value_result_t *out_result);
+
+/*
+ Release a buffer returned by `hegel_printer_value` and reset the struct
+ to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+ (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+ */
+hegel_result_t hegel_printer_value_result_free(hegel_context_t *ctx,
+                                               hegel_printer_value_result_t *result);
+
+/*
+ Fetch a handle onto this test-case handle's *print region* of the family
+ document, writing a caller-owned handle into `*out_printer` (release
+ with `hegel_printer_free`; the document itself lives as long as any
+ handle or the family).
+
+ The family document exists from the family's creation. Each test-case
+ handle owns one region of it: the root handle's region is the document
+ body, and a `hegel_test_case_clone` handle's region is a hole opened in
+ its parent's region at the moment the clone was made. Regions make
+ concurrent printing deterministic: a clone's output appears at its
+ anchor point — where the clone was created — however the threads that
+ produced it were scheduled, and two handles never interleave within one
+ region. The document remains readable after the case completes, so the
+ client can assemble output while drawing and read it back after
+ `hegel_mark_complete` (through a root-handle printer).
+
+ `options` may be NULL for defaults (see `hegel_printer_options_t`). The
+ first call that explicitly configures `max_width` fixes the document's
+ width; later calls may restate it, but a *different* explicit width is
+ an error — the width of the shared document cannot be two things.
+ Content printed before the width is configured (`hegel_note` never
+ configures it) still renders at the configured width: layout happens
+ when the document is read.
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
+ width conflict.
+ */
+hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
+                                       hegel_test_case_t *tc,
+                                       const hegel_printer_options_t *options,
+                                       hegel_printer_t **out_printer);
+
+/*
+ Append a note — `len` bytes of UTF-8 at `text` — to this test-case
+ handle's print region (see `hegel_test_case_printer` for the region
+ model). Each `\n`-separated line of the note becomes its own output
+ line, so notes may contain newlines. Notes and drawn values from *one
+ handle* appear in the order they were appended; a clone's notes appear
+ in the clone's region.
+
+ Notes never configure the document's width; they render at whatever
+ width ends up configured (default 79).
+
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
+ region is dead (the document was already read), and
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
+ `text` with `len > 0`.
+ */
+hegel_result_t hegel_note(hegel_context_t *ctx,
+                          hegel_test_case_t *tc,
+                          const uint8_t *text,
+                          size_t len);
 
 /*
  Parameters:

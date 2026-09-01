@@ -91,3 +91,28 @@ fn test_deferred_mutual_recursion() {
     find_any(x_draw.clone(), |v| (0..=10).contains(v));
     find_any(x_draw, |v| (100..=110).contains(v));
 }
+
+#[derive(Debug, PartialEq)]
+enum SilentTree {
+    Leaf,
+    Branch(Box<SilentTree>),
+}
+
+#[hegel::test]
+fn test_deferred_silent_accepts_a_plain_generator(tc: TestCase) {
+    let d = gs::deferred_silent::<SilentTree>();
+    let g = d.generator();
+    d.set(hegel::one_of!(
+        gs::just(()).map(|()| SilentTree::Leaf),
+        g.clone().map(|inner| SilentTree::Branch(Box::new(inner))),
+    ));
+    tc.draw_silent(g);
+}
+
+#[hegel::test]
+fn test_deferred_silent_handles_become_printable_with_print_as_debug(tc: TestCase) {
+    let d = gs::deferred_silent::<SilentTree>();
+    let g = d.generator();
+    d.set(gs::just(()).map(|()| SilentTree::Leaf));
+    assert_eq!(tc.draw(g.print_as_debug()), SilentTree::Leaf);
+}
