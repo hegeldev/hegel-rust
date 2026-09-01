@@ -613,11 +613,13 @@ mod recursive {
         }
     }
 
-    fn trees() -> gs::RecursiveGenerator<Tree> {
-        gs::recursive(gs::integers::<i32>().map(Tree::Leaf), |subtrees| {
-            hegel::tuples!(subtrees.clone(), subtrees)
-                .map(|(left, right)| Tree::Branch(Box::new(left), Box::new(right)))
-        })
+    macro_rules! trees {
+        () => {
+            gs::recursive(gs::integers::<i32>().map(Tree::Leaf), |subtrees| {
+                hegel::tuples!(subtrees.clone(), subtrees)
+                    .map(|(left, right)| Tree::Branch(Box::new(left), Box::new(right)))
+            })
+        };
     }
 
     /// Sizes must cover the whole range the default caps allow: bare leaves,
@@ -628,7 +630,7 @@ mod recursive {
     /// vanish.
     #[test]
     fn recursive_trees_have_diverse_sizes() {
-        let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees()));
+        let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees!()));
         assert_min_rate(&vs, |t| t.leaf_count() == 1, 0.015, "single leaf");
         assert_min_rate(&vs, |t| t.leaf_count() >= 25, 0.06, "25+ leaves");
         assert_min_rate(&vs, |t| t.leaf_count() >= 90, 0.004, "near the leaf cap");
@@ -732,7 +734,7 @@ mod recursive {
     /// not be systematically bigger or branchier than their later siblings.
     #[test]
     fn recursive_trees_are_not_left_biased() {
-        let vs = sample(4000, 0xE2, |tc| tc.draw_silent(trees().max_leaves(8)));
+        let vs = sample(4000, 0xE2, |tc| tc.draw_silent(trees!().max_leaves(8)));
         let mut roots = 0usize;
         let mut left_leaves = 0usize;
         let mut right_leaves = 0usize;

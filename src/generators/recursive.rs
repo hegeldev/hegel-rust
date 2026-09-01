@@ -1,6 +1,7 @@
-use super::{Generator, TestCase};
+use super::{Generator, PrintableGenerator, TestCase};
 use crate::control::{AttemptMispriced, LeafBudgetExceeded, raise_control};
 use crate::ffi::RecursionHandle;
+use crate::pretty::PrettyPrinter;
 use crate::test_case::{labels, raise_for_rc};
 use hegel_c::hegel_result_t;
 use std::marker::PhantomData;
@@ -12,30 +13,73 @@ const DEFAULT_MAX_LEAVES: usize = 100;
 
 /// The leaf generator and branch function of a [`recursive()`] generator,
 /// type-erased so that [`SubtreeGenerator`] (which appears in the branch
-/// function's own signature) does not need to name their types.
+/// function's own signature) does not need to name their types. The printer
+/// threads through both methods so one erased object serves both draw
+/// paths; the silent path passes the no-op printer.
 trait SubtreeDraw<T>: Send + Sync {
-    fn draw_leaf(&self, tc: &TestCase) -> T;
-    fn draw_branch(&self, tc: &TestCase, subtrees: SubtreeGenerator<T>) -> T;
+    fn draw_leaf(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
+    fn draw_branch(
+        &self,
+        tc: &TestCase,
+        subtrees: SubtreeGenerator<T>,
+        printer: &mut PrettyPrinter,
+    ) -> T;
 }
 
-struct RecursiveCore<G, F, R> {
-    leaf: G,
-    branch: F,
+/// The erased core of a silent draw: ignores the printer and draws the leaf
+/// and branch generators through [`Generator::do_draw`].
+struct SilentCore<G, F, R> {
+    leaf: Arc<G>,
+    branch: Arc<F>,
     _phantom: PhantomData<fn() -> R>,
 }
 
-impl<T, G, F, R> SubtreeDraw<T> for RecursiveCore<G, F, R>
+impl<T, G, F, R> SubtreeDraw<T> for SilentCore<G, F, R>
 where
     G: Generator<T> + Send + Sync,
     F: Fn(SubtreeGenerator<T>) -> R + Send + Sync,
     R: Generator<T>,
 {
-    fn draw_leaf(&self, tc: &TestCase) -> T {
+    fn draw_leaf(&self, tc: &TestCase, _printer: &mut PrettyPrinter) -> T {
         self.leaf.do_draw(tc)
     }
 
-    fn draw_branch(&self, tc: &TestCase, subtrees: SubtreeGenerator<T>) -> T {
+    fn draw_branch(
+        &self,
+        tc: &TestCase,
+        subtrees: SubtreeGenerator<T>,
+        _printer: &mut PrettyPrinter,
+    ) -> T {
         (self.branch)(subtrees).do_draw(tc)
+    }
+}
+
+/// The erased core of a printing draw: draws the leaf and branch generators
+/// through [`TestCase::draw_and_print`], so each value prints with its own
+/// generator's representation.
+struct PrintingCore<G, F, R> {
+    leaf: Arc<G>,
+    branch: Arc<F>,
+    _phantom: PhantomData<fn() -> R>,
+}
+
+impl<T, G, F, R> SubtreeDraw<T> for PrintingCore<G, F, R>
+where
+    G: PrintableGenerator<T> + Send + Sync,
+    F: Fn(SubtreeGenerator<T>) -> R + Send + Sync,
+    R: PrintableGenerator<T>,
+{
+    fn draw_leaf(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        tc.draw_and_print(&*self.leaf, printer)
+    }
+
+    fn draw_branch(
+        &self,
+        tc: &TestCase,
+        subtrees: SubtreeGenerator<T>,
+        printer: &mut PrettyPrinter,
+    ) -> T {
+        tc.draw_and_print((self.branch)(subtrees), printer)
     }
 }
 
@@ -48,6 +92,12 @@ where
 /// Cloning is needed rather than borrowing (`tuples!(&subtrees, &subtrees)`)
 /// because the generator the branch function returns would otherwise borrow
 /// the function's own parameter.
+///
+/// It is a [`PrintableGenerator`], so branch functions can build on
+/// printable combinators and draw sub-values with
+/// [`draw`](crate::TestCase::draw); each sub-value actually prints exactly
+/// when the whole recursive generator does, with the leaf and branch
+/// generators' own representations.
 pub struct SubtreeGenerator<T> {
     core: Arc<dyn SubtreeDraw<T>>,
     recursion: Arc<RecursionHandle>,
@@ -72,22 +122,22 @@ impl<T> SubtreeGenerator<T> {
             depth: self.depth + 1,
         }
     }
-}
 
-impl<T> Generator<T> for SubtreeGenerator<T> {
-    fn do_draw(&self, tc: &TestCase) -> T {
+    /// The one leaf-or-branch body both draw paths run; the silent path
+    /// passes the no-op printer.
+    fn draw_subtree(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         tc.start_span(labels::RECURSIVE);
         let branch = match tc.with_ctc(|ctc| ctc.recursion_branch(&self.recursion, self.depth)) {
             Ok(branch) => branch,
             Err(rc) => raise_for_rc(rc),
         };
         let result = if branch {
-            self.core.draw_branch(tc, self.child())
+            self.core.draw_branch(tc, self.child(), printer)
         } else {
             if let Err(rc) = tc.with_ctc(|ctc| ctc.recursion_leaf(&self.recursion)) {
                 raise_for_rc(rc);
             }
-            self.core.draw_leaf(tc)
+            self.core.draw_leaf(tc, printer)
         };
         if self.depth == 0 {
             if let Err(rc) = tc.with_ctc(|ctc| ctc.recursion_finish(&self.recursion)) {
@@ -102,14 +152,32 @@ impl<T> Generator<T> for SubtreeGenerator<T> {
     }
 }
 
-/// Generator for recursively defined data. Created by [`recursive()`].
-pub struct RecursiveGenerator<T> {
-    core: Arc<dyn SubtreeDraw<T>>,
-    max_depth: usize,
-    max_leaves: usize,
+impl<T> Generator<T> for SubtreeGenerator<T> {
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.draw_subtree(tc, &mut PrettyPrinter::noop())
+    }
 }
 
-impl<T> RecursiveGenerator<T> {
+impl<T> PrintableGenerator<T> for SubtreeGenerator<T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        self.draw_subtree(tc, printer)
+    }
+}
+
+/// Generator for recursively defined data. Created by [`recursive()`].
+///
+/// A [`PrintableGenerator`] exactly when the leaf generator and the
+/// generator the branch function returns both are; drawn values then print
+/// with those generators' own representations.
+pub struct RecursiveGenerator<T, G, F, R> {
+    leaf: Arc<G>,
+    branch: Arc<F>,
+    max_depth: usize,
+    max_leaves: usize,
+    _phantom: PhantomData<fn() -> (T, R)>,
+}
+
+impl<T, G, F, R> RecursiveGenerator<T, G, F, R> {
     /// Set the maximum nesting depth of branches (default 32).
     ///
     /// Sub-values at this depth are always leaves, so a `max_depth` of 0
@@ -133,10 +201,16 @@ impl<T> RecursiveGenerator<T> {
         self.max_leaves = max_leaves;
         self
     }
-}
 
-impl<T> Generator<T> for RecursiveGenerator<T> {
-    fn do_draw(&self, tc: &TestCase) -> T {
+    /// The one retry loop both draw paths run: each attempt draws inside a
+    /// speculative print region, so a discarded attempt (over the leaf
+    /// budget, or mispriced) discards whatever it printed.
+    fn draw_recursive(
+        &self,
+        tc: &TestCase,
+        core: Arc<dyn SubtreeDraw<T>>,
+        printer: &mut PrettyPrinter,
+    ) -> T {
         let base_span_depth = tc.open_span_depth();
         let recursion = match tc
             .with_ctc(|ctc| ctc.new_recursion(self.max_depth as u64, self.max_leaves as u64))
@@ -146,19 +220,27 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
         };
         loop {
             let root = SubtreeGenerator {
-                core: Arc::clone(&self.core),
+                core: Arc::clone(&core),
                 recursion: Arc::clone(&recursion),
                 depth: 0,
             };
-            match catch_unwind(AssertUnwindSafe(|| root.do_draw(tc))) {
-                Ok(value) => return value,
+            let mut speculation = printer.speculate();
+            match catch_unwind(AssertUnwindSafe(|| {
+                root.draw_subtree(tc, speculation.printer())
+            })) {
+                Ok(value) => {
+                    speculation.commit();
+                    return value;
+                }
                 Err(payload) if payload.downcast_ref::<LeafBudgetExceeded>().is_some() => {
+                    speculation.abort();
                     match tc.with_ctc(|ctc| ctc.recursion_retry(&recursion)) {
                         Ok(()) => tc.reset_open_spans_to(base_span_depth),
                         Err(rc) => raise_for_rc(rc),
                     }
                 }
                 Err(payload) if payload.downcast_ref::<AttemptMispriced>().is_some() => {
+                    speculation.abort();
                     tc.reset_open_spans_to(base_span_depth);
                 }
                 Err(payload) => resume_unwind(payload),
@@ -167,9 +249,37 @@ impl<T> Generator<T> for RecursiveGenerator<T> {
     }
 }
 
-impl<T: crate::PrettyPrintable> super::PrintableGenerator<T> for RecursiveGenerator<T> {
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
-        super::generators::draw_and_print_value(self, tc, printer)
+impl<T, G, F, R> Generator<T> for RecursiveGenerator<T, G, F, R>
+where
+    T: 'static,
+    G: Generator<T> + Send + Sync + 'static,
+    F: Fn(SubtreeGenerator<T>) -> R + Send + Sync + 'static,
+    R: Generator<T> + 'static,
+{
+    fn do_draw(&self, tc: &TestCase) -> T {
+        let core: Arc<dyn SubtreeDraw<T>> = Arc::new(SilentCore {
+            leaf: Arc::clone(&self.leaf),
+            branch: Arc::clone(&self.branch),
+            _phantom: PhantomData,
+        });
+        self.draw_recursive(tc, core, &mut PrettyPrinter::noop())
+    }
+}
+
+impl<T, G, F, R> PrintableGenerator<T> for RecursiveGenerator<T, G, F, R>
+where
+    T: 'static,
+    G: PrintableGenerator<T> + Send + Sync + 'static,
+    F: Fn(SubtreeGenerator<T>) -> R + Send + Sync + 'static,
+    R: PrintableGenerator<T> + 'static,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        let core: Arc<dyn SubtreeDraw<T>> = Arc::new(PrintingCore {
+            leaf: Arc::clone(&self.leaf),
+            branch: Arc::clone(&self.branch),
+            _phantom: PhantomData,
+        });
+        self.draw_recursive(tc, core, printer)
     }
 }
 
@@ -188,6 +298,9 @@ impl<T: crate::PrettyPrintable> super::PrintableGenerator<T> for RecursiveGenera
 /// [`max_leaves`](RecursiveGenerator::max_leaves) (attempts that draw more
 /// leaves than this are discarded and retried with a lower branching
 /// probability).
+///
+/// The result is a [`PrintableGenerator`] exactly when `leaf` and the
+/// generator `branch` returns both are.
 ///
 /// # Example
 ///
@@ -210,7 +323,7 @@ impl<T: crate::PrettyPrintable> super::PrintableGenerator<T> for RecursiveGenera
 ///     ));
 /// }
 /// ```
-pub fn recursive<T, G, F, R>(leaf: G, branch: F) -> RecursiveGenerator<T>
+pub fn recursive<T, G, F, R>(leaf: G, branch: F) -> RecursiveGenerator<T, G, F, R>
 where
     T: 'static,
     G: Generator<T> + Send + Sync + 'static,
@@ -218,12 +331,10 @@ where
     R: Generator<T> + 'static,
 {
     RecursiveGenerator {
-        core: Arc::new(RecursiveCore {
-            leaf,
-            branch,
-            _phantom: PhantomData,
-        }),
+        leaf: Arc::new(leaf),
+        branch: Arc::new(branch),
         max_depth: DEFAULT_MAX_DEPTH,
         max_leaves: DEFAULT_MAX_LEAVES,
+        _phantom: PhantomData,
     }
 }
