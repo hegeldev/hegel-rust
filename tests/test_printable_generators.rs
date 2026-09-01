@@ -483,6 +483,15 @@ fn subsequences_print_the_drawn_value() {
 }
 
 #[test]
+fn samples_print_the_drawn_value() {
+    let lines = failing_lines(|tc| {
+        let _: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3]).max_size(5));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = vec![];"]);
+}
+
+#[test]
 fn permutations_print_the_drawn_value() {
     let lines = failing_lines(|tc| {
         let _: Vec<i32> = tc.draw(gs::permutations(vec![1, 2, 3]));

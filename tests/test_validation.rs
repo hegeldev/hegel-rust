@@ -201,17 +201,25 @@ fn test_hashmaps_min_greater_than_max() {
 }
 
 #[test]
-fn test_permutations_min_greater_than_max() {
+fn test_samples_min_greater_than_max() {
     expect_draw_panic(
-        gs::permutations(vec![1, 2, 3]).min_size(3).max_size(2),
+        gs::samples(vec![1, 2, 3]).min_size(3).max_size(2),
         "max_size < min_size",
     );
 }
 
 #[test]
-fn test_permutations_min_size_too_large() {
+fn test_samples_nonempty_from_empty_sequence() {
     expect_draw_panic(
-        gs::permutations(vec![1, 2, 3]).min_size(4),
+        gs::samples(Vec::<i32>::new()).min_size(1),
+        "non-empty sample from an empty sequence",
+    );
+}
+
+#[test]
+fn test_samples_without_replacement_min_size_too_large() {
+    expect_draw_panic(
+        gs::samples(vec![1, 2, 3]).without_replacement().min_size(4),
         "min_size 4 is larger than the 3 elements",
     );
 }

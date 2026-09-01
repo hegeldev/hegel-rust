@@ -6,6 +6,7 @@ use std::borrow::Cow;
 
 const SUBSEQUENCE_LABEL: u64 = fnv1a_hash(b"hegel:subsequence");
 const PERMUTATION_LABEL: u64 = fnv1a_hash(b"hegel:permutation");
+const SAMPLE_LABEL: u64 = fnv1a_hash(b"hegel:sample");
 
 /// Draw between `min_size` and `max_size` distinct indices in `0..n`, without
 /// replacement, in draw order. Shrinks towards fewer indices and towards the
@@ -122,52 +123,13 @@ where
 /// [`permutations()`].
 pub struct PermutationGenerator<'a, T: Clone> {
     elements: Cow<'a, [T]>,
-    min_size: Option<usize>,
-    max_size: Option<usize>,
-}
-
-impl<'a, T: Clone> PermutationGenerator<'a, T> {
-    /// Set the minimum number of elements to include. Setting either size
-    /// bound makes the generator draw a permutation of a subset of the
-    /// elements instead of all of them; the unset bound defaults to 0
-    /// (for `min_size`) or the full length (for `max_size`).
-    pub fn min_size(mut self, min_size: usize) -> Self {
-        self.min_size = Some(min_size);
-        self
-    }
-
-    /// Set the maximum number of elements to include. See
-    /// [`min_size`](Self::min_size) for how size bounds change what is
-    /// generated.
-    pub fn max_size(mut self, max_size: usize) -> Self {
-        self.max_size = Some(max_size);
-        self
-    }
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for PermutationGenerator<'a, T> {
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let n = self.elements.len();
-        if let (Some(min), Some(max)) = (self.min_size, self.max_size) {
-            if min > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        let min_size = if self.min_size.is_none() && self.max_size.is_none() {
-            n
-        } else {
-            self.min_size.unwrap_or(0)
-        };
-        if min_size > n {
-            invalid_argument!(
-                "Cannot generate a permutation: min_size {} is larger than the {} elements in the sequence",
-                min_size,
-                n
-            );
-        }
-        let max_size = self.max_size.map_or(n, |m| m.min(n));
         tc.start_span(PERMUTATION_LABEL);
-        let indices = draw_index_sample(tc, n, min_size, max_size);
+        let indices = draw_index_sample(tc, n, n, n);
         tc.stop_span(false);
         indices
             .into_iter()
@@ -186,13 +148,10 @@ impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T
 
 /// Generate permutations of a fixed list of values.
 ///
-/// By default each drawn `Vec` contains all of the elements in a randomly
-/// chosen order, shrinking towards the original order. Setting
-/// [`min_size`](PermutationGenerator::min_size) or
-/// [`max_size`](PermutationGenerator::max_size) instead draws an ordered
-/// sample without replacement: a permutation of a subset of the elements,
-/// with a size in the given bounds, shrinking towards fewer elements, taken
-/// from earlier in the list, in their original order.
+/// Each drawn `Vec` contains all of the elements in a randomly chosen order,
+/// shrinking towards the original order. To draw a reordered subset of the
+/// elements instead, use [`samples()`] with
+/// [`without_replacement`](SampleGenerator::without_replacement).
 ///
 /// Accepts anything convertible into `Cow<[T]>`, including:
 /// - `Vec<T>` (consumed without re-allocation)
@@ -217,7 +176,144 @@ where
 {
     PermutationGenerator {
         elements: elements.into(),
-        min_size: None,
+    }
+}
+
+/// Generator that samples from a fixed list of values. Created by
+/// [`samples()`].
+pub struct SampleGenerator<'a, T: Clone> {
+    elements: Cow<'a, [T]>,
+    min_size: usize,
+    max_size: Option<usize>,
+    replacement: bool,
+}
+
+impl<'a, T: Clone> SampleGenerator<'a, T> {
+    /// Set the minimum number of elements to include.
+    pub fn min_size(mut self, min_size: usize) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum number of elements to include. When sampling without
+    /// replacement this is additionally capped at the number of elements in
+    /// the list.
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+
+    /// Sample with replacement: each element of the result is chosen
+    /// independently from the full list, so the same value can appear any
+    /// number of times. This is the default.
+    pub fn with_replacement(mut self) -> Self {
+        self.replacement = true;
+        self
+    }
+
+    /// Sample without replacement: each element of the list is used at most
+    /// once, so the result is a reordered subset of the list. Duplicates in
+    /// the input are treated as distinct elements, so they can appear in the
+    /// output up to as many times as they appear in the input.
+    pub fn without_replacement(mut self) -> Self {
+        self.replacement = false;
+        self
+    }
+}
+
+impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, T> {
+    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
+        let n = self.elements.len();
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        if self.replacement {
+            if n == 0 && self.min_size > 0 {
+                invalid_argument!("Cannot generate a non-empty sample from an empty sequence");
+            }
+            let max_size = if n == 0 { Some(0) } else { self.max_size };
+            tc.start_span(SAMPLE_LABEL);
+            let mut collection = Collection::new(tc, self.min_size, max_size);
+            let mut result = Vec::new();
+            while collection.more() {
+                let i = tc.generate_integer_i64(0, n as i64 - 1) as usize;
+                result.push(self.elements[i].clone());
+            }
+            tc.stop_span(false);
+            result
+        } else {
+            if self.min_size > n {
+                invalid_argument!(
+                    "Cannot generate a sample without replacement: min_size {} is larger than the {} elements in the sequence",
+                    self.min_size,
+                    n
+                );
+            }
+            let max_size = self.max_size.map_or(n, |m| m.min(n));
+            tc.start_span(SAMPLE_LABEL);
+            let indices = draw_index_sample(tc, n, self.min_size, max_size);
+            tc.stop_span(false);
+            indices
+                .into_iter()
+                .map(|i| self.elements[i].clone())
+                .collect()
+        }
+    }
+}
+
+impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+    for SampleGenerator<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+/// Generate samples from a fixed list of values.
+///
+/// By default each drawn `Vec` is a sample **with replacement**: every
+/// element is chosen independently from the full list, so the same value can
+/// appear any number of times, and the size is unbounded unless constrained
+/// with [`min_size`](SampleGenerator::min_size) and
+/// [`max_size`](SampleGenerator::max_size). Calling
+/// [`without_replacement`](SampleGenerator::without_replacement) switches to
+/// sampling **without replacement**: each element of the list is used at most
+/// once, so the result is a reordered subset of the list, with at most as
+/// many elements as the list itself. Samples shrink towards fewer elements,
+/// taken from earlier in the list.
+///
+/// To draw a single element, use [`sampled_from()`](super::sampled_from); to
+/// reorder the whole list, use [`permutations()`]; to pick a subset while
+/// preserving the original order, use [`subsequences()`].
+///
+/// Accepts anything convertible into `Cow<[T]>`, including:
+/// - `Vec<T>` (consumed without re-allocation)
+/// - `&[T]` where `T: Clone` (borrowed, zero allocation)
+/// - `&Vec<T>` or `&[T; N]` (via coercion to `&[T]`)
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let with: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3]).max_size(10));
+///     let without: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3]).without_replacement());
+///     assert!(without.len() <= 3);
+/// }
+/// ```
+pub fn samples<'a, T, S>(elements: S) -> SampleGenerator<'a, T>
+where
+    T: Clone + Send + Sync,
+    S: Into<Cow<'a, [T]>>,
+{
+    SampleGenerator {
+        elements: elements.into(),
+        min_size: 0,
         max_size: None,
+        replacement: true,
     }
 }
