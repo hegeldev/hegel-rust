@@ -1,4 +1,6 @@
-use super::{Collection, Generator, TestCase, fnv1a_hash};
+use super::generators::draw_and_print_value;
+use super::{Collection, Generator, PrintableGenerator, TestCase, fnv1a_hash};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
 
@@ -67,6 +69,14 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SubsequenceGenerator
             .into_iter()
             .map(|i| self.elements[i].clone())
             .collect()
+    }
+}
+
+impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+    for SubsequenceGenerator<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+        draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -163,6 +173,14 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for PermutationGenerator
             .into_iter()
             .map(|i| self.elements[i].clone())
             .collect()
+    }
+}
+
+impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+    for PermutationGenerator<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+        draw_and_print_value(self, tc, printer)
     }
 }
 

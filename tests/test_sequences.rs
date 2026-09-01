@@ -11,13 +11,15 @@ fn is_subsequence<T: PartialEq>(sub: &[T], source: &[T]) -> bool {
 
 fn is_sample<T: PartialEq + Clone>(sample: &[T], source: &[T]) -> bool {
     let mut pool = source.to_vec();
-    sample.iter().all(|x| match pool.iter().position(|y| y == x) {
-        Some(i) => {
-            pool.remove(i);
-            true
-        }
-        None => false,
-    })
+    sample
+        .iter()
+        .all(|x| match pool.iter().position(|y| y == x) {
+            Some(i) => {
+                pool.remove(i);
+                true
+            }
+            None => false,
+        })
 }
 
 #[test]
