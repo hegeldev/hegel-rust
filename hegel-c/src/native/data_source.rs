@@ -292,7 +292,7 @@ impl DataSource for NativeDataSource {
         &self,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
-        _invariant_names: Vec<String>,
+        invariant_names: Vec<String>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<NativeStateMachine, DataSourceError> {
@@ -323,7 +323,13 @@ impl DataSource for NativeDataSource {
                     return Err(EngineError::AssumeViolation);
                 }
             }
-            NativeStateMachine::new(ntc, rule_groups, min_concurrency, max_concurrency)
+            NativeStateMachine::new(
+                ntc,
+                rule_groups,
+                invariant_names.len(),
+                min_concurrency,
+                max_concurrency,
+            )
         })
     }
 
@@ -348,6 +354,14 @@ impl DataSource for NativeDataSource {
         worker_index: i64,
     ) -> Result<(), DataSourceError> {
         self.with_ntc(|_ntc| machine.rule_rejected(worker_index))
+    }
+
+    fn state_machine_should_check_invariant(
+        &self,
+        machine: &mut NativeStateMachine,
+        invariant_index: i64,
+    ) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| machine.should_check_invariant(ntc, invariant_index))
     }
 
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {

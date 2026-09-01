@@ -29,9 +29,9 @@ use hegel_c::{
     hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
     hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_free,
     hegel_state_machine_next_group, hegel_state_machine_next_rule,
-    hegel_state_machine_rule_rejected, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_test_case_is_nondeterministic, hegel_version,
+    hegel_state_machine_rule_rejected, hegel_state_machine_should_check_invariant, hegel_status_t,
+    hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_test_case_is_nondeterministic, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -1440,7 +1440,8 @@ fn primitives_after_overrun_all_report_stop_test() {
 /// Exercise the state-machine and weighted-boolean C-ABI entry points
 /// (`hegel_new_state_machine`, `hegel_state_machine_next_group`,
 /// `hegel_state_machine_next_rule`, `hegel_state_machine_rule_rejected`,
-/// `hegel_generate_boolean`) in-process: the invalid-handle and
+/// `hegel_state_machine_should_check_invariant`, `hegel_generate_boolean`)
+/// in-process: the invalid-handle and
 /// argument-validation paths, plus the happy paths. The smoke test that
 /// drives these over dlopen doesn't contribute coverage, so they are
 /// measured here.
@@ -1779,6 +1780,59 @@ fn state_machine_and_primitive_boolean_paths() {
         }
         assert!(rounds >= 1);
         assert_eq!(hegel_state_machine_free(ctx, machine), HEGEL_OK);
+
+        let inv_a = CString::new("inv").unwrap();
+        let invariants: [*const c_char; 1] = [inv_a.as_ptr()];
+        let mut checked: *mut HegelStateMachine = ptr::null_mut();
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                invariants.as_ptr(),
+                1,
+                1,
+                1,
+                &mut checked,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK
+        );
+        let mut should_check = false;
+        assert_eq!(
+            hegel_state_machine_should_check_invariant(ctx, null_tc, checked, 0, &mut should_check),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_state_machine_should_check_invariant(
+                ctx,
+                tc,
+                ptr::null_mut(),
+                0,
+                &mut should_check
+            ),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("state machine handle is null"));
+        assert_eq!(
+            hegel_state_machine_should_check_invariant(ctx, tc, checked, 0, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        assert_eq!(
+            hegel_state_machine_should_check_invariant(ctx, tc, checked, 1, &mut should_check),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invariant_index must be in [0, 1)"));
+        for _ in 0..20 {
+            assert_eq!(
+                hegel_state_machine_should_check_invariant(ctx, tc, checked, 0, &mut should_check),
+                HEGEL_OK
+            );
+        }
+        assert_eq!(hegel_state_machine_free(ctx, checked), HEGEL_OK);
 
         let mut ranged: *mut HegelStateMachine = ptr::null_mut();
         assert_eq!(
