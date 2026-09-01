@@ -1,3 +1,0 @@
-RELEASE_TYPE: minor
-
-This release changes when stateful invariants run. `#[invariant]` methods previously ran after every rule; they now run in full on the machine's initial and final state, and are sampled in between — after any given rule, each invariant runs with probability 1/`stateful_step_count`. This keeps an invariant's expected cost per test case constant as the step count grows, and a violation that persists to the end of a test case is still always caught; what is given up is observing most intermediate states, so a violation a later rule *undoes* is only caught when a sampled check lands inside the window. This applies to both sequential and concurrent state machines.
