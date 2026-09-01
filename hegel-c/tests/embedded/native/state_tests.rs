@@ -1631,3 +1631,21 @@ fn native_variables_add_active_and_consume_round_trip() {
     vars.consume(0);
     assert_eq!(vars.active(), Vec::<i64>::new());
 }
+
+#[test]
+fn spans_nested_to_max_depth_stay_valid() {
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    for _ in 0..MAX_DEPTH {
+        tc.start_span(1);
+    }
+    assert_eq!(tc.status(), None);
+}
+
+#[test]
+fn spans_nested_past_max_depth_conclude_invalid() {
+    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    for _ in 0..=MAX_DEPTH {
+        tc.start_span(1);
+    }
+    assert_eq!(tc.status(), Some(Status::Invalid));
+}

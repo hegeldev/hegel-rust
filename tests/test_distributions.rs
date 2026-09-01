@@ -689,6 +689,37 @@ mod recursive {
         assert_min_rate(&vs, |e| e.leaf_count() >= 90, 0.003, "near the leaf cap");
     }
 
+    /// The same expression-language grammar spelled with combinators — a
+    /// `one_of` whose binary arms pair subtrees with `tuples!` — nests
+    /// several spans per recursion level, so deep values must survive the
+    /// engine's span-depth guard. Regression test: with the guard at 100,
+    /// every tree past ~24 levels was silently concluded invalid, and the
+    /// size distribution collapsed to a seventh of the `compose!` style's.
+    #[test]
+    fn combinator_style_trees_match_the_compose_style_distribution() {
+        let vs = sample(4000, 0xE7, |tc| {
+            tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
+                let mut arms = Vec::new();
+                for _ in 0..17 {
+                    arms.push(exprs.clone().map(|e| Expr::Negate(Box::new(e))).boxed());
+                }
+                for _ in 0..7 {
+                    arms.push(
+                        hegel::tuples!(exprs.clone(), exprs.clone())
+                            .map(|(a, b)| Expr::Add(Box::new(a), Box::new(b)))
+                            .boxed(),
+                    );
+                }
+                gs::one_of(arms)
+            }))
+        });
+        let mean = vs.iter().map(Expr::leaf_count).sum::<usize>() as f64 / vs.len() as f64;
+        assert!(mean > 10.0, "mean leaf count {mean:.2}; expected > 10");
+        assert_min_rate(&vs, |e| e.leaf_count() == 1, 0.1, "single leaf");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 90, 0.003, "near the leaf cap");
+        assert_min_rate(&vs, |e| e.depth() >= 28, 0.15, "28+ levels deep");
+    }
+
     /// A grammar with only unary branches can never grow past one leaf, so
     /// the leaf budget says nothing about it. The adaptive pricing pushes
     /// the branch probability up to its cap instead, spreading chain

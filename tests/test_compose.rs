@@ -13,6 +13,15 @@ fn test_compose_basic(tc: TestCase) {
 }
 
 #[hegel::test]
+fn test_compose_accepts_move_closures(tc: TestCase) {
+    let offset = 10;
+    let value = tc.draw(hegel::compose!(move |tc| {
+        tc.draw(gs::integers::<i32>().min_value(0).max_value(5)) + offset
+    }));
+    assert!((10..=15).contains(&value));
+}
+
+#[hegel::test]
 fn test_compose_dependent_generation(tc: TestCase) {
     let (x, y) = tc.draw(hegel::compose!(|tc| {
         let x = tc.draw(gs::integers::<i32>().min_value(0).max_value(50));

@@ -1200,7 +1200,16 @@ pub enum SpanEvent {
 
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.
-pub const MAX_DEPTH: u32 = 100;
+///
+/// A guard against runaway recursion: span-only loops (bounded by no other
+/// budget) and recursive generators headed for a stack overflow. It must
+/// sit far above any depth legitimate generation reaches — combinator
+/// layers each open a span, so recursive generators nest several spans per
+/// recursion level, and a cap within reach of real values silently
+/// truncates the distribution. 1000 corresponds to recursion ~150+ levels
+/// deep, several times anything a plausible `max_depth` produces, yet
+/// usually below the depth where the frontend's drawing stack overflows.
+pub const MAX_DEPTH: u32 = 1000;
 
 /// A tag identifying a structural-coverage class for a span label.
 ///

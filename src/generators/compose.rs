@@ -74,6 +74,10 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// receives a `&TestCase` parameter. Use `tc.draw()` to draw values from
 /// other generators within the compose block.
 ///
+/// The closure captures its environment by move whether or not the `move`
+/// keyword is written; `compose!(move |tc| { .. })` is accepted and
+/// identical to `compose!(|tc| { .. })`.
+///
 /// # Example
 ///
 /// ```no_run
@@ -90,6 +94,9 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// ```
 #[macro_export]
 macro_rules! compose {
+    (move |$tc:ident| { $($body:tt)* }) => {
+        $crate::compose!(|$tc| { $($body)* })
+    };
     (|$tc:ident| { $($body:tt)* }) => {{
         const LABEL: u64 = $crate::generators::fnv1a_hash(stringify!($($body)*).as_bytes());
         $crate::generators::ComposedGenerator::new(LABEL, move |$tc: &$crate::TestCase| { $($body)* })

@@ -264,7 +264,7 @@ struct DeepSpans;
 impl DeepSpans {
     #[rule]
     fn nest(&self, tc: TestCase) {
-        for _ in 0..101 {
+        for _ in 0..1001 {
             tc.start_span(1);
         }
         let _: bool = tc.draw_silent(gs::booleans());
@@ -288,7 +288,7 @@ struct NestAndBoom;
 impl NestAndBoom {
     #[rule]
     fn nest_and_boom(&self, tc: TestCase) {
-        for _ in 0..101 {
+        for _ in 0..1001 {
             tc.start_span(1);
         }
         panic!("this panic must lose to the engine's invalid conclusion");
