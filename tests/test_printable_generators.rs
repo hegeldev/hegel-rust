@@ -474,6 +474,33 @@ fn filtered_sampled_from_prints_the_chosen_value() {
 }
 
 #[test]
+fn subsequences_print_the_drawn_value() {
+    let lines = failing_lines(|tc| {
+        let _: Vec<i32> = tc.draw(gs::subsequences(vec![1, 2, 3]));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = vec![];"]);
+}
+
+#[test]
+fn samples_print_the_drawn_value() {
+    let lines = failing_lines(|tc| {
+        let _: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3]).max_size(5));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = vec![];"]);
+}
+
+#[test]
+fn permutations_print_the_drawn_value() {
+    let lines = failing_lines(|tc| {
+        let _: Vec<i32> = tc.draw(gs::permutations(vec![1, 2, 3]));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = vec![1, 2, 3];"]);
+}
+
+#[test]
 fn invalid_collection_sizes_report_while_printing() {
     for body in [
         (|tc: hegel::TestCase| {
