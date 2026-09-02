@@ -74,3 +74,24 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
 16. **Target**: handle tests failing >= 10% of the time they are run; budgets and confidence
     arithmetic are derived from that target rather than fixed small constants (a flat N = 10
     misses a p = 0.1 failure 35% of the time). (DRM set the target; review set the arithmetic.)
+
+17. **No checkpoint/rollback in the shrink loop.** Experiment 1 follow-up, mixture landscape:
+    rollback-on-uncertainty (LCB below bar after 10 validation runs) rescues mispinned
+    incumbents but fires constantly on stable landscapes — L1 cost 2.3x, missed reductions
+    9% -> 52% from poisoning good candidates; rollback-on-proof (UCB below bar, up to 40 runs)
+    is free but never fires, because the mispinned rate sits within Wilson noise of any bar
+    derived from the accept-time anchor. Capture-at-confirmation removes ~95% of the hazard at
+    source (pin-failing vs pin-random tables); the residue is a report-time annotation via
+    final validation, not a search-time rollback. (Experiment result.)
+
+18. **Stopping rule: confirmed-dry.** After a dry sweep, run one confirmation sweep where every
+    proposal skips the single-run fast reject and drives cumulative ledger evidence to a bound
+    decision; stop only if it accepts nothing. Same cost as three fixed dry sweeps, half the
+    missed-reduction rate where misses are recoverable (L3 18% -> 10%), and stopping carries a
+    certificate. Replaces the fixed dry-sweep count. (Experiment result.)
+
+19. **Anchor decay rejected; post-accept evidence never feeds the anchor.** Decay bought 1-2
+    length units on L1 at +20-40% cost and made stopping incoherent (missed 51-75%: threshold
+    still falling at stop). Separately, evidence gathered under timeline replay must not raise
+    the anchor, or a pinned incumbent prices fresh-generation candidates out and stalls the
+    shrink. (Experiment result; confirms DRM's monotone-anchor stance.)

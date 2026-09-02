@@ -181,3 +181,107 @@ Follow-ups for this harness:
 - Anchor-decay variant: the monotone anchor makes L1 stop at len ~7; the user constraint
   says that's correct, but measure what a slowly-decaying anchor buys in size if that stance
   ever softens.
+
+## Follow-up run
+
+Harness additions (all three follow-ups above):
+
+- **Stopping rules**: `FixedDry(k)` for k in 1..3, and `ConfirmedDry` — sweep until one dry
+  sweep, then run a confirmation sweep in which every proposal skips the single-run fast
+  reject and drives its cumulative ledger evidence to a bound decision (LCB >= threshold
+  accept, UCB < threshold or cap-30 reject); stop only if the confirmation sweep accepts
+  nothing. New metric: **missed** = an oracle checks, at stop, whether any one-step-reachable
+  smaller candidate has true p >= the final acceptance threshold.
+- **L5 mixture**: bug candidates have two timelines, p_hi = 0.9 (weight 0.5) and p_lo = 0.05.
+  Candidate evaluation always draws fresh (marginal p = 0.475). On accept the incumbent gets
+  a *pinned* timeline; post-accept incumbent runs replay the pin with probability 0.8, else
+  draw fresh. **eff p** = the pinned-regime failure rate a user replay would see. Pin modes:
+  *pin-failing* (capture-at-confirmation: pin drawn proportional to weight x p, so ~95% hi)
+  and *pin-random* (pool-fit accident: pin drawn by weight alone, 50% lo).
+- **Checkpoint semantics fixed while modeling this**: validation must use *post-accept* runs
+  under the pinned regime (the pre-accept gauntlet runs were fresh-generation and are stale
+  evidence for the pinned incumbent), and checkpoint evidence must *not raise the anchor*
+  (a pinned-hi incumbent's rate would price fresh-generation candidates out and stall the
+  shrink). Two rollback rules measured: **v2** rolls back when 10 fresh runs have
+  LCB < 0.5 x anchor (rollback on uncertainty); **v3** accumulates 10 runs per checkpoint up
+  to 40 and rolls back only when UCB < 0.5 x anchor (rollback on proof), advancing the
+  snapshot only when LCB >= the bar.
+- **Anchor decay**: anchor *= d at each sweep end, d in {1.0, 0.98, 0.95}.
+
+### Stopping (P3 ledger g0.8)
+
+| landscape | rule | missed | execs med (p90) |
+| --- | --- | --- | --- |
+| L1 | dry-1 | 10% | 2166 (4078) |
+| L1 | dry-3 | 9% | 2588 (4755) |
+| L1 | confirmed | 10% | 2428 (4518) |
+| L3 | dry-1 | 46% | 116 (232) |
+| L3 | dry-3 | 18% | 149 (260) |
+| L3 | confirmed | 10% | 245 (327) |
+| L4 | dry-1 | 2% | 96 (130) |
+| L4 | dry-3 | 0% | 114 (149) |
+| L4 | confirmed | 0% | 110 (144) |
+
+### L5 mixture (fd3; final p pooled = 0.48 everywhere, len med 1, bug kept 100%)
+
+| pin mode | policy | eff p med (p10-p90) | execs med | rollbacks |
+| --- | --- | --- | --- | --- |
+| failing | P0 naive | 0.82 (0.82-0.82) | 78 | - |
+| failing | P3 ledger g0.8 | 0.82 (0.82-0.82) | 135 | - |
+| failing | P4 v3 | 0.82 (0.82-0.82) | 219 | 0.00 |
+| random | P0 naive | 0.14 (0.14-0.82) | 78 | - |
+| random | P3 ledger g0.8 | 0.82 (0.14-0.82) | 135 | - |
+| random | P4 v2 (LCB rule) | 0.82 (0.82-0.82) | 254 | 2.61 |
+| random | P4 v3 (UCB rule) | 0.14 (0.14-0.82) | 222 | 0.01 |
+
+The pin-random eff-p distributions are bimodal (0.14 or 0.82, set by the final accept's coin
+flip), so medians near the 50% split are noise; read the p10.
+
+### Checkpoint rule on stable landscapes (P4 vs P3 baseline)
+
+| landscape | variant | final p med | len | missed | execs med | rollbacks |
+| --- | --- | --- | --- | --- | --- | --- |
+| L1 | P3 (no ckpt) | 0.58 | 7 | 9% | 2588 | - |
+| L1 | P4 v2 | 0.66 | 8 | 52% | 5927 | 5.56 |
+| L1 | P4 v3 | 0.58 | 7 | 9% | 2516 | 0.01 |
+| L3 | P4 v2 | 0.50 | 1 | 32% | 210 | 1.16 |
+| L3 | P4 v3 | 0.50 | 1 | 11% | 225 | 0.00 |
+
+### Anchor decay (P3 g0.8, fd3)
+
+| landscape | decay | final p med (p10-p90) | len | missed | execs med |
+| --- | --- | --- | --- | --- | --- |
+| L1 | 1.0 | 0.58 (0.50-0.66) | 7 | 9% | 2588 |
+| L1 | 0.98 | 0.50 (0.42-0.58) | 6 | 51% | 3154 |
+| L1 | 0.95 | 0.42 (0.26-0.50) | 5 | 75% | 3690 |
+| L4 | any | 0.90 | 1 | 0% | ~115 |
+
+### What the follow-ups settled
+
+1. **Stopping: adopt confirmed-dry.** Cost is at or below dry-3 on L1/L4 and it halves the
+   missed rate on L3 (18% -> 10%), where the misses are recoverable value-minimizations that
+   fixed dry counts abandon on unlucky single runs. It also terminates with a certificate:
+   every remaining smaller candidate was proven below threshold or hit the run cap. The
+   residual ~9-10% missed on L1 is cap-30 resolution near the threshold, which no stopping
+   rule can fix.
+2. **Checkpointing: drop it from the shrink loop.** Both rollback rules lose. Rolling back on
+   uncertainty (v2) rescues the mispinned incumbent but fires constantly on stable landscapes
+   (L1: 2.3x cost, missed 9% -> 52% from poisoned good candidates). Rolling back on proof
+   (v3) is free on stable landscapes but never fires on the hazard: the mispinned effective
+   rate (0.135) sits at the 0.5 x anchor bar (anchor LCB ~0.27 for true 0.475), and proving
+   UCB below it inside 40-80 fresh runs is marginal by construction — the quantities a
+   rollback must separate are within Wilson noise of each other at affordable run counts.
+   Post-hoc detection is the wrong tool.
+3. **What actually kills the pinning hazard is capture-at-confirmation.** Pin-failing vs
+   pin-random is the whole story: ~95% hi pins at source beats any amount of downstream
+   statistics. Design consequences: (a) the pool must serve the timeline that produced the
+   confirmed failure first (004 must instrument how often first-fit would serve a different
+   one); (b) a *final validation* at report time can still detect the residual ~5% mispins
+   and annotate the report (reporting concern, not search concern).
+4. **Anchor decay: rejected.** It buys 1-2 length units on L1 at +20-40% cost, does nothing
+   where the anchor isn't binding, and the 51-75% missed rates show the run stops by dry
+   sweeps while the threshold is still falling — the stopping criterion becomes incoherent
+   against a moving target. The monotone anchor stands.
+5. If any post-accept validation survives elsewhere in the design: roll back only on proof of
+   badness (UCB below bar), advance snapshots only on proof of goodness (LCB above bar), hold
+   pending otherwise — and never feed pinned-regime evidence into the anchor.

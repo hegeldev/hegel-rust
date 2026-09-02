@@ -155,15 +155,24 @@ One principle: **charge accepts, not rejects.**
   ~10+ against a near-deterministic one. This is where "must not lower failure probability" is
   enforced, at the only place probability can be lost. gamma is an experiment 1 output.
 - The anchor is monotone: set from initial confirmation evidence, raised when validated
-  evidence shows a higher LCB, never re-baselined downward. Rollback (if checkpointing earns
-  its keep at all given strong accepts — an experiment 1 question) restores a validated
-  snapshot and poisons the accepted candidates since; it must also reconcile the improvement
-  count, the downgraded list, and persistence.
+  accept-time evidence shows a higher LCB, never re-baselined downward (decay measured and
+  rejected in experiment 1: marginal size gains, and stopping becomes incoherent against a
+  falling threshold). Post-accept evidence gathered under timeline replay must not feed the
+  anchor — a pinned incumbent's replay rate would price fresh-generation candidates out.
+- There is no checkpoint/rollback in the shrink loop (settled by the experiment 1 follow-up:
+  rollback-on-uncertainty poisons good candidates and multiplies cost on stable landscapes;
+  rollback-on-proof can't separate a mispinned incumbent from its accept-time LCB within
+  affordable run counts). The pinning hazard is handled at source by capture-at-confirmation,
+  plus a final validation at report time that can annotate a residual mispin — a reporting
+  concern, not a search concern.
 - Rejected candidates are retried via pass repetition — the existing stochastic-pass budget
   mechanism (`STOCHASTIC_MAX_FAILURES`) generalized, budgets scaled by the incumbent class —
   and their ledger evidence accumulates across retries, so retries add power instead of
-  starting over. Stopping is evidence-based: stop when accumulated ledger evidence bounds the
-  probability of a missed p >= 0.1 reduction, rather than a fixed dry count.
+  starting over. Stopping is confirmed-dry (experiment 1 follow-up): after a dry sweep, one
+  confirmation sweep drives every proposal's cumulative evidence to a bound decision instead
+  of the single-run fast reject; stop only if it accepts nothing. Costs about the same as
+  three fixed dry sweeps and halves the missed-reduction rate where misses are recoverable,
+  and it terminates with a certificate.
 - All three acceptance paths gate on the same validated-accept event: `consider()`,
   `update_interesting`, and `Persister::record`. Today the latter two fire on every raw
   interesting execution, so one lucky failure of a p = 0.02 candidate displaces the good
@@ -251,7 +260,7 @@ mode still aborts.
 | Merged trie (ND-node) encoding | Timeline pool | Pool shows heavy prefix sharing worth deduplicating |
 | extend=0 vs continuation budget on shrink Full replays | Undecided | Experiment 3/4: deterministic-realization invariant (deficit repair, divergence-observing passes) vs retry-shaped divergence that lengthens paths |
 | Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |
-| Checkpoint/rollback on top of gauntleted accepts | Leaning drop | Experiment 1 first run: identical results to gauntlet-only at 10-40% extra cost on every landscape; re-test with timeline mixtures in experiment 3 before deleting |
+| Checkpoint/rollback on top of gauntleted accepts | Dropped | Experiment 1 follow-up (mixture landscape): rollback-on-uncertainty rescues mispins but poisons good candidates (L1 missed 9% -> 52%, 2.3x cost); rollback-on-proof never fires (mispinned rate sits inside Wilson noise of the bar). Capture-at-confirmation kills the hazard at source; final validation at report time annotates the residue |
 | `replay_aligned` replacement | Accept re-shrinking | Measured local-run cost |
 | FAILED vs FAILED_NONDETERMINISTIC semantics | Undecided | ABI implementation, with binding-compat notes |
 

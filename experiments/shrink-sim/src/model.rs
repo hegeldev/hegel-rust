@@ -2,6 +2,11 @@ pub type Candidate = Vec<u64>;
 
 pub const BUG_THRESHOLD: u64 = 50;
 
+pub const MIX_P_HI: f64 = 0.9;
+pub const MIX_P_LO: f64 = 0.05;
+pub const MIX_W: f64 = 0.5;
+pub const REPLAY_FIT: f64 = 0.8;
+
 pub fn has_bug(c: &Candidate) -> bool {
     c.iter().any(|&a| a >= BUG_THRESHOLD)
 }
@@ -11,11 +16,18 @@ pub fn shortlex_less(a: &Candidate, b: &Candidate) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pin {
+    Failing,
+    Random,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Landscape {
     RisingWithSize,
     DeterministicCore,
     Constant,
     NoiseFloor,
+    Mixture { pin: Pin },
 }
 
 pub const ALL_LANDSCAPES: [Landscape; 4] = [
@@ -58,6 +70,28 @@ impl Landscape {
                     0.02
                 }
             }
+            Landscape::Mixture { .. } => {
+                if has_bug(c) {
+                    MIX_W * MIX_P_HI + (1.0 - MIX_W) * MIX_P_LO
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    pub fn pin_p(self, c: &Candidate, hi: bool) -> f64 {
+        match self {
+            Landscape::Mixture { .. } => {
+                if !has_bug(c) {
+                    0.0
+                } else if hi {
+                    MIX_P_HI
+                } else {
+                    MIX_P_LO
+                }
+            }
+            _ => self.p(c),
         }
     }
 
@@ -67,6 +101,8 @@ impl Landscape {
             Landscape::DeterministicCore => "L2 deterministic-core",
             Landscape::Constant => "L3 constant p=0.5",
             Landscape::NoiseFloor => "L4 noise-floor",
+            Landscape::Mixture { pin: Pin::Failing } => "L5 mixture pin-failing",
+            Landscape::Mixture { pin: Pin::Random } => "L5 mixture pin-random",
         }
     }
 }
