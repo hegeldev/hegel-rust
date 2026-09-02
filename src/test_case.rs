@@ -1211,7 +1211,7 @@ pub mod labels {
 mod tests;
 
 /// The conventional full ranges for the structured draws: years 1..=9999
-/// (what Hypothesis's `dates()` spans) and the whole microsecond-resolution
+/// (what Hypothesis's `dates()` spans) and the whole nanosecond-resolution
 /// day.
 pub(crate) mod full_ranges {
     pub(crate) const MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
@@ -1228,13 +1228,13 @@ pub(crate) mod full_ranges {
         hour: 0,
         minute: 0,
         second: 0,
-        microsecond: 0,
+        nanosecond: 0,
     };
-    pub(crate) const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+    pub(crate) const LAST_NANOSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
         hour: 23,
         minute: 59,
         second: 59,
-        microsecond: 999_999,
+        nanosecond: 999_999_999,
     };
     pub(crate) const MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
         date: MIN_DATE,
@@ -1242,6 +1242,6 @@ pub(crate) mod full_ranges {
     };
     pub(crate) const MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
         date: MAX_DATE,
-        time: LAST_MICROSECOND,
+        time: LAST_NANOSECOND,
     };
 }

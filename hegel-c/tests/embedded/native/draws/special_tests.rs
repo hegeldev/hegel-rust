@@ -13,12 +13,12 @@ fn date(year: i32, month: u8, day: u8) -> Date {
     Date { year, month, day }
 }
 
-fn time(hour: u8, minute: u8, second: u8, microsecond: u32) -> Time {
+fn time(hour: u8, minute: u8, second: u8, nanosecond: u32) -> Time {
     Time {
         hour,
         minute,
         second,
-        microsecond,
+        nanosecond,
     }
 }
 
@@ -36,13 +36,13 @@ const MIDNIGHT: Time = Time {
     hour: 0,
     minute: 0,
     second: 0,
-    microsecond: 0,
+    nanosecond: 0,
 };
-const LAST_MICROSECOND: Time = Time {
+const LAST_NANOSECOND: Time = Time {
     hour: 23,
     minute: 59,
     second: 59,
-    microsecond: 999_999,
+    nanosecond: 999_999_999,
 };
 
 #[test]
@@ -76,27 +76,27 @@ fn generate_date_day_respects_month_length() {
 }
 
 #[test]
-fn generate_time_covers_zero_and_nonzero_microseconds() {
-    let mut seen_microsecond_zero = false;
-    let mut seen_microsecond_nonzero = false;
+fn generate_time_covers_zero_and_nonzero_nanoseconds() {
+    let mut seen_nanosecond_zero = false;
+    let mut seen_nanosecond_nonzero = false;
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
-        let t = generate_time(&mut ntc, MIDNIGHT, LAST_MICROSECOND).unwrap();
+        let t = generate_time(&mut ntc, MIDNIGHT, LAST_NANOSECOND).unwrap();
         assert!(t.hour <= 23 && t.minute <= 59 && t.second <= 59, "{t:?}");
-        assert!(t.microsecond <= 999_999, "{t:?}");
-        if t.microsecond == 0 {
-            seen_microsecond_zero = true;
+        assert!(t.nanosecond <= 999_999_999, "{t:?}");
+        if t.nanosecond == 0 {
+            seen_nanosecond_zero = true;
         } else {
-            seen_microsecond_nonzero = true;
+            seen_nanosecond_nonzero = true;
         }
     }
     assert!(
-        seen_microsecond_zero,
-        "no zero-microsecond times across 200 seeds"
+        seen_nanosecond_zero,
+        "no zero-nanosecond times across 200 seeds"
     );
     assert!(
-        seen_microsecond_nonzero,
-        "no nonzero-microsecond times across 200 seeds"
+        seen_nanosecond_nonzero,
+        "no nonzero-nanosecond times across 200 seeds"
     );
 }
 
@@ -112,7 +112,7 @@ fn generate_datetime_combines_valid_parts() {
             },
             DateTime {
                 date: FULL_MAX_DATE,
-                time: LAST_MICROSECOND,
+                time: LAST_NANOSECOND,
             },
         )
         .unwrap();
@@ -306,8 +306,8 @@ fn generate_time_respects_bounds_and_shrinks_to_min() {
     for seed in 0..200 {
         let mut ntc = fresh_ntc(seed);
         let t = generate_time(&mut ntc, min, max).unwrap();
-        let us = time_to_us(&t);
-        assert!((time_to_us(&min)..=time_to_us(&max)).contains(&us), "{t:?}");
+        let ns = time_to_ns(&t);
+        assert!((time_to_ns(&min)..=time_to_ns(&max)).contains(&ns), "{t:?}");
     }
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     assert_eq!(generate_time(&mut ntc, min, max).unwrap(), min);
@@ -317,10 +317,10 @@ fn generate_time_respects_bounds_and_shrinks_to_min() {
 fn generate_time_rejects_invalid_arguments() {
     let mut ntc = fresh_ntc(0);
     for (min, max) in [
-        (time(24, 0, 0, 0), LAST_MICROSECOND),
+        (time(24, 0, 0, 0), LAST_NANOSECOND),
         (MIDNIGHT, time(0, 60, 0, 0)),
         (MIDNIGHT, time(0, 0, 60, 0)),
-        (MIDNIGHT, time(0, 0, 0, 1_000_000)),
+        (MIDNIGHT, time(0, 0, 0, 1_000_000_000)),
         (time(1, 0, 0, 0), time(0, 59, 0, 0)),
     ] {
         let err = generate_time(&mut ntc, min, max).unwrap_err();
@@ -350,11 +350,11 @@ fn generate_datetime_respects_time_bounds_on_boundary_dates() {
         assert!((days_from_civil(&min.date)..=days_from_civil(&max.date)).contains(&day));
         if day == days_from_civil(&min.date) {
             seen_min_date = true;
-            assert!(time_to_us(&dt.time) >= time_to_us(&min.time), "{dt:?}");
+            assert!(time_to_ns(&dt.time) >= time_to_ns(&min.time), "{dt:?}");
         }
         if day == days_from_civil(&max.date) {
             seen_max_date = true;
-            assert!(time_to_us(&dt.time) <= time_to_us(&max.time), "{dt:?}");
+            assert!(time_to_ns(&dt.time) <= time_to_ns(&max.time), "{dt:?}");
         }
     }
     assert!(seen_min_date && seen_max_date, "boundary dates not covered");
@@ -374,8 +374,8 @@ fn generate_datetime_single_day_constrains_both_ends() {
         let mut ntc = fresh_ntc(seed);
         let dt = generate_datetime(&mut ntc, min, max).unwrap();
         assert_eq!(dt.date, min.date);
-        let us = time_to_us(&dt.time);
-        assert!((time_to_us(&min.time)..=time_to_us(&max.time)).contains(&us));
+        let ns = time_to_ns(&dt.time);
+        assert!((time_to_ns(&min.time)..=time_to_ns(&max.time)).contains(&ns));
     }
 }
 
