@@ -118,6 +118,21 @@ pub enum Verbosity {
     Debug,
 }
 
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NondeterminismStrictness {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    Quiet,
+    /// Switch as under quiet, printing a one-line notice once per run.
+    Warn,
+    /// Abort the run with a flaky-test error, for suites that use determinism
+    /// as a lint.
+    Error,
+}
+
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -131,6 +146,7 @@ pub struct Settings {
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
+    pub(crate) nondeterminism_strictness: NondeterminismStrictness,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
@@ -157,6 +173,7 @@ impl Settings {
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
+            nondeterminism_strictness: NondeterminismStrictness::Quiet,
             seed: None,
             derandomize: in_ci,
             database: if in_ci {
@@ -219,6 +236,13 @@ impl Settings {
     /// Set the verbosity level.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    /// Set how the run reacts when it detects nondeterministic test behavior
+    /// (default: [`NondeterminismStrictness::Quiet`]).
+    pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
+        self.nondeterminism_strictness = strictness;
         self
     }
 

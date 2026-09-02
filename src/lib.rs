@@ -692,4 +692,6 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{Backend, HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
+pub use runner::{
+    Backend, HealthCheck, Hegel, Mode, NondeterminismStrictness, Phase, Settings, Verbosity,
+};

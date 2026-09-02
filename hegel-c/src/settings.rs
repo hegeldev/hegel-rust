@@ -144,17 +144,18 @@ pub enum Verbosity {
     Debug,
 }
 
-/// Nondeterminism experiment scaffolding (`notes/experiments/003-nd-shrink`),
-/// not reachable from any public API. `Resample` turns off choice-tree
-/// serving and conclusion recording so every replay re-executes the body and
-/// outcome flips don't abort the run; `Gauntlet` additionally routes shrink
-/// accepts through the evidence-ledger gauntlet and replaces the pre-shrink
-/// verify with a confirmation batch that seeds the anchor.
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum NdExperiment {
-    Off,
-    Resample,
-    Gauntlet,
+pub enum NondeterminismStrictness {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    Quiet,
+    /// Switch as under `Quiet`, printing a one-line notice once per run.
+    Warn,
+    /// Abort the run with a flaky-test / nondeterminism error, for suites
+    /// that use determinism as a lint.
+    Error,
 }
 
 /// Configuration for a Hegel test run.
@@ -184,9 +185,13 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
-    pub(crate) nd_experiment: NdExperiment,
+    pub(crate) nondeterminism_strictness: NondeterminismStrictness,
+    /// Test-only: start the run in nondeterministic handling instead of
+    /// waiting for a detection flip, so tests exercise the ND machinery
+    /// deterministically. Not reachable from any public API.
+    pub(crate) nd_force: bool,
     /// Experiment 006: run the boost phase (successive halving to raise the
-    /// incumbent's failure rate) before shrinking in ND modes.
+    /// incumbent's failure rate) before shrinking under ND handling.
     pub(crate) nd_boost: bool,
 }
 
@@ -221,7 +226,8 @@ impl Settings {
             report_multiple_failures: true,
             show_statistics: false,
             backend: None,
-            nd_experiment: NdExperiment::Off,
+            nondeterminism_strictness: NondeterminismStrictness::Quiet,
+            nd_force: false,
             nd_boost: false,
         }
     }
@@ -271,6 +277,13 @@ impl Settings {
     /// Set the verbosity level.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    /// Set how the run reacts when it detects nondeterministic test
+    /// behavior. Defaults to [`NondeterminismStrictness::Quiet`].
+    pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
+        self.nondeterminism_strictness = strictness;
         self
     }
 

@@ -44,7 +44,9 @@ use crate::native::nd;
 use crate::native::nd::lifecycle::OriginLifecycle;
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
-use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
+use crate::settings::{
+    Backend, Database, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
+};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -250,11 +252,10 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    let reuse_tries = if self.nd_experiment() == crate::settings::NdExperiment::Off
-                    {
-                        1
-                    } else {
+                    let reuse_tries = if self.nd_handling() {
                         nd::reuse_replay_budget()
+                    } else {
+                        1
                     };
                     let mut attempt = 0u64;
                     let (run, mismatch) = loop {
@@ -270,10 +271,8 @@ impl<'a> Engine<'a> {
                         return Err(RunError::NonDeterministic(msg));
                     }
                     if run.status == Status::Interesting {
-                        if self.nd_experiment() != crate::settings::NdExperiment::Off {
-                            if let Some(o) = run.origin.as_deref() {
-                                self.nd_origins.trust(o);
-                            }
+                        if let Some(o) = run.origin.as_deref() {
+                            self.nd_origins.trust(o);
                         }
                         if i < primary_count {
                             found_interesting_in_primary = true;
@@ -298,7 +297,7 @@ impl<'a> Engine<'a> {
                             db.delete(&secondary_key, &raw);
                         }
                     }
-                    if self.nondeterministic {
+                    if self.concurrent {
                         replay_aligned = false;
                         break;
                     }
@@ -354,7 +353,7 @@ impl<'a> Engine<'a> {
                 self.calls,
                 self.first_bug_at,
                 self.last_bug_at,
-                shrink_phase && !self.nondeterministic,
+                shrink_phase && !self.concurrent,
                 report_multiple,
                 self.first_bug_time.map(|t| t.elapsed()),
             )
@@ -369,7 +368,7 @@ impl<'a> Engine<'a> {
                         self.calls,
                         self.first_bug_at,
                         self.last_bug_at,
-                        shrink_phase && !self.nondeterministic,
+                        shrink_phase && !self.concurrent,
                         report_multiple,
                         self.first_bug_time.map(|t| t.elapsed()),
                     )
@@ -382,9 +381,7 @@ impl<'a> Engine<'a> {
                 // both the novel-prefix walk and the test case itself so the
                 // whole case generates from one consistent distribution.
                 let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let prefix = if self.nondeterministic
-                    || self.nd_experiment() != crate::settings::NdExperiment::Off
-                {
+                let prefix = if self.nd_active {
                     Vec::new()
                 } else {
                     generate_novel_prefix(&self.tree_root, &mut self.rng, params)?
@@ -453,7 +450,7 @@ impl<'a> Engine<'a> {
                 }
 
                 if target_phase
-                    && !self.nondeterministic
+                    && !self.nd_active
                     && self.interesting.is_empty()
                     && !self.targeting.is_empty()
                     && target_schedule.should_fire(self.valid_test_cases)
@@ -466,7 +463,7 @@ impl<'a> Engine<'a> {
                     optimiser.optimise_targets().await?;
                 }
 
-                if !self.nondeterministic
+                if !self.concurrent
                     && run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
@@ -504,8 +501,7 @@ impl<'a> Engine<'a> {
         }
         self.collect_statistics = false;
 
-        if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.nondeterministic
-        {
+        if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.concurrent {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
@@ -568,17 +564,28 @@ impl<'a> Engine<'a> {
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
                 let mut probe_anchor = 0.0f64;
-                let verify = if self.nd_experiment() == crate::settings::NdExperiment::Off {
+                let deterministic_verify = if self.nd_handling() {
+                    None
+                } else {
                     let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
                     let (verify, mismatch) = self.test_function(verify_ntc).await?;
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
                     }
-                    if verify.status != Status::Interesting
-                        || verify.origin.as_deref() != Some(origin.as_str())
+                    if verify.status == Status::Interesting
+                        && verify.origin.as_deref() == Some(origin.as_str())
+                    {
+                        Some(verify)
+                    } else if self.settings.nondeterminism_strictness
+                        == NondeterminismStrictness::Error
                     {
                         return Err(RunError::Flaky(flaky_diagnostic()));
+                    } else {
+                        self.nd_flip();
+                        None
                     }
+                };
+                let verify = if let Some(verify) = deterministic_verify {
                     verify
                 } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
                     probe_anchor = anchor;
@@ -607,9 +614,7 @@ impl<'a> Engine<'a> {
                 };
 
                 let mut verify = verify;
-                if self.settings.nd_boost
-                    && self.nd_experiment() != crate::settings::NdExperiment::Off
-                {
+                if self.settings.nd_boost && self.nd_handling() {
                     let incumbent: Vec<ChoiceValue> =
                         verify.nodes.iter().map(|n| n.value()).collect();
                     if let Some((witness, lcb)) =
@@ -627,13 +632,13 @@ impl<'a> Engine<'a> {
 
                 let initial_spans = Spans::from(verify.spans.clone());
                 let shrunk = {
-                    let mode = self.nd_experiment();
+                    let gauntlet = self.nd_handling();
                     let probe = EngineShrinkProbe {
                         engine: &mut *self,
                         target_origin: origin.clone(),
                         verbosity,
                         output: output.clone(),
-                        mode,
+                        gauntlet,
                         ledger: HashMap::default(),
                         anchor: probe_anchor,
                     };
@@ -670,8 +675,7 @@ impl<'a> Engine<'a> {
             output.line("Skipping shrink: reused aligned database replay");
         }
 
-        let persist =
-            !self.nondeterministic || self.nd_experiment() != crate::settings::NdExperiment::Off;
+        let persist = !self.concurrent;
         if let (true, Some(db), Some(key)) = (persist, self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
@@ -683,7 +687,7 @@ impl<'a> Engine<'a> {
                     serialize_choices(&choices)
                 })
                 .collect();
-            if self.nd_experiment() != crate::settings::NdExperiment::Off {
+            if self.nd_handling() {
                 for origin in self.interesting.keys() {
                     for timeline in self.nd_origins.pool(origin) {
                         new_entries.insert(serialize_choices(timeline));
@@ -725,7 +729,7 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let nondeterministic = self.nondeterministic;
+        let nondeterministic = self.concurrent;
         let mut failures: Vec<Failure> = origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
@@ -741,7 +745,7 @@ impl<'a> Engine<'a> {
                 }
             })
             .collect();
-        if failures.is_empty() && self.nd_experiment() != crate::settings::NdExperiment::Off {
+        if failures.is_empty() && self.nd_handling() {
             for (origin, observations) in self.nd_origins.unconfirmed() {
                 failures.push(Failure {
                     origin: format!("[unconfirmed after {observations} observation(s)] {origin}"),
@@ -872,7 +876,7 @@ pub(crate) fn flaky_diagnostic() -> String {
 
 /// Notice emitted once, when the run first executes a test case that
 /// created a state machine with `max_concurrency > 1` and the run flips
-/// into nondeterministic mode (see [`Engine::nondeterministic`]).
+/// into nondeterministic mode (see [`Engine::concurrent`]).
 /// Informational rather than a warning: the concurrency was asked for
 /// explicitly, but the user should learn why their failure is reported
 /// unshrunk and without a reproduce blob.
@@ -887,6 +891,16 @@ pub(crate) fn concurrent_machine_notice() -> &'static str {
 /// failure this is not a failure: the smallest counterexample found so far is
 /// still reported. Returned as a string (rather than printed inline) so it can
 /// be asserted directly in tests. Mirrors Hypothesis's slow-shrink notice.
+/// Notice emitted once per run under
+/// [`NondeterminismStrictness::Warn`], when detection first switches the
+/// run into nondeterministic handling.
+pub(crate) fn nondeterminism_notice() -> &'static str {
+    "Nondeterministic test behavior detected: failures are now confirmed by \
+     repeated replay before being reported or shrunk. Set \
+     nondeterminism_strictness to quiet to silence this notice, or to error \
+     to abort instead."
+}
+
 pub(crate) fn slow_shrink_warning() -> String {
     format!(
         "WARNING: Shrinking has been running for more than {MAX_SHRINKING_SECONDS} seconds \
@@ -1087,17 +1101,23 @@ pub(crate) struct Engine<'a> {
     pub(crate) first_bug_at: Option<u64>,
     pub(crate) last_bug_at: Option<u64>,
     pub(crate) first_bug_time: Option<crate::sys::Instant>,
-    /// Sticky run-level nondeterminism flag, flipped by the first executed
-    /// test case that creates a state machine with `max_concurrency > 1`
-    /// (see [`crate::native::core::FamilyCore::concurrent_machine`]): the
-    /// test asked for real concurrency, so nothing that assumes
-    /// deterministic replay can be trusted. While set, the run skips
-    /// data-tree recording (and with it novel-prefix generation and the
-    /// choice-tree mismatch check), span mutation, targeting, the verify +
-    /// shrink pass (so generation stops at the first bug), database
-    /// persistence and reuse, and reproduce-blob emission — failures are
-    /// reported faithfully from the execution that discovered them.
-    pub(crate) nondeterministic: bool,
+    /// Sticky detection flag: the run observed nondeterministic test
+    /// behavior — a choice-tree mismatch, a verify status/origin flake, or
+    /// a concurrent state machine — or `Settings::nd_force` started it
+    /// flipped. While set, the run trusts no cached prediction: data-tree
+    /// recording, tree-served replays, novel-prefix generation, and
+    /// targeting are all off. Never cleared within a run.
+    pub(crate) nd_active: bool,
+    /// Sticky flag for the concurrency subset of `nd_active`, flipped by
+    /// the first executed test case that creates a state machine with
+    /// `max_concurrency > 1` (see
+    /// [`crate::native::core::FamilyCore::concurrent_machine`]). Clone
+    /// streams don't survive today's replay machinery (experiment 007), so
+    /// while set the run also skips span mutation, the shrink phase (so
+    /// generation stops at the first bug), database persistence, and
+    /// reproduce-blob emission — failures are reported faithfully from the
+    /// execution that discovered them.
+    pub(crate) concurrent: bool,
     /// Whether [`Self::cached_test_function`] may serve a recorded path from
     /// the choice tree instead of executing the body. Always true today;
     /// nondeterminism-mode replay resamples through this seam by turning it
@@ -1140,14 +1160,36 @@ impl<'a> Engine<'a> {
             first_bug_at: None,
             last_bug_at: None,
             first_bug_time: None,
-            nondeterministic: false,
-            serve_replays: settings.nd_experiment == crate::settings::NdExperiment::Off,
+            nd_active: settings.nd_force,
+            concurrent: false,
+            serve_replays: !settings.nd_force,
             nd_origins: OriginLifecycle::default(),
         })
     }
 
-    fn nd_experiment(&self) -> crate::settings::NdExperiment {
-        self.settings.nd_experiment
+    /// Whether the full nondeterministic pipeline — discovery confirmation,
+    /// the shrink gauntlet, pools, validated persistence, caveated
+    /// reporting — is driving this run. Concurrent-machine runs detect as
+    /// nondeterministic but keep the legacy blobless regime until clone
+    /// streams survive replay (experiment 007).
+    fn nd_handling(&self) -> bool {
+        self.nd_active && !self.concurrent
+    }
+
+    /// Switch the run into nondeterministic handling, per
+    /// [`crate::settings::NondeterminismStrictness`]. Idempotent; callers
+    /// abort instead of flipping under `Error`.
+    fn nd_flip(&mut self) {
+        if self.nd_active {
+            return;
+        }
+        self.nd_active = true;
+        self.serve_replays = false;
+        if self.settings.nondeterminism_strictness == NondeterminismStrictness::Warn
+            && self.settings.verbosity != Verbosity::Quiet
+        {
+            self.settings.output.line(nondeterminism_notice());
+        }
     }
 
     /// Experiment 005: the discovery-confirmation bar
@@ -1275,7 +1317,7 @@ impl<'a> Engine<'a> {
         verbosity: Verbosity,
         output: &crate::settings::Output,
     ) -> Result<(), RunError> {
-        if self.nd_experiment() == crate::settings::NdExperiment::Off {
+        if !self.nd_handling() {
             return Ok(());
         }
         loop {
@@ -1337,22 +1379,30 @@ impl<'a> Engine<'a> {
         &mut self,
         mut ntc: NativeTestCase,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        if self.nondeterministic {
+        if self.concurrent {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_stateful_step_count(self.settings.stateful_step_count);
-        family.set_reject_concurrent_machine(!self.nondeterministic);
+        family.set_reject_concurrent_machine(!self.concurrent);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
-        if !self.nondeterministic && family.concurrent_machine() {
-            self.nondeterministic = true;
+        if !self.concurrent && family.concurrent_machine() {
+            self.concurrent = true;
+            self.nd_active = true;
+            self.serve_replays = false;
             if self.settings.verbosity != Verbosity::Quiet {
                 self.settings.output.line(concurrent_machine_notice());
             }
         }
-        let mismatch = self.record_run(&run, elapsed);
+        let mut mismatch = self.record_run(&run, elapsed);
+        if mismatch.is_some()
+            && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
+        {
+            self.nd_flip();
+            mismatch = None;
+        }
         Ok((run, mismatch))
     }
 
@@ -1365,9 +1415,7 @@ impl<'a> Engine<'a> {
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
     fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
-        let mismatch = if self.nondeterministic
-            || self.nd_experiment() != crate::settings::NdExperiment::Off
-        {
+        let mismatch = if self.nd_active {
             None
         } else {
             crate::native::data_tree::record_tree_full(
@@ -1382,7 +1430,7 @@ impl<'a> Engine<'a> {
         };
         self.calls += 1;
         self.total_test_time += elapsed;
-        if run.nodes.is_empty() && run.status >= Status::Invalid && !self.nondeterministic {
+        if run.nodes.is_empty() && run.status >= Status::Invalid && !self.concurrent {
             self.test_is_trivial = true;
         }
         if run.status >= Status::Valid && !run.target_observations.is_empty() {
@@ -1403,10 +1451,10 @@ impl<'a> Engine<'a> {
                 }
                 self.last_bug_at = Some(self.calls);
                 let origin = run.origin.clone().unwrap_or_default();
-                if self.nd_experiment() == crate::settings::NdExperiment::Off {
-                    if !self.nondeterministic {
-                        self.persister.record(&origin, &run.nodes);
-                    }
+                if self.concurrent {
+                    update_interesting(&mut self.interesting, origin, run.nodes.clone());
+                } else if !self.nd_active {
+                    self.persister.record(&origin, &run.nodes);
                     update_interesting(&mut self.interesting, origin, run.nodes.clone());
                 } else if !self.interesting.contains_key(&origin) {
                     self.nd_origins.observe(&origin);
@@ -1528,13 +1576,13 @@ struct EngineShrinkProbe<'e, 'a> {
     target_origin: String,
     verbosity: Verbosity,
     output: Output,
-    /// Experiment 003 scaffolding: under [`NdExperiment::Gauntlet`] a
-    /// matching first run is not an accept — the candidate keeps executing
-    /// until its cumulative ledger evidence clears the anchor-derived
-    /// threshold or is proven below it. The ledger persists for the whole
-    /// shrink of one origin, so pass repetitions add power to retried
-    /// rejects instead of starting over.
-    mode: crate::settings::NdExperiment,
+    /// Under nondeterministic handling a matching first run is not an
+    /// accept — the candidate keeps executing until its cumulative ledger
+    /// evidence clears the anchor-derived threshold or is proven below it
+    /// ([`nd::gauntlet`]). The ledger persists for the whole shrink of one
+    /// origin, so pass repetitions add power to retried rejects instead of
+    /// starting over.
+    gauntlet: bool,
     ledger: HashMap<Vec<u8>, nd::Evidence>,
     anchor: f64,
 }
@@ -1573,7 +1621,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 }
             };
             let matched = self.matches(&run);
-            if self.mode != crate::settings::NdExperiment::Gauntlet {
+            if !self.gauntlet {
                 return Ok((matched, run.nodes, Spans::from(run.spans)));
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();

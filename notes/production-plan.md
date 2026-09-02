@@ -153,16 +153,16 @@ locked, `just check-coverage` green repo-wide.
 The largest semantic change: ND handling becomes detection-driven instead of
 settings-gated.
 
-- **Signals.** Two detectors, sharing the same plumbing: (1) kind-punning in
-  `resolve_choice` (today it puns silently) and (2) the structural comparison the design
-  names as the primary signal — draw counts and span events diverging between recording
-  and replay, since kind mismatch alone sees only a minority of divergence — plus a
-  verbatim watermark (how far the replay tracked the recording) so positional claims and
-  evidence weighting (phase 1) know their validity range. Recorded as position-tagged
-  events on `NativeTestCase` parallel to `span_events: Vec<(usize, SpanEvent)>`
-  (state.rs:1594), drained via the existing `NativeDataSource::take_*` pattern into
-  `RunResult`, and through `RealizedStream` for clone streams. Within-run evidence only
-  (decision 9): replay-vs-recorded divergence on a DB entry is staleness, not ND.
+- **Signals.** Mode entry needs no new detector: the choice-tree comparison in
+  `record_run` already surfaces both kind punning and structural divergence (replayed
+  runs carry realized kinds, so a pun contradicts the recorded tree), and outcome flips —
+  which never contradict the tree, since conclusions are overwritten — surface as verify
+  status/origin flakes. The finer-grained signal the design also names — a verbatim
+  watermark (how far a replay tracked the stored timeline) so positional claims and
+  evidence weighting (phase 1) know their validity range — has no consumer until the
+  phase-4 replay stack, so it is built there alongside divergence-weighted evidence.
+  Within-run evidence only (decision 9): replay-vs-recorded divergence on a DB entry is
+  staleness, not ND.
 - **Flip triggers.** Any of (design "Mode lifecycle"): a divergence event from the
   detectors above; a verify status/origin flake (today `RunError::Flaky` at
   test_runner.rs:579-583); a confirmation-replay flip; a final-replay flake (channel

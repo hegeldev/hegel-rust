@@ -1050,6 +1050,7 @@ fn shrink_verify_with_a_different_origin_is_flaky() {
         Settings::new()
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
@@ -1085,6 +1086,7 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
             .report_multiple_failures(false)
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
@@ -1270,6 +1272,7 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
         Settings::new()
             .database(Some(path.clone()))
             .phases([Phase::Reuse])
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
             .verbosity(Verbosity::Quiet),
         "k",
         |ds| {
@@ -1306,6 +1309,7 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
         Settings::new()
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
             .database(Some(path.clone()))
             .phases([Phase::Reuse, Phase::Generate])
             .test_cases(10)
@@ -1416,7 +1420,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
 /// Settings entering ND handling directly, for lifecycle tests.
 fn nd_settings() -> Settings {
     let mut settings = Settings::new().database(None).verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     settings
 }
 
@@ -1582,7 +1586,7 @@ fn nd_persists_only_validated_incumbents() {
     let mut settings = Settings::new()
         .database(Some(path.clone()))
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     with_engine(
         settings,
         Some("k"),
@@ -1673,7 +1677,7 @@ fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
                 target_origin: "Panic: bug".to_string(),
                 verbosity: Verbosity::Quiet,
                 output,
-                mode: crate::settings::NdExperiment::Gauntlet,
+                gauntlet: true,
                 ledger: HashMap::default(),
                 anchor: 0.99,
             };
@@ -1701,7 +1705,7 @@ fn nd_gauntlet_run_shrinks_a_deterministic_core_end_to_end() {
         .output(Output::callback(move |line| {
             sink.lock().unwrap().push(line.to_string());
         }));
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     settings.nd_boost = true;
     let result = reuse_run(settings, "k", |ds| {
         if rbool(ds).is_err() {
@@ -1725,7 +1729,7 @@ fn nd_gauntlet_run_holds_a_flaky_failure_end_to_end() {
         .database(None)
         .test_cases(20)
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
         if rbool(ds).is_err() {
             return TestCaseResult::Overrun;
@@ -1754,7 +1758,7 @@ fn nd_unconfirmed_failure_is_reported_with_a_caveat() {
         .database(None)
         .test_cases(10)
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
         if rbool(ds).is_err() {
             return TestCaseResult::Overrun;
@@ -1788,7 +1792,7 @@ fn nd_reuse_retries_a_stored_flaky_timeline_until_it_reproduces() {
         .database(Some(path.clone()))
         .phases([Phase::Reuse])
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
         if rbool(ds).is_err() {
             return TestCaseResult::Overrun;
@@ -1819,7 +1823,7 @@ fn nd_misaligned_trusted_reuse_confirms_at_shrink_and_persists_its_pool() {
     let mut settings = Settings::new()
         .database(Some(path.clone()))
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
         let n = execs.fetch_add(1, Ordering::SeqCst);
         if rbool(ds).is_err() {
@@ -1861,7 +1865,7 @@ fn nd_trusted_failure_that_stops_reproducing_is_still_reported() {
     let mut settings = Settings::new()
         .database(Some(path.clone()))
         .verbosity(Verbosity::Quiet);
-    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
         let first = match rbool(ds) {
             Ok(v) => v,
@@ -1884,4 +1888,241 @@ fn nd_trusted_failure_that_stops_reproducing_is_still_reported() {
         !result.failures[0].origin.contains("[unconfirmed"),
         "a database-trusted origin is never demoted to a caveat"
     );
+}
+
+/// Draws a boolean, fails on `true`, and permanently switches the follow-up
+/// draw's kind after the first failure, so the pre-shrink verification replay
+/// hits a kind mismatch — the schedule
+/// `shrink_verify_surfaces_generator_nondeterminism` pins the `Error` abort
+/// on.
+fn kind_switch_body(
+    seen_bug: &std::sync::atomic::AtomicBool,
+    ds: &dyn DataSource,
+) -> TestCaseResult {
+    use std::sync::atomic::Ordering;
+    let a = match rbool(ds) {
+        Ok(v) => v,
+        Err(()) => return TestCaseResult::Overrun,
+    };
+    if !a {
+        return TestCaseResult::Valid;
+    }
+    let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+        rint(ds, 0, 100).is_err()
+    } else {
+        rbool(ds).is_err()
+    };
+    if follow_up {
+        return TestCaseResult::Overrun;
+    }
+    boom("stable origin")
+}
+
+#[test]
+fn structure_flip_under_quiet_recovers_the_failure_without_a_notice() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| kind_switch_body(&seen_bug, ds),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: stable origin");
+    assert!(result.failures[0].reproduce_blob.is_some());
+    assert!(!result.nondeterministic);
+    assert!(
+        !lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("Nondeterministic test behavior detected")),
+        "quiet strictness prints no notice"
+    );
+}
+
+#[test]
+fn structure_flip_under_warn_prints_the_notice_once() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .nondeterminism_strictness(NondeterminismStrictness::Warn)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| kind_switch_body(&seen_bug, ds),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: stable origin");
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Nondeterministic test behavior detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
+}
+
+#[test]
+fn reuse_kind_flip_under_quiet_completes_without_failures() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+
+    let flip = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let r = if flip.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, i64::MIN, i64::MAX).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(!result.nondeterministic);
+}
+
+#[test]
+fn outcome_flake_under_quiet_confirms_and_shrinks_the_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    // Valid at exec 0 (generation) and exec 2 (the pre-shrink verification
+    // replay, whose non-failure triggers the flip); failing everywhere else,
+    // so confirmation accepts and the shrink runs the gauntlet.
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let n = execs.fetch_add(1, Ordering::SeqCst);
+            if n == 0 || n == 2 {
+                TestCaseResult::Valid
+            } else {
+                boom("outcome")
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: outcome");
+    assert!(result.failures[0].reproduce_blob.is_some());
+    assert!(!result.nondeterministic);
+}
+
+#[test]
+fn outcome_flake_under_quiet_that_never_reproduces_reports_a_caveat() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 1 {
+                boom("outcome")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].origin,
+        "[unconfirmed after 1 observation(s)] Panic: outcome"
+    );
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(!result.nondeterministic);
+}
+
+#[test]
+fn a_double_flip_in_one_verify_prints_the_warn_notice_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let execs = AtomicUsize::new(0);
+    // Exec 0 draws over [0, 100] and fails; every later exec widens the range
+    // to [0, 101] and passes. The pre-shrink verification replay then flips
+    // twice — once for the constraint mismatch against the recorded tree,
+    // once for the vanished failure — and the second flip must be a no-op.
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .nondeterminism_strictness(NondeterminismStrictness::Warn)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            let n = execs.fetch_add(1, Ordering::SeqCst);
+            let hi = if n == 0 { 100 } else { 101 };
+            if rint(ds, 0, hi).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if n == 0 {
+                boom("shift")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        result.failures[0].origin,
+        "[unconfirmed after 1 observation(s)] Panic: shift"
+    );
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Nondeterministic test behavior detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
 }

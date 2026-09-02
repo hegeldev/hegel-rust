@@ -714,7 +714,10 @@ mod stateful {
         }
     }
 
-    #[hegel::test(database = None)]
+    #[hegel::test(
+        database = None,
+        nondeterminism_strictness = hegel::NondeterminismStrictness::Error
+    )]
     #[should_panic(expected = "Flaky test detected")]
     fn test_flaky_raises_flaky(tc: TestCase) {
         hegel::stateful::run(FlakyStateMachine, tc);

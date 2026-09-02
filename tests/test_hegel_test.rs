@@ -532,7 +532,7 @@ mod flakiness {
 
     use super::common::utils::expect_panic;
     use hegel::generators as gs;
-    use hegel::{Hegel, Settings, TestCase, Verbosity};
+    use hegel::{Hegel, NondeterminismStrictness, Settings, TestCase, Verbosity};
 
     #[test]
     fn test_fails_only_once_is_flaky() {
@@ -545,7 +545,11 @@ mod flakiness {
                         panic!("Nope");
                     }
                 })
-                .settings(Settings::new().database(None))
+                .settings(
+                    Settings::new()
+                        .database(None)
+                        .nondeterminism_strictness(NondeterminismStrictness::Error),
+                )
                 .run();
             },
             "Flaky test detected",
@@ -564,7 +568,12 @@ mod flakiness {
                     seen.lock().unwrap().insert(s);
                     panic!("AssertionError");
                 })
-                .settings(Settings::new().verbosity(Verbosity::Quiet).database(None))
+                .settings(
+                    Settings::new()
+                        .verbosity(Verbosity::Quiet)
+                        .database(None)
+                        .nondeterminism_strictness(NondeterminismStrictness::Error),
+                )
                 .run();
             },
             "Flaky test detected",
@@ -575,7 +584,7 @@ mod flakiness {
 mod nocover_baseexception {
     use super::common::utils::expect_panic;
     use hegel::generators as gs;
-    use hegel::{Hegel, Settings};
+    use hegel::{Hegel, NondeterminismStrictness, Settings};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -625,7 +634,12 @@ mod nocover_baseexception {
                         panic!("baseexception_no_rerun_payload");
                     }
                 })
-                .settings(Settings::new().test_cases(100).database(None))
+                .settings(
+                    Settings::new()
+                        .test_cases(100)
+                        .database(None)
+                        .nondeterminism_strictness(NondeterminismStrictness::Error),
+                )
                 .run();
             },
             "Flaky test detected",
@@ -648,7 +662,12 @@ mod nocover_baseexception {
                         tc.draw(gs::integers::<i64>())
                     }));
                 })
-                .settings(Settings::new().test_cases(100).database(None))
+                .settings(
+                    Settings::new()
+                        .test_cases(100)
+                        .database(None)
+                        .nondeterminism_strictness(NondeterminismStrictness::Error),
+                )
                 .run();
             },
             "Flaky test detected",

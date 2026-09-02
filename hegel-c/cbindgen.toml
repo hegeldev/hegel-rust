@@ -131,6 +131,7 @@ include = [
     "hegel_mode_t",
     "hegel_backend_t",
     "hegel_verbosity_t",
+    "hegel_nondeterminism_strictness_t",
     "hegel_status_t",
 ]
 

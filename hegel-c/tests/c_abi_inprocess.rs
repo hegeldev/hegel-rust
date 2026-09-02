@@ -161,6 +161,14 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_c::hegel_settings_set_nondeterminism_strictness(
+                ctx,
+                ptr::null_mut(),
+                hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_WARN as u32
+            ),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_c::hegel_settings_set_seed(ctx, ptr::null_mut(), 0, false),
             HEGEL_E_INVALID_HANDLE
         );
@@ -689,6 +697,11 @@ fn out_of_range_enum_values_are_invalid_arguments() {
         );
         assert!(last_error(ctx).contains("unknown verbosity"));
         assert_eq!(
+            hegel_c::hegel_settings_set_nondeterminism_strictness(ctx, s, 999),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("unknown strictness"));
+        assert_eq!(
             hegel_c::hegel_settings_set_stateful_step_count(ctx, s, 0),
             HEGEL_E_INVALID_ARG
         );
@@ -697,6 +710,18 @@ fn out_of_range_enum_values_are_invalid_arguments() {
             hegel_c::hegel_settings_set_stateful_step_count(ctx, s, -3),
             HEGEL_E_INVALID_ARG
         );
+
+        for strictness in [
+            hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_QUIET,
+            hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_WARN,
+            hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_ERROR,
+        ] {
+            ok(hegel_c::hegel_settings_set_nondeterminism_strictness(
+                ctx,
+                s,
+                strictness as u32,
+            ));
+        }
 
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));

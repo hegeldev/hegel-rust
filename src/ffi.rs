@@ -14,7 +14,9 @@
 //! invalid-argument unwind). Keeping that split means the unsafe boundary stays
 //! small and the control-flow policy stays with the test lifecycle.
 
-use crate::runner::{Backend, Database, HealthCheck, Mode, Phase, Settings, Verbosity};
+use crate::runner::{
+    Backend, Database, HealthCheck, Mode, NondeterminismStrictness, Phase, Settings, Verbosity,
+};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString, c_void};
@@ -156,6 +158,11 @@ impl SettingsHandle {
                     ctx,
                     raw,
                     map_verbosity(settings.verbosity),
+                ));
+                require_ok(hegel_c::hegel_settings_set_nondeterminism_strictness(
+                    ctx,
+                    raw,
+                    map_nondeterminism_strictness(settings.nondeterminism_strictness),
                 ));
                 require_ok(match settings.seed {
                     Some(seed) => hegel_c::hegel_settings_set_seed(ctx, raw, seed, true),
@@ -1520,6 +1527,15 @@ fn map_mode(mode: Mode) -> u32 {
     match mode {
         Mode::TestRun => hegel_c::hegel_mode_t::HEGEL_MODE_TEST_RUN as u32,
         Mode::SingleTestCase => hegel_c::hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32,
+    }
+}
+
+fn map_nondeterminism_strictness(s: NondeterminismStrictness) -> u32 {
+    use hegel_c::hegel_nondeterminism_strictness_t as c;
+    match s {
+        NondeterminismStrictness::Quiet => c::HEGEL_NONDETERMINISM_QUIET as u32,
+        NondeterminismStrictness::Warn => c::HEGEL_NONDETERMINISM_WARN as u32,
+        NondeterminismStrictness::Error => c::HEGEL_NONDETERMINISM_ERROR as u32,
     }
 }
 

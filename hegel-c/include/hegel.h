@@ -515,6 +515,28 @@ typedef enum {
 } hegel_verbosity_t;
 
 /*
+ How a run reacts when it detects nondeterministic test behavior — a test
+ whose structure or outcome changes when the same choices are replayed.
+ Set via `hegel_settings_set_nondeterminism_strictness`.
+ */
+typedef enum {
+    /*
+     Switch to nondeterministic handling silently: failures are confirmed
+     by repeated replay before they are reported or shrunk. The default.
+     */
+    HEGEL_NONDETERMINISM_QUIET = 0,
+    /*
+     Switch as under quiet, printing a one-line notice once per run.
+     */
+    HEGEL_NONDETERMINISM_WARN = 1,
+    /*
+     Abort the run with a flaky-test / nondeterminism error, for suites
+     that use determinism as a lint.
+     */
+    HEGEL_NONDETERMINISM_ERROR = 2,
+} hegel_nondeterminism_strictness_t;
+
+/*
  Outcome of a single test case. Passed to `hegel_mark_complete`.
  */
 typedef enum {
@@ -952,6 +974,17 @@ hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
  Returns `HEGEL_OK`.
  */
 hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx, hegel_settings_t *s, uint32_t v);
+
+/*
+ Parameters:
+ `strictness`: How the run reacts when it detects nondeterministic test
+   behavior. See `hegel_nondeterminism_strictness_t`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_nondeterminism_strictness(hegel_context_t *ctx,
+                                                            hegel_settings_t *s,
+                                                            uint32_t strictness);
 
 /*
  Parameters:

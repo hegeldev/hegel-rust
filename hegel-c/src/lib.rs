@@ -181,144 +181,6 @@ pub mod __bench {
             realized: nodes.iter().map(|n| n.value()).collect(),
         })
     }
-
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub enum NdShrinkMode {
-        Baseline,
-        Resample,
-        Gauntlet,
-    }
-
-    /// Experiment 005 (`notes/experiments/005-lifecycle`): like
-    /// [`nd_shrink_experiment`] but with a directory database, so a second
-    /// run against the same path exercises the Reuse phase. Returns
-    /// `(origin, decoded choices)` per reported failure — caveated failures
-    /// carry the `[unconfirmed ...]` origin prefix and no choices.
-    pub fn nd_lifecycle_experiment(
-        mode: NdShrinkMode,
-        seed: u64,
-        test_cases: u64,
-        db_path: &str,
-        db_key: &str,
-        debug: bool,
-        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Vec<(alloc::string::String, Option<Vec<i64>>)>, alloc::string::String> {
-        let mut settings = crate::settings::Settings::new().test_cases(test_cases);
-        settings.database = crate::settings::Database::Path(db_path.into());
-        settings.derandomize = false;
-        settings.seed = Some(seed);
-        settings.verbosity = if debug {
-            crate::settings::Verbosity::Debug
-        } else {
-            crate::settings::Verbosity::Quiet
-        };
-        settings.nd_experiment = match mode {
-            NdShrinkMode::Baseline => crate::settings::NdExperiment::Off,
-            NdShrinkMode::Resample => crate::settings::NdExperiment::Resample,
-            NdShrinkMode::Gauntlet => crate::settings::NdExperiment::Gauntlet,
-        };
-        let exchange = crate::exchange::CaseExchange::new();
-        let fut = crate::embed::run_native_async(&settings, Some(db_key), &exchange);
-        match crate::exchange::drive(&exchange, fut, run_case) {
-            Ok(result) => Ok(result
-                .failures
-                .iter()
-                .map(|f| {
-                    let decoded = f
-                        .reproduce_blob
-                        .as_deref()
-                        .and_then(crate::native::blob::decode_failure)
-                        .and_then(|choices| {
-                            choices
-                                .iter()
-                                .map(|c| match c {
-                                    crate::native::core::ChoiceValue::Integer(b) => b.to_i64(),
-                                    _ => None,
-                                })
-                                .collect()
-                        });
-                    (f.origin.clone(), decoded)
-                })
-                .collect()),
-            Err(e) => Err(alloc::format!("{e}")),
-        }
-    }
-
-    /// Experiment 006 (`notes/experiments/006-graft-boost`): like
-    /// [`nd_shrink_experiment`] with the boost phase toggled.
-    pub fn nd_boost_experiment(
-        mode: NdShrinkMode,
-        boost: bool,
-        seed: u64,
-        test_cases: u64,
-        debug: bool,
-        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
-        nd_shrink_settings_experiment(mode, boost, seed, test_cases, debug, run_case)
-    }
-
-    /// Experiment 003 (`notes/experiments/003-nd-shrink`): one full explore
-    /// run (generation + shrink) of the caller's test body under the given
-    /// nondeterminism mode. Returns each reported failure's choice sequence
-    /// decoded to integers (`None` for undecodable or non-integer choices),
-    /// or the run-level error message (baseline aborts on flaky bodies).
-    pub fn nd_shrink_experiment(
-        mode: NdShrinkMode,
-        seed: u64,
-        test_cases: u64,
-        debug: bool,
-        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
-        nd_shrink_settings_experiment(mode, false, seed, test_cases, debug, run_case)
-    }
-
-    fn nd_shrink_settings_experiment(
-        mode: NdShrinkMode,
-        boost: bool,
-        seed: u64,
-        test_cases: u64,
-        debug: bool,
-        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
-    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
-        let mut settings = crate::settings::Settings::new().test_cases(test_cases);
-        settings.nd_boost = boost;
-        settings.database = crate::settings::Database::Disabled;
-        settings.derandomize = false;
-        settings.seed = Some(seed);
-        settings.verbosity = if debug {
-            crate::settings::Verbosity::Debug
-        } else {
-            crate::settings::Verbosity::Quiet
-        };
-        settings.nd_experiment = match mode {
-            NdShrinkMode::Baseline => crate::settings::NdExperiment::Off,
-            NdShrinkMode::Resample => crate::settings::NdExperiment::Resample,
-            NdShrinkMode::Gauntlet => crate::settings::NdExperiment::Gauntlet,
-        };
-        let exchange = crate::exchange::CaseExchange::new();
-        let fut = crate::embed::run_native_async(&settings, None, &exchange);
-        match crate::exchange::drive(&exchange, fut, run_case) {
-            Ok(result) => Ok(result
-                .failures
-                .iter()
-                .map(|f| {
-                    f.reproduce_blob
-                        .as_deref()
-                        .and_then(crate::native::blob::decode_failure)
-                        .and_then(|choices| {
-                            choices
-                                .iter()
-                                .map(|c| match c {
-                                    crate::native::core::ChoiceValue::Integer(b) => b.to_i64(),
-                                    _ => None,
-                                })
-                                .collect()
-                        })
-                })
-                .collect()),
-            Err(e) => Err(alloc::format!("{e}")),
-        }
-    }
 }
 
 use crate::backend::{
@@ -329,7 +191,9 @@ use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
-use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
+use crate::settings::{
+    Backend, HealthCheck, Mode, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
+};
 
 /// Result of a libhegel call. See "Calling convention" in the header
 /// preamble.
@@ -483,6 +347,23 @@ pub enum hegel_verbosity_t {
     HEGEL_VERBOSITY_VERBOSE = 2,
     /// As verbose, plus shrinker trace output.
     HEGEL_VERBOSITY_DEBUG = 3,
+}
+
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+/// Set via `hegel_settings_set_nondeterminism_strictness`.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_nondeterminism_strictness_t {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    HEGEL_NONDETERMINISM_QUIET = 0,
+    /// Switch as under quiet, printing a one-line notice once per run.
+    HEGEL_NONDETERMINISM_WARN = 1,
+    /// Abort the run with a flaky-test / nondeterminism error, for suites
+    /// that use determinism as a lint.
+    HEGEL_NONDETERMINISM_ERROR = 2,
 }
 
 /// A phase of the property-test loop, used as a bit flag.
@@ -1201,6 +1082,42 @@ pub unsafe extern "C" fn hegel_settings_set_verbosity(
         }
     };
     handle.inner = handle.inner.clone().verbosity(verbosity);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `strictness`: How the run reacts when it detects nondeterministic test
+///   behavior. See `hegel_nondeterminism_strictness_t`.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_nondeterminism_strictness(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    strictness: u32,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle =
+        match unsafe { settings_mut(ctx, s, "hegel_settings_set_nondeterminism_strictness") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
+    use hegel_nondeterminism_strictness_t as c;
+    let strictness = match strictness {
+        x if x == c::HEGEL_NONDETERMINISM_QUIET as u32 => NondeterminismStrictness::Quiet,
+        x if x == c::HEGEL_NONDETERMINISM_WARN as u32 => NondeterminismStrictness::Warn,
+        x if x == c::HEGEL_NONDETERMINISM_ERROR as u32 => NondeterminismStrictness::Error,
+        _ => {
+            set_last_error(
+                ctx,
+                &format!(
+                    "hegel_settings_set_nondeterminism_strictness: unknown strictness {strictness}"
+                ),
+            );
+            return HEGEL_E_INVALID_ARG;
+        }
+    };
+    handle.inner = handle.inner.clone().nondeterminism_strictness(strictness);
     HEGEL_OK
 }
 
