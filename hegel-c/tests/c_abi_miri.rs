@@ -16,14 +16,17 @@ mod common;
 use common::ok;
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
-    HegelContext, HegelRun, HegelRunResult, HegelSettings, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob, hegel_generate_integer,
-    hegel_mark_complete, hegel_next_test_case, hegel_run_free, hegel_run_result,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
-    hegel_settings_set_test_cases, hegel_settings_set_verbosity, hegel_start_span, hegel_status_t,
-    hegel_stop_span, hegel_test_case_clone, hegel_test_case_free, hegel_verbosity_t,
+    HegelCollection, HegelContext, HegelPool, HegelRun, HegelRunResult, HegelSettings,
+    HegelStateMachine, HegelTestCase, hegel_collection_free, hegel_collection_more,
+    hegel_context_free, hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob,
+    hegel_generate_integer, hegel_mark_complete, hegel_new_collection, hegel_new_pool,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free, hegel_run_free,
+    hegel_run_result, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
+    hegel_settings_set_test_cases, hegel_settings_set_verbosity, hegel_start_span,
+    hegel_state_machine_free, hegel_status_t, hegel_stop_span, hegel_test_case_clone,
+    hegel_test_case_free, hegel_verbosity_t,
 };
 use std::ffi::{CString, c_void};
 use std::ptr;
@@ -218,6 +221,62 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
         ok(hegel_test_case_free(ctx, root));
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// Collection, pool, and state-machine handles are each created and used
+/// through a live test case, then freed *after* the test case, run, and
+/// settings are gone, in an order unrelated to creation. Run under Miri this
+/// proves the object handles own self-contained state — no use-after-free
+/// when they outlive everything they were created from, no double-free, no
+/// leaks (the in-process twin of this test can't see any of that).
+#[test]
+fn object_handles_outlive_the_run_and_free_in_any_order() {
+    unsafe {
+        let (ctx, s, run, tc) = one_case_run();
+
+        let mut collection: *mut HegelCollection = ptr::null_mut();
+        ok(hegel_new_collection(ctx, tc, 0, 3, &mut collection));
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        ok(hegel_new_pool(ctx, tc, &mut pool));
+        let rule = CString::new("only").unwrap();
+        let rules = [rule.as_ptr()];
+        let rule_groups: [i64; 1] = [0];
+        let mut machine: *mut HegelStateMachine = ptr::null_mut();
+        let mut out_concurrency = 0i64;
+        ok(hegel_new_state_machine(
+            ctx,
+            tc,
+            rules.as_ptr(),
+            rule_groups.as_ptr(),
+            1,
+            ptr::null(),
+            0,
+            1,
+            1,
+            &mut machine,
+            &mut out_concurrency,
+        ));
+
+        let mut var_id = 0i64;
+        ok(hegel_pool_add(ctx, tc, pool, &mut var_id));
+        let mut more = false;
+        ok(hegel_collection_more(ctx, tc, collection, &mut more));
+
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+
+        ok(hegel_state_machine_free(ctx, machine));
+        ok(hegel_collection_free(ctx, collection));
+        ok(hegel_pool_free(ctx, pool));
         ok(hegel_context_free(ctx));
     }
 }

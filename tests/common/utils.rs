@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::panic::{UnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hegel::generators::Generator;
@@ -137,7 +138,7 @@ where
             .database(None)
             .suppress_health_check(checks.iter().cloned());
         Hegel::new(move |tc| {
-            let value = tc.draw(&self.generator);
+            let value = tc.draw_silent(&self.generator);
             assert!(
                 (self.predicate)(&value),
                 "Found value that does not match predicate"
@@ -189,6 +190,63 @@ where
     pub fn run(self) {
         self.inner
             .run_with_health_checks_suppressed(&[HealthCheck::TooSlow, HealthCheck::FilterTooMuch]);
+    }
+}
+
+/// Stats from one full seeded run of a failing property: how many times the
+/// test body executed across all phases, the call index at which the failure
+/// was first found, and the debug representation the body reported on its
+/// last (minimal) failure.
+pub struct FailingRunStats {
+    pub total_calls: u64,
+    pub calls_at_first_failure: u64,
+    pub minimal_repr: String,
+}
+
+impl FailingRunStats {
+    /// Test-body executions after the failure was first found: the shrink
+    /// phase plus the final verification replays.
+    pub fn post_discovery_calls(&self) -> u64 {
+        self.total_calls - self.calls_at_first_failure
+    }
+}
+
+/// Run a failing property to completion with a fixed seed and return its
+/// [`FailingRunStats`]. `body` draws from the test case and returns
+/// `Some(debug repr)` when the drawn value hits the failure condition.
+pub fn measure_failing_run<F>(seed: u64, test_cases: u64, body: F) -> FailingRunStats
+where
+    F: Fn(&TestCase) -> Option<String> + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicU64::new(0));
+    let first_failure = Arc::new(AtomicU64::new(0));
+    let minimal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let calls_c = Arc::clone(&calls);
+    let first_c = Arc::clone(&first_failure);
+    let minimal_c = Arc::clone(&minimal);
+    let result = catch_unwind(AssertUnwindSafe(move || {
+        Hegel::new(move |tc| {
+            let n = calls_c.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(repr) = body(&tc) {
+                let _ = first_c.compare_exchange(0, n, Ordering::SeqCst, Ordering::SeqCst);
+                *minimal_c.lock().unwrap() = Some(repr);
+                panic!("HEGEL_MEASURE_FAILING_RUN");
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(test_cases)
+                .database(None)
+                .seed(Some(seed)),
+        )
+        .run();
+    }));
+    assert!(result.is_err(), "expected the property to fail");
+    let minimal_repr = minimal.lock().unwrap().clone().unwrap();
+    FailingRunStats {
+        total_calls: calls.load(Ordering::SeqCst),
+        calls_at_first_failure: first_failure.load(Ordering::SeqCst),
+        minimal_repr,
     }
 }
 
@@ -264,7 +322,7 @@ where
 
         let hegel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(move |tc| {
-                let value = tc.draw(&self.generator);
+                let value = tc.draw_silent(&self.generator);
                 if (self.condition)(&value) {
                     *found_clone.lock().unwrap() = Some(value);
                     panic!("HEGEL_FOUND");
@@ -348,9 +406,12 @@ where
 
     pub fn run(self) -> T {
         let generator = self.generator;
-        MinimalWith::new(move |tc: &TestCase| tc.draw(&generator), self.condition)
-            .test_cases(self.test_cases)
-            .run()
+        MinimalWith::new(
+            move |tc: &TestCase| tc.draw_silent(&generator),
+            self.condition,
+        )
+        .test_cases(self.test_cases)
+        .run()
     }
 }
 
@@ -497,7 +558,7 @@ where
     pub fn run(self) {
         let condition = self.condition;
         Hegel::new(move |tc| {
-            let value = tc.draw(&self.generator);
+            let value = tc.draw_silent(&self.generator);
             assert!(
                 !condition(&value),
                 "Found value that does not match predicate"
@@ -511,4 +572,49 @@ where
         )
         .run();
     }
+}
+
+/// Run a failing single-draw property over `generator` and return the final
+/// replay's captured draw/note lines, asserting a `let draw_1 = …;` line was
+/// printed.
+#[allow(dead_code)]
+pub fn printed_draw_lines<T, G>(generator: G) -> Vec<String>
+where
+    G: hegel::PrintableGenerator<T> + 'static,
+    T: 'static,
+{
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = buf.clone();
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        hegel::with_output_override(sink, || {
+            Hegel::new(move |tc| {
+                tc.draw(&generator);
+                panic!("printed_draw_lines probe");
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(5)
+                    .database(None)
+                    .derandomize(true),
+            )
+            .run();
+        });
+    }));
+    assert!(result.is_err(), "expected the probe property to fail");
+    let mut lines = buf.lock().unwrap().clone();
+    if let Some(pos) = lines
+        .iter()
+        .position(|l| l.starts_with("thread '") && l.contains("panicked at"))
+    {
+        lines.truncate(pos);
+    }
+    assert!(
+        lines.iter().any(|l| l.starts_with("let draw_1 = ")),
+        "expected a printed draw line in {lines:?}"
+    );
+    lines
 }

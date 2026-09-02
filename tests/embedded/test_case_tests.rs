@@ -46,9 +46,9 @@ fn a_clone_can_draw_from_another_thread() {
 #[test]
 fn repeatable_display_name_skips_a_taken_name() {
     let (_run, tc) = emitting_test_case();
-    tc.record_named_draw(&false, "x_1", false);
-    tc.record_named_draw(&false, "x", true);
-    tc.record_named_draw(&false, "x", true);
+    tc.allocate_display_name("x_1", false);
+    tc.allocate_display_name("x", true);
+    tc.allocate_display_name("x", true);
 
     let mut names: Vec<String> = tc
         .with_draw_state(|draw_state| draw_state.allocated_display_names.iter().cloned().collect());

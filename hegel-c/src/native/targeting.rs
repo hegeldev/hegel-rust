@@ -1,50 +1,63 @@
-use std::collections::{HashMap, HashSet};
+use crate::backend::RunError;
+use crate::control::hegel_internal_unwrap;
+use crate::native::{HashMap, HashSet};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceKind, ChoiceNode, ChoiceValue, NativeTestCase, Status,
+    BUFFER_SIZE, ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status,
 };
 use crate::native::shrinker::search::FindInteger;
 use crate::native::test_runner::{Engine, RunResult};
 
+/// The best score observed for one label, together with the choice
+/// sequence that produced it. Keeping the pair in one entry means the
+/// score and its choices can never fall out of sync.
+struct BestTarget {
+    score: f64,
+    choices: Vec<ChoiceValue>,
+}
+
 /// Per-label best score and the choice sequence that produced it.
 pub(crate) struct TargetingState {
-    best_observed_targets: HashMap<String, f64>,
-    best_choices_for_target: HashMap<String, Vec<ChoiceValue>>,
+    best_targets: HashMap<String, BestTarget>,
 }
 
 impl TargetingState {
     pub fn new() -> Self {
         Self {
-            best_observed_targets: HashMap::new(),
-            best_choices_for_target: HashMap::new(),
+            best_targets: HashMap::default(),
         }
     }
 
     /// Record the observations from a Valid run. The first observation for
-    /// each label always populates both maps; subsequent observations only
-    /// overwrite when the score strictly improves. The two maps therefore
-    /// share the same key set (relied on by [`hill_climb`]).
+    /// each label always populates the map; subsequent observations only
+    /// overwrite when the score strictly improves.
     pub fn record(&mut self, choices: &[ChoiceValue], observations: &HashMap<String, f64>) {
         for (label, &score) in observations {
-            let should_record = match self.best_observed_targets.get(label) {
+            let should_record = match self.best_targets.get(label) {
                 None => true,
-                Some(&best) => score > best,
+                Some(best) => score > best.score,
             };
             if should_record {
-                self.best_observed_targets.insert(label.clone(), score);
-                self.best_choices_for_target
-                    .insert(label.clone(), choices.to_vec());
+                self.best_targets.insert(
+                    label.clone(),
+                    BestTarget {
+                        score,
+                        choices: choices.to_vec(),
+                    },
+                );
             }
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.best_observed_targets.is_empty()
+        self.best_targets.is_empty()
     }
 
     #[cfg(test)]
     pub(crate) fn best_score(&self, label: &str) -> Option<f64> {
-        self.best_observed_targets.get(label).copied()
+        self.best_targets.get(label).map(|best| best.score)
     }
 }
 
@@ -112,63 +125,60 @@ impl Optimiser<'_, '_> {
     /// extra values from a fresh RNG instead of overrunning the prefix.
     /// Mirrors Hypothesis's `cached_test_function(choices, extend="full")`
     /// in `optimiser.py::attempt_replace`.
-    async fn run_trial(&mut self, choices: &[ChoiceValue]) -> Option<RunResult> {
+    async fn run_trial(&mut self, choices: &[ChoiceValue]) -> Result<Option<RunResult>, RunError> {
         if self.budget_exhausted() {
-            return None;
+            return Ok(None);
         }
-        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE);
-        let (run, _mismatch) = self.engine.test_function(ntc).await;
-        Some(run)
+        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE)?;
+        let (run, _mismatch) = self.engine.test_function(ntc).await?;
+        Ok(Some(run))
     }
 
     /// Hill-climb every target until no further improvements are found or
     /// the budget is exhausted. Mirrors `engine.py::optimise_targets`.
-    pub(crate) async fn optimise_targets(&mut self) {
-        let mut targets: Vec<String> = self
-            .engine
-            .targeting
-            .best_observed_targets
-            .keys()
-            .cloned()
-            .collect();
+    pub(crate) async fn optimise_targets(&mut self) -> Result<(), RunError> {
+        let mut targets: Vec<String> = self.engine.targeting.best_targets.keys().cloned().collect();
         targets.sort();
         let mut max_improvements: usize = 10;
         loop {
             let prev_calls = self.engine.calls;
             let mut any_improvements = false;
             for target in &targets {
-                let imps = self.hill_climb(target, max_improvements).await;
+                let imps = self.hill_climb(target, max_improvements).await?;
                 if imps > 0 {
                     any_improvements = true;
                 }
             }
             max_improvements = max_improvements.saturating_mul(2);
             if !any_improvements || prev_calls == self.engine.calls {
-                return;
+                return Ok(());
             }
         }
     }
 
-    /// Walk the integer choices in `best_choices_for_target[target]` from
-    /// the end backwards, hill-climbing each one in both directions.
+    /// Walk the integer choices in `target`'s best-known choice sequence
+    /// from the end backwards, hill-climbing each one in both directions.
     /// Mirrors `Optimiser._optimise_target`.
-    async fn hill_climb(&mut self, target: &str, max_improvements: usize) -> usize {
-        let start_choices = self
-            .engine
-            .targeting
-            .best_choices_for_target
-            .get(target)
-            .cloned()
-            .expect("best_choices_for_target out of sync with best_observed_targets");
-        let trial = match self.run_trial(&start_choices).await {
+    async fn hill_climb(
+        &mut self,
+        target: &str,
+        max_improvements: usize,
+    ) -> Result<usize, RunError> {
+        let recorded = self.engine.targeting.best_targets.get(target);
+        let start_choices = hegel_internal_unwrap!(
+            recorded,
+            "hill_climb target {target:?} has no recorded best choices"
+        )
+        .choices
+        .clone();
+        let trial = match self.run_trial(&start_choices).await? {
             Some(t) => t,
-            None => return 0,
+            None => return Ok(0),
         };
         if trial.status < Status::Valid {
-            return 0;
+            return Ok(0);
         }
-        let mut current_choices: Vec<ChoiceValue> =
-            trial.nodes.iter().map(|n| n.value.clone()).collect();
+        let mut current_choices: Vec<ChoiceValue> = trial.nodes.iter().map(|n| n.value()).collect();
         let mut current_nodes = trial.nodes;
         let mut current_score = *trial
             .target_observations
@@ -176,7 +186,7 @@ impl Optimiser<'_, '_> {
             .unwrap_or(&f64::NEG_INFINITY);
         let mut improvements: usize = 0;
 
-        let mut nodes_examined: HashSet<usize> = HashSet::new();
+        let mut nodes_examined: HashSet<usize> = HashSet::default();
         let mut i: isize = current_nodes.len() as isize - 1;
         let mut prev_len = current_nodes.len();
         while i >= 0 && improvements <= max_improvements {
@@ -191,7 +201,7 @@ impl Optimiser<'_, '_> {
                 continue;
             }
             let node = &current_nodes[idx];
-            if !node.was_forced && is_climbable(&node.value, node.kind.as_ref()) {
+            if !node.was_forced && is_climbable(&node.data) {
                 let len_before = current_nodes.len();
                 let mut search = FindInteger::new();
                 while let Some(k) = search.probe() {
@@ -205,7 +215,7 @@ impl Optimiser<'_, '_> {
                             idx,
                             k as i128,
                         )
-                        .await;
+                        .await?;
                     search.record(ok);
                 }
                 if idx < current_nodes.len() && current_nodes.len() == len_before {
@@ -221,14 +231,14 @@ impl Optimiser<'_, '_> {
                                 idx,
                                 -(k as i128),
                             )
-                            .await;
+                            .await?;
                         search.record(ok);
                     }
                 }
             }
             i -= 1;
         }
-        improvements
+        Ok(improvements)
     }
 
     /// Replace `current_choices[idx]` by stepping it `delta` units. Score
@@ -238,7 +248,6 @@ impl Optimiser<'_, '_> {
     /// as an improvement (lateral moves are the principal mechanism for
     /// escaping local maxima, but they shouldn't keep the climber spinning
     /// forever). Returns `true` iff the trial was committed.
-    #[allow(clippy::too_many_arguments)]
     async fn try_replace(
         &mut self,
         target: &str,
@@ -248,54 +257,54 @@ impl Optimiser<'_, '_> {
         improvements: &mut usize,
         idx: usize,
         delta: i128,
-    ) -> bool {
+    ) -> Result<bool, RunError> {
         if delta.saturating_abs() > (1 << 20) {
-            return false;
+            return Ok(false);
         }
         let new_val = match step_choice(&current_nodes[idx], delta) {
             Some(v) => v,
-            None => return false,
+            None => return Ok(false),
         };
         let mut trial_choices = current_choices.clone();
         trial_choices[idx] = new_val;
-        let trial = match self.run_trial(&trial_choices).await {
+        let trial = match self.run_trial(&trial_choices).await? {
             Some(t) => t,
-            None => return false,
+            None => return Ok(false),
         };
         if trial.status < Status::Valid {
-            return false;
+            return Ok(false);
         }
         let new_score = *trial
             .target_observations
             .get(target)
             .unwrap_or(&f64::NEG_INFINITY);
         if new_score < *current_score {
-            return false;
+            return Ok(false);
         }
         let strict = new_score > *current_score;
         if !strict && trial.nodes.len() > current_nodes.len() {
-            return false;
+            return Ok(false);
         }
         *current_score = new_score;
-        *current_choices = trial.nodes.iter().map(|n| n.value.clone()).collect();
+        *current_choices = trial.nodes.iter().map(|n| n.value()).collect();
         *current_nodes = trial.nodes;
         if strict {
             *improvements += 1;
         }
-        true
+        Ok(true)
     }
 }
 
-/// Returns `true` iff `(value, kind)` is a node kind the hill-climber can
-/// step. Mirrors `optimiser.py:109`, which admits integer / float / bytes /
+/// Returns `true` iff `data` is a node kind the hill-climber can step.
+/// Mirrors `optimiser.py:109`, which admits integer / float / bytes /
 /// boolean and skips strings (no sensible "larger" step).
-pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
+pub(crate) fn is_climbable(data: &ChoiceData) -> bool {
     matches!(
-        (value, kind),
-        (ChoiceValue::Integer(_), ChoiceKind::Integer(_))
-            | (ChoiceValue::Float(_), ChoiceKind::Float(_))
-            | (ChoiceValue::Boolean(_), ChoiceKind::Boolean(_))
-            | (ChoiceValue::Bytes(_), ChoiceKind::Bytes(_))
+        data,
+        ChoiceData::Integer(..)
+            | ChoiceData::Float(..)
+            | ChoiceData::Boolean(..)
+            | ChoiceData::Bytes(..)
     )
 }
 
@@ -305,19 +314,19 @@ pub(crate) fn is_climbable(value: &ChoiceValue, kind: &ChoiceKind) -> bool {
 /// `optimiser.py::Optimiser.attempt_replace` (lines 130-156) plus the
 /// `choice_permitted(new_choice, node.constraints)` post-check.
 pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue> {
-    match (&node.value, node.kind.as_ref()) {
-        (ChoiceValue::Integer(v), ChoiceKind::Integer(kind)) => {
+    match &node.data {
+        ChoiceData::Integer(kind, v) => {
             let new = v + crate::native::bignum::BigInt::from(delta);
             Some(ChoiceValue::Integer(kind.value_from_bigint(&new)?))
         }
-        (ChoiceValue::Float(v), ChoiceKind::Float(kind)) => {
+        ChoiceData::Float(kind, v) => {
             let new = v + delta as f64;
             if !kind.validate(new) {
                 return None;
             }
             Some(ChoiceValue::Float(new))
         }
-        (ChoiceValue::Boolean(b), ChoiceKind::Boolean(_)) => {
+        ChoiceData::Boolean(_, b) => {
             if delta.saturating_abs() > 1 {
                 return None;
             }
@@ -330,7 +339,7 @@ pub(crate) fn step_choice(node: &ChoiceNode, delta: i128) -> Option<ChoiceValue>
             };
             Some(ChoiceValue::Boolean(new))
         }
-        (ChoiceValue::Bytes(b), ChoiceKind::Bytes(kind)) => {
+        ChoiceData::Bytes(kind, b) => {
             use crate::native::bignum::{BigInt, Sign};
             let v = BigInt::from_bytes_be(Sign::Plus, b);
             let new_v = v + BigInt::from(delta);

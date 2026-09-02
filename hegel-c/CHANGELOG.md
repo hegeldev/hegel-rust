@@ -1,5 +1,197 @@
 # Changelog
 
+## 0.34.0 - 2026-09-01
+
+This release adds `hegel_state_machine_should_check_invariant`: the engine-side sampling decision for stateful invariant checks, a recorded boolean draw that is true with probability 1/`stateful_step_count`. Frontends call it per invariant at each join point and run their guaranteed initial and final checks unconditionally.
+
+## 0.33.5 - 2026-09-01
+
+This patch fixes a silent size collapse in recursively generated values. The nested-span-depth guard (100) was within reach of legitimate generation — a recursive generator opens several spans per recursion level — and values that crossed it were concluded invalid mid-generation, collapsing typical sizes by roughly 7x for grammars written as a choice over operator arms with tuple-drawn subtrees. The cap is now 1000: far above legitimate depths, still low enough to catch runaway recursion before it overflows the stack.
+
+## 0.33.4 - 2026-09-01
+
+This patch adds a pretty-printing document API to the C ABI, so frontends
+can report drawn values through the engine instead of formatting them
+by hand.
+
+The engine ships an Oppen-style layout core as a set of building blocks:
+`hegel_printer_new` creates a standalone document (configured through a
+`hegel_printer_options_t` handle), and `hegel_printer_text`,
+`hegel_printer_breakable`, `hegel_printer_begin_group` /
+`hegel_printer_end_group`, `hegel_printer_hard_break`,
+`hegel_printer_if_break`, `hegel_printer_shift_indent`, and
+`hegel_printer_comment` build its content. What gets printed — and in which
+language's syntax — is entirely the frontend's choice; the engine only owns
+the layout. Two facilities support printing values while generating them:
+`hegel_printer_deferred` opens a hole whose content is written later and
+spliced in on read, and `hegel_printer_begin_speculative` /
+`hegel_printer_commit_speculative` / `hegel_printer_abort_speculative`
+buffer output that a rejected draw (a filter retry, a duplicate collection
+element) can retract. Reading a document with `hegel_printer_resolve` /
+`hegel_printer_value` seals it: open speculative regions are aborted and
+later writes on any handle become dead-region errors, so a straggling
+writer thread cannot corrupt a rendered report.
+
+Every test case owns one such document, shared by all handles of its
+family: `hegel_test_case_printer` fetches a handle onto it and `hegel_note`
+appends free-form note lines. Each test-case handle writes into its own
+region of the document, and `hegel_test_case_clone` anchors the clone's
+region at the point in the parent's output where the clone was made, so
+concurrent generation from cloned handles renders deterministically no
+matter how the threads interleave.
+
+Frontends that do not use the document API are unaffected.
+
+## 0.33.3 - 2026-08-28
+
+This patch fixes the recursion protocol generating far smaller values than the leaf budget allows. Branch decisions were priced as if every branch had exactly two children, so grammars averaging fewer collapsed to a handful of nodes; and even at a correct price, the induced size distribution keeps its median at a few nodes regardless of the budget. `hegel_new_recursion` now draws a target size for each value from the test case's stream and steers branch decisions toward it, adapting to the arities the branch function actually produces, so typical sizes span the whole leaf budget and unary-only chains spread up to the depth limit.
+
+The protocol gains a new call, `hegel_recursion_finish`, made once a value has been fully generated: it reports `HEGEL_E_RETRY` when the finished value turns out to have been badly mispriced, in which case the client drops the value and regenerates it from the root (at most twice per draw). Clients that never call it keep the previous accept-everything behavior.
+
+## 0.33.2 - 2026-08-27
+
+This patch adds engine support for generating recursively defined data (trees, JSON documents, ...), so every language frontend gets identically distributed recursive values from the same protocol: `hegel_new_recursion` opens a recursive generation scope on a test case, `hegel_recursion_branch` draws each sub-value's leaf-or-branch decision, and `hegel_recursion_leaf` counts each leaf against the scope's budget. The engine owns all of the policy — branch probabilities, the depth limit (which forces the decision as a recorded choice, keeping the choice sequence aligned for the shrinker), and the leaf budget. An attempt that outgrows `max_leaves` reports the new `HEGEL_E_RETRY` result code; the client unwinds it and calls `hegel_recursion_retry`, which discards the attempt's spans and retries with a lower branching probability, concluding the test case invalid when too many attempts in a row fail to fit. Sub-values are expected to be wrapped in spans with the new `HEGEL_LABEL_RECURSIVE` label, which lets the shrinker replace a tree with one of its own subtrees.
+
+## 0.33.1 - 2026-08-26
+
+This patch improves the value distribution of bounded integer generation for large and full-width ranges, so that property tests surface off-by-one, overflow, and sign bugs far more readily.
+
+Drawing an integer from a wide range now chooses between four categories of value — the range endpoints and their inner neighbours (`min`, `max`, `min + 1`, `max - 1`); the curated "interesting" values (zero, ±1, small magnitudes, powers of two, type limits); the diffuse pool of large constants; and the ordinary middle of the range — using a mixture whose weights are drawn afresh for each test case from a Dirichlet distribution (a form of *swarm testing*, after Groce et al., ISSTA 2012). Most test cases stay middle-dominated, so ordinary values remain the common case, while a lumpy minority concentrate on one special category.
+
+Splitting the range endpoints into their own category, and drawing the weights per test case rather than fixing them, is what makes interactions that need *several* operands to be extreme at once reachable. Both operands of an expression drawn in an endpoint-heavy case land on `{min, max, …}` together, so — measured over 20,000 full-width `i64` cases — `x + y` now overflows about 1.4% of the time, where a fixed per-value boundary probability would reach it only at roughly its square. A boundary value appears about 2% of draws (up from about 0.3% before) and a small value about 3% (up from about 0.6%), now clustered in the cases that exercise them rather than spread thinly across every draw.
+
+The special values still shrink toward zero and the simplest endpoints, and narrow ranges are unaffected. Mirrors the boundary-value injection Hypothesis performs (see [#350](https://github.com/hegeldev/hegel-rust/issues/350) and hypothesis#4722).
+
+This patch also fixes the distribution of unbounded width-32 float draws, which previously came out infinite about a third of the time. Finite draws whose magnitude exceeds `f32::MAX` are now remapped into the finite `f32` range instead of rounding to infinity, and out-of-range draws are no longer clamped to `-inf` when a bound is infinite. Large finite `f32` magnitudes (above `f32::MAX / 2`) now appear about 20% of the time instead of essentially never, and infinities about 2%, matching the width-64 shape. The `-inf` clamp fix is width-agnostic: unbounded width-64 draws with NaN or subnormals disallowed previously collapsed a small fraction of draws to `-inf`, and no longer do.
+
+This patch also improves shrinking through a size binding (the `flat_map`-into-collection pattern) for large test cases. When lowering the size value realises a shorter test case, the shrinker now only tries deleting regions of exactly the realised deficit — the candidates that can realign the sequence — instead of every smaller region too, so a single large binding can no longer exhaust the shrinker's stall budget before it reaches a winning candidate.
+
+## 0.33.0 - 2026-08-20
+
+This release replaces the stateful-testing interface with one that also supports concurrent stateful testing.
+
+Every state machine — sequential or concurrent — is now driven by the same round-based protocol. Creating the machine draws the number of workers the caller must run; the owning thread advances rounds on the root test-case handle and checks the machine's invariants at the join points between rounds, while no rule is running:
+
+```c
+hegel_new_state_machine(ctx, tc, rule_names, rule_groups, num_rules,
+                        invariant_names, num_invariants,
+                        min_concurrency, max_concurrency,
+                        &machine, &concurrency);
+/* spawn `concurrency` worker threads, each holding its own clone handle */
+
+while (true) {
+    /* root handle: ask whether to run another round, and for which group */
+    hegel_state_machine_next_group(ctx, tc, machine, &group);
+    if (group == HEGEL_STATE_MACHINE_DONE) break;
+
+    /* wake every worker, then wait for all of them to finish the round */
+
+    /* the join point: every worker is parked — check the invariants */
+}
+/* tell the workers to exit */
+```
+
+Each worker thread `w`, woken once per round, pulls rules on its own clone handle `tc_w` until the engine signals its join point, then parks until the next round:
+
+```c
+while (true) {
+    hegel_state_machine_next_rule(ctx, tc_w, machine, w, &rule);
+    if (rule == HEGEL_STATE_MACHINE_DONE) break;  /* w's round is over */
+    /* apply rules[rule]; if it fails an assumption, report it with
+       hegel_state_machine_rule_rejected(ctx, tc_w, machine, w) */
+}
+```
+
+Each rule is assigned to a concurrency group at machine creation, and for each round the engine draws a random group: only that group's rules are handed out for the round, so rules in the same group may run concurrently with each other and rules in different groups never overlap. A sequential machine is a degenerate case — all-zero `rule_groups`, concurrency bounds `1, 1`, no worker threads at all, and the root handle drives everything: the engine hands out exactly one rule per round, so the two loops collapse into the old rule loop on one thread with a `hegel_state_machine_next_group` call between rules.
+
+This is a breaking C ABI change:
+
+- `hegel_new_state_machine` gains `rule_groups` (group ids parallel to `rule_names`) and `min_concurrency`/`max_concurrency` parameters, plus an `out_concurrency` out-parameter: the engine draws the machine's concurrency level in `[min_concurrency, max_concurrency]` and writes it to `*out_concurrency`. The caller must run exactly that many workers. Passing `min_concurrency == max_concurrency` fixes the level. Groups are identified by arbitrary `int64_t` ids and carry no names: the machine has one concurrency group per distinct value of `rule_groups` (`INT64_MIN` is rejected — it is reserved as the `HEGEL_STATE_MACHINE_DONE` sentinel). Creating the machine now draws from the calling handle's stream, so it can return `HEGEL_E_STOP_TEST`, which the caller should report as an overrun.
+- `hegel_state_machine_next_rule` gains a `worker_index` parameter and now hands out rules for one round at a time; the frontend must advance rounds with `hegel_state_machine_next_group` (new), even for sequential machines.
+- `hegel_state_machine_rule_rejected` gains the same `worker_index` parameter, and its accounting is per worker: it refers to the rule most recently handed to that worker.
+- `HEGEL_STATE_MACHINE_DONE` changes value from `-1` to `INT64_MIN`, so the sentinel sits outside the group-id space callers plausibly use. A frontend that compares `hegel_state_machine_next_rule`'s `out_rule_index` against a hard-coded `-1` instead of the named constant must update.
+
+Creating a state machine with `max_concurrency > 1` declares the run nondeterministic. The engine detects this itself, so frontends have nothing to set up front. A nondeterministic run can't be replayed, so discovery is the only chance to capture. Frontends should check for nondeterminism at test case start, with the new `hegel_test_case_is_nondeterministic`, and capture a nondeterministic case's whole trace — draws, notes, and any failure's diagnostics — while it runs. Only the most recent capture needs to be stored, because the run will end as soon as a failure is found. The engine skips everything that assumes deterministic replay: data-tree recording (and with it novel-prefix generation and the nondeterminism mismatch check), span mutation, the verify and shrink pass (and with it the flakiness check), targeting, and database persistence and reuse.
+
+A failing nondeterministic run reports itself with a new run status, `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` (other `hegel_run_status_t` values are unchanged). Frontends should skip any final replay they normally perform, print no reproducer, and report the bug from what they captured at discovery. A failing single-test-case run still reports plain `HEGEL_RUN_STATUS_FAILED`, since its caller reports from the case's own execution anyway.
+
+The `stateful_step_count` setting now bounds *rounds*. At concurrency 1 each round is exactly one rule and a round whose rule was rejected does not count, so sequential budgets behave as before.
+
+The choice-sequence shape of sequential stateful tests changes as a result (the stop decision moves to the round boundary, and the swarm disabling probability is drawn at machine creation rather than at the first selection), so stored database entries and reproduce blobs for stateful tests are invalidated: stale database entries replay as invalid or overrun and are deleted quietly, while stale blobs fail loudly.
+
+## 0.32.5 - 2026-08-13
+
+This patch improves shrinking for stateful tests that use variable pools. Previously adding a variable to a pool could be hard to remove if other variables in the pool were used after that point. This should no longer be the case.
+
+This patch also fixes shrinking sometimes stopping just short of the simplest failing example. When the randomized escape passes burned through the shrinker's stall budget without progress, the exhausted budget silently discarded every later candidate, so the deterministic passes' final round could no longer normalize the result it was handed. Each scheduling round now starts with a fresh stall budget, so the deterministic passes always get a real final pass over the shrunk example.
+
+## 0.32.4 - 2026-08-13
+
+This patch makes shrinking much cheaper and better at escaping locally-minimal branches: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before. Individual runs are still randomized, so a particular seed may shrink differently than it used to, but every deterministic benchmark result is unchanged and the branch-escape rate is higher across the board.
+
+## 0.32.3 - 2026-08-11
+
+This patch fixes `hegel_test_case_from_blob` ignoring the `stateful_step_count` setting ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). A stateful counterexample that needed more than 50 steps did not reproduce.
+
+## 0.32.2 - 2026-08-10
+
+This patch improves the generation phase's span mutation. A mutated choice sequence that diverges from its donor's path previously ran out of data and was discarded as an overrun; mutation probes now draw randomly past the end of the spliced choices, so a diverged proposal becomes a complete test case seeded with the mutation. On recursive-generator workloads this turns a substantial fraction of previously wasted probes into productive test cases.
+
+## 0.32.1 - 2026-08-07
+
+This patch fixes a bias in data generation where some choices were made with the wrong probability.
+The most visible effect should be the stateful tests should run a full set of steps more often.
+Collection sizes may also be affected.
+
+## 0.32.0 - 2026-08-07
+
+This release adds `hegel_state_machine_rule_rejected(ctx, tc, state_machine)`. Frontends are now responsible for calling this when the rule most recently returned by `hegel_state_machine_next_rule` was rejected before it completed.
+
+## 0.31.0 - 2026-08-07
+
+This release replaces the `int64_t` ids for collections, variable pools, and state machines with opaque caller-owned handles, matching how every other libhegel object works. This is a breaking change to the C ABI.
+
+`hegel_new_collection`, `hegel_new_pool`, and `hegel_new_state_machine` now write a handle (`hegel_collection_t*`, `hegel_pool_t*`, `hegel_state_machine_t*`) through their out-parameter instead of an id, and `hegel_collection_more`, `hegel_collection_reject`, `hegel_pool_add`, `hegel_pool_generate`, and `hegel_state_machine_next_rule` take that handle instead of an id (still alongside the test-case handle, whose stream the draws come from — any clone of the creating test case works, as before). Each handle must be released with its new matching free function — `hegel_collection_free`, `hegel_pool_free`, or `hegel_state_machine_free` — exactly once. The handles are independent of the test case and run they were created under, so the frees are safe in any order, including after `hegel_run_free`. A NULL handle is reported as `HEGEL_E_INVALID_HANDLE`, and the ids' `HEGEL_E_INVALID_ARG` "unknown id" errors are gone.
+
+```c
+/* before */
+int64_t collection;
+hegel_new_collection(ctx, tc, 0, 10, &collection);
+hegel_collection_more(ctx, tc, collection, &more);
+
+/* after */
+hegel_collection_t *collection;
+hegel_new_collection(ctx, tc, 0, 10, &collection);
+hegel_collection_more(ctx, tc, collection, &more);
+hegel_collection_free(ctx, collection);
+```
+
+The threading contract is now per object rather than per family. A collection may be driven by at most one thread at a time: concurrent use reports `HEGEL_E_CONCURRENT_USE`, like a test-case handle. Pools and state machines may be shared between clone handles driven from parallel threads; their operations serialize internally. This also removes a hidden serialization point — collection and pool operations from parallel clones previously contended on one family-wide lock even when touching different objects.
+
+Internal refactoring of the engine's choice-sequence representation. Choice constraints and values are now carried as a single paired type, removing a large class of internal panics on impossible constraint/value combinations; the on-disk choice serialization and reproduce-blob formats are unchanged.
+
+libhegel no longer installs a process-global panic hook. Violated internal invariants of the engine (bugs in hegel itself) no longer panic: during a draw they now report `HEGEL_E_INTERNAL` with the bug-report diagnostic in `hegel_context_last_error`, and during the engine's own exploration (generation, mutation, shrinking) they finish the run with a run-level error read back through `hegel_run_result_error` — exactly where a caught engine panic's message went before. Applications that install their own panic hook no longer have libhegel's hook chained in front of it, and unloading libhegel with `dlclose` no longer leaves a dangling hook behind.
+
+Run-scoped client mistakes no longer abort the process either: an embedding that resumes the engine without concluding the offered test case, and a process launched with `ANTITHESIS_OUTPUT_DIR` pointing at a missing directory, now finish the run with a run-level error naming the mistake, read back through `hegel_run_result_error`.
+
+All of the engine's operating-system access — the failure database's file I/O, the monotonic clock behind the shrink deadline and the TooSlow health check, PRNG seeding entropy, `/dev/urandom` reads, environment lookups, and stderr output — now goes through one narrow internal platform layer that talks to the OS directly (raw syscalls on Linux, kernel32/bcryptprimitives on Windows) instead of through `tempfile` and `rand`'s thread-local generator. This removes more of the thread-local state that made unloading libhegel with `dlclose` unsafe. Two observable details change: the failure database writes each value through a uniquely named `<value>.tmp.<pid>.<counter>` sibling file before its atomic same-directory rename (previously a randomly named temporary), and engine stderr output is written straight to the stderr file descriptor, so in-process capture that only intercepts a language runtime's own printing (such as the Rust test harness's output capture) no longer sees it.
+
+The engine's locking now goes through that platform layer too, replacing `parking_lot` and the standard library's locks with a futex-backed mutex and a lock-free lazy initialiser. With those gone, none of libhegel's own code or dependencies registers thread-local storage or thread-exit destructors — the main sources of the crashes seen when a thread that used libhegel outlives a `dlclose` of it.
+
+Unloading libhegel with `dlclose` is now safe: no code path in the library registers a thread-local destructor, an atexit hook, or any other process-global pointer into the library, so nothing is left behind to dangle after unload. The crate is now `#![no_std]`, and a new off-by-default `runtime` cargo feature builds a fully self-contained library that does not link the Rust standard library at all: `cargo build -p hegeltest-c --no-default-features --features runtime` with `RUSTFLAGS="-C panic=abort"` produces a `libhegel` with no thread-local-storage machinery in its dynamic symbol table, no TLS segment, and no dynamic exports outside the `hegel_*` API (CI now verifies all three on a `--release`-profile build). The default build still links the standard library for its allocator and panic support; its engine paths register no thread-local state either, but the standard library's own runtime remains present in the binary, so embedders who want the strongest unload guarantee should use the `runtime` build. The prebuilt `libhegel-<goos>-<goarch>` release assets are still the default (standard-library-linked) build, so for now the `runtime` configuration means building from source.
+
+This release also changes what happens when libhegel itself has a bug. Violated internal engine invariants are reported as `HEGEL_E_INTERNAL` or as run-level errors, as described above; a residual panic that slips past that reporting — which would indicate a further bug in hegel — now aborts the process at the library boundary instead of being caught and converted into the run-level error previously prefixed `"Engine panic:"`. No unwind ever crosses the C ABI, and a corrupted engine can no longer keep handing out results.
+
+## 0.30.5 - 2026-08-04
+
+This patch adds `hegel_settings_set_stateful_step_count`, which sets the target number of steps a stateful test case runs (default 50).
+
+The stateful stop generation decision has changed. Instead of drawing a single per-case step cap up front, `hegel_state_machine_next_rule` makes a per-step stop decision, forced to keep going before the first step and forced to halt once `stateful_step_count` steps have been handed out. Every stateful case therefore runs at least one step and at most `stateful_step_count`.
+
+## 0.30.4 - 2026-08-04
+
+Internal preparation for making the engine core `no_std`-compatible: the engine's hash tables now use `hashbrown` and its floating-point math now goes through the `libm` crate instead of the platform math library, and the unused `crc32fast` dependency is gone. `libm` can round differently from a platform math library in the last bit, so on some platforms fixed-seed runs may generate different values than previous releases. Stored failures are unaffected: database replay is value-based, and seed reproducibility has always been build-specific.
+
 ## 0.30.3 - 2026-07-27
 
 This patch simplifies hegeltest-c's build step.

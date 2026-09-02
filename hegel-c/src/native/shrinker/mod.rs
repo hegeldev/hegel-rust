@@ -15,12 +15,19 @@ mod strings;
 
 pub use scheduling::ShrinkPass;
 
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Instant;
+use crate::backend::RunError;
+use crate::control::InternalError;
+use crate::native::{HashMap, HashSet};
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
 
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
+use crate::sys::Instant;
+
+use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key};
 
 /// Request passed to the shrinker's test function.
 ///
@@ -39,9 +46,11 @@ pub enum ShrinkRun<'a> {
 }
 
 /// The boxed future a [`ShrinkProbe`] resolves to: the
-/// `(is_interesting, actual_nodes, actual_spans)` outcome of one run.
+/// `(is_interesting, actual_nodes, actual_spans)` outcome of one run, or
+/// the [`ShrinkHalt`] that cut it short (a run-level error raised inside
+/// the engine's replay machinery).
 pub type ProbeFuture<'s> =
-    Pin<Box<dyn Future<Output = (bool, Vec<ChoiceNode>, Spans)> + Send + 's>>;
+    Pin<Box<dyn Future<Output = ShrinkResult<(bool, Vec<ChoiceNode>, Spans)>> + Send + 's>>;
 
 /// Runs one test case for the shrinker, returning
 /// `(is_interesting, actual_nodes, actual_spans)`.
@@ -65,7 +74,7 @@ where
     F: FnMut(ShrinkRun<'_>) -> (bool, Vec<ChoiceNode>, Spans),
 {
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
-        Box::pin(std::future::ready(self(req)))
+        Box::pin(core::future::ready(Ok(self(req))))
     }
 }
 
@@ -73,19 +82,87 @@ where
 /// end-of-shrink profiling report).  Wired only at `Verbosity::Debug`.
 pub type DebugFn<'a> = dyn FnMut(&str) + Send + 'a;
 
-/// Sentinel signalling that the wall-clock shrink deadline has passed.
+/// Signal that ends the whole shrink early.
 ///
-/// Every shrinker execution method ([`Shrinker::run_test_fn`] and the
-/// `consider` / `probe` / `replace` built on it) returns this — instead of
-/// running the test function — once the deadline is exceeded, and passes
-/// propagate it with `?`. Shrinking therefore unwinds promptly, even
-/// mid-pass, keeping the best example found so far. This is the Rust analogue
-/// of Hypothesis's `RunIsComplete` unwind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShrinkStop;
+/// `Stop` is the wall-clock deadline sentinel: every shrinker execution
+/// method ([`Shrinker::run_test_fn`] and the `consider` / `probe` /
+/// `replace` built on it) returns it — instead of running the test function
+/// — once the deadline is exceeded, and passes propagate it with `?`.
+/// Shrinking therefore unwinds promptly, even mid-pass, keeping the best
+/// example found so far. This is the Rust analogue of Hypothesis's
+/// `RunIsComplete` unwind. `Error` is a run-level error raised mid-shrink —
+/// a violated internal invariant in a pass, or a [`RunError`] from the
+/// engine probe executing a candidate; it propagates the same way but
+/// surfaces from [`Shrinker::shrink`] as a run-level error instead of
+/// being absorbed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ShrinkHalt {
+    Stop,
+    Error(RunError),
+}
 
-/// Result of a shrinker operation that the deadline may cut short.
-pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkStop>;
+impl From<InternalError> for ShrinkHalt {
+    fn from(e: InternalError) -> Self {
+        ShrinkHalt::Error(RunError::Internal(e))
+    }
+}
+
+impl From<RunError> for ShrinkHalt {
+    fn from(e: RunError) -> Self {
+        ShrinkHalt::Error(e)
+    }
+}
+
+/// Result of a shrinker operation that the deadline (or an internal error)
+/// may cut short.
+pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkHalt>;
+
+/// Signal that ends one pass's work on a single node.
+///
+/// `Halt` propagates a [`ShrinkHalt`] (the wall-clock deadline or an
+/// internal error). `NodeGone` means the node under work stopped matching
+/// the pass's kind mid-pass — a probe's accepted result punned the kind at
+/// that position or shortened the sequence past it — so the pass abandons
+/// the node and moves on. Per-node pass bodies return `Result<_, PassExit>`
+/// and read the node's current typed value with
+/// `.ok_or(PassExit::NodeGone)?`; [`absorb_node_gone`] converts the outcome
+/// back into a [`ShrinkResult`] at the pass loop.
+pub(super) enum PassExit {
+    Halt(ShrinkHalt),
+    NodeGone,
+}
+
+impl From<ShrinkHalt> for PassExit {
+    fn from(halt: ShrinkHalt) -> Self {
+        PassExit::Halt(halt)
+    }
+}
+
+impl From<InternalError> for PassExit {
+    fn from(e: InternalError) -> Self {
+        PassExit::Halt(ShrinkHalt::from(e))
+    }
+}
+
+/// Fold a per-node pass outcome into the pass's [`ShrinkResult`]:
+/// `NodeGone` is absorbed (the pass simply moves to the next node) and any
+/// [`ShrinkHalt`] keeps propagating.
+pub(super) fn absorb_node_gone<T>(result: Result<T, PassExit>) -> ShrinkResult<()> {
+    match result {
+        Err(PassExit::Halt(halt)) => Err(halt),
+        _ => Ok(()),
+    }
+}
+
+/// Fold a whole-shrink outcome into the runner's error channel:
+/// [`ShrinkHalt::Stop`] is absorbed (the shrink simply ended early, keeping
+/// the best example found so far) and a run-level error keeps propagating.
+pub(crate) fn absorb_stop<T>(result: ShrinkResult<T>) -> Result<(), RunError> {
+    match result {
+        Err(ShrinkHalt::Error(e)) => Err(e),
+        _ => Ok(()),
+    }
+}
 
 pub struct Shrinker<'a> {
     test_fn: Box<dyn ShrinkProbe + Send + 'a>,
@@ -102,7 +179,7 @@ pub struct Shrinker<'a> {
     /// secondary key.
     pub downgraded: Vec<Vec<ChoiceValue>>,
     /// Cap on `improvements`. Once `improvements >= max_improvements`,
-    /// `consider` and `probe` return [`ShrinkStop`] to end the shrink, so the
+    /// `consider` and `probe` return [`ShrinkHalt::Stop`] to end the shrink, so the
     /// runner doesn't get stuck chasing diminishing returns. Defaults to
     /// [`MAX_SHRINKS`]; tests can lower it for controlled-budget assertions.
     pub max_improvements: usize,
@@ -111,7 +188,12 @@ pub struct Shrinker<'a> {
     /// + `max_stall` to detect runaway shrink searches.
     pub calls: usize,
     /// Value of `calls` at the moment of the most recent
-    /// `accept_improvement`.  See `max_stall`.
+    /// `accept_improvement`, or at the start of the current
+    /// `fixate_shrink_passes` outer iteration if that is later — each
+    /// iteration gets a fresh stall window, so calls burned by the
+    /// stochastic passes in one iteration cannot silently gate the
+    /// deterministic passes' candidates in the next and fake a fixed
+    /// point.  See `max_stall`.
     pub calls_at_last_shrink: usize,
     /// Once `calls - calls_at_last_shrink >= max_stall`, further
     /// `consider` / `probe` invocations short-circuit. Grows on every
@@ -172,7 +254,7 @@ impl<'a> Shrinker<'a> {
             calls: 0,
             calls_at_last_shrink: 0,
             max_stall: MAX_SHRINKS,
-            all_changed_nodes: HashSet::new(),
+            all_changed_nodes: HashSet::default(),
             debug: None,
             deadline: None,
             timed_out: false,
@@ -187,7 +269,7 @@ impl<'a> Shrinker<'a> {
             return true;
         }
         if let Some(deadline) = self.deadline {
-            if Instant::now() >= deadline {
+            if Instant::now().is_some_and(|now| now >= deadline) {
                 self.timed_out = true;
                 return true;
             }
@@ -241,13 +323,13 @@ impl<'a> Shrinker<'a> {
         }
         if nodes.len() == self.current_nodes.len() {
             for (candidate, current) in nodes.iter().zip(&self.current_nodes) {
-                if current.was_forced && candidate.value != current.value {
+                if current.was_forced && candidate.data.value_ref() != current.data.value_ref() {
                     return Ok(false);
                 }
             }
         }
         if self.improvements >= self.max_improvements {
-            return Err(ShrinkStop);
+            return Err(ShrinkHalt::Stop);
         }
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
@@ -265,7 +347,7 @@ impl<'a> Shrinker<'a> {
         Ok(false)
     }
 
-    /// Run the test function for `run`, or return [`ShrinkStop`] immediately —
+    /// Run the test function for `run`, or return [`ShrinkHalt::Stop`] immediately —
     /// without touching the test function — once the wall-clock deadline has
     /// passed (latching `timed_out`).
     ///
@@ -278,9 +360,9 @@ impl<'a> Shrinker<'a> {
         run: ShrinkRun<'_>,
     ) -> ShrinkResult<(bool, Vec<ChoiceNode>, Spans)> {
         if self.past_deadline() {
-            return Err(ShrinkStop);
+            return Err(ShrinkHalt::Stop);
         }
-        Ok(self.test_fn.run(run).await)
+        self.test_fn.run(run).await
     }
 
     /// Run a probe: replay `prefix` then continue with random draws (capped at
@@ -293,7 +375,7 @@ impl<'a> Shrinker<'a> {
         max_size: usize,
     ) -> ShrinkResult<()> {
         if self.improvements >= self.max_improvements {
-            return Err(ShrinkStop);
+            return Err(ShrinkHalt::Stop);
         }
         if self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
@@ -314,7 +396,7 @@ impl<'a> Shrinker<'a> {
     /// record the displaced sequence, bump `improvements`, fold the diff
     /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
     fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
-        let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value.clone()).collect();
+        let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
         let span = self.calls.saturating_sub(self.calls_at_last_shrink);
@@ -344,15 +426,16 @@ impl<'a> Shrinker<'a> {
         changed: &mut HashSet<usize>,
     ) {
         let shape_preserved = prev.len() == new.len()
-            && prev.iter().zip(new.iter()).all(|(a, b)| {
-                std::mem::discriminant(a.kind.as_ref()) == std::mem::discriminant(b.kind.as_ref())
-            });
+            && prev
+                .iter()
+                .zip(new.iter())
+                .all(|(a, b)| core::mem::discriminant(&a.data) == core::mem::discriminant(&b.data));
         if !shape_preserved {
             changed.clear();
             return;
         }
         for (i, (a, b)) in prev.iter().zip(new.iter()).enumerate() {
-            if a.value != b.value {
+            if a.data.value_ref() != b.data.value_ref() {
                 changed.insert(i);
             }
         }
@@ -392,17 +475,10 @@ impl<'a> Shrinker<'a> {
             if attempt[i].was_forced {
                 return Ok(false);
             }
-            if !attempt[i].kind.validate(v) {
+            let Some(replaced) = attempt[i].with_value(v) else {
                 return Ok(false);
-            }
-            let coerced = match (attempt[i].kind.as_ref(), v) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(av)) => ChoiceValue::Integer(
-                    ic.value_from_bigint(av)
-                        .unwrap_or_else(|| unreachable!("validated integer fits the node's width")),
-                ),
-                _ => v.clone(),
             };
-            attempt[i] = attempt[i].with_value(coerced);
+            attempt[i] = replaced;
         }
         self.consider(&attempt).await
     }
@@ -450,7 +526,7 @@ impl<'a> Shrinker<'a> {
                 .filter(|(_, calls, shrinks, _)| *calls > 0 && ((*shrinks > 0) == useful))
                 .collect();
             buckets.sort_by_key(|(_, calls, shrinks, deletions)| {
-                (std::cmp::Reverse(*calls), *deletions, *shrinks)
+                (core::cmp::Reverse(*calls), *deletions, *shrinks)
             });
             for (name, calls, shrinks, deletions) in buckets {
                 self.debug_msg(&format!(
@@ -475,11 +551,16 @@ impl<'a> Shrinker<'a> {
     /// because `shrink` is recursive — `shrink_clone_streams` runs a full
     /// nested shrink per clone node — and the type erasure is what lets the
     /// compiler prove the future `Send` without chasing the cycle.
-    pub fn shrink(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    ///
+    /// A [`ShrinkHalt::Stop`] (deadline, improvement cap) is absorbed here —
+    /// it ends the shrink with the best example found so far. A run-level
+    /// error (an internal invariant violation in a pass, or a [`RunError`]
+    /// from the engine probe) propagates as `Err` for the runner to surface.
+    pub fn shrink(&mut self) -> Pin<Box<dyn Future<Output = Result<(), RunError>> + Send + '_>> {
         Box::pin(self.shrink_inner())
     }
 
-    async fn shrink_inner(&mut self) {
+    async fn shrink_inner(&mut self) -> Result<(), RunError> {
         let mut passes: Vec<ShrinkPass> = vec![
             ShrinkPass::new(
                 "remove_discarded",
@@ -603,12 +684,14 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "mutate_and_shrink",
                 Box::new(|sh| boxed_pass(sh.mutate_and_shrink())),
-            ),
+            )
+            .stochastic(),
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
-        let _ = self.fixate_shrink_passes(&mut passes).await;
+        let outcome = self.fixate_shrink_passes(&mut passes).await;
         self.emit_profile_report(&passes, initial_size, initial_calls);
+        absorb_stop(outcome)
     }
 }
 
@@ -637,3 +720,7 @@ mod cache_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_defensive_branch_tests.rs"]
 mod defensive_branch_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_internal_error_tests.rs"]
+mod internal_error_tests;

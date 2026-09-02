@@ -1,20 +1,26 @@
-use super::{Generator, TestCase};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use std::marker::PhantomData;
 
 /// A generator built from imperative code. Created by [`compose!`](crate::compose).
 #[doc(hidden)]
 pub struct ComposedGenerator<T, F> {
+    label: u64,
     f: F,
     _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T, F> ComposedGenerator<T, F>
 where
-    F: Fn(TestCase) -> T,
+    F: Fn(&TestCase) -> T,
 {
-    /// Create a composed generator from a closure that receives a [`TestCase`].
-    pub fn new(f: F) -> Self {
+    /// Create a composed generator from a closure that receives a [`TestCase`]
+    /// by reference. Draws made by the closure are grouped under a span with
+    /// the given label.
+    pub fn new(label: u64, f: F) -> Self {
         ComposedGenerator {
+            label,
             f,
             _phantom: PhantomData,
         }
@@ -23,10 +29,23 @@ where
 
 impl<T, F> Generator<T> for ComposedGenerator<T, F>
 where
-    F: Fn(TestCase) -> T + Send + Sync,
+    F: Fn(&TestCase) -> T + Send + Sync,
 {
     fn do_draw(&self, tc: &TestCase) -> T {
-        (self.f)(tc.child(0))
+        tc.start_span(self.label);
+        let result = (self.f)(tc);
+        tc.stop_span(false);
+        result
+    }
+}
+
+impl<T, F> PrintableGenerator<T> for ComposedGenerator<T, F>
+where
+    T: PrettyPrintable,
+    F: Fn(&TestCase) -> T + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -52,8 +71,12 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// Create a generator from imperative code that draws from other generators.
 ///
 /// This is analogous to Hypothesis's `@composite` decorator. The closure
-/// receives a `TestCase` parameter. Use `tc.draw()` to draw values from
+/// receives a `&TestCase` parameter. Use `tc.draw()` to draw values from
 /// other generators within the compose block.
+///
+/// The closure captures its environment by move whether or not the `move`
+/// keyword is written; `compose!(move |tc| { .. })` and
+/// `compose!(|tc| { .. })` are identical.
 ///
 /// # Example
 ///
@@ -71,13 +94,11 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// ```
 #[macro_export]
 macro_rules! compose {
+    (move |$tc:ident| { $($body:tt)* }) => {
+        $crate::compose!(|$tc| { $($body)* })
+    };
     (|$tc:ident| { $($body:tt)* }) => {{
         const LABEL: u64 = $crate::generators::fnv1a_hash(stringify!($($body)*).as_bytes());
-        $crate::generators::ComposedGenerator::new(move |$tc: $crate::TestCase| {
-            $tc.start_span(LABEL);
-            let __result = { $($body)* };
-            $tc.stop_span(false);
-            __result
-        })
+        $crate::generators::ComposedGenerator::new(LABEL, move |$tc: &$crate::TestCase| { $($body)* })
     }};
 }

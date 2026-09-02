@@ -147,6 +147,11 @@ impl SettingsHandle {
                     raw,
                     settings.test_cases,
                 ));
+                require_ok(hegel_c::hegel_settings_set_stateful_step_count(
+                    ctx,
+                    raw,
+                    settings.stateful_step_count,
+                ));
                 require_ok(hegel_c::hegel_settings_set_verbosity(
                     ctx,
                     raw,
@@ -404,6 +409,20 @@ impl CTestCase {
         CTestCase { raw }
     }
 
+    /// Whether this test case belongs to a run already known to be
+    /// nondeterministic (`hegel_test_case_is_nondeterministic`). The engine
+    /// stamps the case before it starts, so the answer is stable for the
+    /// case's whole lifetime; standalone handles (blob replays) are never
+    /// stamped.
+    pub(crate) fn is_nondeterministic(&self) -> bool {
+        let mut out = false;
+        // SAFETY: self.raw is a live handle; &mut out is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_is_nondeterministic(ctx, self.raw, &mut out)
+        }));
+        out
+    }
+
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
     pub(crate) fn generate_integer(
         &self,
@@ -449,7 +468,6 @@ impl CTestCase {
     }
 
     /// Draw a float according to the full spec libhegel accepts.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_float(
         &self,
         width: u32,
@@ -631,96 +649,208 @@ impl CTestCase {
         &self,
         min_size: u64,
         max_size: Option<u64>,
-    ) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
+    ) -> Result<CollectionHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelCollection = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_collection(
                 ctx,
                 self.raw,
                 min_size,
                 max_size.unwrap_or(u64::MAX),
-                &mut id,
+                &mut raw,
             )
         });
-        rc_to_value(rc, id)
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(CollectionHandle { raw })
     }
 
-    pub(crate) fn collection_more(&self, collection_id: i64) -> Result<bool, hegel_result_t> {
+    pub(crate) fn collection_more(
+        &self,
+        collection: &CollectionHandle,
+    ) -> Result<bool, hegel_result_t> {
         let mut more = false;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_collection_more(ctx, self.raw, collection_id, &mut more)
+            hegel_c::hegel_collection_more(ctx, self.raw, collection.raw, &mut more)
         });
         rc_to_value(rc, more)
     }
 
     pub(crate) fn collection_reject(
         &self,
-        collection_id: i64,
+        collection: &CollectionHandle,
         why: Option<&str>,
     ) -> Result<(), hegel_result_t> {
         let c_why = why.map(cstring_lossy);
         let why_ptr = c_why.as_ref().map_or(ptr::null(), |c| c.as_ptr());
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_collection_reject(ctx, self.raw, collection_id, why_ptr)
+            hegel_c::hegel_collection_reject(ctx, self.raw, collection.raw, why_ptr)
         }))
     }
 
-    pub(crate) fn new_pool(&self) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
-        let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut id) });
-        rc_to_value(rc, id)
+    pub(crate) fn new_recursion(
+        &self,
+        max_depth: u64,
+        max_leaves: u64,
+    ) -> Result<RecursionHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelRecursion = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_new_recursion(ctx, self.raw, max_depth, max_leaves, &mut raw)
+        });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(RecursionHandle { raw })
     }
 
-    pub(crate) fn pool_add(&self, pool_id: i64) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
-        let rc =
-            with_context(|ctx| unsafe { hegel_c::hegel_pool_add(ctx, self.raw, pool_id, &mut id) });
-        rc_to_value(rc, id)
+    pub(crate) fn recursion_branch(
+        &self,
+        recursion: &RecursionHandle,
+        depth: u64,
+    ) -> Result<bool, hegel_result_t> {
+        let mut branch = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_branch(ctx, self.raw, recursion.raw, depth, &mut branch)
+        });
+        rc_to_value(rc, branch)
     }
 
-    pub(crate) fn pool_generate(&self, pool_id: i64, consume: bool) -> Result<i64, hegel_result_t> {
+    pub(crate) fn recursion_leaf(&self, recursion: &RecursionHandle) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_leaf(ctx, self.raw, recursion.raw)
+        }))
+    }
+
+    pub(crate) fn recursion_retry(
+        &self,
+        recursion: &RecursionHandle,
+    ) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_retry(ctx, self.raw, recursion.raw)
+        }))
+    }
+
+    pub(crate) fn recursion_finish(
+        &self,
+        recursion: &RecursionHandle,
+    ) -> Result<(), hegel_result_t> {
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_recursion_finish(ctx, self.raw, recursion.raw)
+        }))
+    }
+
+    pub(crate) fn new_pool(&self) -> Result<PoolHandle, hegel_result_t> {
+        let mut raw: *mut hegel_c::HegelPool = ptr::null_mut();
+        let rc = with_context(|ctx| unsafe { hegel_c::hegel_new_pool(ctx, self.raw, &mut raw) });
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok(PoolHandle { raw })
+    }
+
+    pub(crate) fn pool_add(&self, pool: &PoolHandle) -> Result<i64, hegel_result_t> {
         let mut id: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_pool_generate(ctx, self.raw, pool_id, consume, &mut id)
+            hegel_c::hegel_pool_add(ctx, self.raw, pool.raw, &mut id)
         });
         rc_to_value(rc, id)
     }
 
+    pub(crate) fn pool_generate(
+        &self,
+        pool: &PoolHandle,
+        consume: bool,
+    ) -> Result<i64, hegel_result_t> {
+        let mut id: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_pool_generate(ctx, self.raw, pool.raw, consume, &mut id)
+        });
+        rc_to_value(rc, id)
+    }
+
+    /// Register a state machine. Each rule is assigned to a concurrency
+    /// group by `rule_groups` (parallel to `rule_names`); group ids are
+    /// arbitrary and the machine has one group per distinct value. The
+    /// engine draws the concurrency level in
+    /// `[min_concurrency, max_concurrency]` at creation — weighted toward
+    /// the maximum (the engine owns the distribution) — and returns it
+    /// alongside the new machine's id.
     pub(crate) fn new_state_machine(
         &self,
         rule_names: &[&str],
+        rule_groups: &[i64],
         invariant_names: &[&str],
-    ) -> Result<i64, hegel_result_t> {
+        min_concurrency: i64,
+        max_concurrency: i64,
+    ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
             invariant_names.iter().map(|s| cstring_lossy(s)).collect();
         let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
         let invariant_ptrs: Vec<*const c_char> =
             invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
-        let mut id: i64 = 0;
+        let mut raw: *mut hegel_c::HegelStateMachine = ptr::null_mut();
+        let mut concurrency: i64 = 0;
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_new_state_machine(
                 ctx,
                 self.raw,
                 rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_ptrs.len(),
-                &mut id,
+                min_concurrency,
+                max_concurrency,
+                &mut raw,
+                &mut concurrency,
             )
         });
-        rc_to_value(rc, id)
+        if rc != hegel_result_t::HEGEL_OK {
+            return Err(rc);
+        }
+        Ok((StateMachineHandle { raw }, concurrency))
     }
 
-    /// Ask the engine for the next rule to run; `None` once the engine has
-    /// run enough steps (`HEGEL_STATE_MACHINE_DONE`).
-    pub(crate) fn state_machine_next_rule(
+    /// Start the machine's next round, yielding the id of the round's
+    /// current concurrency group (its value in the registering
+    /// `rule_groups`); `None` once the engine has run enough rounds
+    /// (`HEGEL_STATE_MACHINE_DONE`). Call on the root test-case handle at
+    /// every join point, including before the first rule is requested.
+    pub(crate) fn state_machine_next_group(
         &self,
-        state_machine_id: i64,
+        state_machine: &StateMachineHandle,
     ) -> Result<Option<i64>, hegel_result_t> {
         let mut out: i64 = 0;
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_state_machine_next_rule(ctx, self.raw, state_machine_id, &mut out)
+            hegel_c::hegel_state_machine_next_group(ctx, self.raw, state_machine.raw, &mut out)
+        });
+        let group = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
+            None
+        } else {
+            Some(out)
+        };
+        rc_to_value(rc, group)
+    }
+
+    /// Ask the engine for the next rule for worker `worker_index` to run
+    /// this round; `None` once the worker's round budget is exhausted
+    /// (`HEGEL_STATE_MACHINE_DONE`) and it should wait for the join point.
+    pub(crate) fn state_machine_next_rule(
+        &self,
+        state_machine: &StateMachineHandle,
+        worker_index: i64,
+    ) -> Result<Option<i64>, hegel_result_t> {
+        let mut out: i64 = 0;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_next_rule(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                worker_index,
+                &mut out,
+            )
         });
         let index = if out == hegel_c::HEGEL_STATE_MACHINE_DONE {
             None
@@ -730,11 +860,70 @@ impl CTestCase {
         rc_to_value(rc, index)
     }
 
+    /// Report that the rule most recently drawn for worker `worker_index`
+    /// was rejected (a violated assumption), so the engine does not count
+    /// it toward the step budget.
+    pub(crate) fn state_machine_rule_rejected(
+        &self,
+        state_machine: &StateMachineHandle,
+        worker_index: i64,
+    ) -> Result<(), hegel_result_t> {
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_rule_rejected(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                worker_index,
+            )
+        });
+        rc_to_value(rc, ())
+    }
+
+    /// Ask the engine whether invariant `invariant_index` should run at the
+    /// current join point: a recorded draw that is true with probability
+    /// `1 / stateful_step_count`. The guaranteed initial and final checks
+    /// are the caller's and run without asking.
+    pub(crate) fn state_machine_should_check_invariant(
+        &self,
+        state_machine: &StateMachineHandle,
+        invariant_index: i64,
+    ) -> Result<bool, hegel_result_t> {
+        let mut out = false;
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_state_machine_should_check_invariant(
+                ctx,
+                self.raw,
+                state_machine.raw,
+                invariant_index,
+                &mut out,
+            )
+        });
+        rc_to_value(rc, out)
+    }
+
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
         let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_target(ctx, self.raw, score, c_label.as_ptr())
         }))
+    }
+
+    /// Fetch a root handle onto the document shared by this test case's
+    /// family, creating it sized to `max_width` on first use. Every fetch
+    /// passes the same `PRINTER_MAX_WIDTH`, so the engine's width-conflict
+    /// check never fires. The document outlives the case's completion, so
+    /// drawn values can be assembled during the body and read back after
+    /// `mark_complete`.
+    pub(crate) fn printer(&self, max_width: u64) -> PrinterHandle {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        with_printer_options(max_width, |options| {
+            // SAFETY: self.raw is a live handle; &mut raw is a valid
+            // out-param.
+            require_ok(with_context(|ctx| unsafe {
+                hegel_c::hegel_test_case_printer(ctx, self.raw, options, &mut raw)
+            }));
+        });
+        PrinterHandle { raw }
     }
 
     /// Report the test case's outcome. `origin` is supplied only for an
@@ -758,6 +947,110 @@ impl Drop for CTestCase {
         // frontend created (from_blob, next_test_case, or clone_handle) and is
         // freed exactly once here, dropping its reference to the test case.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel collection handle (`hegel_collection_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_collection`] and driven through
+/// [`CTestCase::collection_more`] / [`CTestCase::collection_reject`] with any
+/// handle of the same test-case family. The handle is independent of the test
+/// case and run it was created under, so dropping it is safe in any order.
+pub(crate) struct CollectionHandle {
+    raw: *mut hegel_c::HegelCollection,
+}
+
+// SAFETY: libhegel guards the collection's state with its own lock (rejecting
+// concurrent use with `HEGEL_E_CONCURRENT_USE`), so moving or sharing the
+// handle across threads is sound.
+unsafe impl Send for CollectionHandle {}
+unsafe impl Sync for CollectionHandle {}
+
+impl Drop for CollectionHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_collection call and
+        // is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_collection_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel recursion handle (`hegel_recursion_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_recursion`] and driven through
+/// [`CTestCase::recursion_branch`] / [`CTestCase::recursion_leaf`] /
+/// [`CTestCase::recursion_retry`] / [`CTestCase::recursion_finish`] with
+/// any handle of the same test-case
+/// family. The scope serializes concurrent use internally, so it may be
+/// shared between clone handles on parallel threads; it is independent of
+/// the test case and run it was created under, so dropping it is safe in
+/// any order.
+pub(crate) struct RecursionHandle {
+    raw: *mut hegel_c::HegelRecursion,
+}
+
+// SAFETY: libhegel guards the recursion scope's state with its own lock
+// (serializing concurrent operations), so moving or sharing the handle
+// across threads is sound.
+unsafe impl Send for RecursionHandle {}
+unsafe impl Sync for RecursionHandle {}
+
+impl Drop for RecursionHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_recursion call and
+        // is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_recursion_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel variable-pool handle (`hegel_pool_t`), freed on drop.
+///
+/// Built by [`CTestCase::new_pool`] and driven through
+/// [`CTestCase::pool_add`] / [`CTestCase::pool_generate`] with any handle of
+/// the same test-case family. The pool serializes concurrent use internally,
+/// so it may be shared between clone handles on parallel threads; it is
+/// independent of the test case and run it was created under, so dropping it
+/// is safe in any order.
+pub(crate) struct PoolHandle {
+    raw: *mut hegel_c::HegelPool,
+}
+
+// SAFETY: libhegel guards the pool's state with its own lock (serializing
+// concurrent operations), so moving or sharing the handle across threads is
+// sound.
+unsafe impl Send for PoolHandle {}
+unsafe impl Sync for PoolHandle {}
+
+impl Drop for PoolHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_pool call and is
+        // freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_pool_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel state-machine handle (`hegel_state_machine_t`), freed on
+/// drop.
+///
+/// Built by [`CTestCase::new_state_machine`] and driven through
+/// [`CTestCase::state_machine_next_rule`] with any handle of the same
+/// test-case family. The machine serializes concurrent use internally; it is
+/// independent of the test case and run it was created under, so dropping it
+/// is safe in any order.
+pub(crate) struct StateMachineHandle {
+    raw: *mut hegel_c::HegelStateMachine,
+}
+
+// SAFETY: libhegel guards the machine's state with its own lock (serializing
+// concurrent operations), so moving or sharing the handle across threads is
+// sound.
+unsafe impl Send for StateMachineHandle {}
+unsafe impl Sync for StateMachineHandle {}
+
+impl Drop for StateMachineHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from a successful hegel_new_state_machine call
+        // and is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_state_machine_free(ctx, self.raw) });
     }
 }
 
@@ -786,7 +1079,6 @@ impl std::fmt::Debug for StringGenerator {
 impl StringGenerator {
     /// Build a text generator over the alphabet described by the fields.
     /// `max_codepoint` of `None` means unconstrained.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn text(
         min_size: u64,
         max_size: u64,
@@ -893,6 +1185,202 @@ impl Drop for StringGenerator {
         // SAFETY: `raw` came from a hegel_string_generator_* constructor and
         // is freed exactly once.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_string_generator_free(ctx, self.raw) });
+    }
+}
+
+/// An owned libhegel pretty-printer handle (`hegel_printer_t`), freed on
+/// drop.
+///
+/// Wraps one handle onto an engine-side document; the engine shares the
+/// document between handles (a deferred slot handle points into the same
+/// document as its root), so dropping a handle never discards content.
+/// Methods return `Err` with libhegel's diagnostic on misuse;
+/// [`crate::pretty::PrettyPrinter`] decides which of those to tolerate and
+/// which to raise.
+pub(crate) struct PrinterHandle {
+    raw: *mut hegel_c::HegelPrinter,
+}
+
+// SAFETY: the engine synchronizes every printer call on the document's own
+// lock, so handles may be used and dropped from any thread.
+unsafe impl Send for PrinterHandle {}
+unsafe impl Sync for PrinterHandle {}
+
+impl std::fmt::Debug for PrinterHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrinterHandle").finish_non_exhaustive()
+    }
+}
+
+/// How a printer operation failed: the region it addresses is dead (a
+/// straggling writer after the document was read — callers treat this as a
+/// silent no-op), or genuine misuse carrying libhegel's diagnostic.
+pub(crate) enum PrinterCallError {
+    DeadRegion,
+    Other(String),
+}
+
+/// Run `f` with an engine printer-options handle configured for `max_width`,
+/// freeing the handle afterwards (options only parameterize construction, so
+/// they never outlive the constructing call).
+fn with_printer_options(max_width: u64, f: impl FnOnce(*const hegel_c::HegelPrinterOptions)) {
+    let mut options: *mut hegel_c::HegelPrinterOptions = ptr::null_mut();
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_new(ctx, &mut options)
+    }));
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_set_max_width(ctx, options, max_width)
+    }));
+    f(options);
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_printer_options_free(ctx, options)
+    }));
+}
+
+impl PrinterHandle {
+    /// Create a standalone document that keeps lines within `max_width`
+    /// characters.
+    pub(crate) fn new(max_width: u64) -> Self {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        with_printer_options(max_width, |options| {
+            require_ok(with_context(|ctx| unsafe {
+                hegel_c::hegel_printer_new(ctx, options, &mut raw)
+            }));
+        });
+        PrinterHandle { raw }
+    }
+
+    fn check(rc: hegel_result_t) -> Result<(), PrinterCallError> {
+        match rc {
+            hegel_result_t::HEGEL_OK => Ok(()),
+            // The handle pointer is always live here, so an invalid-handle
+            // code can only mean its region has died (the document was
+            // already read, or the region's anchor was retracted).
+            hegel_result_t::HEGEL_E_INVALID_HANDLE => Err(PrinterCallError::DeadRegion),
+            _ => Err(PrinterCallError::Other(last_error_string())),
+        }
+    }
+
+    /// Emit literal text. Must not contain newlines.
+    pub(crate) fn text(&self, s: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_text(ctx, self.raw, s.as_ptr(), s.len())
+        }))
+    }
+
+    /// Emit a break point rendering as `sep` when the enclosing group fits.
+    pub(crate) fn breakable(&self, sep: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_breakable(ctx, self.raw, sep.as_ptr(), sep.len())
+        }))
+    }
+
+    /// Emit an unconditional newline plus the current indentation.
+    pub(crate) fn hard_break(&self) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_hard_break(ctx, self.raw)
+        }))
+    }
+
+    /// Attach a comment (passed in full rendered form) to the line currently
+    /// being written: it is emitted at the end of that line, forces every
+    /// open group to break, and is excluded from width accounting.
+    pub(crate) fn comment(&self, text: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_comment(ctx, self.raw, text.as_ptr(), text.len())
+        }))
+    }
+
+    /// Open a group: emit `open`, then indent subsequent break points by
+    /// `indent`.
+    pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_begin_group(ctx, self.raw, indent, open.as_ptr(), open.len())
+        }))
+    }
+
+    /// Close the innermost group: undo its `begin_group` indentation, then
+    /// emit `close`.
+    pub(crate) fn end_group(&self, close: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_end_group(ctx, self.raw, close.as_ptr(), close.len())
+        }))
+    }
+
+    /// Adjust the indentation applied by subsequent break points.
+    pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_shift_indent(ctx, self.raw, delta)
+        }))
+    }
+
+    /// Open a deferred hole at this handle's current position and return a
+    /// handle onto its slot. Content written to the slot is spliced in at
+    /// the hole's position when [`PrinterHandle::resolve`] runs.
+    pub(crate) fn deferred(&self) -> Result<PrinterHandle, PrinterCallError> {
+        let mut raw: *mut hegel_c::HegelPrinter = ptr::null_mut();
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_deferred(ctx, self.raw, &mut raw)
+        }))?;
+        Ok(PrinterHandle { raw })
+    }
+
+    /// Splice every deferred hole's content in at its position; all slots of
+    /// the session die.
+    pub(crate) fn resolve(&self) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_resolve(ctx, self.raw)
+        }))
+    }
+
+    /// Open a speculative region: subsequent output buffers until committed
+    /// or aborted.
+    pub(crate) fn begin_speculative(&self) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_begin_speculative(ctx, self.raw)
+        }))
+    }
+
+    /// Close the innermost speculative region, keeping its content.
+    pub(crate) fn commit_speculative(&self) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_commit_speculative(ctx, self.raw)
+        }))
+    }
+
+    /// Close the innermost speculative region, discarding its content.
+    pub(crate) fn abort_speculative(&self) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_abort_speculative(ctx, self.raw)
+        }))
+    }
+
+    /// Flush pending break points and read everything printed so far.
+    pub(crate) fn value(&self) -> Result<String, PrinterCallError> {
+        let mut result = hegel_c::hegel_printer_value_result_t {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_value(ctx, self.raw, &mut result)
+        }))?;
+        // SAFETY: on success the engine guarantees `data` is a non-null
+        // engine-allocated buffer of `len` bytes; it is copied out and then
+        // released exactly once via hegel_printer_value_result_free.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec();
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_value_result_free(ctx, &mut result)
+        }));
+        Ok(string_from_engine_bytes(bytes))
+    }
+}
+
+impl Drop for PrinterHandle {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from hegel_printer_new / hegel_printer_deferred /
+        // hegel_test_case_printer and is freed exactly once here.
+        free_on_drop(|ctx| unsafe { hegel_c::hegel_printer_free(ctx, self.raw) });
     }
 }
 

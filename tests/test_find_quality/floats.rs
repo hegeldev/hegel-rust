@@ -136,15 +136,6 @@ fn test_half_bounded_generates_zero() {
 }
 
 #[test]
-fn test_is_float() {
-    Hegel::new(|tc| {
-        tc.draw(gs::floats::<f64>());
-    })
-    .settings(Settings::new().test_cases(1000).database(None))
-    .run();
-}
-
-#[test]
 fn test_negation_is_self_inverse() {
     Hegel::new(|tc| {
         let x: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));

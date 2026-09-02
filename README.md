@@ -44,7 +44,7 @@ This test will fail when run with `cargo test`! Hegel will produce a minimal fai
 
 ```
 ---- test_matches_builtin stdout ----
-let vec1 = [0, 0];
+let vec1 = vec![0, 0];
 thread 'test_matches_builtin' (2) panicked at tests/readme.rs:16:5:
 assertion `left == right` failed
   left: [0, 0]

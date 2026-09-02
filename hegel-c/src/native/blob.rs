@@ -33,6 +33,8 @@
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
 use crate::native::database::{deserialize_choices, serialize_choices};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// `payload` is the raw [`serialize_choices`] output.
 const PREFIX_RAW: u8 = 0;

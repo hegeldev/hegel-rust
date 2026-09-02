@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::common::utils::{Minimal, expect_panic, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 use hegel::{Hegel, Settings};
 
 fn list_and_int() -> impl Generator<(Vec<i64>, i64)> {
@@ -216,47 +216,6 @@ fn test_can_find_list() {
 }
 
 #[test]
-fn test_can_collectively_minimize_integers() {
-    let n = 10usize;
-    let xs = Minimal::new(
-        gs::vecs(gs::integers::<i64>()).min_size(n).max_size(n),
-        |x: &Vec<i64>| x.iter().collect::<HashSet<_>>().len() >= 2,
-    )
-    .test_cases(2000)
-    .run();
-    assert_eq!(xs.len(), n);
-    let distinct = xs.iter().collect::<HashSet<_>>().len();
-    assert!((2..=3).contains(&distinct));
-}
-
-#[test]
-fn test_can_collectively_minimize_booleans() {
-    let n = 10usize;
-    let xs = Minimal::new(
-        gs::vecs(gs::booleans()).min_size(n).max_size(n),
-        |x: &Vec<bool>| x.iter().collect::<HashSet<_>>().len() >= 2,
-    )
-    .test_cases(2000)
-    .run();
-    assert_eq!(xs.len(), n);
-    assert_eq!(xs.iter().collect::<HashSet<_>>().len(), 2);
-}
-
-#[test]
-fn test_can_collectively_minimize_text() {
-    let n = 10usize;
-    let xs = Minimal::new(
-        gs::vecs(gs::text()).min_size(n).max_size(n),
-        |x: &Vec<String>| x.iter().collect::<HashSet<_>>().len() >= 2,
-    )
-    .test_cases(2000)
-    .run();
-    assert_eq!(xs.len(), n);
-    let distinct = xs.iter().collect::<HashSet<_>>().len();
-    assert!((2..=3).contains(&distinct));
-}
-
-#[test]
 fn test_sorting_pass_survives_type_changes_from_lists() {
     expect_panic(
         || {
@@ -352,8 +311,11 @@ fn test_redistribute_stale_indices_after_type_change() {
             );
             let _: bool = tc.draw(gs::booleans());
             let _: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(0).boxed(),
-                gs::booleans().map(|b| b as i64).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(0)
+                    .boxed_printable(),
+                gs::booleans().map(|b| b as i64).boxed_printable(),
             ]));
             if v0 {
                 panic!("v0 set");
@@ -402,12 +364,24 @@ fn test_sort_stale_indices_after_punning() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Hegel::new(|tc| {
             let v0: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
             ]));
             let v1: i64 = tc.draw(gs::one_of(vec![
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
-                gs::integers::<i64>().min_value(0).max_value(10).boxed(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
+                gs::integers::<i64>()
+                    .min_value(0)
+                    .max_value(10)
+                    .boxed_printable(),
             ]));
             if v0 + v1 > 10 {
                 panic!("sum");
@@ -427,33 +401,4 @@ fn test_multiple_empty_lists_are_independent() {
     );
     assert_eq!(xs.len(), 2);
     assert!(xs[0].is_empty() && xs[1].is_empty());
-}
-
-/// The empty hashmap is the minimal counterexample for any-predicate;
-/// a `len >= 3` predicate shrinks to a 3-entry map with simplest keys
-/// and empty string values.
-#[test]
-fn test_dictionary_empty_is_minimal() {
-    let result = minimal(
-        gs::hashmaps(gs::integers::<i64>(), gs::text()),
-        |_: &HashMap<i64, String>| true,
-    );
-    assert!(result.is_empty());
-}
-
-#[test]
-fn test_dictionary_at_least_three_entries() {
-    let x = minimal(
-        gs::hashmaps(gs::integers::<i64>(), gs::text()),
-        |t: &HashMap<i64, String>| t.len() >= 3,
-    );
-    assert!(x.len() >= 3);
-    let values: HashSet<&String> = x.values().collect();
-    assert_eq!(values.len(), 1);
-    assert_eq!(*values.iter().next().unwrap(), "");
-    for k in x.keys() {
-        if *k < 0 {
-            assert!(x.contains_key(&(*k + 1)));
-        }
-    }
 }

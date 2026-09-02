@@ -6,6 +6,7 @@ use crate::test_case::TestCase;
 /// Health checks detect common issues with test configuration that would
 /// otherwise cause tests to run inefficiently or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.
     FilterTooMuch,
@@ -50,6 +51,7 @@ impl HealthCheck {
 /// Corresponds to a subset of `hypothesis.Phase` (the `explain` phase is not
 /// yet supported in hegel-rust).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Phase {
     /// Run explicit test cases added via `#[hegel::explicit_test_case]`.
     Explicit,
@@ -65,6 +67,7 @@ pub enum Phase {
 
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Mode {
     /// Run a full test (multiple test cases with shrinking). This is the default.
     TestRun,
@@ -79,6 +82,7 @@ pub enum Mode {
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
 /// vs `backend="hypothesis-urandom"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Backend {
     /// The default: generate from a seeded pseudo-random generator. Runs are
     /// reproducible from [`Settings::seed`] and shrinking/replay work as usual.
@@ -102,6 +106,7 @@ pub enum Backend {
 
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Verbosity {
     /// Suppress all output.
     Quiet,
@@ -124,6 +129,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
@@ -141,17 +147,21 @@ pub struct Settings {
 impl Settings {
     /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        let in_ci = is_in_ci();
+        Self::for_ci(is_in_ci())
+    }
+
+    fn for_ci(in_ci: bool) -> Self {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             seed: None,
             derandomize: in_ci,
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
             phases: vec![
@@ -184,8 +194,23 @@ impl Settings {
     }
 
     /// Set the number of test cases to run (default: 100).
+    ///
+    /// The `HEGEL_TEST_CASES` environment variable, when set and non-empty,
+    /// overrides this value at runtime — including a value set explicitly
+    /// here or via `#[hegel::test(test_cases = ...)]`. This makes it easy to
+    /// scale a whole test suite up (a nightly deep run) or down (a quick
+    /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set the target number of steps run per stateful test case (default:
+    /// 50). Each stateful case runs at least one step and at most this many.
+    /// Has no effect on non-stateful tests. `n` must be at least 1; a smaller
+    /// value makes the run fail with a usage error.
+    pub fn stateful_step_count(mut self, n: i64) -> Self {
+        self.stateful_step_count = n;
         self
     }
 
@@ -208,6 +233,11 @@ impl Settings {
     }
 
     /// Set the database path for storing failing examples, or `None` to disable.
+    ///
+    /// The `HEGEL_DATABASE` environment variable, when set and non-empty,
+    /// overrides this value at runtime: the literal value `disabled` turns
+    /// the database off (matching the `--database` CLI flag's keyword), and
+    /// any other value is used as the database path.
     pub fn database(mut self, database: Option<String>) -> Self {
         self.database = match database {
             None => Database::Disabled,
@@ -271,6 +301,34 @@ impl Settings {
         self.phases.contains(&phase)
     }
 
+    /// Apply environment-variable overrides to these settings. Called once
+    /// per run, after all builder configuration, so the environment wins
+    /// over values set in source.
+    pub(crate) fn with_env_overrides(self) -> Self {
+        self.with_env_overrides_from(env_var)
+    }
+
+    fn with_env_overrides_from(mut self, env: impl Fn(&str) -> Option<String>) -> Self {
+        if let Some(value) = env("HEGEL_TEST_CASES") {
+            if !value.is_empty() {
+                match value.parse::<u64>() {
+                    Ok(n) if n > 0 => self.test_cases = n,
+                    _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
+                }
+            }
+        }
+        if let Some(value) = env("HEGEL_DATABASE") {
+            if !value.is_empty() {
+                self.database = if value == "disabled" {
+                    Database::Disabled
+                } else {
+                    Database::Path(value)
+                };
+            }
+        }
+        self
+    }
+
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
@@ -308,7 +366,15 @@ where
     Hegel::new(test_fn).run();
 }
 
+fn env_var(key: &str) -> Option<String> {
+    std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
+}
+
 fn is_in_ci() -> bool {
+    is_in_ci_from(env_var)
+}
+
+fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
@@ -324,8 +390,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+        None => env(key).is_some(),
+        Some(expected) => env(key).as_deref() == Some(expected),
     })
 }
 
@@ -395,10 +461,11 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
+        let settings = self.settings.with_env_overrides();
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,
-                &self.settings,
+                &settings,
                 self.database_key.as_deref(),
                 &blob,
                 self.test_location.as_ref(),
@@ -408,7 +475,7 @@ where
 
         crate::run_lifecycle::drive(
             self.test_fn,
-            &self.settings,
+            &settings,
             self.database_key.as_deref(),
             self.test_location.as_ref(),
         );

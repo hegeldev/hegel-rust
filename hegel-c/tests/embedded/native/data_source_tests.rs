@@ -4,9 +4,10 @@ use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
+use alloc::vec;
 
 fn random_source() -> (NativeDataSource, NativeTestCaseHandle) {
-    let ntc = NativeTestCase::new_random(EngineRng::seeded(7));
+    let ntc = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
     NativeDataSource::new(ntc)
 }
 
@@ -47,83 +48,155 @@ fn start_and_stop_span_return_ok() {
 }
 
 #[test]
-fn new_collection_returns_sequential_id() {
+fn new_collection_returns_state_with_requested_bounds() {
     let (ds, _handle) = random_source();
-    let id_a = ds.new_collection(0, None).unwrap();
-    let id_b = ds.new_collection(1, Some(3)).unwrap();
-    assert_eq!(id_a, 0);
-    assert_eq!(id_b, 1);
+    let unbounded = ds.new_collection(0, None).unwrap();
+    assert_eq!(unbounded.min_size, 0);
+    assert!(unbounded.max_size.is_infinite());
+    let bounded = ds.new_collection(1, Some(3)).unwrap();
+    assert_eq!(bounded.min_size, 1);
+    assert_eq!(bounded.max_size, 3.0);
 }
 
 #[test]
 fn collection_more_and_reject_round_trip() {
     let (ds, _handle) = random_source();
-    let id = ds.new_collection(2, Some(4)).unwrap();
-    assert!(ds.collection_more(id).unwrap());
-    ds.collection_reject(id, None).unwrap();
-    assert!(ds.collection_more(id).unwrap());
-    ds.collection_reject(id, Some("nope")).unwrap();
+    let mut state = ds.new_collection(2, Some(4)).unwrap();
+    assert!(ds.collection_more(&mut state).unwrap());
+    ds.collection_reject(&mut state, None).unwrap();
+    assert!(ds.collection_more(&mut state).unwrap());
+    ds.collection_reject(&mut state, Some("nope")).unwrap();
 }
 
 #[test]
 fn new_pool_pool_add_and_pool_generate_non_consuming() {
     let (ds, _handle) = random_source();
-    let pool = ds.new_pool().unwrap();
-    let v1 = ds.pool_add(pool).unwrap();
-    let v2 = ds.pool_add(pool).unwrap();
-    assert_eq!(v1, 1);
-    assert_eq!(v2, 2);
-    let drawn = ds.pool_generate(pool, false).unwrap();
+    let mut pool = ds.new_pool().unwrap();
+    let v1 = ds.pool_add(&mut pool).unwrap();
+    let v2 = ds.pool_add(&mut pool).unwrap();
+    assert_eq!(v1, 0);
+    assert_eq!(v2, 1);
+    let drawn = ds.pool_generate(&mut pool, false).unwrap();
     assert!(drawn == v1 || drawn == v2);
-    assert_eq!(ds.pool_generate(pool, true).ok().map(|_| ()), Some(()));
+    assert_eq!(ds.pool_generate(&mut pool, true).ok().map(|_| ()), Some(()));
+}
+
+/// The fresh-id window is anchored on ids ever drawn in the family, not on
+/// the live pool, so consuming draws do not destabilize later recorded ids.
+/// Original run: add(0), add(1), consume-draw(0), add(2). Deleting the
+/// add-1 step replays [0, 0, 2]; the final id 2 must survive even though
+/// the live pool is empty at that point.
+#[test]
+fn pool_add_ids_survive_deletion_before_a_consuming_draw() {
+    let choices = [
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Integer(BigInt::from(2)),
+    ];
+    let (ds, _handle) = NativeDataSource::new(NativeTestCase::for_choices(&choices, None, None));
+    let mut pool = ds.new_pool().unwrap();
+    assert_eq!(ds.pool_add(&mut pool).unwrap(), 0);
+    assert_eq!(ds.pool_generate(&mut pool, true).unwrap(), 0);
+    assert_eq!(ds.pool_add(&mut pool).unwrap(), 2);
 }
 
 #[test]
 fn pool_generate_on_empty_pool_returns_assume() {
     let (ds, _handle) = random_source();
-    let pool = ds.new_pool().unwrap();
+    let mut pool = ds.new_pool().unwrap();
     assert!(matches!(
-        ds.pool_generate(pool, false),
+        ds.pool_generate(&mut pool, false),
         Err(DataSourceError::Assume)
     ));
 }
 
-#[test]
-fn new_state_machine_returns_sequential_ids() {
-    let (ds, _handle) = random_source();
-    assert_eq!(
-        ds.new_state_machine(vec!["push".into(), "pop".into()], vec!["sorted".into()])
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        ds.new_state_machine(vec!["clear".into()], vec![]).unwrap(),
-        1
-    );
+fn sequential_machine(
+    ds: &NativeDataSource,
+    rule_names: Vec<String>,
+    invariant_names: Vec<String>,
+) -> Result<NativeStateMachine, DataSourceError> {
+    let rule_groups = vec![0; rule_names.len()];
+    ds.new_state_machine(rule_names, rule_groups, invariant_names, 1, 1)
 }
 
 #[test]
 fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
     let (ds, _handle) = random_source();
-    let err = ds.new_state_machine(vec![], vec![]).unwrap_err();
+    let err = match sequential_machine(&ds, vec![], vec![]) {
+        Err(e) => e,
+        Ok(_) => panic!("expected an InvalidArgument error"),
+    };
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("no rules"));
     assert!(!ds.test_aborted());
-    assert_eq!(
-        ds.new_state_machine(vec!["push".into()], vec![]).unwrap(),
-        0
-    );
+    sequential_machine(&ds, vec!["push".into()], vec![]).unwrap();
+}
+
+#[test]
+fn new_state_machine_with_non_parallel_rule_groups_is_invalid_argument() {
+    let (ds, _handle) = random_source();
+    let err = match ds.new_state_machine(vec!["a".into()], vec![0, 0], vec![], 1, 1) {
+        Err(e) => e,
+        Ok(_) => panic!("expected an InvalidArgument error"),
+    };
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    assert!(err.to_string().contains("parallel"));
+}
+
+#[test]
+fn new_state_machine_infers_the_groups_from_the_distinct_ids() {
+    let (ds, _handle) = random_source();
+    let mut machine = ds
+        .new_state_machine(
+            vec!["a".into(), "b".into(), "c".into()],
+            vec![-5, 40, -5],
+            vec![],
+            1,
+            1,
+        )
+        .unwrap();
+    for _ in 0..20 {
+        match ds.state_machine_next_group(&mut machine).unwrap() {
+            Some(group) => assert!(group == -5 || group == 40),
+            None => break,
+        }
+    }
+}
+
+#[test]
+fn new_state_machine_with_bad_concurrency_bounds_is_invalid_argument() {
+    let (ds, _handle) = random_source();
+    for (min, max) in [(0, 1), (-1, -1), (3, 2)] {
+        let err = match ds.new_state_machine(vec!["a".into()], vec![0], vec![], min, max) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an InvalidArgument error"),
+        };
+        assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+        assert!(
+            err.to_string()
+                .contains("concurrency bounds must satisfy 1 <= min <= max")
+        );
+        assert!(!ds.test_aborted());
+    }
 }
 
 #[test]
 fn state_machine_next_rule_returns_in_range_indices() {
     let (ds, _handle) = random_source();
-    let id = ds
-        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
-        .unwrap();
-    assert!(ds.state_machine_next_rule(id).unwrap().unwrap() < 3);
+    let mut machine =
+        sequential_machine(&ds, vec!["a".into(), "b".into(), "c".into()], vec![]).unwrap();
+    assert!(ds.state_machine_next_group(&mut machine).unwrap().is_some());
+    assert!(
+        ds.state_machine_next_rule(&mut machine, 0)
+            .unwrap()
+            .unwrap()
+            < 3
+    );
     for _ in 0..20 {
-        match ds.state_machine_next_rule(id).unwrap() {
+        if ds.state_machine_next_group(&mut machine).unwrap().is_none() {
+            break;
+        }
+        match ds.state_machine_next_rule(&mut machine, 0).unwrap() {
             Some(index) => assert!(index < 3),
             None => break,
         }
@@ -131,17 +204,40 @@ fn state_machine_next_rule_returns_in_range_indices() {
 }
 
 #[test]
-fn state_machine_next_rule_on_exhausted_source_stops_test() {
+fn with_ntc_maps_internal_engine_errors_without_latching_abort() {
+    let (ds, _handle) = random_source();
+    let e = crate::control::InternalError::new(format_args!("engine invariant"));
+    let out: Result<(), DataSourceError> = ds.with_ntc(|_| Err(EngineError::Internal(e.clone())));
+    match out {
+        Err(DataSourceError::Internal(got)) => assert_eq!(got, e),
+        other => panic!("expected DataSourceError::Internal, got {other:?}"),
+    }
+    assert!(!ds.test_aborted());
+}
+
+#[test]
+fn state_machine_calls_on_exhausted_source_stop_test() {
     let (ds, _handle) = exhausted_source();
-    let id = ds
-        .new_state_machine(vec!["a".into(), "b".into()], vec![])
-        .unwrap();
     assert!(matches!(
-        ds.state_machine_next_rule(id),
+        sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]),
         Err(DataSourceError::StopTest)
     ));
-    assert!(ds.state_machine_next_rule(id).is_err());
-    assert!(ds.new_state_machine(vec!["a".into()], vec![]).is_err());
+    let (fresh, _fresh_handle) = random_source();
+    let mut machine = sequential_machine(&fresh, vec!["a".into(), "b".into()], vec![]).unwrap();
+    assert!(matches!(
+        ds.state_machine_next_group(&mut machine),
+        Err(DataSourceError::StopTest)
+    ));
+    assert!(
+        fresh
+            .state_machine_next_group(&mut machine)
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        ds.state_machine_next_rule(&mut machine, 0),
+        Err(DataSourceError::StopTest)
+    ));
 }
 
 #[test]
@@ -214,44 +310,34 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
     assert!(ds.start_span(0).is_err());
     assert!(ds.stop_span(false).is_err());
     assert!(ds.new_collection(0, None).is_err());
-    assert!(ds.collection_more(0).is_err());
-    assert!(ds.collection_reject(0, None).is_err());
+    let mut state = ManyState::new(0, None);
+    assert!(ds.collection_more(&mut state).is_err());
+    assert!(ds.collection_reject(&mut state, None).is_err());
     assert!(ds.generate_boolean(0.5, None).is_err());
     assert!(ds.new_pool().is_err());
-    assert!(ds.pool_add(0).is_err());
-    assert!(ds.pool_generate(0, false).is_err());
+    let mut pool = NativeVariables::new();
+    assert!(ds.pool_add(&mut pool).is_err());
+    assert!(ds.pool_generate(&mut pool, false).is_err());
 }
 
 #[test]
-fn unknown_handle_ids_map_to_invalid_argument_without_panicking() {
+fn state_machine_rule_rejected_reports_the_outstanding_rule() {
     let (ds, _handle) = random_source();
-
-    let more = ds.collection_more(999).unwrap_err();
+    let mut machine = sequential_machine(&ds, vec!["a".into(), "b".into()], vec![]).unwrap();
+    let without_draw = ds.state_machine_rule_rejected(&mut machine, 0).unwrap_err();
     assert!(
-        matches!(&more, DataSourceError::InvalidArgument(m) if m.contains("unknown collection id")),
-        "{more:?}"
+        matches!(&without_draw, DataSourceError::InvalidArgument(m) if m.contains("no outstanding rule")),
+        "{without_draw:?}"
     );
-    let reject = ds.collection_reject(999, None).unwrap_err();
+    assert!(!ds.test_aborted());
+    assert!(ds.state_machine_next_group(&mut machine).unwrap().is_some());
     assert!(
-        matches!(&reject, DataSourceError::InvalidArgument(m) if m.contains("unknown collection id")),
-        "{reject:?}"
+        ds.state_machine_next_rule(&mut machine, 0)
+            .unwrap()
+            .is_some()
     );
-
-    let pool_negative = ds.pool_add(-1).unwrap_err();
-    assert!(
-        matches!(&pool_negative, DataSourceError::InvalidArgument(m) if m.contains("unknown variable pool id")),
-        "{pool_negative:?}"
-    );
-    let pool_past_end = ds.pool_generate(0, false).unwrap_err();
-    assert!(
-        matches!(&pool_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown variable pool id")),
-        "{pool_past_end:?}"
-    );
-    let sm_past_end = ds.state_machine_next_rule(0).unwrap_err();
-    assert!(
-        matches!(&sm_past_end, DataSourceError::InvalidArgument(m) if m.contains("unknown state machine id")),
-        "{sm_past_end:?}"
-    );
+    ds.state_machine_rule_rejected(&mut machine, 0).unwrap();
+    assert!(ds.state_machine_rule_rejected(&mut machine, 0).is_err());
 }
 
 #[test]
@@ -324,7 +410,7 @@ fn clone_stream_draws_independently_and_reassembles() {
 
     let nodes = NativeDataSource::take_nodes(&handle);
     assert_eq!(nodes.len(), 3);
-    let ChoiceValue::Clone(record) = &nodes[1].value else {
+    let ChoiceValue::Clone(record) = &nodes[1].value() else {
         panic!("expected the clone node to carry its stream");
     };
     assert_eq!(record.realized_nodes().unwrap().len(), 1);
@@ -333,13 +419,13 @@ fn clone_stream_draws_independently_and_reassembles() {
 #[test]
 fn pools_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let pool = ds.new_pool().unwrap();
-    let v1 = ds.pool_add(pool).unwrap();
+    let mut pool = ds.new_pool().unwrap();
+    let v1 = ds.pool_add(&mut pool).unwrap();
     let child = ds.clone_stream().unwrap();
-    let got = child.pool_generate(pool, true).unwrap();
+    let got = child.pool_generate(&mut pool, true).unwrap();
     assert_eq!(got, v1);
     assert!(matches!(
-        ds.pool_generate(pool, false),
+        ds.pool_generate(&mut pool, false),
         Err(DataSourceError::Assume)
     ));
 }
@@ -347,21 +433,30 @@ fn pools_are_shared_across_cloned_streams() {
 #[test]
 fn collections_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let collection = ds.new_collection(1, Some(1)).unwrap();
+    let mut collection = ds.new_collection(1, Some(1)).unwrap();
     let child = ds.clone_stream().unwrap();
-    assert!(child.collection_more(collection).unwrap());
-    assert!(!child.collection_more(collection).unwrap());
+    assert!(child.collection_more(&mut collection).unwrap());
+    assert!(!child.collection_more(&mut collection).unwrap());
 }
 
 #[test]
 fn state_machines_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let machine = ds
-        .new_state_machine(vec!["a".into(), "b".into(), "c".into()], vec![])
+    let mut machine = ds
+        .new_state_machine(
+            vec!["a".into(), "b".into(), "c".into()],
+            vec![0, 0, 0],
+            vec![],
+            2,
+            2,
+        )
         .unwrap();
+    assert_eq!(ds.state_machine_next_group(&mut machine).unwrap(), Some(0));
     let child = ds.clone_stream().unwrap();
-    assert!(child.state_machine_next_rule(machine).unwrap().unwrap() < 3);
-    if let Some(index) = ds.state_machine_next_rule(machine).unwrap() {
+    if let Some(index) = child.state_machine_next_rule(&mut machine, 1).unwrap() {
+        assert!(index < 3);
+    }
+    if let Some(index) = ds.state_machine_next_rule(&mut machine, 0).unwrap() {
         assert!(index < 3);
     }
 }
@@ -392,8 +487,19 @@ fn mark_complete_from_a_clone_concludes_the_family() {
     ));
     assert!(matches!(
         NativeDataSource::take_outcome(&handle),
-        TestCaseResult::Invalid
+        Ok(TestCaseResult::Invalid)
     ));
+}
+
+#[test]
+fn take_outcome_reports_a_usage_error_for_an_unconcluded_family() {
+    let (ds, handle) = random_source();
+    ds.generate_boolean(0.5, None).unwrap();
+    let err = NativeDataSource::take_outcome(&handle).unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
+    let msg = err.to_string();
+    assert!(msg.contains("never marked complete"), "{msg}");
+    assert!(msg.contains("mark_complete"), "{msg}");
 }
 
 #[test]

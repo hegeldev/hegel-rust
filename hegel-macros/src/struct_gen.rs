@@ -2,45 +2,56 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
 
-use crate::utils::{GenericsParts, default_gen_bounds, split_generics};
+use crate::utils::{
+    GenericsParts, default_gen_bounds, generator_param_ident, print_shape, split_generics,
+};
 
 /// Derive Generator for a struct.
 pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream {
     let name = &input.ident;
     let generator_name = format_ident!("{}Generator", name);
 
-    let fields = match &data.fields {
-        Fields::Named(fields) => &fields.named,
-        Fields::Unnamed(_) => {
-            return syn::Error::new_spanned(
-                input,
-                "Generator can only be derived for structs with named fields",
-            )
-            .to_compile_error()
-            .into();
-        }
-        Fields::Unit => {
-            return syn::Error::new_spanned(input, "Generator cannot be derived for unit structs")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
-    for field_name in &field_names {
-        if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
-            return syn::Error::new_spanned(
-                field_name,
-                format!(
-                    "field name `{field_name}` collides with the generated builder API of \
-                     #[derive(DefaultGenerator)]; rename the field or implement \
-                     DefaultGenerator by hand"
-                ),
-            )
-            .to_compile_error()
-            .into();
-        }
+    if data.fields.is_empty() {
+        return syn::Error::new_spanned(
+            name,
+            "DefaultGenerator cannot be derived for structs with no fields: \
+             there is nothing to configure; use gs::just(...) instead",
+        )
+        .to_compile_error()
+        .into();
     }
+
+    let (field_names, is_tuple): (Vec<syn::Ident>, bool) = match &data.fields {
+        Fields::Named(fields) => {
+            let names: Vec<_> = fields
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().unwrap().clone())
+                .collect();
+            for field_name in &names {
+                if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
+                    return syn::Error::new_spanned(
+                        field_name,
+                        format!(
+                            "field name `{field_name}` collides with the generated builder API \
+                             of #[derive(DefaultGenerator)]; rename the field or implement \
+                             DefaultGenerator by hand"
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+            (names, false)
+        }
+        Fields::Unnamed(fields) => {
+            let names = (0..fields.unnamed.len())
+                .map(|i| format_ident!("_{}", i))
+                .collect();
+            (names, true)
+        }
+        Fields::Unit => unreachable!(),
+    };
 
     let GenericsParts {
         gen_params,
@@ -53,6 +64,11 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = quote! { #name #ty_generics };
+    let gen_params = if gen_params.is_empty() {
+        quote! {}
+    } else {
+        quote! { #gen_params, }
+    };
     let phantom_field = if input.generics.params.is_empty() {
         quote! {}
     } else {
@@ -64,89 +80,164 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         quote! { __phantom: ::core::marker::PhantomData, }
     };
 
-    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+    let field_types: Vec<_> = data.fields.iter().map(|f| &f.ty).collect();
+    let mut generator_params: Vec<syn::Ident> = field_names
+        .iter()
+        .map(|field_name| generator_param_ident(&field_name.to_string()))
+        .collect();
+    {
+        let mut seen = std::collections::HashSet::new();
+        if generator_params
+            .iter()
+            .any(|param| !seen.insert(param.to_string()))
+        {
+            generator_params = (0..field_names.len())
+                .map(|i| format_ident!("__G{}", i))
+                .collect();
+        }
+    }
+
+    let generator_param_decls =
+        generator_params
+            .iter()
+            .zip(field_types.iter())
+            .map(|(param, ty)| {
+                quote! {
+                    #param = <#ty as ::hegel::generators::DefaultGenerator>::Generator
+                }
+            });
 
     let generator_fields = field_names
+        .iter()
+        .zip(generator_params.iter())
+        .map(|(name, param)| {
+            quote! { #name: #param }
+        });
+
+    let new_fields = field_names
         .iter()
         .zip(field_types.iter())
         .map(|(name, ty)| {
             quote! {
-                #name: ::hegel::generators::BoxedGenerator<'a, #ty>
+                #name: <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
             }
         });
 
-    let new_field_inits = field_types.iter().map(|ty| {
-        quote! {
-            <#ty as ::hegel::generators::DefaultGenerator>::default_generator().boxed()
-        }
-    });
+    let default_bounds = default_gen_bounds(&field_types);
 
-    let new_fields = field_names.iter().zip(new_field_inits).map(|(name, init)| {
-        quote! { #name: #init }
-    });
-
-    let default_bounds = default_gen_bounds(&field_types, quote! { 'a });
-
-    let with_method_impls =
-        field_names
+    let with_method_impls = field_names.iter().enumerate().map(|(index, field_name)| {
+        let field_type = field_types[index];
+        let params_before = &generator_params[..index];
+        let params_after = &generator_params[index + 1..];
+        let moves = field_names
             .iter()
-            .zip(field_types.iter())
-            .map(|(field_name, field_type)| {
-                quote! {
-                    /// Set a custom generator for this field.
-                    pub fn #field_name<G>(mut self, generator: G) -> Self
-                    where
-                        G: ::hegel::generators::Generator<#field_type> + Send + Sync + 'a,
-                    {
-                        self.#field_name = generator.boxed();
-                        self
-                    }
+            .zip(generator_params.iter())
+            .enumerate()
+            .map(|(other, (other_name, _))| {
+                if other == index {
+                    quote! { #field_name: generator }
+                } else {
+                    quote! { #other_name: self.#other_name }
                 }
             });
-
-    let generate_fields = field_names.iter().map(|name| {
         quote! {
-            #name: self.#name.do_draw(__tc)
+            /// Set a custom generator for this field.
+            ///
+            /// Any [`Generator`](::hegel::generators::Generator) of the
+            /// field's type is accepted; the resulting generator can be
+            /// passed to [`draw`](::hegel::TestCase::draw) exactly when
+            /// every field generator is a
+            /// [`PrintableGenerator`](::hegel::generators::PrintableGenerator).
+            pub fn #field_name<G>(
+                self,
+                generator: G,
+            ) -> #generator_name<#(#param_uses,)* #(#params_before,)* G, #(#params_after,)*>
+            where
+                G: ::hegel::generators::Generator<#field_type>,
+            {
+                #generator_name {
+                    #(#moves,)*
+                    #phantom_init
+                }
+            }
         }
     });
 
-    let default_generator_bounds = default_gen_bounds(&field_types, quote! { 'static });
+    let (span_label, construct) = if is_tuple {
+        let draws = field_names.iter().map(|name| {
+            quote! { self.#name.do_draw(__tc) }
+        });
+        (
+            quote! { ::hegel::generators::labels::TUPLE },
+            quote! { #name(#(#draws,)*) },
+        )
+    } else {
+        let generate_fields = field_names.iter().map(|name| {
+            quote! { #name: self.#name.do_draw(__tc) }
+        });
+        (
+            quote! { ::hegel::generators::labels::FIXED_DICT },
+            quote! { #name { #(#generate_fields,)* } },
+        )
+    };
+
+    let print_idents: Vec<_> = (0..field_names.len())
+        .map(|i| format_ident!("__field{i}"))
+        .collect();
+    let print_construct = if is_tuple {
+        quote! { #name(#(#print_idents,)*) }
+    } else {
+        quote! { #name { #(#field_names: #print_idents,)* } }
+    };
+    let print_actions: Vec<_> = print_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(print_ident, field_name)| {
+            quote! {
+                let #print_ident = __tc.draw_and_print(&self.#field_name, __printer);
+            }
+        })
+        .collect();
+    let print_body = print_shape(&name.to_string(), &data.fields, &print_actions);
 
     let expanded = quote! {
+        #[allow(non_camel_case_types)]
         const _: () = {
             use ::hegel::generators::Generator as _;
+            use ::hegel::generators::PrintableGenerator as _;
 
-            pub struct #generator_name<'a, #gen_params>
+            pub struct #generator_name<#gen_params #(#generator_param_decls,)*>
             where
                 #(#user_predicates,)*
-                #(#type_param_idents: 'a,)*
             {
                 #(#generator_fields,)*
                 #phantom_field
             }
 
-            impl<'a, #gen_params> #generator_name<'a, #(#param_uses,)*>
+            impl<#gen_params> #generator_name<#(#param_uses,)*>
             where
                 #(#user_predicates,)*
-                #(#type_param_idents: 'a,)*
+                #(#default_bounds,)*
             {
-                pub fn new() -> Self
-                where
-                    #(#default_bounds,)*
-                {
+                pub fn new() -> Self {
                     Self {
                         #(#new_fields,)*
                         #phantom_init
                     }
                 }
+            }
 
+            impl<#gen_params #(#generator_params,)*>
+                #generator_name<#(#param_uses,)* #(#generator_params,)*>
+            where
+                #(#user_predicates,)*
+            {
                 #(#with_method_impls)*
             }
 
-            impl<'a, #gen_params> Default for #generator_name<'a, #(#param_uses,)*>
+            impl<#gen_params> Default for #generator_name<#(#param_uses,)*>
             where
                 #(#user_predicates,)*
-                #(#type_param_idents: 'a,)*
                 #(#default_bounds,)*
             {
                 fn default() -> Self {
@@ -154,17 +245,35 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 }
             }
 
-            impl<'a, #gen_params> ::hegel::generators::Generator<#self_ty>
-                for #generator_name<'a, #(#param_uses,)*>
+            impl<#gen_params #(#generator_params,)*> ::hegel::generators::Generator<#self_ty>
+                for #generator_name<#(#param_uses,)* #(#generator_params,)*>
             where
                 #(#user_predicates,)*
-                #(#type_param_idents: 'a,)*
+                #(#generator_params: ::hegel::generators::Generator<#field_types>,)*
             {
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::FIXED_DICT);
-                    let __result = #name {
-                        #(#generate_fields,)*
-                    };
+                    __tc.start_span(#span_label);
+                    let __result = #construct;
+                    __tc.stop_span(false);
+                    __result
+                }
+            }
+
+            impl<#gen_params #(#generator_params,)*>
+                ::hegel::generators::PrintableGenerator<#self_ty>
+                for #generator_name<#(#param_uses,)* #(#generator_params,)*>
+            where
+                #(#user_predicates,)*
+                #(#generator_params: ::hegel::generators::PrintableGenerator<#field_types>,)*
+            {
+                fn do_draw_and_print(
+                    &self,
+                    __tc: &::hegel::TestCase,
+                    __printer: &mut ::hegel::PrettyPrinter,
+                ) -> #self_ty {
+                    __tc.start_span(#span_label);
+                    #print_body
+                    let __result = #print_construct;
                     __tc.stop_span(false);
                     __result
                 }
@@ -174,9 +283,9 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             where
                 #(#user_predicates,)*
                 #(#type_param_idents: 'static,)*
-                #(#default_generator_bounds,)*
+                #(#default_bounds,)*
             {
-                type Generator = #generator_name<'static, #(#param_uses,)*>;
+                type Generator = #generator_name<#(#param_uses,)*>;
                 fn default_generator() -> Self::Generator {
                     #generator_name::new()
                 }

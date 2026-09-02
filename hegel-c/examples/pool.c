@@ -83,7 +83,7 @@ int main(void) {
         if (tc == NULL) break;
 
         struct live_set live = { .count = 0 };
-        int64_t pool;
+        hegel_pool_t *pool;
         if (hegel_new_pool(ctx, tc, &pool) != HEGEL_OK) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
@@ -122,6 +122,10 @@ int main(void) {
             }
             if (live.count > max_pool) max_pool = live.count;
         }
+
+        /* The pool handle is caller-owned and freed independently of the
+         * test case. */
+        HEGEL_CHECK(hegel_pool_free, ctx, pool);
 
         if (bad) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING,

@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
+use alloc::vec::Vec;
 
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceData, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker};
 
@@ -21,30 +22,24 @@ impl<'a> Shrinker<'a> {
     }
 
     pub(super) async fn sort_values_integers(&mut self) -> ShrinkResult<()> {
-        self.try_sort_group(|k| matches!(k, ChoiceKind::Integer(_)))
+        self.try_sort_group(|d| matches!(d, ChoiceData::Integer(..)))
             .await
     }
 
     pub(super) async fn sort_values_booleans(&mut self) -> ShrinkResult<()> {
-        self.try_sort_group(|k| matches!(k, ChoiceKind::Boolean(_)))
+        self.try_sort_group(|d| matches!(d, ChoiceData::Boolean(..)))
             .await
     }
 
     async fn try_sort_group<F>(&mut self, matches_kind: F) -> ShrinkResult<()>
     where
-        F: Fn(&ChoiceKind) -> bool,
+        F: Fn(&ChoiceData) -> bool,
     {
         let indices: Vec<usize> = self
             .current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| {
-                if matches_kind(n.kind.as_ref()) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(i, n)| if matches_kind(&n.data) { Some(i) } else { None })
             .collect();
 
         if indices.len() < 2 {
@@ -53,14 +48,14 @@ impl<'a> Shrinker<'a> {
 
         let values: Vec<ChoiceValue> = indices
             .iter()
-            .map(|&i| self.current_nodes[i].value.clone())
+            .map(|&i| self.current_nodes[i].value())
             .collect();
         let mut keyed: Vec<_> = indices
             .iter()
             .map(|&i| {
                 (
                     self.current_nodes[i].sort_key_ref(),
-                    self.current_nodes[i].value.clone(),
+                    self.current_nodes[i].value(),
                 )
             })
             .collect();
@@ -85,8 +80,7 @@ impl<'a> Shrinker<'a> {
                     .iter()
                     .copied()
                     .filter(|&i| {
-                        i < self.current_nodes.len()
-                            && matches_kind(self.current_nodes[i].kind.as_ref())
+                        i < self.current_nodes.len() && matches_kind(&self.current_nodes[i].data)
                     })
                     .collect();
                 if j >= valid.len() {
@@ -99,9 +93,9 @@ impl<'a> Shrinker<'a> {
                 {
                     break;
                 }
-                let v_j = self.current_nodes[idx_j].value.clone();
-                let v_prev = self.current_nodes[idx_prev].value.clone();
-                let mut swap = HashMap::new();
+                let v_j = self.current_nodes[idx_j].value();
+                let v_prev = self.current_nodes[idx_prev].value();
+                let mut swap = HashMap::default();
                 swap.insert(idx_prev, v_j);
                 swap.insert(idx_j, v_prev);
                 if self.replace(&swap).await? {
@@ -125,11 +119,11 @@ impl<'a> Shrinker<'a> {
             while i + 2 * block_size <= self.current_nodes.len() {
                 let j = i + block_size;
 
-                let types_a: Vec<std::mem::Discriminant<ChoiceKind>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(self.current_nodes[i + k].kind.as_ref()))
+                let types_a: Vec<core::mem::Discriminant<ChoiceData>> = (0..block_size)
+                    .map(|k| core::mem::discriminant(&self.current_nodes[i + k].data))
                     .collect();
-                let types_b: Vec<std::mem::Discriminant<ChoiceKind>> = (0..block_size)
-                    .map(|k| std::mem::discriminant(self.current_nodes[j + k].kind.as_ref()))
+                let types_b: Vec<core::mem::Discriminant<ChoiceData>> = (0..block_size)
+                    .map(|k| core::mem::discriminant(&self.current_nodes[j + k].data))
                     .collect();
 
                 if types_a != types_b {
@@ -138,10 +132,10 @@ impl<'a> Shrinker<'a> {
                 }
 
                 let block_a: Vec<ChoiceValue> = (0..block_size)
-                    .map(|k| self.current_nodes[i + k].value.clone())
+                    .map(|k| self.current_nodes[i + k].value())
                     .collect();
                 let block_b: Vec<ChoiceValue> = (0..block_size)
-                    .map(|k| self.current_nodes[j + k].value.clone())
+                    .map(|k| self.current_nodes[j + k].value())
                     .collect();
 
                 if block_a == block_b {
@@ -149,7 +143,7 @@ impl<'a> Shrinker<'a> {
                     continue;
                 }
 
-                let mut swap = HashMap::new();
+                let mut swap = HashMap::default();
                 for k in 0..block_size {
                     swap.insert(i + k, block_b[k].clone());
                     swap.insert(j + k, block_a[k].clone());

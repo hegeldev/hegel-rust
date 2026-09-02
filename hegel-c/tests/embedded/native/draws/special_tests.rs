@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::*;
@@ -5,7 +6,7 @@ use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
 
 fn fresh_ntc(seed: u64) -> NativeTestCase {
-    NativeTestCase::new_random(EngineRng::seeded(seed))
+    NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap()
 }
 
 fn date(year: i32, month: u8, day: u8) -> Date {
@@ -157,7 +158,7 @@ fn generate_uuid_default_can_produce_non_rfc_versions() {
 
 #[test]
 fn generate_uuid_never_produces_nil() {
-    let mut ntc = NativeTestCase::for_simplest(1000);
+    let mut ntc = NativeTestCase::for_simplest(1000).unwrap();
     let bytes = generate_uuid(&mut ntc, None).unwrap();
     assert_ne!(bytes, [0u8; 16], "nil UUID must never be produced");
 }

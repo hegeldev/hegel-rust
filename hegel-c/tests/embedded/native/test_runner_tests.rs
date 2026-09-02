@@ -10,8 +10,10 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use crate::native::core::choices::BooleanChoice;
+use alloc::vec;
 
-use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Mode, Phase};
 use std::time::Duration;
@@ -47,6 +49,25 @@ fn boom(msg: &str) -> TestCaseResult {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
     })
+}
+
+/// Create (and immediately drop) a one-rule state machine whose declared
+/// concurrency bound is above 1. On the first such case of a run the
+/// engine rejects the creation with an assume violation (`Err(Invalid)`
+/// here): the case is discarded and the run flips into nondeterministic
+/// mode, and later cases create the machine successfully.
+fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
+    match ds.new_state_machine(
+        vec!["rule".to_string()],
+        vec![0],
+        alloc::vec::Vec::new(),
+        2,
+        2,
+    ) {
+        Ok(_) => Ok(()),
+        Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
+        Err(_) => Err(TestCaseResult::Overrun),
+    }
 }
 
 #[test]
@@ -92,8 +113,6 @@ fn invalid_thresholds_match_hypothesis() {
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::native::core::ChoiceKind;
-use crate::native::core::choices::BooleanChoice;
 use crate::native::data_tree::{DataTreeNode, record_tree};
 
 /// Build an [`Engine`] whose driver runs `body` (returning the test
@@ -110,7 +129,7 @@ where
     let settings = Settings::new().database(None);
     let exchange = CaseExchange::new();
     let fut = async {
-        let mut ctx = Engine::new(&settings, None, &exchange);
+        let mut ctx = Engine::new(&settings, None, &exchange).unwrap();
         after(&mut ctx, &exec_count).await;
     };
     crate::exchange::drive(&exchange, fut, |ds| {
@@ -133,6 +152,7 @@ fn run_single_case_sync(
         run_single_case(settings, key, &exchange),
         run_case,
     )
+    .unwrap()
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -143,7 +163,7 @@ fn run_main_sync(
     run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
     too_slow_threshold: Duration,
     shrink_budget: Duration,
-) -> Result<Vec<Failure>, crate::backend::RunError> {
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
     let exchange = CaseExchange::new();
     crate::exchange::drive(
         &exchange,
@@ -153,11 +173,7 @@ fn run_main_sync(
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 #[test]
@@ -176,7 +192,8 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
                     None,
                     0,
                 )
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 0, "tree-known path must not run the body");
             assert_eq!(run.nodes.len(), 1);
@@ -194,13 +211,73 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
+        },
+    );
+}
+
+#[test]
+fn cached_test_function_predicts_overrun_for_truncated_known_path() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            let first = ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(first.status, Status::Valid);
+            assert_eq!(count.get(), 1);
+
+            let truncated = [ChoiceValue::Boolean(false)];
+            let predicted = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(predicted.status, Status::EarlyStop);
+            assert_eq!(count.get(), 1, "a predicted overrun must not run the body");
+            assert_eq!(predicted.nodes.len(), 1);
+
+            let again = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(again.status, Status::EarlyStop);
+            assert_eq!(count.get(), 1);
+        },
+    );
+}
+
+#[test]
+fn cached_test_function_probe_executes_past_a_predicted_overrun() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1);
+
+            let prefix = [ChoiceValue::Boolean(false)];
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert_eq!(
+                count.get(),
+                2,
+                "a probe must execute the body to draw its continuation"
+            );
         },
     );
 }
@@ -221,12 +298,12 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
@@ -254,7 +331,8 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
         async |ctx, _| {
             let run = ctx
                 .execute(NativeTestCase::for_choices(&[], None, None))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
         },
     );
@@ -269,11 +347,11 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
         },
         async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await;
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
-            assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
+            assert_eq!(run.nodes[0].value(), ChoiceValue::Boolean(true));
         },
     );
 }
@@ -302,7 +380,7 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -337,7 +415,7 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -377,7 +455,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             ctx.valid_test_cases = 100;
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 0);
             assert_eq!(ctx.calls, 0);
@@ -387,28 +465,60 @@ fn span_mutation_stops_when_example_budget_is_full() {
 }
 
 #[test]
+fn span_mutation_extends_diverged_proposals_with_random_draws() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..4 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 2), span(1, 2)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert!(
+                ctx.valid_test_cases >= 1,
+                "a mutated sequence that runs out of data should be completed \
+                 with fresh random draws instead of being discarded, got {} \
+                 valid cases from {} calls",
+                ctx.valid_test_cases,
+                ctx.calls
+            );
+        },
+    );
+}
+
+#[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Prng(_))
+    ));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
-}
-
-/// Wrap a `run_main` outcome into the aggregate
-/// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
-/// convenient for tests that drive `run_main` directly to inject the
-/// TooSlow / shrink-budget thresholds: the exploration failures wrapped up.
-fn complete_native(
-    exploration: Result<Vec<crate::backend::Failure>, crate::backend::RunError>,
-) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    Ok(crate::backend::TestRunResult {
-        failures: exploration?,
-    })
+    assert!(matches!(
+        create_rng(&settings, None),
+        Ok(EngineRng::Urandom(_))
+    ));
 }
 
 #[test]
@@ -463,7 +573,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -488,7 +598,8 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
+    assert!(!result.nondeterministic);
     assert!(
         result.failures[0].origin.contains("always fails"),
         "{:?}",
@@ -506,13 +617,13 @@ fn slow_shrink_warning_mentions_shrinking() {
 #[test]
 fn run_main_stops_shrinking_when_budget_is_exhausted() {
     let body = |ds: &dyn DataSource| -> TestCaseResult {
-        let cid = match ds.new_collection(0, None) {
+        let mut collection = match ds.new_collection(0, None) {
             Ok(c) => c,
             Err(_) => return TestCaseResult::Overrun,
         };
         let mut len = 0usize;
         loop {
-            match ds.collection_more(cid) {
+            match ds.collection_more(&mut collection) {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(_) => return TestCaseResult::Overrun,
@@ -543,7 +654,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         Duration::from_secs(30),
         Duration::ZERO,
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
@@ -573,7 +684,7 @@ fn run_main_reports_too_slow_at_call_site() {
         Duration::ZERO,
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration);
+    let result = exploration;
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
@@ -644,12 +755,15 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             TestCaseResult::Valid
         },
         async |ctx, _count| {
-            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1)).await;
+            let (run, _mismatch) = ctx
+                .test_function(NativeTestCase::for_simplest(1).unwrap())
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
 
             let mut tree = DataTreeNode::default();
             record_tree(&mut tree, &run.nodes, run.status, &[]);
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value().clone()).collect();
             assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
         },
     );
@@ -668,14 +782,13 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let exploration = run_main_sync(
+    run_main_sync(
         &settings,
         Some(key),
         &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
-    );
-    complete_native(exploration)
+    )
 }
 
 #[test]
@@ -1005,6 +1118,145 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
 }
 
 #[test]
+fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("stable origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(result.nondeterministic);
+    assert!(
+        seen_bug.load(Ordering::SeqCst),
+        "the bug must have been discovered by generation"
+    );
+}
+
+#[test]
+fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let failed_once = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("racy origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+}
+
+#[test]
+fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
+    db.save(b"k", &seeded);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            boom("db origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(
+        db.fetch(b"k").is_empty(),
+        "the stale replay is discarded like a failed assumption and deleted, \
+         and the fresh failure is not persisted"
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(db.fetch(&secondary).is_empty());
+}
+
+#[test]
+fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Concurrent state machine detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
@@ -1139,7 +1391,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("child too big"));
 
@@ -1150,7 +1402,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
     };
     assert_eq!(
-        record.values().cloned().collect::<Vec<_>>(),
+        record.owned_values(),
         vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(
             100
         ))]

@@ -3,7 +3,7 @@ use crate::native::core::NativeTestCase;
 use crate::native::rng::EngineRng;
 
 fn fresh_ntc(seed: u64) -> NativeTestCase {
-    NativeTestCase::new_random(EngineRng::seeded(seed))
+    NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap()
 }
 
 fn domain_draw(ntc: &mut NativeTestCase, max_length: usize) -> Result<String, EngineError> {
@@ -245,25 +245,25 @@ fn generate_url_fragments_chars_in_safe_set() {
 #[test]
 fn url_encode_path_safe_chars_passthrough() {
     assert_eq!(
-        url_encode_path("abcXYZ012$-_.+!*'(),~"),
+        url_encode_path("abcXYZ012$-_.+!*'(),~").unwrap(),
         "abcXYZ012$-_.+!*'(),~"
     );
 }
 
 #[test]
 fn url_encode_path_encodes_space_and_slash() {
-    assert_eq!(url_encode_path("a b/c"), "a%20b%2Fc");
+    assert_eq!(url_encode_path("a b/c").unwrap(), "a%20b%2Fc");
 }
 
 #[test]
 fn url_encode_path_encodes_control_chars() {
-    assert_eq!(url_encode_path("\t\n"), "%09%0A");
+    assert_eq!(url_encode_path("\t\n").unwrap(), "%09%0A");
 }
 
 #[test]
 fn url_encode_path_encodes_high_latin1() {
     let s: String = ['\u{00FF}', '\u{0080}'].iter().collect();
-    assert_eq!(url_encode_path(&s), "%FF%80");
+    assert_eq!(url_encode_path(&s).unwrap(), "%FF%80");
 }
 
 #[test]
@@ -271,13 +271,6 @@ fn generate_domain_rejects_tiny_max_length_as_invalid_argument() {
     let mut ntc = fresh_ntc(0);
     let err = domain_draw(&mut ntc, 3).unwrap_err();
     assert!(matches!(err, EngineError::InvalidArgument(_)));
-}
-
-#[test]
-fn domain_spec_validates_max_length_range() {
-    assert!(DomainSpec::new(3).is_err());
-    assert!(DomainSpec::new(4).is_ok());
-    assert!(DomainSpec::new(255).is_ok());
 }
 
 #[test]

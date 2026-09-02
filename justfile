@@ -126,6 +126,29 @@ c-test-abort:
 c-test-abort:
     @echo "Skipping c-test-abort on Windows (bash-based driver, follow-up)"
 
+# Build libhegel as a self-contained no-std cdylib (`--no-default-features
+# --features runtime`, `panic = "abort"` because there is no unwinder
+# without std), check with `nm -D`/`readelf` that it registers no
+# thread-local state and exports only hegel_* (the dlclose-safety
+# contract), and run the smoke tests — including the dlopen/dlclose replay
+# test — against it. Built `--release` so the gate certifies the profile a
+# shipped artifact would use, and into a separate target dir so it doesn't
+# clobber the default std-backed artifacts.
+[linux]
+c-test-runtime:
+    RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/runtime cargo build --release -p hegeltest-c --no-default-features --features runtime
+    RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/runtime cargo clippy --release -p hegeltest-c --no-default-features --features runtime -- -D warnings
+    scripts/check-no-tls.sh target/runtime/release/libhegel_c.so
+    HEGEL_C_LIB_DIR={{justfile_directory()}}/target/runtime/release cargo test -p hegeltest-c
+
+[macos]
+c-test-runtime:
+    @echo "Skipping c-test-runtime on macOS (GNU nm -D based check, Linux-only for now)"
+
+[windows]
+c-test-runtime:
+    @echo "Skipping c-test-runtime on Windows (GNU nm -D based check, Linux-only for now)"
+
 # Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
 c-header:
     HEGEL_C_HEADER_WRITE=1 cargo test -p hegeltest-c --test header_drift

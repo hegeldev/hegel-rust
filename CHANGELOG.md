@@ -1,5 +1,319 @@
 # Changelog
 
+## 0.35.0 - 2026-09-01
+
+This release changes when stateful invariants run. `#[invariant]` methods previously ran after every rule; they now run in full on the machine's initial and final state, and are sampled in between — after any given rule, each invariant runs with probability 1/`stateful_step_count`. This keeps an invariant's expected cost per test case constant as the step count grows, and a violation that persists to the end of a test case is still always caught; what is given up is observing most intermediate states, so a violation a later rule *undoes* is only caught when a sampled check lands inside the window. This applies to both sequential and concurrent state machines.
+
+## 0.34.1 - 2026-09-01
+
+This patch fixes a silent size collapse in `generators::recursive()` values whose branch generator stacks several combinators per recursion level (e.g. `one_of!` arms pairing subtrees with `tuples!`). Each combinator layer opens a span, and the engine's span-depth guard sat low enough that deep values were discarded as invalid, collapsing typical sizes by roughly 7x. The guard now sits far above any depth legitimate generation reaches.
+
+`compose!` now also accepts the `move` keyword on its closure; captures were already by move, so `compose!(move |tc| { .. })` is identical to `compose!(|tc| { .. })`.
+
+## 0.34.0 - 2026-09-01
+
+This release makes `generators::recursive()` print compositionally: the result is a `PrintableGenerator` exactly when the leaf generator and the generator the branch function returns both are, and drawn values print with those generators' own representations. Previously the result was printable whenever the produced type implemented `PrettyPrintable`, printing by value and ignoring how the component generators print. `SubtreeGenerator` is now a `PrintableGenerator` too, so branch functions can pass subtrees to printable combinators and draw them with `tc.draw(..)`.
+
+Migration notes:
+
+- `RecursiveGenerator` now carries its component generator types (`RecursiveGenerator<T, G, F, R>`), which include closure types, so helper functions can no longer name it as a return type: return `impl Generator<T>` (or `impl PrintableGenerator<T>`) instead, applying `max_depth`/`max_leaves` before returning.
+- A recursive generator whose leaf or branch generator is not printable no longer satisfies `tc.draw(..)` even when the produced type implements `PrettyPrintable`; make the component printable (`.print_as_value()`, `.print_as_debug()`, or `.print_with(..)`) or draw with `tc.draw_silent(..)`.
+
+## 0.33.1 - 2026-09-01
+
+This patch adds three new generators that draw from a fixed list of values: `gs::permutations()` generates all of the elements in a randomly chosen order, `gs::subsequences()` generates subsets of the elements in their original order, and `gs::samples()` generates samples of the elements — with replacement by default, or without replacement via `without_replacement()`.
+
+```rust
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let perm: Vec<i32> = tc.draw(gs::permutations(vec![1, 2, 3, 4, 5]));
+    let sub: Vec<i32> = tc.draw(gs::subsequences(vec![1, 2, 3, 4, 5]));
+    let sample: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3, 4, 5]).max_size(10));
+}
+```
+
+`subsequences` and `samples` support `min_size` and `max_size` bounds on how many elements are included. Permutations shrink towards the original order; subsequences and samples shrink towards fewer elements, taken from earlier in the list.
+
+## 0.33.0 - 2026-09-01
+
+This release replaces `Debug`-based reporting of drawn values with a
+pretty-printing system. Failing examples now print each drawn value as a
+valid Rust expression — `vec![1, 2]`, `HashMap::from([(1, false)])`,
+`Some("x".to_string())`, `Ipv4Addr::new(10, 0, 0, 1)` — laid out and
+wrapped like source code, so a reported counterexample can be pasted
+straight back into a test. Values print as they are drawn, which is what
+lets rejected attempts (filter retries, duplicate collection elements)
+disappear from the report and lets a value whose representation is only
+known during test execution — a Hegel-controlled RNG, say — fill in its
+output as it is used. Notes made mid-draw (from inside a composite body)
+now flush after the enclosing draw's line instead of splicing into it, and
+draws made from cloned `TestCase`s on other threads appear at the point
+where the clone was made, deterministically, regardless of how the threads
+interleave.
+
+The printing protocol is two new traits and a document type. A value
+describes its own representation through `PrettyPrintable` (implemented
+for the standard types the generator library produces, derivable with
+`#[derive(PrettyPrintable)]`, and available for any `Debug` type through
+`pretty_print_as_debug!` or `pretty::print_debug_repr`); a generator that
+can print what it draws implements `PrintableGenerator`, which every
+built-in generator does — structural combinators (collections, tuples,
+`optional`, `one_of!`, `flat_map`) whenever their components are printable,
+value combinators (`map`, `filter`, composites) whenever the produced type
+is `PrettyPrintable`. `Document` and `PrettyPrinter` expose the layout
+engine directly for custom representations.
+
+The headline breaking change: `TestCase::draw` now takes an
+`impl PrintableGenerator<T>` instead of any generator of a `Debug` type.
+Most call sites compile unchanged. A hand-written `Generator`
+implementation passed to `tc.draw` needs one of the escape hatches —
+`.print_as_value()` prints the value's own `PrettyPrintable`
+representation, `.print_as_debug()` prints any `Debug` type,
+`.print_with(f)` prints a custom representation (and can mask secrets) —
+or can switch to `tc.draw_silent`, which accepts any `Generator` and skips
+reporting:
+
+```rust
+// before
+let value = tc.draw(my_generator);
+
+// after: say how the drawn value should be reported ...
+let value = tc.draw(my_generator.print_as_debug());
+// ... or skip reporting it
+let value = tc.draw_silent(my_generator);
+```
+
+To make a hand-written generator printable itself, implement
+`PrintableGenerator::do_draw_and_print` and define `do_draw` as
+`self.do_draw_and_print(tc, &mut PrettyPrinter::noop())`, so both draw
+paths share one body and consume identical choices by construction.
+
+Other breaking changes, all small:
+
+- `#[derive(DefaultGenerator)]` now generates printable generators that
+  print field by field, in the same layout `#[derive(PrettyPrintable)]`
+  produces. The generated builder methods accept any printable generator
+  and are type-changing; a plain `Generator` argument needs one of the
+  printing escape hatches above.
+- `one_of!` expands to per-arity generator types (`OneOf1Generator` ..
+  `OneOf12Generator`, mirroring `tuples!`), printable exactly when every
+  arm is. More than 12 arms is now a compile error pointing at the
+  vec-based `one_of()`.
+- `HegelRandom` is now an opaque struct rather than a public enum. It
+  reports the random values the test actually consumed
+  (`HegelRandom { consumed: [..] }`) or the seed in true-random mode.
+- The settings enums (`HealthCheck`, `Phase`, `Mode`, `Backend`,
+  `Verbosity`) are `#[non_exhaustive]`; matches on them need a wildcard
+  arm.
+- The `Generator::enumerate_values` fast path is gone. Filtered draws and
+  unique collections always rejection-sample; a set or map whose
+  `min_size` exceeds what its element or key generator can produce now
+  surfaces as a `FilterTooMuch` health check at run time instead of an
+  eager argument error. Draws that are satisfiable but that rejection
+  sampling rarely satisfies — a filter that keeps one value in a hundred,
+  a set that must contain most of a small alphabet — fail the same health
+  check, where the fast path used to make them reliable.
+
+## 0.32.5 - 2026-08-28
+
+This patch fixes the distribution of `generators::recursive` to cover a broader range of leaves up to `max_leaves`. Previously for some uses (especially ones where the branch case often drew 0 or 1 leaves) the recursive generator ended up biased very heavily towards small values.
+
+## 0.32.4 - 2026-08-27
+
+This patch adds `generators::recursive`, a combinator for generating recursively defined data such as trees or JSON documents. It takes a generator for the leaf values and a function that builds one level of branch structure from a generator of subtrees:
+
+```rust
+let json = gs::recursive(
+    gs::floats::<f64>().map(Json::Number),
+    |json| gs::vecs(json).max_size(5).map(Json::Array),
+);
+```
+
+Generated sizes cover everything the caps allow, from a single leaf up to the limits set by the `max_depth` and `max_leaves` builder methods; a generation attempt that outgrows `max_leaves` is discarded and retried with a lower branching probability.
+
+## 0.32.3 - 2026-08-27
+
+This patch adds support for `#[derive(DefaultGenerator)]` on tuple structs ([#183](https://github.com/hegeldev/hegel-rust/issues/183)). The generated builder methods are positional, matching the `._0(...)` field builders already used by enum tuple variants:
+
+```rust
+#[derive(DefaultGenerator)]
+struct Meters(f64);
+
+let g = gs::default::<Meters>()._0(gs::floats().min_value(0.0).max_value(3.0));
+```
+
+Deriving on a struct with no fields (unit, empty named, or empty tuple) now produces a clear error in all three cases. Empty named structs previously failed with a confusing "unused lifetime parameter" error from inside the generated code.
+
+## 0.32.2 - 2026-08-26
+
+This patch improves the distribution of `generators::integers` for large and full-width ranges, by way of an engine update. Each test case now draws its own mix of value categories (a form of swarm testing), so the values that property tests rely on to surface off-by-one, overflow, and sign bugs — the range endpoints and their neighbours, zero, ±1, and small magnitudes — appear several times more often than before (boundary values on about 2% of full-width draws, up from about 0.3%) and cluster within test cases, so several operands go extreme at once: a full-width `x + y` now overflows about 1.5% of the time. The middle of the range stays well covered. See the `hegeltest-c` changelog for measurements and details.
+
+This patch also fixes the distribution of `generators::floats::<f32>()`, which previously generated infinities on about a third of unbounded draws and produced large finite values essentially never. Unbounded `f32` draws now match the `f64` shape: infinities are rare (about 2%) and large finite magnitudes are common. The underlying clamp fix also affects `f64` generators configured with `allow_nan(false)` or `allow_subnormal(false)`, which previously produced `-inf` on a small fraction of unbounded draws.
+
+## 0.32.1 - 2026-08-25
+
+This patch documents that a violated assumption inside a state machine rule is not transactional. Place assumptions at the start of the rule.
+
+## 0.32.0 - 2026-08-25
+
+This release redesigns the `derive_generator!` macro for externally defined structs. Previously the macro implemented `DefaultGenerator` for the target type, which Rust's orphan rule rejects whenever that type comes from another crate, so every use the macro was designed for failed to compile. The only invocations that did compile were those in the same crate as the type definition, where `#[derive(DefaultGenerator)]` already works, so the macro was entirely redundant with the derive.
+
+The macro now takes an explicit generator name and generates a standalone public generator struct with `new()` and a builder method per field, and no longer implements `DefaultGenerator`:
+
+```rust
+// before
+derive_generator!(Person {
+    name: String,
+    age: u32,
+});
+let person: Person = tc.draw(gs::default::<Person>());
+
+// after
+derive_generator!(PersonGenerator for Person {
+    name: String,
+    age: u32,
+});
+let person: Person = tc.draw(PersonGenerator::new());
+```
+
+Because the orphan rule makes a `DefaultGenerator` impl impossible for foreign types, `gs::default::<T>()` cannot support types handled by `derive_generator!`; draw from the generated generator directly instead. For types defined in your own crate, keep using `#[derive(DefaultGenerator)]`.
+
+This release also removes hegel's dependency on the `paste` crate, along with the hidden `hegel::paste` re-export.
+
+## 0.31.0 - 2026-08-20
+
+This release adds concurrent stateful testing: stateful tests where rules run concurrently from a number of worker threads. See the new stateful module documentation for details.
+
+## 0.30.0 - 2026-08-14
+
+This release changes `one_of!` to expand to arity-specific generator types
+(`OneOf1Generator` through `OneOf12Generator`, mirroring the `tuples!`
+design) instead of boxing every alternative into a `OneOfGenerator`. The
+component generators keep their concrete types, so the macro's result is a
+nameable type that can be stored in a struct field or returned from a
+function, and building it no longer allocates per alternative. The drawn
+choice sequence (a ONE_OF span around one index draw) is unchanged, so
+saved failures replay identically.
+
+Two things can break. Code that annotated the macro's result as
+`OneOfGenerator` must now name the arity-specific type (or box the
+alternatives explicitly and call `one_of()`):
+
+```rust
+// before
+let g: gs::OneOfGenerator<i64> = hegel::one_of!(gs::integers(), gs::just(7));
+
+// after
+let g: gs::OneOf2Generator<gs::IntegerGenerator<i64>, gs::JustGenerator<i64>, i64> =
+    hegel::one_of!(gs::integers(), gs::just(7));
+```
+
+And `one_of!` now supports at most 12 alternatives; a longer list is a
+compile error pointing at the vec-based `one_of()`, which remains the way
+to choose among a runtime-sized (or very large) collection of boxed
+generators. `one_of()` itself now accepts any iterable of generators of
+one type — `OneOfGenerator` is generic over the stored generator type,
+defaulting to `BoxedGenerator`, so most existing uses keep compiling
+unchanged. The exception is calls that spelled out the type arguments:
+`one_of` gained a type parameter, so e.g. `one_of::<i64, _>(gens)` must
+drop the turbofish (plain `one_of(gens)` infers everything).
+
+For parity, the arity-specific tuple generator types (`Tuple0Generator`
+through `Tuple12Generator`) are now exported as well, so `tuples!` results
+can be named the same way, and `tuples!` reports the same clear compile
+error as `one_of!` when given more than 12 generators.
+
+## 0.29.10 - 2026-08-13
+
+This patch significantly improves shrinking for stateful tests that use `stateful::Pool`.
+
+## 0.29.9 - 2026-08-13
+
+This patch improves shrinking: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before.
+
+## 0.29.8 - 2026-08-11
+
+This patch adds `weighted_booleans` for generating boolean values with probability 
+`p` in `[0.0, 1.0]` of true.
+
+## 0.29.7 - 2026-08-11
+
+This patch fixes the replay of stateful counterexamples that need more than 50 steps ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). Previously, the replay of the shrunk counterexample stopped at 50 steps and incorrectly triggered a flaky test error.
+
+## 0.29.6 - 2026-08-11
+
+This patch brings various minor improvements to the `#[composite]` macro.
+
+- Adds support for passing parameters by reference without an explicit lifetime, if the lifetime is not used in the return type.
+- Stops the items_after_statements clippy lint from firing if constants/ functions are defined in the function body.
+- Tries to output generator even if errors are found as to not raise errors elsewhere
+
+## 0.29.5 - 2026-08-11
+
+This patch adds two environment variables that override settings at runtime, so a whole test suite's behavior can be adjusted without editing source:
+
+- `HEGEL_TEST_CASES` overrides the number of test cases each test runs, taking precedence over values configured in source (including explicit `test_cases` settings). For example, `HEGEL_TEST_CASES=10000 cargo test` runs a deep exploration of every property test.
+- `HEGEL_DATABASE` overrides the failure database location: `HEGEL_DATABASE=disabled` turns the database off (the same keyword the `--database` CLI flag uses), and any other non-empty value relocates the database to that path.
+
+## 0.29.4 - 2026-08-10
+
+This patch improves random generation for tests with repeated structure (recursive generators, collections, state machines). The engine proposes new test cases by splicing the choices of one span over another with the same label; a spliced sequence that diverged from its donor's path was previously discarded, and is now completed with fresh random draws instead, so every such proposal becomes a real test case seeded with the mutation.
+
+## 0.29.3 - 2026-08-07
+
+This release updates the `hegeltest-c` dependency to 0.32.1.
+
+## 0.29.2 - 2026-08-07
+
+This patch improves rule generation for stateful tests. Rules that reject via `assume()` no longer cause test cases to run fewer steps than they should.
+
+## 0.29.1 - 2026-08-07
+
+This patch updates the native engine as part of making libhegel safe to unload and portable beyond std platforms. Two of the engine changes are visible from hegel-rust:
+
+- Bugs in hegel itself now surface as run-level errors carrying a bug-report diagnostic instead of panics raised inside the engine. A panic that escapes that reporting — which would indicate a further bug in hegel — now aborts the process at the engine boundary instead of being converted into a run-level error.
+- Engine diagnostics are written directly to the stderr file descriptor, so the Rust test harness's output capture no longer intercepts them.
+
+## 0.29.0 - 2026-08-06
+
+This release changes `#[hegel::composite]` generators and `hegel::compose!` closures to receive the `TestCase` by reference instead of by value:
+
+```rust
+# before
+#[hegel::composite]
+fn sorted_vec(tc: TestCase, min_len: usize) -> Vec<i32> { ... }
+
+# after
+#[hegel::composite]
+fn sorted_vec(tc: &TestCase, min_len: usize) -> Vec<i32> { ... }
+```
+
+Since all `TestCase` methods take `&self`, the body of a composite rarely needs any change beyond the signature; code that moved the owned `TestCase` elsewhere (for example into a spawned thread) should call `tc.clone()` to get an independent handle, which was already the supported way to drive a test case from another thread.
+
+The motivation is that `#[composite]` now expands to a named generator struct (`sorted_vec` above gets a `SortedVecCompositeGenerator`) instead of a function returning an opaque `impl`-typed generator. This makes composite generators much more capable:
+
+- A composite can now recursively draw from itself, directly or through combinators like `one_of!`, which previously failed to compile. Recursive generators for tree-shaped data can now be written as ordinary recursive composites.
+- The generator returned by a composite has a nameable type, so it can be stored in structs, returned from functions, and passed as an argument to other composites.
+- Composite generators implement `Clone`.
+
+Arguments to a composite (the parameters after the `TestCase`) are now stored on the generated struct and cloned into each draw, so they must implement `Clone`. Most argument types already do; to pass a non-`Clone` generator as an argument, box it first with `.boxed()`.
+
+This release also fixes a bug where an explicit `return` inside a composite or `compose!` body left the generator's span open, unbalancing the span tree the shrinker uses and degrading shrinking for such generators.
+
+## 0.28.8 - 2026-08-04
+
+This patch adds a `stateful_step_count` setting controlling how many steps a stateful (`#[state_machine]`) test case runs. It defaults to 50, and each case now runs at least one step and at most `stateful_step_count`.
+
+```rust
+Settings::new().stateful_step_count(20)
+```
+
+## 0.28.7 - 2026-08-04
+
+This release updates the `hegeltest-c` dependency to 0.30.4.
+
 ## 0.28.6 - 2026-07-29
 
 This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.

@@ -1,8 +1,13 @@
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 /// Health checks that can be suppressed during test execution.
 ///
 /// Health checks detect common issues with test configuration that would
 /// otherwise cause tests to run inefficiently or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HealthCheck {
     /// Too many test cases are being filtered out via `assume()`.
     FilterTooMuch,
@@ -24,6 +29,7 @@ pub enum HealthCheck {
 /// Corresponds to a subset of `hypothesis.Phase` (the `explain` phase is not
 /// yet supported in hegel-rust).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Phase {
     /// Run explicit test cases added via `#[hegel::explicit_test_case]`.
     Explicit,
@@ -39,6 +45,7 @@ pub enum Phase {
 
 /// Controls the test execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Mode {
     /// Run a full test (multiple test cases with shrinking). This is the default.
     TestRun,
@@ -53,6 +60,7 @@ pub enum Mode {
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
 /// vs `backend="hypothesis-urandom"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Backend {
     /// The default: generate from a seeded pseudo-random generator. Runs are
     /// reproducible from [`Settings::seed`] and shrinking/replay work as usual.
@@ -89,10 +97,10 @@ pub struct Output {
 }
 
 /// A caller-supplied destination for engine output lines.
-type OutputSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+type OutputSink = alloc::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Output {
-    /// The default destination: each line goes to stderr via `eprintln!`.
+    /// The default destination: each line is written to stderr.
     pub fn stderr() -> Self {
         Output { sink: None }
     }
@@ -100,7 +108,7 @@ impl Output {
     /// Deliver each line to `sink` instead of stderr.
     pub fn callback(sink: impl Fn(&str) + Send + Sync + 'static) -> Self {
         Output {
-            sink: Some(std::sync::Arc::new(sink)),
+            sink: Some(alloc::sync::Arc::new(sink)),
         }
     }
 
@@ -108,13 +116,13 @@ impl Output {
     pub(crate) fn line(&self, line: &str) {
         match &self.sink {
             Some(sink) => sink(line),
-            None => eprintln!("{line}"),
+            None => crate::sys::stderr_line(line),
         }
     }
 }
 
-impl std::fmt::Debug for Output {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Output {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.sink {
             Some(_) => f.write_str("Output(callback)"),
             None => f.write_str("Output(stderr)"),
@@ -124,6 +132,7 @@ impl std::fmt::Debug for Output {
 
 /// Controls how much output Hegel produces during test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Verbosity {
     /// Suppress all output.
     Quiet,
@@ -146,6 +155,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
+    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) output: Output,
     pub(crate) seed: Option<u64>,
@@ -163,10 +173,14 @@ pub struct Settings {
 impl Settings {
     /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        let in_ci = is_in_ci();
+        Self::for_ci(is_in_ci())
+    }
+
+    fn for_ci(in_ci: bool) -> Self {
         Self {
             mode: Mode::TestRun,
             test_cases: 100,
+            stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
@@ -174,7 +188,7 @@ impl Settings {
             database: if in_ci {
                 Database::Disabled
             } else {
-                Database::Unset // nocov
+                Database::Unset
             },
             suppress_health_check: Vec::new(),
             phases: vec![
@@ -221,6 +235,13 @@ impl Settings {
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set the target number of steps run per stateful test case (default:
+    /// 50). Each case runs at least one step and at most this many.
+    pub fn stateful_step_count(mut self, n: i64) -> Self {
+        self.stateful_step_count = n;
         self
     }
 
@@ -329,6 +350,10 @@ pub(crate) enum Database {
 }
 
 fn is_in_ci() -> bool {
+    is_in_ci_from(crate::sys::env_var)
+}
+
+fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),
@@ -344,8 +369,8 @@ fn is_in_ci() -> bool {
     ];
 
     CI_VARS.iter().any(|(key, value)| match value {
-        None => std::env::var_os(key).is_some(),
-        Some(expected) => std::env::var(key).ok().as_deref() == Some(expected),
+        None => env(key).is_some(),
+        Some(expected) => env(key).as_deref() == Some(expected),
     })
 }
 

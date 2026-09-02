@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
+use alloc::vec::Vec;
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue};
+use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue};
 
-use super::search::{BinSearchDownBig, FindInteger};
+use super::search::{BinSearchDownBig, FindInteger, SearchStep};
 use super::{ShrinkResult, Shrinker};
 use crate::control::{hegel_internal_assert, hegel_internal_debug_assert};
 
@@ -28,21 +29,18 @@ impl<'a> Shrinker<'a> {
 
                 if !self.consider(&attempt).await? && i > 0 {
                     let prev = &attempt[i - 1];
-                    let decremented = match (prev.kind.as_ref(), &prev.value) {
-                        (ChoiceKind::Integer(ic), ChoiceValue::Integer(v))
-                            if *v != ic.simplest() =>
-                        {
-                            ic.value_from_bigint(&(v.clone() - 1))
-                                .map(ChoiceValue::Integer)
-                        }
-                        (ChoiceKind::Boolean(_), ChoiceValue::Boolean(true)) => {
-                            Some(ChoiceValue::Boolean(false))
+                    let decremented: Option<ChoiceData> = match &prev.data {
+                        ChoiceData::Integer(ic, v) if *v != ic.simplest() => ic
+                            .value_from_bigint(&(v.clone() - 1))
+                            .map(|nv| ChoiceData::Integer(alloc::sync::Arc::clone(ic), nv)),
+                        ChoiceData::Boolean(bc, true) => {
+                            Some(ChoiceData::Boolean(bc.clone(), false))
                         }
                         _ => None,
                     };
-                    if let Some(new_value) = decremented {
+                    if let Some(new_data) = decremented {
                         let mut modified = attempt.clone();
-                        modified[i - 1] = modified[i - 1].with_value(new_value);
+                        modified[i - 1] = ChoiceNode::new(new_data, modified[i - 1].was_forced);
                         self.consider(&modified).await?;
                     }
                 }
@@ -65,13 +63,11 @@ impl<'a> Shrinker<'a> {
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
 
-            let (current_val, ic) = match (node.kind.as_ref(), &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (v.clone(), ic.clone()),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            let ChoiceData::Integer(ic, current_val) = &node.data else {
+                i += 1;
+                continue;
             };
+            let current_val = current_val.clone();
 
             let simplest = ic.simplest();
             if current_val == simplest {
@@ -83,9 +79,8 @@ impl<'a> Shrinker<'a> {
 
             let mut search = BinSearchDownBig::new(simplest, current_val);
             while let Some(v) = search.probe() {
-                let value = self.int_replacement(i, &v);
                 let ok = self
-                    .try_replace_with_deletion(i, value, expected_len)
+                    .try_replace_with_deletion(i, ChoiceValue::Integer(v), expected_len)
                     .await?;
                 search.record(ok);
             }
@@ -97,37 +92,44 @@ impl<'a> Shrinker<'a> {
 
     /// Try replacing the value at `idx`. If the result is interesting, done.
     /// If the result is valid but used fewer nodes than `expected_len`, try
-    /// deleting regions after `idx` to recover an interesting result.
+    /// deleting a region after `idx` to recover an interesting result. Only
+    /// regions of exactly the realised deficit are tried — the aligned
+    /// candidates — keeping each probe linear in the sequence length so a
+    /// large binding can't exhaust the stall window on a single probe.
     pub(super) async fn try_replace_with_deletion(
         &mut self,
         idx: usize,
         value: ChoiceValue,
         expected_len: usize,
     ) -> ShrinkResult<bool> {
-        if self.replace(&HashMap::from([(idx, value.clone())])).await? {
+        if self
+            .replace(&HashMap::from_iter([(idx, value.clone())]))
+            .await?
+        {
             return Ok(true);
         }
 
         let mut attempt = self.current_nodes.clone();
-        attempt[idx] = attempt[idx].with_value(value);
+        let Some(replaced) = attempt[idx].with_value(&value) else {
+            return Ok(false);
+        };
+        attempt[idx] = replaced;
 
         let (_, actual_nodes, _) = self.run_test_fn(super::ShrinkRun::Full(&attempt)).await?;
         if actual_nodes.len() >= expected_len {
             return Ok(false);
         }
 
-        let k = expected_len - actual_nodes.len();
-        for size in (1..=k).rev() {
-            let start = attempt.len().saturating_sub(size);
-            if start <= idx {
-                continue;
-            }
-            for j in (idx + 1..=start).rev() {
-                let mut candidate = attempt[..j].to_vec();
-                candidate.extend_from_slice(&attempt[j + size..]);
-                if self.consider(&candidate).await? {
-                    return Ok(true);
-                }
+        let deficit = expected_len - actual_nodes.len();
+        let start = attempt.len().saturating_sub(deficit);
+        if start <= idx {
+            return Ok(false);
+        }
+        for j in (idx + 1..=start).rev() {
+            let mut candidate = attempt[..j].to_vec();
+            candidate.extend_from_slice(&attempt[j + deficit..]);
+            if self.consider(&candidate).await? {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -153,13 +155,11 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            let ChoiceData::Integer(ic, current_val) = &node.data else {
+                i += 1;
+                continue;
             };
+            let (ic, current_val) = (alloc::sync::Arc::clone(ic), current_val.clone());
             let simplest = ic.simplest();
             if current_val == simplest {
                 i += 1;
@@ -184,9 +184,11 @@ impl<'a> Shrinker<'a> {
             } else {
                 &current_val + BigInt::from(1)
             };
-            let towards_value = self.int_replacement(i, &towards);
             let mut lowered = self.current_nodes.clone();
-            lowered[i] = lowered[i].with_value(towards_value);
+            lowered[i] = ChoiceNode::new(
+                ChoiceData::Integer(alloc::sync::Arc::clone(&ic), towards),
+                lowered[i].was_forced,
+            );
 
             let (_, actual_nodes, actual_spans) =
                 self.run_test_fn(super::ShrinkRun::Full(&lowered)).await?;
@@ -194,19 +196,18 @@ impl<'a> Shrinker<'a> {
             let mut misalignment_handled = false;
             for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
                 let cand = &lowered[k];
-                let actual_val = &actual_nodes[k].value;
-                let retry_value = match (&cand.value, actual_val) {
-                    (ChoiceValue::String(c), ChoiceValue::String(a)) if c.len() > a.len() => {
-                        Some(ChoiceValue::String(c[..a.len()].to_vec()))
+                let retry_data: Option<ChoiceData> = match (&cand.data, &actual_nodes[k].data) {
+                    (ChoiceData::String(sc, c), ChoiceData::String(_, a)) if c.len() > a.len() => {
+                        Some(ChoiceData::String(sc.clone(), c[..a.len()].to_vec()))
                     }
-                    (ChoiceValue::Bytes(c), ChoiceValue::Bytes(a)) if c.len() > a.len() => {
-                        Some(ChoiceValue::Bytes(c[..a.len()].to_vec()))
+                    (ChoiceData::Bytes(bc, c), ChoiceData::Bytes(_, a)) if c.len() > a.len() => {
+                        Some(ChoiceData::Bytes(bc.clone(), c[..a.len()].to_vec()))
                     }
                     _ => None,
                 };
-                if let Some(rv) = retry_value {
+                if let Some(rd) = retry_data {
                     let mut candidate = lowered.clone();
-                    candidate[k] = candidate[k].with_value(rv);
+                    candidate[k] = ChoiceNode::new(rd, candidate[k].was_forced);
                     if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
                         misalignment_handled = true;
                         break;
@@ -282,15 +283,19 @@ impl<'a> Shrinker<'a> {
             }
             let starting = i;
             let mut search = FindInteger::new();
-            while let Some(k) = search.probe() {
-                let ok = if k * n > starting {
-                    false
-                } else {
-                    self.run_node_program_live(starting - k * n, n, 1).await?
-                };
-                search.record(ok);
-            }
-            let left_offset = search.result();
+            let left_offset = loop {
+                match search.step() {
+                    SearchStep::Done(v) => break v,
+                    SearchStep::Probe(k) => {
+                        let ok = if k * n > starting {
+                            false
+                        } else {
+                            self.run_node_program_live(starting - k * n, n, 1).await?
+                        };
+                        search.record(ok);
+                    }
+                }
+            };
             let start = starting.saturating_sub(left_offset * n);
 
             let snapshot = self.current_nodes.clone();

@@ -1,7 +1,12 @@
-use super::{DefaultGenerator, Generator, TestCase, labels};
+use super::{DefaultGenerator, Generator, PrintableGenerator, TestCase, labels};
+use crate::pretty::PrettyPrinter;
 use std::marker::PhantomData;
 
 /// Creates a tuple generator from 0–12 component generators.
+///
+/// The component generators keep their concrete types, so the result is a
+/// nameable, arity-specific generator type: [`Tuple0Generator`](crate::generators::Tuple0Generator)
+/// through [`Tuple12Generator`](crate::generators::Tuple12Generator).
 ///
 /// # Examples
 ///
@@ -64,10 +69,19 @@ macro_rules! tuples {
             $g1, $g2, $g3, $g4, $g5, $g6, $g7, $g8, $g9, $g10, $g11, $g12,
         )
     };
+    ($g1:expr, $g2:expr, $g3:expr, $g4:expr, $g5:expr, $g6:expr, $g7:expr, $g8:expr, $g9:expr, $g10:expr, $g11:expr, $g12:expr, $($rest:tt)+) => {
+        compile_error!(
+            "tuples! supports at most 12 generators; for wider shapes, nest \
+             tuples! calls or write a composite generator"
+        )
+    };
 }
 
 macro_rules! impl_tuple {
-    ($name:ident, $fn_name:ident, $(($idx:tt, $field:ident, $G:ident, $T:ident)),+) => {
+    ($name:ident, $fn_name:ident, $arity:literal, $(($idx:tt, $field:ident, $G:ident, $T:ident)),+) => {
+        #[doc = concat!(
+            "The ", $arity, "-element tuple generator created by [`tuples!`](crate::tuples)."
+        )]
         pub struct $name<$($G,)+ $($T,)+> {
             $($field: $G,)+
             _phantom: PhantomData<fn($($T,)+)>,
@@ -85,8 +99,38 @@ macro_rules! impl_tuple {
             }
         }
 
+        impl<$($T,)+ $($G,)+> PrintableGenerator<($($T,)+)> for $name<$($G,)+ $($T,)+>
+        where
+            $($G: PrintableGenerator<$T>,)+
+        {
+            fn do_draw_and_print(
+                &self,
+                tc: &TestCase,
+                printer: &mut PrettyPrinter,
+            ) -> ($($T,)+) {
+                tc.start_span(labels::TUPLE);
+                printer.begin_group(1, "(");
+                let mut index = 0usize;
+                let result = ($(
+                    {
+                        if index > 0 {
+                            printer.text(",");
+                            printer.breakable(" ");
+                        }
+                        index += 1;
+                        tc.draw_and_print(&self.$field, printer)
+                    },
+                )+);
+                if index == 1 {
+                    printer.text(",");
+                }
+                printer.end_group(")");
+                tc.stop_span(false);
+                result
+            }
+        }
+
         #[doc(hidden)]
-        #[allow(clippy::too_many_arguments)]
         pub fn $fn_name<$($T,)+ $($G: Generator<$T>,)+>(
             $($field: $G,)+
         ) -> $name<$($G,)+ $($T,)+> {
@@ -115,6 +159,12 @@ impl Generator<()> for Tuple0Generator {
     fn do_draw(&self, _tc: &TestCase) {}
 }
 
+impl PrintableGenerator<()> for Tuple0Generator {
+    fn do_draw_and_print(&self, _tc: &TestCase, printer: &mut PrettyPrinter) {
+        printer.text("()");
+    }
+}
+
 #[doc(hidden)]
 pub fn tuples0() -> Tuple0Generator {
     Tuple0Generator
@@ -127,16 +177,18 @@ impl DefaultGenerator for () {
     }
 }
 
-impl_tuple!(Tuple1Generator, tuples1, (0, gen1, G1, T1));
+impl_tuple!(Tuple1Generator, tuples1, 1, (0, gen1, G1, T1));
 impl_tuple!(
     Tuple2Generator,
     tuples2,
+    2,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2)
 );
 impl_tuple!(
     Tuple3Generator,
     tuples3,
+    3,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3)
@@ -144,6 +196,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple4Generator,
     tuples4,
+    4,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -152,6 +205,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple5Generator,
     tuples5,
+    5,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -161,6 +215,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple6Generator,
     tuples6,
+    6,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -171,6 +226,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple7Generator,
     tuples7,
+    7,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -182,6 +238,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple8Generator,
     tuples8,
+    8,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -194,6 +251,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple9Generator,
     tuples9,
+    9,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -207,6 +265,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple10Generator,
     tuples10,
+    10,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -221,6 +280,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple11Generator,
     tuples11,
+    11,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),
@@ -236,6 +296,7 @@ impl_tuple!(
 impl_tuple!(
     Tuple12Generator,
     tuples12,
+    12,
     (0, gen1, G1, T1),
     (1, gen2, G2, T2),
     (2, gen3, G3, T3),

@@ -13,4 +13,5 @@ mod flatmap;
 mod floats;
 mod integers;
 mod mixed_types;
+mod stateful;
 mod strings;

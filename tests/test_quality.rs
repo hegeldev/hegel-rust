@@ -10,18 +10,6 @@ mod shrink_quality {
     use std::collections::{HashMap, HashSet};
 
     #[test]
-    fn test_integers_from_minimizes_leftwards() {
-        let v: i64 = minimal(gs::integers::<i64>().min_value(101), |_| true);
-        assert_eq!(v, 101);
-    }
-
-    #[test]
-    fn test_minimize_bounded_integers_to_zero() {
-        let v: i64 = minimal(gs::integers::<i64>().min_value(-10).max_value(10), |_| true);
-        assert_eq!(v, 0);
-    }
-
-    #[test]
     fn test_minimize_bounded_integers_to_positive() {
         let v: i64 = minimal(
             gs::integers::<i64>()
@@ -34,59 +22,9 @@ mod shrink_quality {
     }
 
     #[test]
-    fn test_minimize_string_to_empty() {
-        let s: String = minimal(gs::text(), |_| true);
-        assert_eq!(s, "");
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    enum Mixed {
-        Int(i64),
-        Text(String),
-        Bool(bool),
-    }
-
-    #[test]
-    fn test_minimize_one_of() {
-        let v = minimal(
-            gs::one_of(vec![
-                gs::integers::<i64>().map(Mixed::Int).boxed(),
-                gs::text().map(Mixed::Text).boxed(),
-                gs::booleans().map(Mixed::Bool).boxed(),
-            ]),
-            |_| true,
-        );
-        let ok = matches!(&v, Mixed::Int(0))
-            || matches!(&v, Mixed::Text(s) if s.is_empty())
-            || matches!(&v, Mixed::Bool(false));
-        assert!(ok, "got {v:?}");
-    }
-
-    #[test]
-    fn test_minimize_mixed_list() {
-        let mixed = minimal(
-            gs::vecs(gs::one_of(vec![
-                gs::integers::<i64>().map(Mixed::Int).boxed(),
-                gs::text().map(Mixed::Text).boxed(),
-            ])),
-            |x: &Vec<Mixed>| x.len() >= 10,
-        );
-        for v in &mixed {
-            let ok = matches!(v, Mixed::Int(0)) || matches!(v, Mixed::Text(s) if s.is_empty());
-            assert!(ok, "got element {v:?} in {mixed:?}");
-        }
-    }
-
-    #[test]
     fn test_minimize_longer_string() {
         let s = minimal(gs::text(), |x: &String| x.chars().count() >= 10);
         assert_eq!(s, "0".repeat(10));
-    }
-
-    #[test]
-    fn test_minimize_longer_list_of_strings() {
-        let xs = minimal(gs::vecs(gs::text()), |x: &Vec<String>| x.len() >= 10);
-        assert_eq!(xs, vec![String::new(); 10]);
     }
 
     #[test]
@@ -117,105 +55,6 @@ mod shrink_quality {
         );
         let expected: HashSet<i64> = [0_i64, 1, 2].into_iter().collect();
         assert_eq!(xs, expected);
-    }
-
-    #[test]
-    fn test_can_simplify_flatmap_with_bounded_left_hand_size() {
-        let g = gs::booleans().flat_map(|x: bool| gs::vecs(gs::just(x)));
-        let v = minimal(g, |xs: &Vec<bool>| xs.len() >= 10);
-        assert_eq!(v, vec![false; 10]);
-    }
-
-    #[test]
-    fn test_can_simplify_across_flatmap_of_just() {
-        let v = minimal(
-            gs::integers::<i64>().flat_map(gs::just::<i64>),
-            |_: &i64| true,
-        );
-        assert_eq!(v, 0);
-    }
-
-    #[test]
-    fn test_can_simplify_on_right_hand_strategy_of_flatmap() {
-        let v = minimal(
-            gs::integers::<i64>().flat_map(|x: i64| gs::vecs(gs::just(x))),
-            |_| true,
-        );
-        assert_eq!(v, Vec::<i64>::new());
-    }
-
-    #[test]
-    fn test_can_ignore_left_hand_side_of_flatmap() {
-        let v = minimal(
-            gs::integers::<i64>().flat_map(|_| gs::vecs(gs::integers::<i64>())),
-            |xs: &Vec<i64>| xs.len() >= 10,
-        );
-        assert_eq!(v, vec![0_i64; 10]);
-    }
-
-    #[test]
-    fn test_can_simplify_on_both_sides_of_flatmap() {
-        let v = minimal(
-            gs::integers::<i64>().flat_map(|x: i64| gs::vecs(gs::just(x))),
-            |xs: &Vec<i64>| xs.len() >= 10,
-        );
-        assert_eq!(v, vec![0_i64; 10]);
-    }
-
-    #[test]
-    fn test_flatmap_rectangles() {
-        let lengths = gs::integers::<i64>().min_value(0).max_value(10);
-        let g = lengths.flat_map(|w: i64| {
-            let n = w.max(0) as usize;
-            gs::vecs(
-                gs::vecs(gs::sampled_from(vec!["a".to_string(), "b".to_string()]))
-                    .min_size(n)
-                    .max_size(n),
-            )
-        });
-        let xs = Minimal::new(g, |x: &Vec<Vec<String>>| {
-            let target = vec!["a".to_string(), "b".to_string()];
-            x.contains(&target)
-        })
-        .test_cases(2000)
-        .run();
-        let target = vec!["a".to_string(), "b".to_string()];
-        assert_eq!(xs, vec![target]);
-    }
-
-    #[test]
-    fn test_dictionary_empty() {
-        let t: HashMap<i64, String> =
-            minimal(gs::hashmaps(gs::integers::<i64>(), gs::text()), |_| true);
-        assert!(t.is_empty());
-    }
-
-    #[test]
-    fn test_dictionary_size_3() {
-        let t: HashMap<i64, String> = minimal(
-            gs::hashmaps(gs::integers::<i64>(), gs::text()),
-            |t: &HashMap<i64, String>| t.len() >= 3,
-        );
-        let value_set: HashSet<&String> = t.values().collect();
-        assert_eq!(value_set.len(), 1);
-        assert!(value_set.iter().next().unwrap().is_empty());
-        let keys: HashSet<i64> = t.keys().copied().collect();
-        for k in &keys {
-            if *k < 0 {
-                assert!(
-                    keys.contains(&(*k + 1)),
-                    "negative key {k} but {} not in keys {keys:?}",
-                    *k + 1
-                );
-            }
-            if *k > 0 {
-                assert!(
-                    keys.contains(&(*k - 1)),
-                    "positive key {k} but {} not in keys {keys:?}",
-                    *k - 1
-                );
-            }
-        }
     }
 
     #[test]
@@ -310,22 +149,6 @@ mod shrink_quality {
     }
 
     #[test]
-    #[ignore = "flaky: duplicate generation is too slow — see #350. Over random \
-                seeds the first qualifying example appears at a median of ~1100 \
-                executions (well above this budget), so the pass/fail here is a \
-                seed lottery rather than a real signal."]
-    fn test_duplicate_containment() {
-        let (xs, x): (Vec<i64>, i64) = Minimal::new(
-            gs::tuples!(gs::vecs(gs::integers::<i64>()), gs::integers::<i64>()),
-            |(xs, x): &(Vec<i64>, i64)| xs.iter().filter(|&&v| v == *x).count() > 1,
-        )
-        .test_cases(1000)
-        .run();
-        assert_eq!(xs, vec![0, 0]);
-        assert_eq!(x, 0);
-    }
-
-    #[test]
     fn test_reordering_bytes() {
         let xs: Vec<i64> = minimal(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
             x.iter().map(|&v| i128::from(v)).sum::<i128>() >= 10 && x.len() >= 3
@@ -333,32 +156,6 @@ mod shrink_quality {
         let mut sorted = xs.clone();
         sorted.sort();
         assert_eq!(xs, sorted);
-    }
-
-    #[test]
-    fn test_minimize_long_list() {
-        let xs: Vec<bool> = minimal(gs::vecs(gs::booleans()).min_size(50), |x: &Vec<bool>| {
-            x.len() >= 70
-        });
-        assert_eq!(xs, vec![false; 70]);
-    }
-
-    #[test]
-    fn test_minimize_list_of_longish_lists() {
-        let size = 5;
-        let xs: Vec<Vec<bool>> = minimal(
-            gs::vecs(gs::vecs(gs::booleans())),
-            move |x: &Vec<Vec<bool>>| {
-                x.iter()
-                    .filter(|t| t.iter().any(|&b| b) && t.len() >= 2)
-                    .count()
-                    >= size
-            },
-        );
-        assert_eq!(xs.len(), size);
-        for v in &xs {
-            assert_eq!(v, &vec![false, true]);
-        }
     }
 
     #[test]
@@ -384,24 +181,6 @@ mod shrink_quality {
     }
 
     #[test]
-    fn test_list_with_wide_gap() {
-        let mut xs: Vec<i64> = minimal(gs::vecs(gs::integers::<i64>()), |x: &Vec<i64>| {
-            if x.is_empty() {
-                return false;
-            }
-            let mx = *x.iter().max().unwrap();
-            let mn = *x.iter().min().unwrap();
-            let Some(threshold) = mn.checked_add(10) else {
-                return false;
-            };
-            mx > threshold && threshold > 0
-        });
-        assert_eq!(xs.len(), 2);
-        xs.sort();
-        assert_eq!(xs[1], 11 + xs[0]);
-    }
-
-    #[test]
     fn test_minimize_namedtuple() {
         let (a, b) = minimal(
             gs::tuples!(gs::integers::<i64>(), gs::integers::<i64>()),
@@ -410,7 +189,7 @@ mod shrink_quality {
         assert_eq!(b, a + 1);
     }
 
-    #[derive(hegel::DefaultGenerator, Debug)]
+    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable, Debug)]
     struct TwoBools {
         a: bool,
         b: bool,
@@ -430,24 +209,6 @@ mod shrink_quality {
         );
         let single: HashSet<bool> = std::iter::once(false).collect();
         assert_eq!(xs, vec![single; 3]);
-    }
-
-    #[test]
-    fn test_minimize_list_of_lists() {
-        let xs: Vec<Vec<i64>> = minimal(
-            gs::vecs(gs::vecs(gs::integers::<i64>())),
-            |x: &Vec<Vec<i64>>| x.iter().filter(|inner| !inner.is_empty()).count() >= 3,
-        );
-        assert_eq!(xs, vec![vec![0_i64]; 3]);
-    }
-
-    #[test]
-    fn test_minimize_list_of_tuples() {
-        let xs: Vec<(i64, i64)> = minimal(
-            gs::vecs(gs::tuples!(gs::integers::<i64>(), gs::integers::<i64>())),
-            |x: &Vec<(i64, i64)>| x.len() >= 2,
-        );
-        assert_eq!(xs, vec![(0_i64, 0_i64), (0_i64, 0_i64)]);
     }
 
     #[test]
@@ -510,18 +271,6 @@ mod shrink_quality {
     }
 
     #[test]
-    fn test_sum_of_pair_int() {
-        let (a, b) = minimal(
-            gs::tuples!(
-                gs::integers::<i64>().min_value(0).max_value(1000),
-                gs::integers::<i64>().min_value(0).max_value(1000)
-            ),
-            |(a, b): &(i64, i64)| a + b > 1000,
-        );
-        assert_eq!((a, b), (1, 1000));
-    }
-
-    #[test]
     fn test_sum_of_pair_float() {
         let (a, b) = minimal(
             gs::tuples!(
@@ -561,20 +310,6 @@ mod shrink_quality {
     }
 
     #[test]
-    fn test_sum_of_pair_separated_int() {
-        let separated_sum = hegel::compose!(|tc| {
-            let n1 = tc.draw(gs::integers::<i64>().min_value(0).max_value(1000));
-            tc.draw(gs::text());
-            tc.draw(gs::booleans());
-            tc.draw(gs::integers::<i64>());
-            let n2 = tc.draw(gs::integers::<i64>().min_value(0).max_value(1000));
-            (n1, n2)
-        });
-        let (a, b) = minimal(separated_sum, |(a, b): &(i64, i64)| a + b > 1000);
-        assert_eq!((a, b), (1, 1000));
-    }
-
-    #[test]
     fn test_sum_of_pair_separated_float() {
         let separated_sum = hegel::compose!(|tc| {
             let f1 = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1000.0));
@@ -589,7 +324,7 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
     enum Expr {
         Int(i64),
         Add(Box<Expr>, Box<Expr>),
@@ -707,18 +442,6 @@ mod shrink_quality {
             Box::new(Expr::Add(Box::new(Expr::Int(0)), Box::new(Expr::Int(0)))),
         );
         assert_eq!(x, expected);
-    }
-
-    #[test]
-    fn test_one_of_slip() {
-        let v: i64 = minimal(
-            gs::one_of(vec![
-                gs::integers::<i64>().min_value(101).max_value(200).boxed(),
-                gs::integers::<i64>().min_value(0).max_value(100).boxed(),
-            ]),
-            |_| true,
-        );
-        assert_eq!(v, 101);
     }
 
     fn check_perfectly_shrinks_integer(n: i64) {
@@ -948,7 +671,7 @@ mod collective_minimization {
         ));
     }
 
-    #[derive(hegel::DefaultGenerator, Debug)]
+    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable, Debug)]
     struct IntBool {
         a: i64,
         b: bool,

@@ -1,7 +1,12 @@
-use std::path::PathBuf;
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::native::bignum::BigInt;
-use crate::native::core::ChoiceValue;
+use crate::native::core::{ChoiceValue, ChoiceValueRef};
+use crate::sys;
 
 /// Multi-value key/value store backing the native engine's replay phase.
 ///
@@ -49,37 +54,65 @@ fn key_hash(key: &[u8]) -> String {
 }
 
 pub struct DirectoryTestCaseDatabase {
-    db_root: PathBuf,
+    db_root: String,
     metakeys_hash: String,
 }
 
 impl DirectoryTestCaseDatabase {
     pub fn new(db_root: &str) -> Self {
         DirectoryTestCaseDatabase {
-            db_root: PathBuf::from(db_root),
+            db_root: db_root.to_owned(),
             metakeys_hash: key_hash(METAKEYS_NAME),
         }
     }
 
-    pub fn key_path(&self, key: &[u8]) -> PathBuf {
-        self.db_root.join(key_hash(key))
+    pub fn key_path(&self, key: &[u8]) -> String {
+        format!("{}/{}", self.db_root, key_hash(key))
     }
 
-    fn value_path(&self, key: &[u8], value: &[u8]) -> PathBuf {
-        self.key_path(key).join(fnv_hex(value))
+    fn value_path(&self, key: &[u8], value: &[u8]) -> String {
+        format!("{}/{}", self.key_path(key), fnv_hex(value))
     }
+}
+
+/// Within-process discriminator for temporary file names, so concurrent
+/// saves in one process never collide (the process id keeps them unique
+/// across processes).
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A `<path>.tmp.<pid>.<counter>` sibling name for [`atomic_write`]'s
+/// temporary file: the counter keeps concurrent saves in one process
+/// distinct, the process id keeps processes sharing a database distinct.
+fn temp_path(path: &str) -> String {
+    format!(
+        "{path}.tmp.{}.{}",
+        sys::pid(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Write `value` to `path` atomically: write it to a uniquely named
+/// sibling [`temp_path`] file, then rename over `path` (same-directory
+/// renames are atomic). Failures leave no partial file behind — the
+/// temporary is removed and `path` is untouched.
+fn atomic_write(path: &str, value: &[u8]) {
+    let tmp = temp_path(path);
+    if sys::fs::write(&tmp, value).is_ok() && sys::fs::rename(&tmp, path).is_ok() {
+        return;
+    }
+    let _ = sys::fs::remove_file(&tmp);
 }
 
 impl TestCaseDatabase for DirectoryTestCaseDatabase {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let dir = self.key_path(key);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(d) => d,
+        let names = match sys::fs::read_dir(&dir) {
+            Ok(names) => names,
             Err(_) => return Vec::new(),
         };
         let mut out = Vec::new();
-        for entry in entries.flatten() {
-            if let Ok(bytes) = std::fs::read(entry.path()) {
+        for name in names {
+            if let Ok(bytes) = sys::fs::read(&format!("{dir}/{name}")) {
                 out.push(bytes);
             }
         }
@@ -87,30 +120,25 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
     }
 
     fn save(&self, key: &[u8], value: &[u8]) {
-        if key_hash(key) != self.metakeys_hash && !self.key_path(key).exists() {
+        if key_hash(key) != self.metakeys_hash && !sys::fs::exists(&self.key_path(key)) {
             self.save(METAKEYS_NAME, key);
         }
         let dir = self.key_path(key);
-        if std::fs::create_dir_all(&dir).is_err() {
+        if sys::fs::create_dir_all(&dir).is_err() {
             return;
         }
         let path = self.value_path(key, value);
-        if path.exists() {
+        if sys::fs::exists(&path) {
             return;
         }
-        if let Ok(mut tmp) = tempfile::NamedTempFile::new_in(&dir) {
-            use std::io::Write;
-            if tmp.write_all(value).is_ok() {
-                let _ = tmp.persist(&path);
-            }
-        }
+        atomic_write(&path, value);
     }
 
     fn delete(&self, key: &[u8], value: &[u8]) {
-        if std::fs::remove_file(self.value_path(key, value)).is_err() {
+        if sys::fs::remove_file(&self.value_path(key, value)).is_err() {
             return;
         }
-        if std::fs::remove_dir(self.key_path(key)).is_ok() && key_hash(key) != self.metakeys_hash {
+        if sys::fs::remove_dir(&self.key_path(key)).is_ok() && key_hash(key) != self.metakeys_hash {
             self.delete(METAKEYS_NAME, key);
         }
     }
@@ -120,23 +148,23 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
             self.save(src, value);
             return;
         }
-        if !self.key_path(dst).exists() {
+        if !sys::fs::exists(&self.key_path(dst)) {
             self.save(METAKEYS_NAME, dst);
         }
         let dst_dir = self.key_path(dst);
-        if std::fs::create_dir_all(&dst_dir).is_err() {
+        if sys::fs::create_dir_all(&dst_dir).is_err() {
             self.delete(src, value);
             self.save(dst, value);
             return;
         }
         let src_path = self.value_path(src, value);
         let dst_path = self.value_path(dst, value);
-        if std::fs::rename(&src_path, &dst_path).is_err() {
+        if sys::fs::rename(&src_path, &dst_path).is_err() {
             self.delete(src, value);
             self.save(dst, value);
             return;
         }
-        if std::fs::remove_dir(self.key_path(src)).is_ok() && key_hash(src) != self.metakeys_hash {
+        if sys::fs::remove_dir(&self.key_path(src)).is_ok() && key_hash(src) != self.metakeys_hash {
             self.delete(METAKEYS_NAME, src);
         }
     }
@@ -189,37 +217,41 @@ pub(super) fn fnv1a(s: &[u8]) -> u64 {
 ///       persisted — spans and kinds are recreated on replay.
 pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
-    serialize_choice_list(&mut buf, choices.len(), choices.iter());
+    serialize_choice_list(
+        &mut buf,
+        choices.len(),
+        choices.iter().map(ChoiceValueRef::from),
+    );
     buf
 }
 
 fn serialize_choice_list<'a>(
     buf: &mut Vec<u8>,
     count: usize,
-    choices: impl Iterator<Item = &'a ChoiceValue>,
+    choices: impl Iterator<Item = ChoiceValueRef<'a>>,
 ) {
     buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
         match choice {
-            ChoiceValue::Integer(v) => {
+            ChoiceValueRef::Integer(v) => {
                 buf.push(0);
                 serialize_any_integer(buf, v);
             }
-            ChoiceValue::Boolean(v) => {
+            ChoiceValueRef::Boolean(v) => {
                 buf.push(1);
-                buf.push(*v as u8);
+                buf.push(v as u8);
             }
-            ChoiceValue::Float(v) => {
+            ChoiceValueRef::Float(v) => {
                 buf.push(2);
                 buf.extend_from_slice(&v.to_bits().to_le_bytes());
             }
-            ChoiceValue::Bytes(v) => {
+            ChoiceValueRef::Bytes(v) => {
                 buf.push(3);
                 let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
                 buf.extend_from_slice(v);
             }
-            ChoiceValue::String(v) => {
+            ChoiceValueRef::String(v) => {
                 buf.push(4);
                 let len = v.len() as u32;
                 buf.extend_from_slice(&len.to_le_bytes());
@@ -227,9 +259,9 @@ fn serialize_choice_list<'a>(
                     buf.extend_from_slice(&cp.to_le_bytes());
                 }
             }
-            ChoiceValue::Clone(record) => {
+            ChoiceValueRef::Clone(children) => {
                 buf.push(5);
-                serialize_choice_list(buf, record.len(), record.values());
+                serialize_choice_list(buf, children.len(), children.values());
             }
         }
     }
@@ -254,7 +286,7 @@ fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> 
     let mut pos = pos + 1;
     macro_rules! native {
         ($t:ty) => {{
-            const N: usize = std::mem::size_of::<$t>();
+            const N: usize = core::mem::size_of::<$t>();
             let raw: [u8; N] = bytes.get(pos..pos + N)?.try_into().ok()?;
             pos += N;
             BigInt::from(<$t>::from_le_bytes(raw))
@@ -372,7 +404,7 @@ fn deserialize_choice_list(
                 pos += 1;
                 let (children, new_pos) = deserialize_choice_list(bytes, pos, depth + 1)?;
                 pos = new_pos;
-                choices.push(ChoiceValue::Clone(std::sync::Arc::new(
+                choices.push(ChoiceValue::Clone(alloc::sync::Arc::new(
                     crate::native::core::CloneRecord::from_values(children),
                 )));
             }

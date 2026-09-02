@@ -1,39 +1,34 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, Status};
+use crate::native::core::{
+    ChoiceKind, ChoiceNode, ChoiceValue, CloneRecord, GenerationParameters, Status,
+};
 use crate::native::rng::EngineRng;
 
 fn int_kind(min: i128, max: i128) -> ChoiceKind {
-    ChoiceKind::Integer(IntegerChoice {
+    ChoiceKind::Integer(std::sync::Arc::new(IntegerChoice {
         min_value: BigInt::from(min),
         max_value: BigInt::from(max),
         shrink_towards: BigInt::from(0),
-    })
+    }))
 }
 
 fn int_node(min: i128, max: i128, value: i128) -> ChoiceNode {
     ChoiceNode::new(
-        int_kind(min, max),
-        ChoiceValue::Integer(BigInt::from(value)),
+        int_kind(min, max)
+            .resolve(&ChoiceValue::Integer(BigInt::from(value)))
+            .unwrap(),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn forced_bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        true,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, true)
 }
 
 #[test]
@@ -54,7 +49,8 @@ fn generate_novel_prefix_replays_forced_values_and_descends() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(
             prefix,
             vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
@@ -98,7 +94,8 @@ fn record_tree_kill_depths_marks_inner_nodes_exhausted() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..50 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert!(
             prefix.is_empty()
                 || prefix.first() != Some(&ChoiceValue::Integer(BigInt::from(0)))
@@ -120,7 +117,11 @@ fn generate_novel_prefix_returns_empty_for_exhausted_root() {
     record_tree(&mut root, &[], Status::Valid, &[0]);
     assert!(root.is_exhausted);
     let mut rng = EngineRng::seeded(0);
-    assert!(generate_novel_prefix(&root, &mut rng).is_empty());
+    assert!(
+        generate_novel_prefix(&root, &mut rng, GenerationParameters::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -130,8 +131,41 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
     record_tree(&mut root, &[bool_node(true)], Status::Invalid, &[]);
 
     let mut rng = EngineRng::seeded(0);
-    let prefix = generate_novel_prefix(&root, &mut rng);
+    let prefix = generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
     assert!(prefix.is_empty());
+}
+
+/// The novel-prefix walk must sample boolean proposals from the recorded
+/// draw's `p`, not a fair coin: while the common branch is unexhausted, a
+/// rare branch like the `p = 2^-16` stateful stop signal must stay rare.
+#[test]
+fn novel_prefix_respects_boolean_probability() {
+    let mut root = DataTreeNode::default();
+    for x in 0..100 {
+        record_tree(
+            &mut root,
+            &[
+                ChoiceNode::boolean(BooleanChoice { p: 1.0 / 65536.0 }, false, false),
+                int_node(0, 1_000_000, x),
+            ],
+            Status::Valid,
+            &[],
+        );
+    }
+    let mut rng = EngineRng::seeded(0);
+    let mut rare_first = 0;
+    for _ in 0..200 {
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
+        if prefix.first() == Some(&ChoiceValue::Boolean(true)) {
+            rare_first += 1;
+        }
+    }
+    assert!(
+        rare_first <= 5,
+        "the p = 2^-16 branch was proposed {rare_first}/200 times; the \
+         novel-prefix walk should sample from the recorded p, not 50/50"
+    );
 }
 
 #[test]
@@ -181,7 +215,7 @@ fn simulate_unseen_when_path_diverges() {
 }
 
 #[test]
-fn simulate_unseen_when_choices_run_out_mid_path() {
+fn simulate_predicts_overrun_when_choices_run_out_mid_path() {
     let mut root = DataTreeNode::default();
     record_tree(
         &mut root,
@@ -189,7 +223,21 @@ fn simulate_unseen_when_choices_run_out_mid_path() {
         Status::Valid,
         &[],
     );
-    assert_eq!(simulate(&root, &[ChoiceValue::Boolean(false)]), None);
+    let outcome = simulate_full(&root, &[ChoiceValue::Boolean(false)], None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.status, Status::EarlyStop);
+    assert_eq!(outcome.nodes.len(), 1);
+    assert_eq!(outcome.origin, None);
+}
+
+#[test]
+fn simulate_predicts_overrun_for_empty_choices_on_a_recorded_tree() {
+    let mut root = DataTreeNode::default();
+    record_tree(&mut root, &[bool_node(false)], Status::Valid, &[]);
+    let outcome = simulate_full(&root, &[], None).unwrap().unwrap();
+    assert_eq!(outcome.status, Status::EarlyStop);
+    assert!(outcome.nodes.is_empty());
 }
 
 #[test]
@@ -204,11 +252,7 @@ fn simulate_returns_interesting_conclusion() {
 
 #[test]
 fn simulate_follows_forced_value_ignoring_prefix() {
-    let forced_true = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        true,
-    );
+    let forced_true = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, true);
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[forced_true], Status::Valid, &[]);
 
@@ -242,14 +286,16 @@ fn simulate_full_puns_original_simplest_to_new_simplest_with_prefix_nodes() {
     let choices = vec![ChoiceValue::Integer(BigInt::from(100))];
     let prefix_nodes = vec![int_node(100, 200, 100)];
 
-    let with_nodes = simulate_full(&root, &choices, Some(&prefix_nodes)).unwrap();
+    let with_nodes = simulate_full(&root, &choices, Some(&prefix_nodes))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         with_nodes.status,
         Status::Valid,
         "a stale value equal to its original kind's simplest puns to the new kind's simplest"
     );
 
-    let bare = simulate_full(&root, &choices, None).unwrap();
+    let bare = simulate_full(&root, &choices, None).unwrap().unwrap();
     assert_eq!(
         bare.status,
         Status::Interesting,
@@ -261,7 +307,8 @@ fn simulate_full_puns_original_simplest_to_new_simplest_with_prefix_nodes() {
 fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     use crate::native::core::choices::{BytesChoice, FloatChoice, StringChoice};
     use crate::native::intervalsets::IntervalSet;
-    let forced = |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind, value, true);
+    let forced =
+        |kind: ChoiceKind, value: ChoiceValue| ChoiceNode::new(kind.resolve(&value).unwrap(), true);
     let nodes = vec![
         forced(int_kind(0, 100), ChoiceValue::Integer(BigInt::from(42))),
         forced(
@@ -283,7 +330,9 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
         ),
         forced(
             ChoiceKind::String(StringChoice {
-                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)]).into(),
+                intervals: IntervalSet::new(vec![(b'a' as u32, b'z' as u32)])
+                    .unwrap()
+                    .into(),
                 min_size: 0,
                 max_size: 4,
             }),
@@ -295,7 +344,8 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
     record_tree(&mut root, &nodes, Status::Valid, &[]);
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(prefix[0], ChoiceValue::Integer(BigInt::from(42)));
         assert_eq!(prefix[1], ChoiceValue::Float(2.5));
         assert_eq!(prefix[2], ChoiceValue::Bytes(vec![7, 8]));
@@ -307,13 +357,8 @@ fn generate_novel_prefix_replays_forced_values_of_every_kind() {
 }
 
 fn realized_clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(CloneRecord::from_run(
-            children,
-            Vec::new(),
-            Vec::new(),
-        ))),
+    ChoiceNode::clone_stream(
+        Arc::new(RealizedStream::new(children, Vec::new(), Vec::new())),
         false,
     )
 }
@@ -332,17 +377,20 @@ fn record_and_simulate_roundtrip_with_clone_nodes() {
     let mut root = DataTreeNode::default();
     assert!(record_tree(&mut root, &nodes, Status::Interesting, &[]).is_none());
 
-    let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value.clone()).collect();
-    let outcome = simulate_full(&root, &values, None).unwrap();
+    let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value().clone()).collect();
+    let outcome = simulate_full(&root, &values, None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Interesting);
     assert_eq!(outcome.nodes.len(), 3);
-    let ChoiceValue::Clone(record) = &outcome.nodes[1].value else {
+    let ChoiceValue::Clone(record) = &outcome.nodes[1].value() else {
         panic!("simulated clone node lost its record");
     };
     let realized = record.realized_nodes().unwrap();
     assert_eq!(realized.len(), 2);
-    assert_eq!(*realized[0].kind, ChoiceKind::Boolean(BooleanChoice));
-    assert_eq!(realized[1].value, ChoiceValue::Integer(BigInt::from(2)));
+    assert_eq!(
+        realized[0].kind(),
+        ChoiceKind::Boolean(BooleanChoice { p: 0.5 })
+    );
+    assert_eq!(realized[1].value(), ChoiceValue::Integer(BigInt::from(2)));
 
     let values_only: Vec<ChoiceValue> = vec![
         ChoiceValue::Integer(BigInt::from(3)),
@@ -383,9 +431,9 @@ fn simulate_ignores_trailing_unread_child_values() {
         ChoiceValue::Boolean(true),
         ChoiceValue::Boolean(true),
     ])];
-    let outcome = simulate_full(&root, &longer, None).unwrap();
+    let outcome = simulate_full(&root, &longer, None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let ChoiceValue::Clone(record) = &outcome.nodes[0].value() else {
         panic!("expected a clone node");
     };
     assert_eq!(record.len(), 1);
@@ -440,7 +488,7 @@ fn clone_streams_with_context_dependent_children_disable_prediction_quietly() {
     assert!(record_tree(&mut root, &run1, Status::Valid, &[]).is_none());
     assert!(record_tree(&mut root, &run2, Status::Valid, &[]).is_none());
 
-    let exact: Vec<ChoiceValue> = run1.iter().map(|n| n.value.clone()).collect();
+    let exact: Vec<ChoiceValue> = run1.iter().map(|n| n.value().clone()).collect();
     assert_eq!(simulate(&root, &exact), Some(Status::Valid));
 
     let punnable = vec![
@@ -481,7 +529,8 @@ fn novel_prefix_explores_inside_clone_subtrees() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         assert_eq!(
             prefix,
             vec![clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
@@ -510,7 +559,8 @@ fn novel_prefix_descends_recorded_continuations_or_recurses() {
     let mut seen_inside = false;
     let mut seen_continuation = false;
     for _ in 0..100 {
-        let prefix = generate_novel_prefix(&root, &mut rng);
+        let prefix =
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default()).unwrap();
         if prefix == inside {
             seen_inside = true;
         } else if prefix == continuation {
@@ -540,7 +590,11 @@ fn novel_prefix_stops_before_a_fully_explored_clone_node() {
     );
     let mut rng = EngineRng::seeded(0);
     for _ in 0..20 {
-        assert!(generate_novel_prefix(&root, &mut rng).is_empty());
+        assert!(
+            generate_novel_prefix(&root, &mut rng, GenerationParameters::default())
+                .unwrap()
+                .is_empty()
+        );
     }
     assert!(!root.is_exhausted);
 }
@@ -579,33 +633,6 @@ fn a_stream_that_previously_ended_but_now_continues_disables_prediction() {
 }
 
 #[test]
-fn values_only_clone_records_disable_prediction_quietly() {
-    let node = ChoiceNode::new(
-        ChoiceKind::Clone,
-        clone_prefix_value(vec![ChoiceValue::Boolean(true)]),
-        false,
-    );
-    let mut root = DataTreeNode::default();
-    assert!(record_tree(&mut root, &[node], Status::Valid, &[]).is_none());
-    assert_eq!(
-        simulate(
-            &root,
-            &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])]
-        ),
-        Some(Status::Valid)
-    );
-    assert_eq!(
-        simulate(
-            &root,
-            &[clone_prefix_value(vec![ChoiceValue::Integer(
-                BigInt::from(999)
-            )])]
-        ),
-        None
-    );
-}
-
-#[test]
 fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
     let mut root = DataTreeNode::default();
     record_tree(
@@ -619,12 +646,13 @@ fn forced_nodes_inside_clone_streams_replay_their_recorded_value() {
         &[clone_prefix_value(vec![ChoiceValue::Boolean(false)])],
         None,
     )
+    .unwrap()
     .unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    assert_eq!(record.value_at(0), &ChoiceValue::Boolean(true));
+    assert!(stream.nodes()[0].value() == ChoiceValue::Boolean(true));
 }
 
 #[test]
@@ -642,12 +670,12 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(true),
     ])]);
-    let outcome = simulate_full(&root, &[candidate], None).unwrap();
+    let outcome = simulate_full(&root, &[candidate], None).unwrap().unwrap();
     assert_eq!(outcome.status, Status::Valid);
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    let ChoiceValue::Clone(inner) = record.value_at(0) else {
+    let Some(inner) = stream.nodes()[0].data.as_clone() else {
         panic!("expected a nested clone value");
     };
     assert_eq!(inner.len(), 1);
@@ -656,7 +684,7 @@ fn nested_clones_inside_clone_streams_simulate_recursively() {
 #[test]
 fn span_events_inside_clone_streams_are_reconstructed() {
     use crate::native::core::{Span, SpanEvent};
-    let child_record = CloneRecord::from_run(
+    let child_stream = RealizedStream::new(
         vec![bool_node(true)],
         vec![Span {
             start: 0,
@@ -671,11 +699,7 @@ fn span_events_inside_clone_streams_are_reconstructed() {
             (1, SpanEvent::Close { discarded: false }),
         ],
     );
-    let node = ChoiceNode::new(
-        ChoiceKind::Clone,
-        ChoiceValue::Clone(Arc::new(child_record)),
-        false,
-    );
+    let node = ChoiceNode::clone_stream(Arc::new(child_stream), false);
     let mut root = DataTreeNode::default();
     record_tree(&mut root, &[node], Status::Valid, &[]);
     let outcome = simulate_full(
@@ -683,13 +707,52 @@ fn span_events_inside_clone_streams_are_reconstructed() {
         &[clone_prefix_value(vec![ChoiceValue::Boolean(true)])],
         None,
     )
+    .unwrap()
     .unwrap();
-    let ChoiceValue::Clone(record) = &outcome.nodes[0].value else {
+    let Some(stream) = outcome.nodes[0].data.as_clone() else {
         panic!("expected a clone node");
     };
-    assert_eq!(record.spans().len(), 1);
-    assert_eq!(record.spans()[0].label, "9");
-    assert_eq!(record.spans()[0].start, 0);
-    assert_eq!(record.spans()[0].end, 1);
-    assert_eq!(record.span_events().len(), 2);
+    assert_eq!(stream.spans().len(), 1);
+    assert_eq!(stream.spans()[0].label, "9");
+    assert_eq!(stream.spans()[0].start, 0);
+    assert_eq!(stream.spans()[0].end, 1);
+    assert_eq!(stream.span_events().len(), 2);
+}
+
+#[test]
+fn choice_value_key_wraps_a_clone_value_and_exposes_its_record() {
+    let record = Arc::new(CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]));
+    let key = ChoiceValueKey::from(&ChoiceValue::Clone(Arc::clone(&record)));
+    assert!(Arc::ptr_eq(key.as_clone().unwrap(), &record));
+    assert!(
+        ChoiceValueKey::from(&ChoiceValue::Boolean(false))
+            .as_clone()
+            .is_none()
+    );
+}
+
+#[test]
+fn pick_non_exhausted_value_returns_none_for_a_clone_kind() {
+    let mut rng = EngineRng::seeded(0);
+    let children = HashMap::default();
+    assert_eq!(
+        pick_non_exhausted_value(
+            &ChoiceKind::Clone,
+            &children,
+            &mut rng,
+            GenerationParameters::default()
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn simulate_clone_stream_leaves_recorded_territory_at_an_unexplored_position() {
+    let root = DataTreeNode::default();
+    assert!(
+        simulate_clone_stream(&root, &[ChoiceValue::Boolean(true)])
+            .unwrap()
+            .is_none()
+    );
 }

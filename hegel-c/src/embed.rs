@@ -16,6 +16,8 @@
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
+use alloc::boxed::Box;
+use alloc::format;
 
 /// Synchronous driver for [`run_native_async`], retained for tests: runs the
 /// whole exploration on the calling thread, invoking `run_case` once per
@@ -61,14 +63,14 @@ pub(crate) async fn run_native_async(
 ) -> Result<TestRunResult, RunError> {
     if settings.mode == crate::settings::Mode::SingleTestCase {
         let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
+            crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
+            nondeterministic: false,
         });
     }
 
-    let failures = crate::native::test_runner::explore(settings, database_key, exchange).await?;
-    Ok(TestRunResult { failures })
+    crate::native::test_runner::explore(settings, database_key, exchange).await
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a
@@ -81,12 +83,6 @@ pub(crate) async fn run_native_async(
 /// whether the blob reproduced its failure (the property failed) or is stale
 /// (it passed). A blob whose choices no longer match the caller's generators
 /// surfaces as a stop-test error from the draw that overruns.
-///
-/// `settings` accompany the replay — currently only
-/// [`Verbosity::Debug`](crate::Verbosity::Debug) and the output destination
-/// are consulted, logging the decoded choice count — but they intentionally
-/// travel with the blob so future settings reach the replay path without a
-/// signature break.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
@@ -100,6 +96,8 @@ pub fn data_source_for_blob(
         ));
     }
     let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
+    ntc.family()
+        .set_stateful_step_count(settings.stateful_step_count);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
     Some(Box::new(data_source))
 }

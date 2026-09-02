@@ -6,26 +6,59 @@ header = """
  * This header is generated from hegel-c/src/lib.rs by cbindgen. Do not
  * edit it directly; re-run `just c-header` after changing the Rust source.
  *
+ * libhegel implements the core of property-based testing: generation,
+ * shrinking, the example database, and the decision of what to run next. It
+ * ships as a shared library (libhegel.so, libhegel.dylib, hegel.dll) with a
+ * C ABI.
+ *
+ * Terminology
+ * -----------
+ * - Library: the language-specific frontend that calls into libhegel.
+ *   Sometimes called the caller below, since from libhegel's point of view
+ *   it is whatever is making the calls.
+ * - Context: holds the diagnostic message of a failed call. Passed as the
+ *   first argument to nearly every function.
+ * - Run: the full lifecycle of one property test, including executing many
+ *   test cases and shrinking any failures.
+ * - Test case: a single execution of the test function and the concrete
+ *   values generated for it. Cloning a handle yields more handles onto the
+ *   same test case, each with its own choice sequence.
+ * - Span: a labeled grouping of draws that tells the shrinker which draws
+ *   belong to one unit.
+ * - Reproduce blob: a base64 string encoding a test case's choice sequence,
+ *   which can be replayed later to reproduce it exactly. It is only
+ *   guaranteed to reproduce the failure in the version of Hegel in which it
+ *   was generated.
+ *
  * Calling convention
  * ------------------
- * Every function takes a hegel_context_t* as its first argument and returns a
- * hegel_result_t code (HEGEL_OK is zero; negatives are errors), with two
- * exceptions: hegel_context_new, which creates a context and returns it, and
- * hegel_context_last_error, the error-reporting reader, which returns the
- * message pointer directly. Anything else a call produces — a handle, a
- * string, a count — is written through a trailing out-parameter named out_*. A
- * NULL context is allowed and simply opts out of error messages.
+ * Every function takes a hegel_context_t* as its first argument and returns
+ * a hegel_result_t code, except for hegel_context_new, which returns a
+ * context, and hegel_context_last_error, which returns the message pointer
+ * directly.
  *
- * Pointer ownership
- * -----------------
- * Pointers you pass *into* a libhegel function are always yours. The library
- * reads them during the call and copies whatever it needs to keep, so you may
- * free or reuse the memory as soon as the call returns. This covers strings
- * (char*), byte buffers, and arrays of strings alike.
+ * HEGEL_OK is zero and every error code is negative. Anything else a call
+ * produces is written through a trailing out-parameter named out_*.
  *
- * Of the pointers libhegel hands *back* (returned by hegel_context_new, or
- * written to an out-parameter otherwise), you own — and must release with the
- * matching free — every handle from these:
+ * Every function returns HEGEL_E_INVALID_HANDLE when passed a NULL handle
+ * (except the *_free functions, where NULL is a no-op) and
+ * HEGEL_E_INVALID_ARG when passed any other invalid argument (a NULL
+ * out-parameter, inverted bounds, a non-UTF-8 string, and so on). The
+ * functions below leave these implicit.
+ *
+ * A NULL context is always allowed and opts out of error messages. The call
+ * still returns its usual error code. A context must not be used
+ * concurrently from multiple threads, since each fallible call overwrites
+ * the stored message.
+ *
+ * Ownership
+ * ---------
+ * Pointers you pass into a libhegel function are always owned by the
+ * caller. libhegel reads them during the call and copies whatever it needs
+ * to keep, so you may free or reuse the memory as soon as the call returns.
+ * Run results own their data and are independent of the run they came from.
+ *
+ * Release every pointer returned by these functions with its matching free:
  *
  *     hegel_context_new          ->  hegel_context_free
  *     hegel_settings_new         ->  hegel_settings_free
@@ -36,39 +69,37 @@ header = """
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
  *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_new_collection       ->  hegel_collection_free
+ *     hegel_new_pool             ->  hegel_pool_free
+ *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
+ *     hegel_printer_options_new  ->  hegel_printer_options_free
+ *     hegel_printer_new          ->  hegel_printer_free
+ *     hegel_printer_deferred     ->  hegel_printer_free
+ *     hegel_test_case_printer    ->  hegel_printer_free
+ *     hegel_printer_value        ->  hegel_printer_value_result_free
  *
- * Every test-case handle you receive — whether from hegel_test_case_from_blob,
- * hegel_next_test_case, or hegel_test_case_clone — is yours and must be
- * released with hegel_test_case_free exactly once.
+ * Every other pointer libhegel hands back is a borrowed string. The caller
+ * must not free it, and it is valid only until a documented point.
+ * hegel_context_last_error is invalidated by the next call on that context.
  *
- * A test case and all clones descended from it are considered to be part of a
- * *family* of test cases. All test cases in a family are independent handles
- * onto one shared underlying test case; the resources associated with the test
- * case are released once its last handle is freed, so a clone keeps
- * working after the handle it was cloned from is freed. For a run-owned handle
- * the run keeps its own internal reference, so freeing your handle is always
- * memory-safe and never disturbs the run's state (this makes it easy to wrap a
- * handle in a garbage-collected language and free it from a finaliser). Note
- * that freeing is not completing, though: a run-owned test case still needs
- * hegel_mark_complete from some handle in its family before the run can
- * advance, so conclude every case before dropping your last handle to it —
- * see hegel_test_case_free.
+ * Threading
+ * ---------
+ * Each kind of handle has its own threading contract:
  *
- * The result and failure snapshots those last two return own their data and
- * are independent of the run: they stay valid after hegel_run_free, so a
- * wrapper can free each object from its own finaliser in any order.
- *
- * The buffers hegel_generate_bytes and hegel_generate_string fill in are
- * yours too — release each with its matching result-free function above.
- *
- * Every *other* pointer libhegel hands back is a borrowed string: libhegel
- * still owns it, you must not free it, and it is valid only until a point
- * that the function documents. Strings read off a result or failure
- * snapshot (hegel_run_result_error, the hegel_failure_* getters) live until
- * that snapshot's free; hegel_context_last_error is invalidated by the next
- * call on that context. Copy them to keep them.
+ * - A context must not be used concurrently from multiple threads. Each
+ *   fallible call overwrites its stored message, so sharing one across
+ *   threads is a data race.
+ * - A settings handle may be shared across threads once configured, but
+ *   each setter call requires exclusive access.
+ * - A run handle must only be used from one thread at a time. Calling
+ *   hegel_next_test_case, hegel_run_result, or hegel_run_free concurrently
+ *   on the same run is undefined behavior.
+ * - A test-case handle may be driven by at most one thread at a time.
+ *   Concurrent operations on it return HEGEL_E_CONCURRENT_USE. To generate
+ *   from several threads, hegel_test_case_clone the handle and give each
+ *   thread its own clone.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
@@ -111,6 +142,11 @@ include = [
 "HegelRunResult" = "hegel_run_result_t"
 "HegelFailure" = "hegel_failure_t"
 "HegelStringGenerator" = "hegel_string_generator_t"
+"HegelCollection" = "hegel_collection_t"
+"HegelPool" = "hegel_pool_t"
+"HegelStateMachine" = "hegel_state_machine_t"
+"HegelPrinter" = "hegel_printer_t"
+"HegelPrinterOptions" = "hegel_printer_options_t"
 
 # Enum types are named hegel_*_t directly in the Rust source, with each
 # variant pre-prefixed (HEGEL_STATUS_VALID etc.), so cbindgen's automatic

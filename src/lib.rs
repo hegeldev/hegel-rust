@@ -107,7 +107,7 @@
 //! }
 //!
 //! #[hegel::composite]
-//! fn generate_person(tc: TestCase) -> Person {
+//! fn generate_person(tc: &TestCase) -> Person {
 //!     let age = tc.draw(gs::integers::<i32>());
 //!     let name = tc.draw(gs::text());
 //!     Person { age, name }
@@ -128,7 +128,7 @@
 //! }
 //!
 //! #[hegel::composite]
-//! fn generate_person(tc: TestCase) -> Person {
+//! fn generate_person(tc: &TestCase) -> Person {
 //!     let age = tc.draw(gs::integers::<i32>());
 //!     let name = tc.draw(gs::text());
 //!     let driving_license = if age >= 18 {
@@ -173,6 +173,16 @@
 //! }
 //! ```
 //!
+//! To override the number of test cases at runtime — for the whole suite,
+//! without editing source — set the `HEGEL_TEST_CASES` environment variable:
+//!
+//! ```bash
+//! HEGEL_TEST_CASES=10000 cargo test
+//! ```
+//!
+//! When set and non-empty, it takes precedence over any value configured in
+//! source, including explicit `test_cases` attributes.
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
@@ -200,6 +210,11 @@
 //! generate concurrently without perturbing each other's values and the
 //! same seed replays the same values on every stream.
 //!
+//! In a failing example's report, a clone's drawn values appear together,
+//! at the point where the clone was created — not interleaved by wall-clock
+//! timing — so the report is deterministic no matter how the threads were
+//! scheduled.
+//!
 //! Determinism extends only as far as your own code's determinism: if your
 //! threads race on shared state, Hegel replays each stream faithfully but
 //! the test may still behave differently run to run — see [`TestCase`]'s
@@ -224,6 +239,7 @@ pub mod explicit_test_case;
 pub mod extras;
 pub(crate) mod ffi;
 pub mod generators;
+pub mod pretty;
 #[doc(hidden)]
 pub mod run_lifecycle;
 pub(crate) mod runner;
@@ -233,10 +249,10 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
+pub use generators::PrintableGenerator;
+pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
-#[doc(hidden)]
-pub use paste;
 #[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
@@ -252,8 +268,28 @@ pub use hegel_c::__bench;
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
 /// allowing it to be used with [`default`](generators::default) via `default::<T>()`.
 ///
+/// Deriving only works on type definitions you own; for a struct defined in
+/// another crate, see [`derive_generator!`](crate::derive_generator) instead.
+///
+/// The derived generator prints values field by field as it draws them, in
+/// the same Rust-expression format `#[derive(PrettyPrintable)]` produces,
+/// so the type itself needs no [`PrettyPrintable`] implementation. It is
+/// generic over its field generators — mirroring `one_of!` and tuples — and
+/// is a [`PrintableGenerator`] exactly when every field generator is one:
+/// the builder methods accept any [`Generator`] of the field's type, and a
+/// non-printable field generator simply makes the result silent-only (or
+/// printable again via [`print_as_value`](generators::Generator::print_as_value),
+/// [`print_as_debug`](generators::Generator::print_as_debug), or
+/// [`print_with`](generators::Generator::print_with)). Because the derived
+/// generator prints compositionally, a hand-written [`PrettyPrintable`]
+/// implementation on the type is **not consulted** for its failing-example
+/// output; a type that wants a different printed representation implements
+/// [`DefaultGenerator`] by hand.
+///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
+/// - for tuple structs, the builder methods are positional: `._0(generator)`,
+///   `._1(generator)`, etc.
 ///
 /// For enums, the generated generator draws one of the variants at random.
 /// Unit variants need no configuration; every data-carrying variant gets
@@ -280,11 +316,17 @@ pub use hegel_c::__bench;
 ///     age: u32,
 /// }
 ///
+/// #[derive(Debug, DefaultGenerator)]
+/// struct Meters(f64);
+///
 /// #[hegel::test]
 /// fn generates_people(tc: hegel::TestCase) {
 ///     let generator = gs::default::<Person>()
 ///         .age(gs::integers::<u32>().min_value(0).max_value(120));
 ///     let person: Person = tc.draw(generator);
+///     let height: Meters = tc.draw(
+///         gs::default::<Meters>()._0(gs::floats().min_value(0.0).max_value(3.0)),
+///     );
 /// }
 /// ```
 ///
@@ -316,18 +358,65 @@ pub use hegel_c::__bench;
 /// ```
 pub use hegel_macros::DefaultGenerator;
 
+/// Derive [`PrettyPrintable`] for a struct or enum.
+///
+/// The generated implementation prints the value in Rust-expression syntax —
+/// `Name { field: value, … }`, `Name(value, …)`, and `Name::Variant …` for
+/// enums — using the printer's group machinery so values that do not fit on
+/// one line wrap with each field on its own line. Every generic type
+/// parameter is given a [`PrettyPrintable`] bound, mirroring how
+/// `derive(Debug)` bounds `Debug`.
+///
+/// For a type whose `Debug` output is already the representation you want
+/// (or one you cannot add a derive to), use
+/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
+///
+/// A field whose type cannot implement [`PrettyPrintable`] — a foreign type
+/// the orphan rule keeps out, say — can opt out with `#[pretty(debug)]`:
+/// that field prints its `Debug` representation (re-laid-out through the
+/// printer, like [`print_as_debug`](generators::Generator::print_as_debug)),
+/// and its type must implement `Debug` instead.
+///
+/// ```
+/// use hegel::{Document, PrettyPrintable};
+///
+/// #[derive(PrettyPrintable)]
+/// struct Person {
+///     name: String,
+///     age: u32,
+///     #[pretty(debug)]
+///     home: std::path::PathBuf,
+/// }
+///
+/// let person = Person {
+///     name: "Ada".to_string(),
+///     age: 36,
+///     home: "/home/ada".into(),
+/// };
+/// let mut doc = Document::new();
+/// person.pretty_print(doc.printer());
+/// assert_eq!(
+///     doc.finish(),
+///     "Person { name: \"Ada\".to_string(), age: 36, home: \"/home/ada\" }"
+/// );
+/// ```
+pub use hegel_macros::PrettyPrintable;
+
 /// Define a composite generator from a function.
 ///
-/// The first parameter must be a [`TestCase`] and is passed automatically
+/// The first parameter must be a `&`[`TestCase`] and is passed automatically
 /// when the generator is drawn. Any additional parameters become parameters
-/// of the returned factory function. The function must have an explicit
-/// return type.
+/// of the generator's constructor function and must implement [`Clone`]:
+/// they are stored on the generator and cloned into each draw (pass a
+/// non-`Clone` generator argument through
+/// [`boxed()`](generators::Generator::boxed)). The function must have an
+/// explicit return type.
 ///
 /// ```no_run
 /// use hegel::generators as gs;
 ///
 /// #[hegel::composite]
-/// fn sorted_vec(tc: hegel::TestCase, min_len: usize) -> Vec<i32> {
+/// fn sorted_vec(tc: &hegel::TestCase, min_len: usize) -> Vec<i32> {
 ///     let mut v: Vec<i32> = tc.draw(gs::vecs(gs::integers()).min_size(min_len));
 ///     v.sort();
 ///     v
@@ -338,6 +427,33 @@ pub use hegel_macros::DefaultGenerator;
 ///     let v = tc.draw(sorted_vec(3));
 ///     assert!(v.len() >= 3);
 ///     assert!(v.windows(2).all(|w| w[0] <= w[1]));
+/// }
+/// ```
+///
+/// The attribute expands to a struct named after the function
+/// (`sorted_vec` above becomes `SortedVecCompositeGenerator`) plus a
+/// constructor function with the original name, so the generator has a
+/// nameable type that can be stored, cloned, and passed to other
+/// composites. Because the constructor is an ordinary function returning
+/// that struct, composite generators can also call themselves recursively:
+///
+/// ```no_run
+/// use hegel::generators as gs;
+///
+/// #[derive(Debug, Clone, hegel::PrettyPrintable)]
+/// enum Tree {
+///     Leaf,
+///     Branch(Box<Tree>, Box<Tree>),
+/// }
+///
+/// #[hegel::composite]
+/// fn tree(tc: &hegel::TestCase) -> Tree {
+///     tc.draw(hegel::one_of!(
+///         gs::just(Tree::Leaf),
+///         hegel::compose!(|tc| {
+///             Tree::Branch(Box::new(tc.draw(tree())), Box::new(tc.draw(tree())))
+///         }),
+///     ))
 /// }
 /// ```
 pub use hegel_macros::composite;
@@ -402,6 +518,71 @@ pub use hegel_macros::rewrite_draws;
 ///
 /// See the [`stateful`] module docs for more information.
 pub use hegel_macros::state_machine;
+
+/// Derive a [`ConcurrentStateMachine`](crate::stateful::ConcurrentStateMachine)
+/// implementation from an `impl` block, for concurrent stateful testing via
+/// [`stateful::run_concurrent`].
+///
+/// Methods annotated `#[rule(group = "name")]` become rules assigned to the
+/// named concurrency group; methods annotated `#[invariant]` become
+/// invariants, checked in full on the machine's initial and final state and
+/// sampled at the join points between rounds. Rules in the same
+/// group may run concurrently with each other; rules in different groups
+/// never overlap.
+///
+/// A bare `#[rule]` with no `group = "..."` argument is assigned to a
+/// single shared anonymous group, so a machine with no group annotations
+/// is maximally concurrent: any rule may overlap with any other, and naming
+/// groups is how overlap gets restricted.
+///
+/// The model is shared by reference across worker threads, so rules and
+/// invariants must take `&self` (mutable state needs interior mutability),
+/// and the model type must be `Sync`. See
+/// [`run_concurrent`](crate::stateful::run_concurrent) for the full
+/// execution model.
+///
+/// ```no_run
+/// use std::sync::Mutex;
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// struct KvTest {
+///     store: Mutex<std::collections::HashMap<u8, i64>>,
+/// }
+///
+/// #[hegel::concurrent_state_machine]
+/// impl KvTest {
+///     #[rule(group = "rw")]
+///     fn put(&self, tc: TestCase) {
+///         let key: u8 = tc.draw(gs::integers());
+///         let value: i64 = tc.draw(gs::integers());
+///         self.store.lock().unwrap_or_else(|e| e.into_inner()).insert(key, value);
+///     }
+///
+///     #[rule(group = "rw")]
+///     fn get(&self, tc: TestCase) {
+///         let key: u8 = tc.draw(gs::integers());
+///         let _ = self.store.lock().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
+///     }
+///
+///     #[rule(group = "dump")]
+///     fn dump(&self, _: TestCase) {
+///         let _ = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone();
+///     }
+///
+///     #[invariant]
+///     fn small_enough(&self, _: TestCase) {
+///         assert!(self.store.lock().unwrap_or_else(|e| e.into_inner()).len() <= 256);
+///     }
+/// }
+///
+/// #[hegel::test]
+/// fn test_kv(tc: TestCase) {
+///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
+///     hegel::stateful::run_concurrent(m, tc, 1, 3);
+/// }
+/// ```
+pub use hegel_macros::concurrent_state_machine;
 
 /// The main entrypoint into Hegel.
 ///

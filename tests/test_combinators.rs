@@ -1,7 +1,7 @@
 mod common;
 
 use common::utils::{assert_all_examples, expect_panic, find_any};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 use hegel::{Hegel, Settings, TestCase};
 
 #[hegel::test]
@@ -19,19 +19,7 @@ fn test_sampled_from_strings(tc: TestCase) {
 }
 
 #[test]
-fn test_one_of_enumerates_when_all_children_do() {
-    let g = hegel::one_of!(
-        gs::sampled_from(vec![1_i64, 2]),
-        gs::sampled_from(vec![3_i64, 4]),
-    );
-    assert_eq!(g.enumerate_values(), Some(vec![1, 2, 3, 4]));
-
-    let g = hegel::one_of!(gs::sampled_from(vec![1_i64, 2]), gs::integers::<i64>());
-    assert!(g.enumerate_values().is_none());
-}
-
-#[test]
-fn test_one_of_enumerable_children_feed_the_filter_pool() {
+fn test_one_of_filtered_produces_only_valid_values() {
     assert_all_examples(
         hegel::one_of!(
             gs::sampled_from(vec![1_i64, 2]),
@@ -40,16 +28,6 @@ fn test_one_of_enumerable_children_feed_the_filter_pool() {
         .filter(|x: &i64| x % 2 == 1),
         |x: &i64| *x == 1 || *x == 3,
     );
-}
-
-#[test]
-fn test_optional_can_generate_some() {
-    find_any(gs::optional(gs::integers::<i32>()), |v| v.is_some());
-}
-
-#[test]
-fn test_optional_can_generate_none() {
-    find_any(gs::optional(gs::integers::<i32>()), |v| v.is_none());
 }
 
 #[hegel::test]
@@ -98,8 +76,55 @@ fn test_one_of_with_different_types_via_map(tc: TestCase) {
 
 #[hegel::test]
 fn test_one_of_many(tc: TestCase) {
-    let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed())));
+    let value = tc.draw(gs::one_of((0..10).map(|i| gs::just(i).boxed_printable())));
     assert!((0..10).contains(&value));
+}
+
+#[derive(Clone, PartialEq)]
+struct Opaque(i32);
+
+#[hegel::test]
+fn test_one_of_with_non_printable_components_draws_silently(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(1)),
+        gs::integers::<i32>().min_value(2).max_value(5).map(Opaque),
+    ));
+    assert!(value == Opaque(1) || (2..=5).contains(&value.0));
+}
+
+#[hegel::test]
+fn test_one_of_with_mixed_printable_and_non_printable_components(tc: TestCase) {
+    let value = tc.draw_silent(hegel::one_of!(
+        gs::just(Opaque(7)).print_with(|_, printer| printer.text("Opaque(7)")),
+        gs::just(Opaque(8)),
+    ));
+    assert!(value == Opaque(7) || value == Opaque(8));
+}
+
+#[hegel::test]
+fn test_one_of_single_component(tc: TestCase) {
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(42))), 42);
+    assert_eq!(tc.draw(hegel::one_of!(gs::just(43),)), 43);
+    assert_eq!(tc.draw_silent(hegel::one_of!(gs::just(44))), 44);
+}
+
+#[hegel::test]
+fn test_one_of_twelve_components(tc: TestCase) {
+    let value = tc.draw(hegel::one_of!(
+        gs::just(0),
+        gs::just(1),
+        gs::just(2),
+        gs::just(3),
+        gs::just(4),
+        gs::just(5),
+        gs::just(6),
+        gs::just(7),
+        gs::just(8),
+        gs::just(9),
+        gs::just(10),
+        gs::just(11),
+    ));
+    assert!((0..12).contains(&value));
 }
 
 #[hegel::test]
@@ -130,8 +155,8 @@ fn test_filter(tc: TestCase) {
 fn test_boxed_generator_clone(tc: TestCase) {
     let gen1 = gs::integers::<i32>().min_value(0).max_value(10).boxed();
     let gen2 = gen1.clone();
-    let v1 = tc.draw(gen1);
-    let v2 = tc.draw(gen2);
+    let v1 = tc.draw_silent(gen1);
+    let v2 = tc.draw_silent(gen2);
     assert!((0..=10).contains(&v1));
     assert!((0..=10).contains(&v2));
 }
@@ -140,7 +165,7 @@ fn test_boxed_generator_clone(tc: TestCase) {
 fn test_boxed_generator_double_boxed(tc: TestCase) {
     let gen1 = gs::integers::<i32>().min_value(0).max_value(10).boxed();
     let gen2 = gen1.boxed();
-    let value = tc.draw(gen2);
+    let value = tc.draw_silent(gen2);
     assert!((0..=10).contains(&value));
 }
 
@@ -160,7 +185,7 @@ fn test_sampled_from_accepts_array(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_non_primitive(tc: TestCase) {
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, hegel::PrettyPrintable)]
     struct Point {
         x: i32,
         y: i32,
@@ -212,15 +237,6 @@ fn test_optional_mapped_find_any() {
     );
 }
 
-/// A rare value (x == 0) should always be found via the enumerate_values fallback.
-#[test]
-fn test_sampled_from_filter_rare_value() {
-    assert_all_examples(
-        gs::sampled_from((0..100_i64).collect::<Vec<i64>>()).filter(|x: &i64| *x == 0),
-        |x: &i64| *x == 0,
-    );
-}
-
 /// A selective filter on sampled_from should only produce values satisfying
 /// the predicate, not trigger a FilterTooMuch health check.
 #[test]
@@ -231,8 +247,8 @@ fn test_sampled_from_filter_produces_only_valid_values() {
     );
 }
 
-/// When all elements are rejected, panic immediately with a clear message
-/// rather than triggering FilterTooMuch or silently passing vacuously.
+/// When all elements are rejected, the run fails (via the engine's
+/// rejection accounting) rather than silently passing vacuously.
 #[test]
 fn test_sampled_from_unsatisfiable_filter_panics() {
     expect_panic(
@@ -244,11 +260,11 @@ fn test_sampled_from_unsatisfiable_filter_panics() {
             .settings(Settings::new().database(None))
             .run();
         },
-        "(?i)(unsatisfiable|filter)",
+        "(?i)(health.check|FailedHealthCheck|unsatisfiable|filter)",
     );
 }
 
-/// Chained .map().filter() on sampled_from should also use enumerate_values.
+/// Chained .map().filter() on sampled_from produces only valid values.
 #[test]
 fn test_sampled_from_mapped_then_filtered() {
     assert_all_examples(
@@ -259,7 +275,7 @@ fn test_sampled_from_mapped_then_filtered() {
     );
 }
 
-/// Boxed filtered sampled_from forwards enumerate_values through the box.
+/// A boxed filtered sampled_from produces only valid values.
 #[test]
 fn test_sampled_from_filtered_boxed() {
     assert_all_examples(
@@ -395,7 +411,7 @@ mod one_of {
     fn test_one_of_empty() {
         expect_panic(
             || {
-                gs::one_of::<i64, _>(vec![]);
+                gs::one_of(Vec::<gs::BoxedGenerator<i64>>::new());
             },
             "one_of requires at least one generator",
         );
@@ -508,8 +524,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let draw_1 = [0, 0];"),
-            "expected `let draw_1 = [0, 0];` in the captured report:\n{}",
+            output.contains("let draw_1 = vec![0, 0];"),
+            "expected `let draw_1 = vec![0, 0];` in the captured report:\n{}",
             output
         );
         assert!(
@@ -543,8 +559,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let some_numbers = [0, 0];"),
-            "expected `let some_numbers = [0, 0];` in the captured report:\n{}",
+            output.contains("let some_numbers = vec![0, 0];"),
+            "expected `let some_numbers = vec![0, 0];` in the captured report:\n{}",
             output
         );
         assert!(
@@ -623,7 +639,7 @@ mod nocover_filtering {
                 s = s.filter(move |x: &i64| *x != f).boxed();
             }
 
-            let x: i64 = tc.draw(&s);
+            let x: i64 = tc.draw_silent(&s);
             assert!((1..=20).contains(&x));
             assert!(!forbidden.contains(&x));
         })
@@ -1058,5 +1074,197 @@ mod nocover_given_reuse {
         })
         .settings(Settings::new().database(None))
         .run();
+    }
+}
+
+mod one_of_named_types {
+    use hegel::generators::{self as gs, OneOf2Generator};
+    use hegel::{Hegel, Settings};
+
+    struct Holder {
+        generator:
+            OneOf2Generator<gs::IntegerGenerator<i64>, gs::SampledFromGenerator<'static, i64>, i64>,
+    }
+
+    #[test]
+    fn test_one_of_result_types_are_nameable() {
+        let holder = Holder {
+            generator: hegel::one_of!(gs::integers::<i64>(), gs::sampled_from(vec![1_i64, 2])),
+        };
+        Hegel::new(move |tc| {
+            let _: i64 = tc.draw(&holder.generator);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    struct BoxedHolder {
+        generator: gs::OneOfGenerator<'static, i64>,
+    }
+
+    #[test]
+    fn test_the_unqualified_one_of_generator_type_is_the_printable_form() {
+        use hegel::PrintableGenerator;
+
+        let holder = BoxedHolder {
+            generator: gs::one_of(vec![
+                gs::integers::<i64>().boxed_printable(),
+                gs::just(7_i64).boxed_printable(),
+            ]),
+        };
+        Hegel::new(move |tc| {
+            let _: i64 = tc.draw(&holder.generator);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+}
+
+fn _one_of_generator_is_covariant_in_its_lifetime<'a>(
+    g: gs::OneOfGenerator<'static, i64>,
+) -> gs::OneOfGenerator<'a, i64> {
+    g
+}
+
+mod one_of_arity_dispatch {
+    use hegel::generators::{self as gs, PrintableGenerator};
+    use hegel::{Hegel, Settings, TestCase};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    fn assert_every_alternative_reachable<G>(arity: i32, generator: G)
+    where
+        G: PrintableGenerator<i32> + Send + Sync + 'static,
+    {
+        let seen: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+        let track = Arc::clone(&seen);
+        Hegel::new(move |tc: TestCase| {
+            track.lock().unwrap().insert(tc.draw(&generator));
+        })
+        .settings(Settings::new().database(None).test_cases(500))
+        .run();
+        assert_eq!(*seen.lock().unwrap(), (0..arity).collect::<HashSet<i32>>());
+    }
+
+    #[test]
+    fn test_one_of_every_arity_reaches_every_alternative() {
+        assert_every_alternative_reachable(1, hegel::one_of!(gs::just(0)));
+        assert_every_alternative_reachable(2, hegel::one_of!(gs::just(0), gs::just(1)));
+        assert_every_alternative_reachable(
+            3,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2)),
+        );
+        assert_every_alternative_reachable(
+            4,
+            hegel::one_of!(gs::just(0), gs::just(1), gs::just(2), gs::just(3)),
+        );
+        assert_every_alternative_reachable(
+            5,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4)
+            ),
+        );
+        assert_every_alternative_reachable(
+            6,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5)
+            ),
+        );
+        assert_every_alternative_reachable(
+            7,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6)
+            ),
+        );
+        assert_every_alternative_reachable(
+            8,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7)
+            ),
+        );
+        assert_every_alternative_reachable(
+            9,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8)
+            ),
+        );
+        assert_every_alternative_reachable(
+            10,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9)
+            ),
+        );
+        assert_every_alternative_reachable(
+            11,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10)
+            ),
+        );
+        assert_every_alternative_reachable(
+            12,
+            hegel::one_of!(
+                gs::just(0),
+                gs::just(1),
+                gs::just(2),
+                gs::just(3),
+                gs::just(4),
+                gs::just(5),
+                gs::just(6),
+                gs::just(7),
+                gs::just(8),
+                gs::just(9),
+                gs::just(10),
+                gs::just(11)
+            ),
+        );
     }
 }
