@@ -115,6 +115,18 @@ impl OriginLifecycle {
         );
     }
 
+    /// A validated accept measured `origin`'s failure rate at `anchor`
+    /// (a gauntlet first-accept or a boost holdout). Monotone: never
+    /// lowers the stored anchor (decision 19), and a no-op unless the
+    /// origin is confirmed — an anchor only exists past the bar.
+    pub(crate) fn raise_anchor(&mut self, origin: &str, anchor: f64) {
+        if let Some(OriginState::Confirmed { anchor: stored, .. }) = self.origins.get_mut(origin) {
+            if anchor > *stored {
+                *stored = anchor;
+            }
+        }
+    }
+
     /// The discovery bar rejected `origin`. Returns whether the caller
     /// must evict it from the interesting map: true for unconfirmed
     /// origins (recording the rejection for the caveated report), false

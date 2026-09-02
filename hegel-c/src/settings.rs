@@ -190,9 +190,6 @@ pub struct Settings {
     /// waiting for a detection flip, so tests exercise the ND machinery
     /// deterministically. Not reachable from any public API.
     pub(crate) nd_force: bool,
-    /// Experiment 006: run the boost phase (successive halving to raise the
-    /// incumbent's failure rate) before shrinking under ND handling.
-    pub(crate) nd_boost: bool,
 }
 
 impl Settings {
@@ -228,7 +225,6 @@ impl Settings {
             backend: None,
             nondeterminism_strictness: NondeterminismStrictness::Quiet,
             nd_force: false,
-            nd_boost: false,
         }
     }
 

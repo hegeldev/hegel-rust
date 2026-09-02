@@ -43,7 +43,7 @@ use crate::native::database::{
 use crate::native::nd;
 use crate::native::nd::lifecycle::OriginLifecycle;
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, SweepMode, absorb_stop};
 use crate::settings::{
     Backend, Database, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
 };
@@ -645,17 +645,12 @@ impl<'a> Engine<'a> {
                 };
 
                 let mut verify = verify;
-                if self.settings.nd_boost && self.nd_handling() {
+                if self.nd_handling() && probe_anchor < nd::BOOST_RELIABILITY_FLOOR {
                     let incumbent: Vec<ChoiceValue> =
                         verify.nodes.iter().map(|n| n.value()).collect();
                     if let Some((witness, lcb)) =
                         self.nd_boost(&origin, &incumbent, probe_anchor).await?
                     {
-                        if verbosity == Verbosity::Debug {
-                            output.line(&format!(
-                                "nd boost: origin={origin} anchor {probe_anchor:.3} -> {lcb:.3}"
-                            ));
-                        }
                         verify = witness;
                         probe_anchor = lcb;
                     }
@@ -672,6 +667,7 @@ impl<'a> Engine<'a> {
                         gauntlet,
                         ledger: HashMap::default(),
                         anchor: probe_anchor,
+                        sweep: SweepMode::Fast,
                         raised: crate::native::HashSet::default(),
                     };
                     let mut shrinker =
@@ -1390,11 +1386,13 @@ impl<'a> Engine<'a> {
         })
     }
 
-    /// Experiment 006: the boost phase — successive halving over the
+    /// The boost phase (experiment 006) — successive halving over the
     /// incumbent, its pool, and probe mutants, scored by failure rate under
     /// budgeted replay. Returns a witness run and new anchor when the
     /// winner's holdout LCB beats the confirmation anchor (holdout because
     /// the in-race rate of a halving winner is selection-biased upward).
+    /// Run before shrinking only when the anchor sits below
+    /// [`nd::BOOST_RELIABILITY_FLOOR`] (gate G2).
     async fn nd_boost(
         &mut self,
         origin: &str,
@@ -1455,7 +1453,15 @@ impl<'a> Engine<'a> {
         }
         let lcb = holdout.lower_bound();
         Ok(match (witness, lcb > anchor) {
-            (Some(witness), true) => Some((witness, lcb)),
+            (Some(witness), true) => {
+                if self.settings.verbosity == Verbosity::Debug {
+                    self.settings.output.line(&format!(
+                        "nd boost: origin={origin} anchor {anchor:.3} -> {lcb:.3}"
+                    ));
+                }
+                self.nd_origins.raise_anchor(origin, lcb);
+                Some((witness, lcb))
+            }
             _ => None,
         })
     }
@@ -1804,8 +1810,16 @@ struct EngineShrinkProbe<'e, 'a> {
     /// origin, so pass repetitions add power to retried rejects instead of
     /// starting over.
     gauntlet: bool,
+    /// Cumulative evidence per candidate, keyed by serialized realized
+    /// choices — a candidate whose replay punned into another realization
+    /// merges evidence with it, deliberately: the realized timeline is
+    /// what the evidence is about, whatever proposal produced it.
     ledger: HashMap<Vec<u8>, nd::Evidence>,
     anchor: f64,
+    /// Under [`SweepMode::Confirm`] a non-matching first run is not a
+    /// reject — the ledger is driven to a bound verdict either way
+    /// (decision 18); only gauntleted probes distinguish the modes.
+    sweep: SweepMode,
     /// Timelines whose first accept already raised the anchor. Later
     /// accepts of the same timeline draw on ever-growing replay evidence,
     /// and replay-sourced evidence must not keep raising the anchor or the
@@ -1828,6 +1842,12 @@ impl EngineShrinkProbe<'_, '_> {
 }
 
 impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        let previous = self.sweep;
+        self.sweep = mode;
+        self.gauntlet.then_some(previous)
+    }
+
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
         Box::pin(async move {
             if self.verbosity == Verbosity::Verbose {
@@ -1853,7 +1873,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let key = serialize_choices(&realized);
             self.record_evidence(&key, matched, 1.0);
-            if !matched {
+            if !matched && self.sweep == SweepMode::Fast {
                 return Ok((false, run.nodes, Spans::from(run.spans)));
             }
             loop {
@@ -1863,6 +1883,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         let first_accept = self.raised.insert(key.clone());
                         if first_accept && lower_bound > self.anchor {
                             self.anchor = lower_bound;
+                            self.engine
+                                .nd_origins
+                                .raise_anchor(&self.target_origin, lower_bound);
                         }
                         self.engine
                             .record_nd_incumbent(&self.target_origin, &run.nodes);

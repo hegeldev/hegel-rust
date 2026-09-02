@@ -114,3 +114,20 @@ fn unconfirmed_report_is_sorted_and_skips_confirmed_origins() {
         vec![("a", 2), ("c", 1)]
     );
 }
+
+#[test]
+fn raise_anchor_is_monotone_and_confirmed_only() {
+    let mut lc = OriginLifecycle::default();
+    lc.raise_anchor("a", 0.9);
+    lc.observe("a");
+    lc.raise_anchor("a", 0.9);
+    assert!(lc.needs_confirmation("a"));
+    lc.trust("b", Vec::new());
+    lc.raise_anchor("b", 0.9);
+    assert!(lc.take_witness("b").is_none());
+    lc.confirm("c", 0.3, Some(witness("c")), Vec::new());
+    lc.raise_anchor("c", 0.2);
+    lc.raise_anchor("c", 0.6);
+    let (_, anchor) = lc.take_witness("c").unwrap();
+    assert_eq!(anchor, 0.6);
+}

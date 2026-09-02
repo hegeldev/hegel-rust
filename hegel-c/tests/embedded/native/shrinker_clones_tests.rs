@@ -220,3 +220,90 @@ fn nested_clone_probe_routes_probe_requests_through_the_outer_test_fn() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(int_value(&nodes[0]), 3);
 }
+
+use crate::native::shrinker::{ProbeFuture, ShrinkProbe, SweepMode};
+use std::sync::Mutex;
+
+struct SweepRecordingProbe {
+    modes: Arc<Mutex<Vec<SweepMode>>>,
+}
+
+impl ShrinkProbe for SweepRecordingProbe {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        self.modes.lock().unwrap().push(mode);
+        Some(SweepMode::Fast)
+    }
+
+    fn run<'s>(&'s mut self, _req: ShrinkRun<'s>) -> ProbeFuture<'s> {
+        Box::pin(core::future::ready(Ok((false, Vec::new(), Spans::new()))))
+    }
+}
+
+#[test]
+fn nested_clone_probe_forwards_sweep_modes_to_the_outer_probe() {
+    let modes: Arc<Mutex<Vec<SweepMode>>> = Arc::default();
+    let mut outer: Box<dyn ShrinkProbe + Send> = Box::new(SweepRecordingProbe {
+        modes: Arc::clone(&modes),
+    });
+    let template = vec![clone_node(vec![int_node(5)])];
+    let outer_values: Vec<ChoiceValue> = template.iter().map(|n| n.value()).collect();
+    let mut probe = super::NestedCloneProbe {
+        test_fn: &mut outer,
+        template: &template,
+        outer_values: &outer_values,
+        i: 0,
+    };
+    assert_eq!(
+        probe.set_sweep_mode(SweepMode::Confirm),
+        Some(SweepMode::Fast)
+    );
+    assert_eq!(*modes.lock().unwrap(), vec![SweepMode::Confirm]);
+}
+
+/// A synthetic gauntleted probe over a clone-bearing sequence: fast
+/// judgments always miss, Confirm judgments report the true predicate —
+/// the node at `[0, 0]` is an integer >= 10.
+struct GauntletedCloneProbe {
+    mode: SweepMode,
+}
+
+impl ShrinkProbe for GauntletedCloneProbe {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        let previous = self.mode;
+        self.mode = mode;
+        Some(previous)
+    }
+
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
+        let outcome = match req {
+            ShrinkRun::Full(nodes) => (
+                self.mode == SweepMode::Confirm && int_at_path_at_least(nodes, &[0, 0], 10),
+                nodes.to_vec(),
+                Spans::new(),
+            ),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        };
+        Box::pin(core::future::ready(Ok(outcome)))
+    }
+}
+
+#[test]
+fn nested_clone_shrink_reaches_the_minimum_through_confirmation_sweeps() {
+    let initial = vec![clone_node(vec![int_node(47), bool_node(true)])];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(GauntletedCloneProbe {
+            mode: SweepMode::Fast,
+        }),
+        initial,
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.shrink()).unwrap();
+    assert_eq!(shrinker.current_nodes.len(), 1);
+    let child = child_nodes_of(&shrinker.current_nodes[0]);
+    assert_eq!(child.len(), 1);
+    assert_eq!(
+        int_value(&child[0]),
+        10,
+        "the nested shrink's improvements must survive the outer fast reject"
+    );
+}

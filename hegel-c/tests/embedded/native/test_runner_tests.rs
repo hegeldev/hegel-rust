@@ -176,6 +176,18 @@ fn bool_node(value: bool) -> ChoiceNode {
     ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
+fn int_node(value: i128) -> ChoiceNode {
+    ChoiceNode::integer(
+        crate::native::core::choices::IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(value),
+        false,
+    )
+}
+
 #[test]
 fn cached_test_function_serves_tree_known_path_without_executing() {
     with_counting_ctx(
@@ -1629,8 +1641,18 @@ fn nd_persists_only_validated_incumbents() {
 
 #[test]
 fn nd_boost_raises_the_anchor_or_declines() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let mut settings = Settings::new()
+        .database(None)
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    settings.nd_force = true;
     with_engine(
-        nd_settings(),
+        settings,
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -1660,6 +1682,14 @@ fn nd_boost_raises_the_anchor_or_declines() {
                     .is_none()
             );
         },
+    );
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.starts_with("nd boost: origin=Panic: bug anchor 0.000 -> ")),
+        "an accepted boost reports the anchor move at Debug verbosity"
     );
 }
 
@@ -1691,6 +1721,7 @@ fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
                 ledger: HashMap::default(),
                 raised: crate::native::HashSet::default(),
                 anchor: 0.99,
+                sweep: SweepMode::Fast,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -1717,7 +1748,6 @@ fn nd_gauntlet_run_shrinks_a_deterministic_core_end_to_end() {
             sink.lock().unwrap().push(line.to_string());
         }));
     settings.nd_force = true;
-    settings.nd_boost = true;
     let result = reuse_run(settings, "k", |ds| {
         if rbool(ds).is_err() {
             return TestCaseResult::Overrun;
@@ -1729,7 +1759,10 @@ fn nd_gauntlet_run_shrinks_a_deterministic_core_end_to_end() {
     assert!(result.failures[0].origin.contains("Panic: always"));
     assert!(result.failures[0].reproduce_blob.is_some());
     assert!(!result.nondeterministic);
-    assert!(lines.lock().unwrap().iter().any(|l| l.contains("nd boost")));
+    assert!(
+        !lines.lock().unwrap().iter().any(|l| l.contains("nd boost")),
+        "an always-failing origin confirms above the reliability floor, so boost is skipped"
+    );
 }
 
 #[test]
@@ -2336,6 +2369,7 @@ fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_a
                 ledger: HashMap::default(),
                 raised: crate::native::HashSet::default(),
                 anchor: 0.3,
+                sweep: SweepMode::Fast,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -2621,6 +2655,121 @@ fn a_fresh_tier_replay_that_detects_nondeterminism_under_error_strictness_aborts
                 Err(other) => panic!("expected RunError::NonDeterministic, got {other:?}"),
                 Ok(_) => panic!("expected RunError::NonDeterministic, got a result"),
             }
+        },
+    );
+}
+
+#[test]
+fn nd_shrinking_never_lowers_the_failure_probability_at_the_noise_floor() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let bug_ticks = AtomicUsize::new(0);
+    let noise_ticks = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(30)
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        let Ok(n) = rint(ds, 0, 5) else {
+            return TestCaseResult::Overrun;
+        };
+        let mut bug = false;
+        for _ in 0..n {
+            match rint(ds, 0, 20) {
+                Ok(v) => bug |= v >= 10,
+                Err(()) => return TestCaseResult::Overrun,
+            }
+        }
+        if bug {
+            if bug_ticks.fetch_add(1, Ordering::SeqCst) % 10 != 9 {
+                return boom("bug");
+            }
+        } else if noise_ticks.fetch_add(1, Ordering::SeqCst) % 50 == 0 {
+            return boom("bug");
+        }
+        TestCaseResult::Valid
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("Panic: bug"));
+    let blob = result.failures[0].reproduce_blob.as_ref().unwrap();
+    let crate::native::blob::DecodedBlob::Nd(state) =
+        crate::native::blob::decode_blob(blob).unwrap()
+    else {
+        panic!("expected an nd blob");
+    };
+    let incumbent = state.incumbent();
+    let atoms: Vec<i128> = incumbent[1..]
+        .iter()
+        .map(|v| match v {
+            ChoiceValue::Integer(n) => i128::try_from(n).unwrap(),
+            other => panic!("expected integer atoms, got {other:?}"),
+        })
+        .collect();
+    assert!(
+        atoms.iter().any(|&v| v >= 10),
+        "the final example must keep the p = 0.9 bug rather than drift to the \
+         p = 0.02 noise floor: {atoms:?}"
+    );
+    assert_eq!(
+        atoms,
+        vec![10],
+        "the L4 standard: one atom, minimized to the bug boundary"
+    );
+}
+
+#[test]
+fn gauntlet_depth_charges_the_deadline_not_the_logical_counters() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let bug_runs = AtomicUsize::new(0);
+    let total_runs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            total_runs.fetch_add(1, Ordering::SeqCst);
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 10 && bug_runs.fetch_add(1, Ordering::SeqCst) % 3 != 0 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let output = ctx.settings.output.clone();
+            let probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: bug".to_string(),
+                verbosity: Verbosity::Quiet,
+                output,
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.3,
+                sweep: SweepMode::Fast,
+            };
+            let mut shrinker =
+                Shrinker::with_probe(Box::new(probe), vec![int_node(47)], Spans::new());
+            shrinker.shrink().await.unwrap();
+            assert_eq!(shrinker.current_nodes.len(), 1);
+            assert_eq!(
+                shrinker.current_nodes[0].value(),
+                ChoiceValue::Integer(BigInt::from(10)),
+                "the confirmed-dry stop must land on the true boundary"
+            );
+            assert!(!shrinker.timed_out);
+            assert!(
+                shrinker.calls < total_runs.load(Ordering::SeqCst),
+                "gauntlet reruns are physical only: {} logical calls, {} executions",
+                shrinker.calls,
+                total_runs.load(Ordering::SeqCst)
+            );
+            assert!(
+                bug_runs.load(Ordering::SeqCst) > 0,
+                "accepts must have been gauntleted"
+            );
         },
     );
 }

@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
-use super::{ShrinkResult, Shrinker};
+use super::{ShrinkResult, Shrinker, SweepMode};
 
 /// A boxed shrink-pass step. Returns [`ShrinkHalt::Stop`](super::ShrinkHalt::Stop) once the
 /// shrink deadline has passed so the scheduler unwinds promptly. The step
@@ -107,16 +107,40 @@ impl<'a> Shrinker<'a> {
     ///   passes that deleted nodes (-1) come first, then passes that
     ///   changed shape (0), then useless passes (1).
     ///
-    /// Returns when no pass made any progress over a full outer
-    /// iteration. Called by [`Shrinker::shrink`].
+    /// Stopping is confirmed-dry (decision 18): after the [`SweepMode::Fast`]
+    /// fixpoint — no pass made progress over a full outer iteration — a
+    /// probe that honors sweep modes gets one [`SweepMode::Confirm`]
+    /// iteration, in which it skips its single-run fast reject and drives
+    /// each candidate's cumulative evidence to a bound decision. An
+    /// improvement there resumes the fast fixpoint; only a confirmation
+    /// iteration that accepts nothing ends the shrink. Experiment 001's
+    /// follow-up run: on the constant-p=0.5 landscape fixed dry-sweep rules
+    /// miss reachable reductions 18-46% of the time, confirmed-dry 10%.
+    /// Called by [`Shrinker::shrink`].
     pub async fn fixate_shrink_passes(
         &mut self,
         passes: &mut Vec<ShrinkPass<'a>>,
     ) -> ShrinkResult<()> {
+        loop {
+            while self.pass_iteration(passes).await? {}
+            let Some(previous) = self.test_fn.set_sweep_mode(SweepMode::Confirm) else {
+                return Ok(());
+            };
+            let confirmed = self.pass_iteration(passes).await;
+            self.test_fn.set_sweep_mode(previous);
+            if !confirmed? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One outer iteration of [`Shrinker::fixate_shrink_passes`]: step every
+    /// pass under its retry budget, then re-sort the pass list. Returns
+    /// whether any pass improved the shrink target.
+    async fn pass_iteration(&mut self, passes: &mut Vec<ShrinkPass<'a>>) -> ShrinkResult<bool> {
         const STOCHASTIC_MAX_FAILURES: usize = 6;
-        let mut any_ran = true;
-        while any_ran {
-            any_ran = false;
+        let mut any_ran = false;
+        {
             self.calls_at_last_shrink = self.calls;
             let mut can_discard = self.remove_discarded().await?;
             let calls_at_loop_start = self.calls;
@@ -185,7 +209,7 @@ impl<'a> Shrinker<'a> {
             indexed.sort_by_key(|(key, _)| *key);
             passes.extend(indexed.into_iter().map(|(_, pass)| pass));
         }
-        Ok(())
+        Ok(any_ran)
     }
 
     /// Read-only access to per-pass stats; used by `shrink`'s profile

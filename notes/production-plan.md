@@ -276,6 +276,13 @@ behavior locked.
   increments what. Measure the adaptive-search restart cost under pass repetition
   (FindInteger/BinSearchDown hold no cross-invocation state; design says measure before
   deciding resumable state vs accepting the cost) and record the disposition.
+  *Measured (counting-probe over `Shrinker::shrink` on all-nodes-pinned boundary
+  landscapes, 5 and 10 int nodes): 68-72% of full-run proposals are repeats of earlier
+  candidates. Disposition: accept the cost, no resumable search state. A repeat costs
+  zero executions deterministically (tree-served) and exactly one under ND, where it is
+  the mechanism decision 7 relies on — repeated proposals accumulate ledger evidence on
+  retried rejects — so resuming the searches would trade correctness-relevant power for
+  physical savings only the ND fast path sees.*
 - **Ledger scope**: per-origin-shrink ledger (already) so pass repetition accumulates
   evidence across retried rejects (decision 7); keyed by serialized realized nodes —
   document that punned realizations merge evidence, which is intended. Anchor updates go
@@ -300,6 +307,12 @@ rule is confirmed-dry, accounting documented and tested.
   wording (decision 3). Caveated unconfirmed failures reported only when nothing confirmed
   (decision 24). Multi-failure reporting works under ND: distinct origins each report with
   their own caveat and blob (design: the one-failure-per-run limit is replaced).
+  *Bindings survey for retiring status 3: hegel-typescript and hegel-ocaml never adopted
+  it (their status enums stop at ERROR=2, anything failed replays blobs through the
+  standard channel); hegel-go declares its own constants and handles 3 in runner.go —
+  dead but harmless once the engine stops emitting it; hegel-cpp vendors hegel.h and
+  branches on the enum value, so dropping it from the header is a deliberate
+  compile-time migration signal on their next header sync. Retirement is safe.*
 - **Final replay.** Decide the channel the design left open: today the frontend replays
   each blob exactly once after the engine future completes (run_lifecycle.rs:616-624);
   the natural fit is engine-side via phase 4's replay primitive — up to the budget B with

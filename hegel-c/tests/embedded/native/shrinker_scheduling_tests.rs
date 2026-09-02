@@ -608,3 +608,95 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     assert!(drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).is_err());
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");
 }
+
+use crate::native::shrinker::{ProbeFuture, ShrinkProbe, SweepMode};
+use std::sync::{Arc, Mutex};
+
+/// Experiment 001's L3 shape, taken to its extreme: every candidate is
+/// truly interesting, but every fast single-run judgment misses, so a
+/// fast sweep is dry from the first proposal. Confirm-mode judgments
+/// report the truth.
+struct L3Probe {
+    mode: SweepMode,
+    mode_calls: Arc<Mutex<Vec<SweepMode>>>,
+}
+
+impl ShrinkProbe for L3Probe {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        let previous = self.mode;
+        self.mode = mode;
+        self.mode_calls.lock().unwrap().push(mode);
+        Some(previous)
+    }
+
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
+        let outcome = match req {
+            ShrinkRun::Full(nodes) => (
+                self.mode == SweepMode::Confirm,
+                nodes.to_vec(),
+                Spans::new(),
+            ),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        };
+        Box::pin(core::future::ready(Ok(outcome)))
+    }
+}
+
+#[test]
+fn a_confirmation_sweep_rescues_improvements_dry_fast_sweeps_missed() {
+    let mode_calls: Arc<Mutex<Vec<SweepMode>>> = Arc::default();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(L3Probe {
+            mode: SweepMode::Fast,
+            mode_calls: Arc::clone(&mode_calls),
+        }),
+        vec![int_node(10), int_node(20)],
+        Spans::new(),
+    );
+    let mut passes = vec![ShrinkPass::new(
+        "zero_choices",
+        Box::new(|sh| Box::pin(sh.zero_choices())),
+    )];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    let values: Vec<_> = shrinker
+        .current_nodes
+        .iter()
+        .map(|n| match &n.value() {
+            ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![0, 0],
+        "every improvement here is only reachable through a confirmation sweep"
+    );
+    let calls = mode_calls.lock().unwrap();
+    assert_eq!(calls.first(), Some(&SweepMode::Confirm));
+    assert_eq!(
+        calls.last(),
+        Some(&SweepMode::Fast),
+        "the scheduler must restore the entry mode after each confirmation sweep"
+    );
+}
+
+#[test]
+fn a_probe_that_declines_sweep_modes_gets_no_confirmation_sweep() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    let mut passes = vec![ShrinkPass::new(
+        "zero_choices",
+        Box::new(|sh| Box::pin(sh.zero_choices())),
+    )];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    assert_eq!(
+        shrinker.calls, 1,
+        "a dry fast fixpoint with a declining probe ends the shrink outright"
+    );
+}

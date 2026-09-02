@@ -134,6 +134,12 @@ pub(crate) const POOL_CAP: usize = 10;
 pub(crate) const BOOST_POOL: usize = 16;
 pub(crate) const BOOST_HOLDOUT: u64 = 10;
 
+/// Boost runs only for origins whose confirmation anchor sits below this
+/// floor (gate G2): replay of a sub-floor origin is unreliable enough
+/// that hunting a steadier timeline is worth the measurement runs, while
+/// above it the halving race buys nothing a user would notice.
+pub(crate) const BOOST_RELIABILITY_FLOOR: f64 = 0.5;
+
 /// Candidates surviving one successive-halving boost round.
 pub(crate) fn boost_keep(candidates: usize) -> usize {
     candidates.div_ceil(2)

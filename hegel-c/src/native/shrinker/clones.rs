@@ -17,7 +17,7 @@ use crate::native::core::{
     ChoiceData, ChoiceNode, ChoiceValue, CloneRecord, RealizedStream, Spans, flattened_values_len,
 };
 
-use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker};
+use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker, SweepMode};
 
 /// `template` with the clone node at `i` carrying `child` as its stream.
 /// The spliced record has no span info — replay recreates spans — and
@@ -37,6 +37,10 @@ struct NestedCloneProbe<'p, 'a> {
 }
 
 impl ShrinkProbe for NestedCloneProbe<'_, '_> {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        self.test_fn.set_sweep_mode(mode)
+    }
+
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> super::ProbeFuture<'s> {
         Box::pin(async move {
             let i = self.i;
