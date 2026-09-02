@@ -97,7 +97,7 @@ impl Future for Offer<'_> {
 /// finish the case — everything through `mark_complete` — before returning,
 /// upholding the alternation protocol. Test-only: the C ABI drives the
 /// engine future one poll per `hegel_next_test_case` call instead.
-#[cfg(any(test, feature = "__bench"))]
+#[cfg(test)]
 pub(crate) fn drive<F: Future>(
     exchange: &CaseExchange,
     fut: F,

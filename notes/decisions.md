@@ -188,3 +188,26 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
 30. **Strictness surface confirmed** (plan gate G4): `nondeterminism_strictness = quiet |
     warn | error`, default quiet; `error` reproduces today's abort diagnostics verbatim;
     `warn` prints once per run. (DRM accepted recommendation.)
+
+## 2026-09-03
+
+31. **Decision 14 closed: no per-position or per-stream anchoring.** Experiment 007's full
+    campaign: whole-timeline pool replay reproduces concurrent-stateful and clone-flaky
+    failures at ceiling (20/20 discovery and DB reuse, 60/60 blob replays, each workload)
+    with positional splices as the rescue tier, and splices structurally cannot tear clone
+    records (a clone stream is one timeline element). Reopen only if a real workload shows
+    pool + splices missing at meaningful rates. (Experiment result.)
+
+32. **Clone serialization stays values-only.** The round-trip drops realized kinds; the only
+    consumer is `resolve_choice`'s is-simplest check, which fires solely on constraint drift,
+    so verbatim replay is unaffected — measured cross-run in 007 (replays re-raise the stored
+    shrunk value exactly). Cost: a stale stored clone value puns to `unit()` rather than
+    `simplest()`. (Experiment result; closes the phase-4 open item.)
+
+33. **`reproduce_failure` replays a nondeterministic blob until a replay fails.**
+    `hegel_run_start_blob` runs the blob through the same replay primitive as database reuse
+    (pool first-fit, then splices; no fresh tier — a fresh case could fail for an unrelated
+    reason). Measured need: single-shot incumbent replay reproduced a racy machine's shrunk
+    failure 4/30. Completes decision 25's one-replay-primitive rule for the blob path;
+    `hegel_test_case_from_blob` stays for embedders as a documented single attempt.
+    (Experiment 007 result.)

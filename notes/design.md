@@ -1,354 +1,223 @@
 # Handling nondeterministic tests
 
-Working design for extending the engine to handle tests whose behaviour varies across runs.
-Agreed 2026-09-02, pre-implementation. `decisions.md` is the decision log; `research/` holds the
-code maps and the adversarial review this design is grounded in; `experiments/` tracks the
-experiment sequence. This branch is working state: the final implementation will be extracted
-from it with pruning and history rewriting.
+As-built description of the engine's nondeterministic-test handling, written after the
+implementation landed (the pre-implementation design this evolved from is in the git history
+at a1d1b6d2). `decisions.md` is the decision log; `research/` holds the code maps and
+adversarial review the original design was grounded in; `experiments/` (write-ups) and
+`../experiments/` (frozen harnesses) carry the measurements cited below.
 
 ## Problem
 
 Hegel inherits Hypothesis's central invariant: no nondeterminism outside the system's control.
-Concurrent stateful testing (PR #378) intrinsically breaks it, and the current handling is
-wholesale surrender: a sticky run-level flag disables the data tree, novel-prefix generation,
-span mutation, targeting, shrinking, database persistence/reuse, and reproduce blobs, then
-reports at most one failure per run from a capture-at-discovery stash. Two problems:
+Concurrent stateful testing intrinsically breaks it, and the pre-branch handling was wholesale
+surrender — a sticky flag disabled the data tree, novel-prefix generation, span mutation,
+targeting, shrinking, persistence, and reproduce blobs, then reported at most one failure per
+run from a capture-at-discovery stash. Every other nondeterminism source (cloned streams,
+external randomness, timing) simply aborted the run as `Flaky`/`NonDeterministic` with no
+failure report.
 
-1. Concurrent machines are not the only nondeterminism source. Plain clone-based concurrency,
-   external randomness, and timing dependence get no handling: they surface as
-   `RunError::Flaky` / `RunError::NonDeterministic`, which abort the run with no failure report.
-2. It gives up far too much — most importantly shrinking.
+## Goals (met)
 
-The existing implementation is a temporary bandaid, not a canonical pattern to extend.
-
-## Goals
-
-- Handle test cases that fail at least 10% of the times they are run.
-- Detect nondeterminism rather than only accepting declarations. Declared sources (concurrent
-  machines) keep working.
+- Handle test cases that fail at least 10% of the times they are run; all budgets and
+  confidence arithmetic derive from that target.
+- Detect nondeterminism as well as accepting declarations (concurrent machines).
 - Restore shrinking, multi-failure reporting, database persistence, and reproduce blobs for
   nondeterministic tests.
-- Shrinking must not lower the failure probability of the reported example; raise it when
-  possible, and if shrinking reaches a deterministically-failing region, stay there.
-- Keep warning about environment modification (a test that mutates global state so it fails once
-  and then always passes), with wording that admits we cannot reliably distinguish it from a
-  very rare failure.
+- Never lower the reported example's failure probability by shrinking; raise it when cheap.
+- Keep a caveat for the environment-modification hypothesis, with wording that admits it is
+  indistinguishable from a very rare failure.
 
-Non-goals:
-
-- Antithesis. Inside Antithesis the environment is deterministic and a separate
-  determinator-based path will exist.
-- The unmerged parallel-tests branch; ignore until it lands.
-- Controlling or enumerating thread schedules. We sample schedules; we never replay one.
+Non-goals: Antithesis (deterministic environment, separate path); controlling or replaying
+thread schedules — we sample schedules, never replay one.
 
 ## Conceptual model
 
 Two axes needing different machinery:
 
 - **Generation nondeterminism**: the same replayed prefix produces a different draw structure —
-  the code path depends on scheduling or external state, so the test asks different questions.
-  A representation problem.
-- **Outcome nondeterminism**: the same realized choice sequence produces a different verdict.
-  A statistics problem.
+  a representation problem.
+- **Outcome nondeterminism**: the same realized choice sequence produces a different verdict —
+  a statistics problem.
 
-Failure probability becomes first-class. Every decision that today assumes "interesting is a
-pure function of the choice sequence" — shrinker acceptance, database reuse, final replay, the
-flakiness errors — becomes a decision about an estimated probability with explicit budgets.
+Failure probability is first-class: every decision that once assumed "interesting is a pure
+function of the choice sequence" — shrinker acceptance, database reuse, the final replay, the
+flakiness errors — is a decision about an estimated probability with explicit budgets.
 
-Vocabulary:
+Vocabulary: a **timeline** is the realized choice sequence of one execution; the **incumbent**
+is the failing timeline held as an origin's best example; the **pool** is a bounded per-origin
+set of other failing timelines; the **evidence ledger** is per-candidate `(fails, weighted
+runs)` counts, never persisted; the **anchor** is a Wilson lower confidence bound on the
+incumbent's failure rate; the **gauntlet** is the evidence bar a shrink candidate must clear.
 
-- **Timeline**: the realized choice sequence (nodes + spans) of one execution.
-- **Incumbent**: the flat failing timeline currently held as the best example for an origin —
-  what the shrinker minimizes and what persists as the primary DB entry.
-- **Timeline pool**: bounded per-origin set of other realized timelines, failing-first; replay
-  fallback and donor material for cross-timeline passes.
-- **Evidence ledger**: per-candidate `(runs, failures)` counts accumulated across proposals,
-  passes, and retries within a run. Never persisted; recomputed fresh each run.
-- **Class / anchor**: a confidence lower bound (Wilson/Jeffreys LCB) on the incumbent's failure
-  rate, derived from the ledger. Never a raw streak: confirmation stops at the first failure, so
-  an incumbent can enter shrinking with zero observed passes even at p = 0.7, and a streak-based
-  "deterministic" class would paralyze shrinking.
-- **Gauntlet**: the multi-failure evidence a candidate must accumulate to be accepted as the new
-  incumbent.
+## Architecture
 
-## Design
+Engine-side everything lives under `hegel-c/src/native/`: the statistics and lifecycle in
+`nd/` (`mod.rs`, `lifecycle.rs`), the run orchestration in `test_runner.rs`, persistence
+formats in `blob.rs`.
 
 ### Mode lifecycle and strictness
 
-A run flips deterministic -> nondeterministic (sticky, run-level) when:
+`Engine.nd_active` is the sticky run-level flag; `nd_flip()` sets it. Flip sources
+(`test_function_tagged`):
 
-- **declared**: a state machine is created with `max_concurrency > 1` (as today); or
-- **detected**, from within-run evidence only: a data-tree kind mismatch at any checked site
-  (reuse/probe/generation/verify), a verify status/origin flake, a confirmation-replay flip, or
-  a final-replay flake (which needs a new channel — today it fires frontend-side after the
-  engine future completed; either move the final replay engine-side or add a post-run path).
-  Mid-shrink mismatches are currently discarded (`test_runner.rs:1222`) and need plumbing: a
-  flip during shrinking converts or restarts that origin's shrink in ND mode rather than
-  aborting via `ShrinkHalt::Error`.
+- **declared**: the first executed case that creates a state machine with
+  `max_concurrency > 1` (`FamilyCore::concurrent_machine`). Declared concurrency enters ND
+  handling even under `error` strictness — the user asked for threads.
+- **detected**, within-run evidence only (`record_run`'s mismatch signal): a choice-tree
+  divergence on identical replayed choices, or a replay whose outcome flips (the final
+  replay's miss under deterministic handling flips the run rather than aborting). A stored DB
+  entry that stops reproducing is staleness, never evidence (decision 9).
 
-Cross-run divergence — a stored DB entry that no longer reproduces — is **not** evidence: it
-overwhelmingly means the test or generators changed. It keeps today's semantics (staleness),
-softened by the retry/demotion policy below.
+`nondeterminism_strictness = quiet | warn | error` (`hegel_settings_set_nondeterminism_strictness`),
+default quiet: quiet flips silently, warn prints one notice, error reproduces the old
+Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (decisions 1, 30).
 
-New setting `nondeterminism_strictness = quiet | warn | error`, default quiet. `error`
-preserves today's aborts (the accidental-global-state lint); `warn` flips and prints a notice
-once; `quiet` just flips. Lives in frontend `Settings`, forwarded over a new
-`hegel_settings_set_*`, honored on both sides of the ABI.
+### Statistics (`nd/mod.rs`)
 
-No case stamping, no sacrificed first case: capture-at-confirmation (below) removes the reason
-cases had to be marked nondeterministic before they start.
+- `Evidence`: divergence-weighted Wilson bounds. A replay that diverged from its stored
+  timeline before completing weighs its non-failure by the **verbatim watermark** — the
+  fraction tracked before first divergence (decision 22) — so diverged misses don't count full
+  weight toward demotion or confirmation misses.
+- Discovery bar (decision 23, experiment 005A): gate 10 replays, reject on zero failures;
+  otherwise extend to 40, accepting early on the 4th failure (`GATE_RUNS`, `CONFIRM_CAP`,
+  `CONFIRM_MIN_FAILS`).
+- Gauntlet (experiments 001/003): accept when the ledger LCB clears
+  `max(0.8 * anchor, 0.05)`, reject when the UCB proves it never will, cap 30 physical runs
+  (`GAUNTLET_GAMMA`, `GAUNTLET_FLOOR`, `GAUNTLET_CAP`).
+- Replay budgets from the p >= 0.1 target: `replay_budget(rate, tolerance)` with 5% miss
+  tolerance gives ~29 replays, early exit on failure, so live bugs cost ~1/p
+  (`TARGET_FAILURE_RATE`, `reuse_replay_budget`).
+- Continuation budget past a stored timeline: `len + max(4, len/8)` fresh draws
+  (experiment 004).
 
-### Representation: timeline pool
+### Origin lifecycle (`nd/lifecycle.rs`)
 
-Per origin: a flat failing incumbent plus a bounded pool of other realized timelines,
-failing-first. Replay of a stored ND failure tries stored timelines in order (incumbent first);
-a replay that falls off a timeline continues with fresh generation under a capped continuation
-budget (which requires an entropy source and an extension budget in blob replay — today's blob
-replay has neither). The pool is semantically the branch-point-with-per-value-suffixes model;
-storing whole sequences instead of a merged trie avoids a new `ChoiceValue` variant,
-`CloneRecord` equality extension, sort-key extension, and recursive serialization, and — the
-deciding argument — the merged artifact has no stable trunk: everything engine-side operates on
-the flat realized sequence of one execution, and every accepted shrink would invalidate all
-folded branches.
+Per-origin state machine: `Unconfirmed -> Confirmed` (discovery bar),
+`Unconfirmed -> Trusted` (database reproduction, decision 24 — the prior run only persisted
+confirmed origins, so the bar is not re-run), monotone anchor raises on validated accepts
+(decision 19). Confirmation gates origin *admission*: `nd_discovery_sweep` runs the bar over
+every unconfirmed interesting origin after each generation step, dropping origins that fail it
+(decision 24); raw interesting runs never displace an occupied origin (decision 20). Confirmed
+origins carry a pool (cap 10) harvested from capture-at-confirmation (decision 10). The
+lifecycle also words each failure's **caveat** from the run's own evidence — confirmed,
+trusted, confirmed-but-dry-at-report-time, or unconfirmed.
 
-Persistence: DB entries and blobs get a new encoding (new blob prefix byte; blob decode already
-rejects unknown prefixes loudly) storing incumbent + pool. The format self-identifying as ND is
-the **only** ND persistence. No flags, no rate estimates, no sample counts are ever persisted;
-estimates are computed afresh each run. Consequences: every run stands alone (CI with
-`Database::Disabled` gets the full detect-from-scratch experience), and there is no stale-flag
-or flag-flapping problem.
+### Representation and persistence
 
-Measured (experiment 004, structurally-ND bodies): pool cap 5-10 — K=5 captures nearly all
-recoverable reproduction (kind-flip 68% -> 99%, heterogeneous-shift 28% -> 65%), K=10 reaches
-the plateau, K=20 adds nothing; first-fit costs at most ~3 replays per attempt. The
-continuation budget only needs to absorb net elongation: extend 4 captured the whole
-single-timeline benefit on every body, extend 64 was free but useless. Capture-at-confirmation
-alone harvests enough pool diversity.
+`NdReproState` (blob.rs): stored timelines incumbent-first, an entropy seed, and the
+continuation-budget extension. Serialized as the version-2 database entry and behind blob
+prefixes 2/3 (self-identifying, decision 8; old readers reject unknown prefixes loudly). Only
+confirmed origins persist, via the `Persister`, which buffers during shrinking and commits
+validated incumbents — Ctrl-C keeps the last validated example. No rates or counters are ever
+persisted (decision 8): every run stands alone. Hygiene is two strikes across two runs:
+primary miss demotes to the secondary corpus, secondary miss deletes (decision 11).
 
-Deferred (see table below): per-position divergence anchors, and any anchoring inside clone
-streams. Start with whole-timeline machinery only. 004's instrumentation on DRM's suspicion
-(heavy nondeterminism may demand tracking *more* alternatives): prefix sharing is
-anticorrelated with pool need — high (0.93+) only on bodies K=1 already handles, low
-(0.32-0.48) with early unpredictable fall-off where the pool earns its keep — so the merged
-trie stays rejected, while per-position anchoring keeps a measured target: the ~27% residue
-on heterogeneous-shift bodies that whole timelines plateau under. 006's span grafting is the
-probe for that residue.
+Clone streams serialize values-only (tag 5); realized kinds are dropped. Verbatim replay is
+unaffected — the only consumer of realized info is `resolve_choice`'s is-simplest pun, which
+fires solely on constraint drift (decision 32, measured in 007).
 
-### Detection signals
+### Replay-until-failure (`nd_reproduce`)
 
-Kind mismatch (the existing detector) sees only a minority of divergence: booleans validate
-unconditionally, most integer draws contain all recorded heads, and pool draws repair rather
-than reject, so structure can shift with identical kinds (e.g. a collection `reject()` firing
-in one timeline only). Add a structural comparison — draw counts and span events between the
-recording and the replay — as the primary detected-divergence signal, plus a verbatim watermark
-(the position where replay stopped being verbatim: first pun, repair, or forced recompute) so
-downstream machinery knows how far positional claims are valid.
-
-004 correction on how to *use* these signals: first divergence does not mean the replay is
-dead — punning damages one position and stays aligned after it (kind-flip bodies fall off
-verbatim at 0.40 of stored length yet still reproduce 66%). Divergence is for evidence
-weighting — a structurally diverged non-failure says little about the stored timeline and
-should not count full weight toward demotion/deletion or confirmation misses — not for early
-abort or eager fallthrough to the next pool entry.
-
-### Confirmation and budgets
-
-Confirming a failure in ND mode = replay up to B times. B is derived from the target, not
-fixed: B = ln(delta) / ln(1 - p) with the p = 0.1 target and delta = 0.05..0.1 gives B in the
-low-to-high 20s. Expected cost is min(1/p, B), so the cap is only paid for failures that don't
-reproduce. Once in-run evidence exists, budgets adapt to the fresh estimate. If nothing
-reproduces, the run still fails, reporting the observed failure with the caveated wording
-(below).
-
-Two corrections from experiment 003. First, confirmation cannot stop at the first replayed
-failure: that rule catches p >= 0.1 bugs whp but also passes a p = 0.02 noise-floor fluke ~44%
-of the time at B = 29, and on noisy tests first-interesting is a fluke more often than a real
-bug — the bar must be evidence-based (enough failures that the noise floor is implausible),
-derived in experiment 005. Early exit remains fine once the bar is met. Second, discovery
-confirmation replaces a filter today's engine provides by accident: the verify-replay Flaky
-abort refuses to shrink anything that doesn't reproduce. ND mode removes the abort, so an
-unconfirmed origin must be dropped from the interesting map (generation keeps hunting) rather
-than carried forward.
-
-The bar (derived in 005A by exact DP; decision 23): **replay 10 times, reject on zero
-failures; any failure continues to 40 total, accepting early on the 4th failure**. 0.6% false
-accept per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, 15 replays per
-rejected fluke, 4.4 per near-deterministic confirmation. The governing asymmetry: false
-accepts are sticky (they occupy the origin behind the displacement gate), false rejects
-recycle through re-discovery, so per-discovery power is the cheap thing to trade for a hard
-false-accept floor and low fluke cost. Wilson-over-noise-floor and SPRT shapes both lose to
-the gate (005A table).
-
-005B correction: confirmation gates origin *admission*, not one code path. Span-mutation and
-targeting executions fill vacant origins too, and an origin that slips in unconfirmed rides
-to shrink and gets reported (26/30 false confirms on pure noise before the fix). The engine
-sweeps every unconfirmed interesting origin after each generation step; an untrusted origin
-reaching shrink faces the full bar there; DB-reused origins are trusted on reproduction (the
-prior run only persisted confirmed origins — re-running the bar would drop real p ~ 0.1
-reused bugs ~55% at verify). Caveated failures are reported only when nothing confirmed.
+One primitive serves confirmation, database reuse, the final replay, and blob replay
+(decision 25): each stored timeline first-fit under a weighted per-timeline budget, then
+positional splices of random timeline pairs (6), then fresh generations where the caller
+allows them. Splices cut whole timelines at top-level positions, so a clone stream — one
+`ChoiceValue::Clone` element — crosses over intact. Executions run through `measure()`, which
+detects nondeterminism and admits origins like any run but moves none of the runner's
+quantitative state (below).
 
 ### Shrinking
 
-One principle: **charge accepts, not rejects.**
+Charge accepts, not rejects (decision 7): a candidate whose first run passes is rejected with
+0/1 in the ledger; a candidate whose first run fails pays the gauntlet before displacing the
+incumbent. Rejected candidates retry via pass repetition with evidence accumulating across
+retries. Stopping is confirmed-dry (decision 18): after a dry sweep, one confirmation sweep
+drives every proposal's cumulative evidence to a bound decision. The anchor is monotone and
+never fed by replay-sourced evidence (decision 19). There is no checkpoint/rollback
+(decision 17). All acceptance paths — `consider()`, `update_interesting`, persistence — gate
+on the same validated-accept event.
 
-- Rejects are single-run: a candidate whose first run passes is rejected with evidence 0/1
-  retained in the ledger.
-- Accepts pay a gauntlet: a candidate whose first run fails keeps running until its ledger LCB
-  clears the acceptance threshold (accept), its UCB falls below it (reject), or a run cap hits.
-  The threshold is gamma * anchor: a tolerance factor times the incumbent anchor, so acceptance
-  cost scales with how reliably the incumbent fails — a few runs against a flaky incumbent,
-  ~10+ against a near-deterministic one. This is where "must not lower failure probability" is
-  enforced, at the only place probability can be lost. gamma is an experiment 1 output.
-- The anchor is monotone: set from initial confirmation evidence, raised when validated
-  accept-time evidence shows a higher LCB, never re-baselined downward (decay measured and
-  rejected in experiment 1: marginal size gains, and stopping becomes incoherent against a
-  falling threshold). Post-accept evidence gathered under timeline replay must not feed the
-  anchor — a pinned incumbent's replay rate would price fresh-generation candidates out.
-- There is no checkpoint/rollback in the shrink loop (settled by the experiment 1 follow-up:
-  rollback-on-uncertainty poisons good candidates and multiplies cost on stable landscapes;
-  rollback-on-proof can't separate a mispinned incumbent from its accept-time LCB within
-  affordable run counts). The pinning hazard is handled at source by capture-at-confirmation,
-  plus a final validation at report time that can annotate a residual mispin — a reporting
-  concern, not a search concern.
-- Rejected candidates are retried via pass repetition — the existing stochastic-pass budget
-  mechanism (`STOCHASTIC_MAX_FAILURES`) generalized, budgets scaled by the incumbent class —
-  and their ledger evidence accumulates across retries, so retries add power instead of
-  starting over. Stopping is confirmed-dry (experiment 1 follow-up): after a dry sweep, one
-  confirmation sweep drives every proposal's cumulative evidence to a bound decision instead
-  of the single-run fast reject; stop only if it accepts nothing. Costs about the same as
-  three fixed dry sweeps and halves the missed-reduction rate where misses are recoverable,
-  and it terminates with a certificate.
-- All three acceptance paths gate on the same validated-accept event: `consider()`,
-  `update_interesting`, and `Persister::record`. Today the latter two fire on every raw
-  interesting execution, so one lucky failure of a p = 0.02 candidate displaces the good
-  primary DB entry mid-pass. The Persister buffers during shrinking and commits validated
-  incumbents; Ctrl-C keeps the last validated example.
-- Accounting units: the stall guard and improvement cap count logical candidates (first run of
-  a candidate); wall clock counts physical runs. Adaptive searches (`FindInteger`,
-  `BinSearchDown`) either get resumable state across pass repetitions or we accept restart
-  cost — measure first. `BinSearchDown` probing the simplest value first is the single worst
-  teleport hazard under single-run accepts; the gauntlet is what defuses it.
+Boost (`nd_boost`, gate G2/decision 28): when a confirmed incumbent's anchor sits below the
+0.5 reliability floor, successive halving over 16 mutation-generated variants, scored by
+ledger LCB, winner re-measured on a 10-run holdout before seeding the anchor. Above the floor
+it never runs; there is no public setting.
 
-Boost phase (raise p before minimizing): successive halving / bandit allocation over
-mutation-generated variants (span duplication, donor splices — machinery that exists), scored
-by ledger LCB, winner re-estimated on a holdout sample before it seeds the anchor, on its own
-wall-clock budget. Not the Optimiser: its budget gate exits once any failure exists, failure
-rate is not an observable it can score, and `is_climbable` excludes Clone nodes — the structure
-of the top workload.
+### Data tree under ND handling
 
-Measured (006A, ~250 replays/invocation, holdout-gated): the gauntlet's monotone anchor alone
-already lands deterministic-core landscapes deterministic in 90% of runs (an accept touching
-the core raises the anchor and prices the flaky region out); boost closes the tail to 100% at
-+14% cost and is harmless on flat landscapes. On coreless rising landscapes it is a
-size-for-reliability trade (final p 0.26 -> 0.42, len 3 -> 5, +46% cost) — shipping default
-is reporting policy (reliability-floor heuristic or setting), decision 25.
-
-Cross-timeline passes: donor splicing of failing-timeline content onto candidates, at span
-granularity initially (reusing `try_span_mutation` / `pass_to_descendant` /
-`mutate_and_shrink`'s divergence-repair shapes). Finer, anchor-addressed grafting is deferred
-with the representation question.
-
-Measured (006B): even position-random splices of pool pairs rescue 65-100% of full-pool
-replay misses at ~6 replays each, lifting heterogeneous-shift reproduction from 72% to ~90%.
-Replay-until-failure order (decision 25): pool first-fit, then a handful of splices, then
-fresh generation. Span-anchored split points are an optimization over this, not a
-prerequisite; the same prefix+suffix construction serves as the boost's variant generator.
-
-### Data tree in ND mode
-
-Detection and novel-prefix generation only. Conclusions are never served: `cached_test_function`
-must execute in ND mode, since serving the first recorded verdict is exactly the bias the
-multi-run machinery exists to avoid; the ledger replaces the tree's dedup role. If restoring
-the tree is too costly initially, disabling it stays acceptable (decided). If restored:
-widened nodes need per-(kind, value) child keys, an interior-conclusion "continued past"
-marker (a node concluded at depth 5 in one run and continued to depth 8 in another must not
-read as exhausted), per-branch forced flags, and transactional recording so a mismatch under
-quiet-flip doesn't leave the tree half-updated.
+Disabled (gate G3/decision 29): recording, tree-served replays, novel-prefix generation, and
+targeting are all off once `nd_active` is set — `cached_test_function` executes every replay,
+since serving the first recorded verdict is exactly the bias the multi-run machinery exists to
+avoid. Kind-set tolerance is the noted follow-up if generation cost ever shows up; experiment
+007 measured none on the target workloads.
 
 ### Reporting
 
-Unified on replay-until-failure:
+The engine owns the final replay (`final_replay`): every failure it is about to report
+re-executes first — deterministic runs once (a miss flips the run to ND handling, or aborts
+under `error`), ND runs through the replay primitive plus up to 4 fresh generations. Replays
+of already-discovered failures — confirmation batches, database-reuse replays, the final
+replay, blob replays — are **stamped** (`hegel_test_case_is_nondeterministic`), telling the
+client to capture output, diagnostic, and backtrace; ordinary exploration and shrink probes
+stay cheap and unstamped.
 
-- ND failures carry blobs (new format). The final replay runs the blob up to B; the first
-  failing execution, rendered fresh (emit + backtrace on), is the report. `report_multiple_failures`
-  works; per-origin identity stays.
-- If nothing reproduces within B: caveated report from capture-at-confirmation — the engine
-  marks confirmation replays capture-enabled (shrink probes stay cheap; the capture corresponds
-  to the shrunk incumbent, not the unshrunk discovery). Wording quotes in-run measurements only
-  ("failed 3 of 20 replays this run") and names both hypotheses, weighting environment
-  modification only when non-reproduction is genuinely surprising given the in-run evidence.
-- `NondetStash`, capture-at-discovery, and the one-failure-per-run limit are replaced.
-  Whether `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` keeps its value with new semantics or ND
-  failures report as `FAILED`-with-blobs is an implementation-time ABI decision; either way it
-  is a coordinated ABI-semantics break for bindings (hegel.h documents the stamp contract and a
-  C-ABI test pins it) and needs changelog callouts in both crates.
+ND failures report as plain `FAILED` (gate G1/decision 27; `FAILED_NONDETERMINISTIC` is
+retired) with a per-failure caveat accessor (`hegel_failure_caveat`) quoting the run's own
+replay evidence, and a v2 reproduce blob when confirmed. An unconfirmed failure still fails
+the run (decision 3) with a caveat naming both hypotheses and no blob. The frontend
+(`src/run_lifecycle.rs::drive`) captures each interesting case's buffered output per origin as
+the run pumps, then prints each reported failure as one block — freshest capture, diagnostic,
+caveat, reproducer line — and re-raises the failing test's own panic.
 
-### Database
+### Reproduce blobs
 
-- Reuse replays an ND-format entry up to B with early exit.
-- Hygiene without persisted counters, expressed in the existing corpora: a primary entry that
-  doesn't reproduce within budget is demoted to secondary; a secondary entry that misses again
-  is deleted. Two strikes across two runs.
-- `replay_aligned` (skip shrinking on exact replay) essentially never holds under ND; accept
-  re-shrinking for now and revisit if local-run cost bites.
+`hegel_run_start_blob` replays a blob as a run: a deterministic blob replays its choices once;
+an ND blob runs the replay primitive over its stored pool with no fresh tier (decision 33).
+`Hegel::reproduce_failure` drives it through the same frontend loop. `hegel_test_case_from_blob`
+remains for embedders as a documented single attempt.
+
+### Concurrency unification (experiment 007)
+
+Concurrent-machine runs flow through the pipeline above like any other ND run: creation always
+succeeds, the flip happens at the first executed case that declares concurrency, and
+concurrent failures are confirmed, shrunk, persisted, and blob-reproducible. The prior
+regime's case stamping, sacrificed first case, shrink/persistence/span-mutation gates, and
+blobless static-caveat reporting are gone. Measured at ceiling: 20/20 discovery and DB reuse,
+60/60 blob replays on a genuinely racy machine.
 
 ### Accounting
 
-`test_function` gets a replay/measurement flag excluding confirmation replays, gauntlet runs,
-checkpoint validations, and boost measurements from: `valid_test_cases` and the invalid budget,
-health-check counters, event statistics (whose changelog promise is per-generation-case
-fractions), targeting records, and first/last-bug markers. Without it every quantitative
-runner behavior silently changes meaning.
+`measure()` executions — confirmation batches, gauntlet runs, boost measurements,
+replay-until-failure — are excluded from `valid_test_cases`, the invalid budget, health-check
+counters, event statistics, targeting records, and the bug-window markers, which all describe
+generation. Without the split every quantitative runner behavior silently changes meaning.
 
-### ABI surface (sketch)
+### ABI summary
 
-New: strictness setter; blob prefix byte(s) for the ND format plus a blob-kind query (or
-out-param on `hegel_test_case_from_blob`); entropy + continuation budget for ND blob replay;
-a capture-enabled stamp on confirmation replays (reusing or extending the
-`hegel_test_case_is_nondeterministic` slot); the replay/measurement distinction if confirmation
-is ever frontend-driven. Changed semantics: run statuses and the stamping contract, per above.
-`RunError` variants stay flattened to one string over the ABI — tolerable because only `error`
-mode still aborts.
+Added: `hegel_settings_set_nondeterminism_strictness`, `hegel_failure_caveat`,
+`hegel_run_start_blob`; blob prefixes 2/3. Changed: run status 3 retired; the stamp contract
+(`hegel_test_case_is_nondeterministic`) now covers every replay of a discovered failure;
+concurrent machine creation no longer rejects. Both crates' changelogs carry the break.
 
-## Deferred decisions
+## Closed decisions
 
-| Decision | Default for now | Revisit when |
-| --- | --- | --- |
-| Per-position divergence anchors; anchoring inside clone streams | Closed: none anywhere | 004: no stable anchor position exists (fall-off early and unpredictable, watermark p10 0.11-0.14); 006B: the K=10 pool's 73% plateau residue is reached by position-random splicing of stored timelines (65-100% of misses rescued), so anchoring buys nothing recombination doesn't already provide |
-| Merged trie (ND-node) encoding | Timeline pool — now measured, not just argued | Closed harder by 004: prefix sharing is anticorrelated with pool need (0.93+ where K=1 suffices, 0.32-0.48 where the pool matters) |
-| extend=0 vs continuation budget on shrink Full replays | Small budget (constant + small fraction of stored length) | 004: extend 4 captures the whole benefit (absorbs net elongation); larger budgets are free but useless; bare replay loses 22-47% to end-of-sequence overruns on count-shifting bodies |
-| Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |
-| Checkpoint/rollback on top of gauntleted accepts | Dropped | Experiment 1 follow-up (mixture landscape): rollback-on-uncertainty rescues mispins but poisons good candidates (L1 missed 9% -> 52%, 2.3x cost); rollback-on-proof never fires (mispinned rate sits inside Wilson noise of the bar). Capture-at-confirmation kills the hazard at source; final validation at report time annotates the residue |
-| `replay_aligned` replacement | Accept re-shrinking | 005B measured it: outcome-ND reuse runs cost 2-4 executions (aligned, shrink skipped); structurally-ND reuse runs re-shrink every time at 1.9k-8.4k executions. Revisit if that price bites on slow real bodies |
-| FAILED vs FAILED_NONDETERMINISTIC semantics | Undecided | ABI implementation, with binding-compat notes |
+| Question | Outcome |
+| --- | --- |
+| Per-position divergence anchors; anchoring inside clone streams | Closed, none anywhere (decisions 14/31): fall-off positions are unpredictable (004), and positional splicing of stored timelines rescues the pool's residue (006B, 007 at ceiling) |
+| Merged trie encoding | Rejected (decision 5, hardened by 004: prefix sharing anticorrelates with pool need) |
+| Checkpoint/rollback in the shrink loop | Dropped (decision 17) |
+| `replay_aligned` under ND | Essentially never holds; re-shrinking accepted (005B measured the price) |
+| FAILED vs FAILED_NONDETERMINISTIC | FAILED + caveat accessor (decision 27) |
+| Boost default | Reliability-floor heuristic, no setting (decision 28) |
+| Clone-kind serialization fidelity | Values-only kept (decision 32) |
 
-## Known risks (accepted, not solved)
+## Known risks (accepted)
 
-- **Invisible divergence**: kind-compatible structural divergence that even span/draw-count
-  comparison can miss in principle; whole-timeline machinery is the backstop.
-- **Origin instability**: the same sequence can panic at different sites; panics from unjoined
-  threads collapse to `Panic at <unknown>`. Per-origin identity stays; the collapse fix is
-  deferred to structured concurrency support.
-- **Shrink wall clock**: multi-run accounting makes `MAX_SHRINKING_SECONDS = 300` the binding
-  constraint for slow concurrent bodies. Measure; possibly a budget setting later.
-- **Caveat fatigue**: at p near the 0.1 target, non-reproduction within B is common enough that
-  over-eager environment-modification warnings would train users to ignore them; hence
-  evidence-weighted wording.
-- **Bindings**: the ABI-semantics changes need a coordinated rollout and loud changelogs.
-
-## Experiment sequence
-
-Detail and status in `experiments/000-plan.md`.
-
-1. **Simulation harness** (`experiments/shrink-sim/`): the gauntlet/ledger/pass-repetition
-   loop against synthetic failure landscapes; calibrates gamma, budgets, stopping rules;
-   settles pass-repetition vs per-candidate-N cost and whether checkpointing earns its keep.
-   Becomes the regression suite for the real statistics.
-2. **Cache seam**: resampling seam at `cached_test_function`; measure a fixate iteration with
-   dedup off on a real ~50-node target.
-3. **Flat-timeline shrink in-engine** on synthetic flaky tests; measure final true p, size, cost.
-4. **Replay semantics**: pool fallback + continuation budgets in `resolve_choice`; structural
-   divergence detector; fall-off instrumentation.
-5. **Lifecycle**: confirmation, capture-at-confirmation, persistence gating, unified reporting,
-   blob v2, strictness setting.
-6. **Cross-timeline grafting and the boost phase.**
+- **Invisible divergence**: kind-compatible structural divergence can evade detection in
+  principle; whole-timeline machinery is the backstop.
+- **Origin instability**: panics from unjoined threads collapse to `Panic at <unknown>`;
+  the fix is deferred to structured concurrency support.
+- **Shrink wall clock**: multi-run accounting makes `MAX_SHRINKING_SECONDS` the binding
+  constraint for slow concurrent bodies; a budget setting is possible later.
+- **Caveat fatigue**: hence evidence-weighted wording and unconfirmed-only-when-nothing-
+  confirmed reporting.
+- **Bindings**: the ABI break needs a coordinated rollout; both RELEASE.md files call it out.

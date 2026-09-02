@@ -5,7 +5,7 @@ Working notes for extending Hegel to handle nondeterministic tests (branch
 heavy notes; the final implementation will be extracted from it. The things worth preserving
 from each throwaway are knowledge, worked use cases, and tests — they live here.
 
-- `design.md` — the current design. Kept up to date as experiments teach us things.
+- `design.md` — the as-built design, rewritten once the implementation landed.
 - `decisions.md` — append-only decision log with rationale.
 - `research/map-*.md` — code maps of every determinism-dependent subsystem, with `path:line`
   refs (compiled 2026-09-02 at a0185a65).

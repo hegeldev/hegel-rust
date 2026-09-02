@@ -16,6 +16,8 @@ exclude = [
   "/AGENTS.md",
   "/.github",
   "/nix",
+  "/notes",
+  "/experiments",
   "/RELEASE-sample.md",
   # Test-only fixture binaries (see the [[bin]] targets below). Excluding the
   # sources makes `cargo package` strip the [[bin]] targets from the published

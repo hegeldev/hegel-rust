@@ -1233,11 +1233,6 @@ pub(crate) struct Engine<'a> {
     /// user asked for real threads, so even `error` strictness handles the
     /// resulting nondeterminism rather than aborting on it.
     pub(crate) concurrent: bool,
-    /// Whether [`Self::cached_test_function`] may serve a recorded path from
-    /// the choice tree instead of executing the body. Always true today;
-    /// nondeterminism-mode replay resamples through this seam by turning it
-    /// off (`notes/experiments/002-cache-seam`).
-    pub(crate) serve_replays: bool,
     /// Per-origin confirmation lifecycle under ND handling: admission,
     /// trust, confirmation state (anchor/witness/pool), and the caveated
     /// unconfirmed report. See [`OriginLifecycle`].
@@ -1284,7 +1279,6 @@ impl<'a> Engine<'a> {
             first_bug_time: None,
             nd_active: settings.nd_force,
             concurrent: false,
-            serve_replays: !settings.nd_force,
             nd_origins: OriginLifecycle::default(),
             capture_replays: false,
         })
@@ -1306,7 +1300,6 @@ impl<'a> Engine<'a> {
             return;
         }
         self.nd_active = true;
-        self.serve_replays = false;
         if self.settings.nondeterminism_strictness == NondeterminismStrictness::Warn
             && self.settings.verbosity != Verbosity::Quiet
         {
@@ -1895,14 +1888,17 @@ impl<'a> Engine<'a> {
     /// bare when `extend == 0`, with up to `extend` random draws past the end
     /// of `choices` otherwise — which records the run into the tree so a
     /// later replay of the same path is served. There is no separate result
-    /// cache: the tree is the single source of truth.
+    /// cache: the tree is the single source of truth. Under nondeterministic
+    /// handling nothing is served: identical choices need not produce
+    /// identical outcomes, so every replay executes the body
+    /// (`notes/experiments/002-cache-seam`).
     pub(crate) async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if self.serve_replays {
+        if !self.nd_active {
             if let Some(out) =
                 crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
             {
