@@ -70,6 +70,55 @@ pub mod __bench {
     pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
         crate::native::core::state::biased_float_sample(fc, rng).unwrap()
     }
+
+    pub struct FixateCostReport {
+        pub executions: u64,
+        pub total: core::time::Duration,
+    }
+
+    /// Experiment 002 (`notes/experiments/002-cache-seam`): replay one
+    /// recorded interesting case `reps` times through the
+    /// `cached_test_function` seam, with tree-serving on or off, and report
+    /// how many executions actually ran and how long the loop took. The body
+    /// draws `draws` boolean choices and fails.
+    pub fn fixate_cost_experiment(serve_replays: bool, draws: u32, reps: u32) -> FixateCostReport {
+        let mut settings = crate::settings::Settings::new();
+        settings.database = crate::settings::Database::Disabled;
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = async {
+            let mut engine =
+                crate::native::test_runner::Engine::new(&settings, None, &exchange).unwrap();
+            engine.serve_replays = serve_replays;
+            let first = engine
+                .cached_test_function(&[], None, 4 * draws as usize + 64)
+                .await
+                .unwrap();
+            assert_eq!(first.nodes.len(), draws as usize);
+            let nodes = first.nodes;
+            let choices: Vec<crate::native::core::ChoiceValue> =
+                nodes.iter().map(|n| n.value()).collect();
+            let calls_before = engine.calls;
+            let start = crate::sys::Instant::now();
+            for _ in 0..reps {
+                let run = engine.cached_test_function(&choices, Some(&nodes), 0).await.unwrap();
+                assert!(matches!(run.status, crate::native::core::Status::Interesting));
+            }
+            let total = start.map_or(core::time::Duration::ZERO, |s| s.elapsed());
+            (engine.calls - calls_before, total)
+        };
+        let (executions, total) = crate::exchange::drive(&exchange, fut, |ds| {
+            for _ in 0..draws {
+                ds.generate_boolean(0.5, None).unwrap();
+            }
+            ds.mark_complete(&crate::backend::TestCaseResult::Interesting(
+                crate::backend::Failure {
+                    origin: alloc::string::String::from("experiment"),
+                    reproduce_blob: None,
+                },
+            ));
+        });
+        FixateCostReport { executions, total }
+    }
 }
 
 use crate::backend::{

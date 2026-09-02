@@ -996,6 +996,11 @@ pub(crate) struct Engine<'a> {
     /// persistence and reuse, and reproduce-blob emission — failures are
     /// reported faithfully from the execution that discovered them.
     pub(crate) nondeterministic: bool,
+    /// Whether [`Self::cached_test_function`] may serve a recorded path from
+    /// the choice tree instead of executing the body. Always true today;
+    /// nondeterminism-mode replay resamples through this seam by turning it
+    /// off (`notes/experiments/002-cache-seam`).
+    pub(crate) serve_replays: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -1030,6 +1035,7 @@ impl<'a> Engine<'a> {
             last_bug_at: None,
             first_bug_time: None,
             nondeterministic: false,
+            serve_replays: true,
         })
     }
 
@@ -1193,24 +1199,27 @@ impl<'a> Engine<'a> {
     /// of `choices` otherwise — which records the run into the tree so a
     /// later replay of the same path is served. There is no separate result
     /// cache: the tree is the single source of truth.
-    async fn cached_test_function(
+    pub(crate) async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
-        {
-            if out.status != Status::EarlyStop || extend == 0 {
-                return Ok(RunResult {
-                    status: out.status,
-                    nodes: out.nodes,
-                    spans: out.spans,
-                    origin: out.origin,
-                    target_observations: out.target_observations,
-                    span_events: Vec::new(),
-                    events: Vec::new(),
-                });
+        if self.serve_replays {
+            if let Some(out) =
+                crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
+            {
+                if out.status != Status::EarlyStop || extend == 0 {
+                    return Ok(RunResult {
+                        status: out.status,
+                        nodes: out.nodes,
+                        spans: out.spans,
+                        origin: out.origin,
+                        target_observations: out.target_observations,
+                        span_events: Vec::new(),
+                        events: Vec::new(),
+                    });
+                }
             }
         }
         let ntc = if extend == 0 {
