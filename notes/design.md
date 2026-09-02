@@ -135,12 +135,22 @@ downstream machinery knows how far positional claims are valid.
 
 ### Confirmation and budgets
 
-Confirming a failure in ND mode = replay up to B times, stopping at the first failure. B is
-derived from the target, not fixed: B = ln(delta) / ln(1 - p) with the p = 0.1 target and
-delta = 0.05..0.1 gives B in the low-to-high 20s. Expected cost is min(1/p, B), so the cap is
-only paid for failures that don't reproduce. Once in-run evidence exists, budgets adapt to the
-fresh estimate. If nothing reproduces, the run still fails, reporting the observed failure with
-the caveated wording (below).
+Confirming a failure in ND mode = replay up to B times. B is derived from the target, not
+fixed: B = ln(delta) / ln(1 - p) with the p = 0.1 target and delta = 0.05..0.1 gives B in the
+low-to-high 20s. Expected cost is min(1/p, B), so the cap is only paid for failures that don't
+reproduce. Once in-run evidence exists, budgets adapt to the fresh estimate. If nothing
+reproduces, the run still fails, reporting the observed failure with the caveated wording
+(below).
+
+Two corrections from experiment 003. First, confirmation cannot stop at the first replayed
+failure: that rule catches p >= 0.1 bugs whp but also passes a p = 0.02 noise-floor fluke ~44%
+of the time at B = 29, and on noisy tests first-interesting is a fluke more often than a real
+bug — the bar must be evidence-based (enough failures that the noise floor is implausible),
+derived in experiment 005. Early exit remains fine once the bar is met. Second, discovery
+confirmation replaces a filter today's engine provides by accident: the verify-replay Flaky
+abort refuses to shrink anything that doesn't reproduce. ND mode removes the abort, so an
+unconfirmed origin must be dropped from the interesting map (generation keeps hunting) rather
+than carried forward.
 
 ### Shrinking
 

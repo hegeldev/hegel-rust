@@ -144,6 +144,19 @@ pub enum Verbosity {
     Debug,
 }
 
+/// Nondeterminism experiment scaffolding (`notes/experiments/003-nd-shrink`),
+/// not reachable from any public API. `Resample` turns off choice-tree
+/// serving and conclusion recording so every replay re-executes the body and
+/// outcome flips don't abort the run; `Gauntlet` additionally routes shrink
+/// accepts through the evidence-ledger gauntlet and replaces the pre-shrink
+/// verify with a confirmation batch that seeds the anchor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NdExperiment {
+    Off,
+    Resample,
+    Gauntlet,
+}
+
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -171,6 +184,7 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    pub(crate) nd_experiment: NdExperiment,
 }
 
 impl Settings {
@@ -204,6 +218,7 @@ impl Settings {
             report_multiple_failures: true,
             show_statistics: false,
             backend: None,
+            nd_experiment: NdExperiment::Off,
         }
     }
 

@@ -119,6 +119,67 @@ pub mod __bench {
         });
         FixateCostReport { executions, total }
     }
+
+    pub use crate::backend::{DataSource, Failure, TestCaseResult};
+    pub use crate::native::bignum::ToPrimitive;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum NdShrinkMode {
+        Baseline,
+        Resample,
+        Gauntlet,
+    }
+
+    /// Experiment 003 (`notes/experiments/003-nd-shrink`): one full explore
+    /// run (generation + shrink) of the caller's test body under the given
+    /// nondeterminism mode. Returns each reported failure's choice sequence
+    /// decoded to integers (`None` for undecodable or non-integer choices),
+    /// or the run-level error message (baseline aborts on flaky bodies).
+    pub fn nd_shrink_experiment(
+        mode: NdShrinkMode,
+        seed: u64,
+        test_cases: u64,
+        debug: bool,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
+        let mut settings = crate::settings::Settings::new().test_cases(test_cases);
+        settings.database = crate::settings::Database::Disabled;
+        settings.derandomize = false;
+        settings.seed = Some(seed);
+        settings.verbosity = if debug {
+            crate::settings::Verbosity::Debug
+        } else {
+            crate::settings::Verbosity::Quiet
+        };
+        settings.nd_experiment = match mode {
+            NdShrinkMode::Baseline => crate::settings::NdExperiment::Off,
+            NdShrinkMode::Resample => crate::settings::NdExperiment::Resample,
+            NdShrinkMode::Gauntlet => crate::settings::NdExperiment::Gauntlet,
+        };
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = crate::embed::run_native_async(&settings, None, &exchange);
+        match crate::exchange::drive(&exchange, fut, run_case) {
+            Ok(result) => Ok(result
+                .failures
+                .iter()
+                .map(|f| {
+                    f.reproduce_blob
+                        .as_deref()
+                        .and_then(crate::native::blob::decode_failure)
+                        .and_then(|choices| {
+                            choices
+                                .iter()
+                                .map(|c| match c {
+                                    crate::native::core::ChoiceValue::Integer(b) => b.to_i64(),
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                })
+                .collect()),
+            Err(e) => Err(alloc::format!("{e}")),
+        }
+    }
 }
 
 use crate::backend::{

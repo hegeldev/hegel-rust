@@ -354,7 +354,9 @@ impl<'a> Engine<'a> {
                 // both the novel-prefix walk and the test case itself so the
                 // whole case generates from one consistent distribution.
                 let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let prefix = if self.nondeterministic {
+                let prefix = if self.nondeterministic
+                    || self.nd_experiment() != crate::settings::NdExperiment::Off
+                {
                     Vec::new()
                 } else {
                     generate_novel_prefix(&self.tree_root, &mut self.rng, params)?
@@ -371,6 +373,36 @@ impl<'a> Engine<'a> {
                 let (run, mismatch) = self.test_function(ntc).await?;
                 if let Some(msg) = mismatch {
                     return Err(RunError::NonDeterministic(msg));
+                }
+
+                if self.nd_experiment() != crate::settings::NdExperiment::Off
+                    && run.status == Status::Interesting
+                {
+                    let origin = run.origin.clone().unwrap_or_default();
+                    if !self.nd_confirmed.contains(&origin) {
+                        let choices: Vec<ChoiceValue> =
+                            run.nodes.iter().map(|n| n.value()).collect();
+                        let mut fails = 1u64;
+                        for _ in 1..ND_CONFIRM_RUNS {
+                            let ntc = NativeTestCase::for_choices(&choices, Some(&run.nodes), None);
+                            let (rerun, _mismatch) = self.test_function(ntc).await?;
+                            if rerun.status == Status::Interesting
+                                && rerun.origin.as_deref() == Some(origin.as_str())
+                            {
+                                fails += 1;
+                            }
+                        }
+                        if verbosity == Verbosity::Debug {
+                            output.line(&format!(
+                                "nd discovery confirm: origin={origin} fails={fails}/{ND_CONFIRM_RUNS}"
+                            ));
+                        }
+                        if fails >= ND_DISCOVERY_MIN_FAILS {
+                            self.nd_confirmed.insert(origin);
+                        } else {
+                            self.interesting.remove(&origin);
+                        }
+                    }
                 }
 
                 if verbosity == Verbosity::Debug {
@@ -533,24 +565,53 @@ impl<'a> Engine<'a> {
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
 
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
-                let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                let (verify, mismatch) = self.test_function(verify_ntc).await?;
-                if let Some(msg) = mismatch {
-                    return Err(RunError::NonDeterministic(msg));
-                }
-                if verify.status != Status::Interesting
-                    || verify.origin.as_deref() != Some(origin.as_str())
-                {
-                    return Err(RunError::Flaky(flaky_diagnostic()));
-                }
+                let mut probe_anchor = 0.0f64;
+                let verify = if self.nd_experiment() == crate::settings::NdExperiment::Off {
+                    let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
+                    let (verify, mismatch) = self.test_function(verify_ntc).await?;
+                    if let Some(msg) = mismatch {
+                        return Err(RunError::NonDeterministic(msg));
+                    }
+                    if verify.status != Status::Interesting
+                        || verify.origin.as_deref() != Some(origin.as_str())
+                    {
+                        return Err(RunError::Flaky(flaky_diagnostic()));
+                    }
+                    verify
+                } else {
+                    let mut fails = 0u64;
+                    let mut witness = None;
+                    for _ in 0..ND_CONFIRM_RUNS {
+                        let ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
+                        let (run, _mismatch) = self.test_function(ntc).await?;
+                        if run.status == Status::Interesting
+                            && run.origin.as_deref() == Some(origin.as_str())
+                        {
+                            fails += 1;
+                            if witness.is_none() {
+                                witness = Some(run);
+                            }
+                        }
+                    }
+                    let Some(witness) = witness else {
+                        shrunk_origins.insert(origin);
+                        continue;
+                    };
+                    probe_anchor = wilson_bound(fails, ND_CONFIRM_RUNS, false);
+                    witness
+                };
 
                 let initial_spans = Spans::from(verify.spans.clone());
                 let shrunk = {
+                    let mode = self.nd_experiment();
                     let probe = EngineShrinkProbe {
                         engine: &mut *self,
                         target_origin: origin.clone(),
                         verbosity,
                         output: output.clone(),
+                        mode,
+                        ledger: HashMap::default(),
+                        anchor: probe_anchor,
                     };
                     let mut shrinker =
                         Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
@@ -1001,6 +1062,11 @@ pub(crate) struct Engine<'a> {
     /// nondeterminism-mode replay resamples through this seam by turning it
     /// off (`notes/experiments/002-cache-seam`).
     pub(crate) serve_replays: bool,
+    /// Experiment 003 scaffolding: origins whose discovery passed the
+    /// confirmation batch. An unconfirmed interesting origin is removed from
+    /// the interesting map so generation keeps looking — a noise fluke must
+    /// not become the shrink target.
+    nd_confirmed: crate::native::HashSet<String>,
 }
 
 impl<'a> Engine<'a> {
@@ -1035,8 +1101,13 @@ impl<'a> Engine<'a> {
             last_bug_at: None,
             first_bug_time: None,
             nondeterministic: false,
-            serve_replays: true,
+            serve_replays: settings.nd_experiment == crate::settings::NdExperiment::Off,
+            nd_confirmed: crate::native::HashSet::default(),
         })
+    }
+
+    fn nd_experiment(&self) -> crate::settings::NdExperiment {
+        self.settings.nd_experiment
     }
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
@@ -1087,7 +1158,9 @@ impl<'a> Engine<'a> {
     /// served by [`data_tree::simulate_full`] without re-running the body.
     ///
     fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
-        let mismatch = if self.nondeterministic {
+        let mismatch = if self.nondeterministic
+            || self.nd_experiment() != crate::settings::NdExperiment::Off
+        {
             None
         } else {
             crate::native::data_tree::record_tree_full(
@@ -1126,7 +1199,11 @@ impl<'a> Engine<'a> {
                 if !self.nondeterministic {
                     self.persister.record(&origin, &run.nodes);
                 }
-                update_interesting(&mut self.interesting, origin, run.nodes.clone());
+                if self.nd_experiment() == crate::settings::NdExperiment::Off
+                    || !self.interesting.contains_key(&origin)
+                {
+                    update_interesting(&mut self.interesting, origin, run.nodes.clone());
+                }
             }
         }
         mismatch
@@ -1243,6 +1320,56 @@ struct EngineShrinkProbe<'e, 'a> {
     target_origin: String,
     verbosity: Verbosity,
     output: Output,
+    /// Experiment 003 scaffolding: under [`NdExperiment::Gauntlet`] a
+    /// matching first run is not an accept — the candidate keeps executing
+    /// until its cumulative ledger evidence clears the anchor-derived
+    /// threshold or is proven below it. The ledger persists for the whole
+    /// shrink of one origin, so pass repetitions add power to retried
+    /// rejects instead of starting over.
+    mode: crate::settings::NdExperiment,
+    ledger: HashMap<Vec<u8>, (u64, u64)>,
+    anchor: f64,
+}
+
+const ND_CONFIRM_RUNS: u64 = 20;
+const ND_DISCOVERY_MIN_FAILS: u64 = 2;
+const ND_GAUNTLET_CAP: u64 = 30;
+const ND_GAMMA: f64 = 0.8;
+const ND_THRESHOLD_FLOOR: f64 = 0.05;
+
+fn wilson_bound(fails: u64, runs: u64, upper: bool) -> f64 {
+    if runs == 0 {
+        return if upper { 1.0 } else { 0.0 };
+    }
+    let z = 1.96f64;
+    let n = runs as f64;
+    let p = fails as f64 / n;
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let center = p + z2 / (2.0 * n);
+    let margin = z * libm::sqrt((p * (1.0 - p) + z2 / (4.0 * n)) / n);
+    let bound = if upper {
+        (center + margin) / denom
+    } else {
+        (center - margin) / denom
+    };
+    bound.clamp(0.0, 1.0)
+}
+
+impl EngineShrinkProbe<'_, '_> {
+    fn matches(&self, run: &RunResult) -> bool {
+        run.status == Status::Interesting
+            && run.origin.as_deref() == Some(self.target_origin.as_str())
+    }
+
+    fn record_evidence(&mut self, key: &[u8], matched: bool) -> (u64, u64) {
+        let e = self.ledger.entry(key.to_vec()).or_insert((0, 0));
+        e.0 += 1;
+        if matched {
+            e.1 += 1;
+        }
+        *e
+    }
 }
 
 impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
@@ -1264,9 +1391,36 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         .await?
                 }
             };
-            let matches = run.status == Status::Interesting
-                && run.origin.as_deref() == Some(self.target_origin.as_str());
-            Ok((matches, run.nodes, Spans::from(run.spans)))
+            let matched = self.matches(&run);
+            if self.mode != crate::settings::NdExperiment::Gauntlet {
+                return Ok((matched, run.nodes, Spans::from(run.spans)));
+            }
+            let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+            let key = serialize_choices(&realized);
+            self.record_evidence(&key, matched);
+            if !matched {
+                return Ok((false, run.nodes, Spans::from(run.spans)));
+            }
+            let threshold = (ND_GAMMA * self.anchor).max(ND_THRESHOLD_FLOOR);
+            loop {
+                let (runs, fails) = *self.ledger.get(&key).unwrap();
+                let lcb = wilson_bound(fails, runs, false);
+                if lcb >= threshold {
+                    if lcb > self.anchor {
+                        self.anchor = lcb;
+                    }
+                    return Ok((true, run.nodes, Spans::from(run.spans)));
+                }
+                if wilson_bound(fails, runs, true) < threshold || runs >= ND_GAUNTLET_CAP {
+                    return Ok((false, run.nodes, Spans::from(run.spans)));
+                }
+                let rerun = self
+                    .engine
+                    .cached_test_function(&realized, Some(&run.nodes), 0)
+                    .await?;
+                let m = self.matches(&rerun);
+                self.record_evidence(&key, m);
+            }
         })
     }
 }

@@ -95,3 +95,18 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     still falling at stop). Separately, evidence gathered under timeline replay must not raise
     the anchor, or a pinned incumbent prices fresh-generation candidates out and stalls the
     shrink. (Experiment result; confirms DRM's monotone-anchor stance.)
+
+20. **In ND mode, raw interesting runs never displace an occupied origin.** A raw interesting
+    execution may fill a vacant origin (first discovery, pending confirmation); displacement
+    happens only through validated accepts (the shrinker's gauntleted result). Experiment 003
+    showed the alternative live: post-discovery generation flukes at the noise floor displaced
+    a 20/20-confirmed discovery in ~80% of noise-floor trials. (Experiment result; instance of
+    the standing "gate all acceptance paths on validated accepts" decision.)
+
+21. **Discovery-time confirmation is a prerequisite, not a nicety.** First-interesting on a
+    noisy test is a background fluke more often than a real bug (2:1 in experiment 003's
+    noise-floor). Today's Flaky abort accidentally filters those by refusing to proceed when
+    the verify replay doesn't reproduce; ND mode removes that abort and must replace it with
+    the confirmation batch — an unconfirmed origin is dropped and generation keeps hunting.
+    The confirmation bar must respect the noise-floor caution (a flat >= 2-fails-in-20 passes
+    p = 0.02 noise ~5% of the time); deriving it is 005's job. (Experiment result.)
