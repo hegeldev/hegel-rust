@@ -30,16 +30,11 @@ pub use collections::{
     ArrayGenerator, HashMapGenerator, HashSetGenerator, VecGenerator, arrays, hashmaps, hashsets,
     vecs,
 };
-pub use combinators::{
-    OneOf1Generator, OneOf2Generator, OneOf3Generator, OneOf4Generator, OneOf5Generator,
-    OneOf6Generator, OneOf7Generator, OneOf8Generator, OneOf9Generator, OneOf10Generator,
-    OneOf11Generator, OneOf12Generator, OneOfGenerator, OptionalGenerator, SampledFromGenerator,
-    one_of, optional, sampled_from,
-};
 #[doc(hidden)]
+pub use combinators::one_of_from_alternatives;
 pub use combinators::{
-    one_of1, one_of2, one_of3, one_of4, one_of5, one_of6, one_of7, one_of8, one_of9, one_of10,
-    one_of11, one_of12,
+    Alternatives, OneOfCons, OneOfGenerator, OneOfLast, OptionalGenerator, PrintableAlternatives,
+    SampledFromGenerator, one_of, optional, sampled_from,
 };
 pub use compose::ComposedGenerator;
 #[doc(hidden)]

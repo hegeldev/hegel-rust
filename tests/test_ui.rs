@@ -185,7 +185,10 @@ fn newest_hegel_rlib(dirs: &[PathBuf]) -> PathBuf {
 ///   the `--explain` hint carry no information about hegel and are dropped,
 ///   as are the "consider manually implementing" help for derive-introduced
 ///   bounds and its "to learn more" link, whose wording is still evolving
-///   across toolchains.
+///   across toolchains;
+/// - a type too long for a `required for` note is elided as `, ...>` by
+///   stable but `, _>` by nightly; the nightly form is rewritten to
+///   stable's.
 fn normalize_e0283_stderr(raw: &str) -> String {
     let mut out = Vec::new();
     let mut in_impl_list = false;
@@ -240,6 +243,10 @@ fn normalize_e0283_stderr(raw: &str) -> String {
                 rest.rsplitn(3, ':').last().unwrap().to_string()
             };
             out.push(format!(" --> {location}"));
+            continue;
+        }
+        if trimmed.starts_with("= note: required for ") {
+            out.push(format!(" {}", trimmed.replace(", _>", ", ...>")));
             continue;
         }
         if trimmed.starts_with('|') || trimmed.starts_with('=') {
@@ -364,8 +371,8 @@ fn derived_generator_non_printable_field_diagnostic() {
 /// A `one_of!` over non-printable components passed to `tc.draw`. Checked by
 /// hand for the same reason as the E0283 case — the diagnostic enumerates
 /// `PrettyPrintable` implementors, which vary with the feature set and
-/// toolchain — but the rest of the wording is toolchain-stable, so a single
-/// golden suffices.
+/// toolchain — but with the long-type elision normalized the rest of the
+/// wording is toolchain-stable, so a single golden suffices.
 #[test]
 fn one_of_non_printable_draw_diagnostic() {
     let actual = compile_failing_case("tests/ui-printability/one_of_non_printable_draw.rs");
