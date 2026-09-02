@@ -1287,6 +1287,40 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
     }
 }
 
+/// A one-case budget skips the deterministic simplest-example probe (which
+/// would otherwise consume the whole budget and pin every run to the
+/// all-simplest case), so the single case is randomly generated.
+#[test]
+fn a_one_case_budget_generates_a_random_case() {
+    let mut executions = 0;
+    let mut drawn: Vec<u64> = Vec::new();
+    let result = run_main_sync(
+        &Settings::new()
+            .test_cases(1)
+            .database(None)
+            .seed(Some(0))
+            .verbosity(Verbosity::Quiet),
+        None,
+        |ds| {
+            executions += 1;
+            for _ in 0..4 {
+                if let Ok(n) = ru64(&*ds) {
+                    drawn.push(n);
+                }
+            }
+            ds.mark_complete(&TestCaseResult::Valid);
+        },
+        Duration::from_secs(30),
+        Duration::ZERO,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert_eq!(executions, 1, "one valid case is the whole budget");
+    assert!(
+        drawn.iter().any(|&n| n != 0),
+        "the one case must be random, not the all-simplest probe: {drawn:?}"
+    );
+}
+
 #[test]
 fn derandomize_is_keyed_by_test_identity() {
     let settings = Settings::new()

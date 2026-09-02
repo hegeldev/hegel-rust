@@ -265,10 +265,15 @@ impl<'a> Engine<'a> {
             log_phase("Generate", "Start");
         }
 
+        // The simplest-example probe counts against the test-case budget, so
+        // a one-case budget skips it: the whole budget goes to the randomly
+        // generated case, instead of every run executing only the
+        // deterministic simplest case.
         if settings.phases.contains(&Phase::Generate)
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
+            && max_test_cases > 1
         {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
