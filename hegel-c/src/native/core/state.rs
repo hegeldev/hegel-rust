@@ -1385,6 +1385,10 @@ pub struct FamilyCore {
     /// `tc.target()` observations, keyed by label. Family-wide so the
     /// once-per-test-case label uniqueness holds across clones.
     pub(crate) target_observations: Mutex<HashMap<String, f64>>,
+    /// `tc.event()` / `tc.event_value()` observations, in recording order:
+    /// the label plus the numeric observation for `event_value`. Family-wide
+    /// so clone-stream events land on the same test case.
+    pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
     /// Target number of rounds a stateful test case runs. Bounds the
     /// per-round stop decision in [`NativeStateMachine::next_group`].
     /// Defaults to 50, overridden per run from the `stateful_step_count`
@@ -1427,6 +1431,7 @@ impl FamilyCore {
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
+            events: Mutex::new(Vec::new()),
             stateful_step_count: AtomicI64::new(50),
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),

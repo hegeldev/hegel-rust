@@ -166,6 +166,11 @@ impl SettingsHandle {
                     raw,
                     settings.report_multiple_failures,
                 ));
+                require_ok(hegel_c::hegel_settings_set_show_statistics(
+                    ctx,
+                    raw,
+                    settings.show_statistics,
+                ));
                 match &settings.database {
                     Database::Disabled => {
                         let empty = CString::new("").unwrap();
@@ -900,6 +905,20 @@ impl CTestCase {
         let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_target(ctx, self.raw, score, c_label.as_ptr())
+        }))
+    }
+
+    pub(crate) fn event(&self, label: &str) -> Result<(), hegel_result_t> {
+        let c_label = cstring_lossy(label);
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_event(ctx, self.raw, c_label.as_ptr())
+        }))
+    }
+
+    pub(crate) fn event_value(&self, label: &str, value: f64) -> Result<(), hegel_result_t> {
+        let c_label = cstring_lossy(label);
+        rc_to_unit(with_context(|ctx| unsafe {
+            hegel_c::hegel_event_value(ctx, self.raw, value, c_label.as_ptr())
         }))
     }
 

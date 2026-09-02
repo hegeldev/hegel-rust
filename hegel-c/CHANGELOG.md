@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.34.1 - 2026-09-02
+
+This patch adds event statistics: `hegel_event` and `hegel_event_value` record labelled observations on the current test case, and with the new `hegel_settings_set_show_statistics` setting the engine prints a statistics block on the run's output at the end of the run — per label, the fraction of generation-phase test cases the event occurred in, and a distribution summary of numeric observations.
+
 ## 0.34.0 - 2026-09-01
 
 This release adds `hegel_state_machine_should_check_invariant`: the engine-side sampling decision for stateful invariant checks, a recorded boolean draw that is true with probability 1/`stateful_step_count`. Frontends call it per invariant at each join point and run their guaranteed initial and final checks unconditionally.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.36.1 - 2026-09-02
+
+This patch adds event statistics. `tc.event(label)` records that a labelled situation occurred in the current test case, and `tc.event_value(label, value)` records a numeric observation; with statistics enabled — `Settings::show_statistics(true)`, or the `HEGEL_STATISTICS` environment variable — the end of the run reports, per label, the fraction of generation-phase test cases each event occurred in and a distribution summary (count, min, median, mean, p90, max) of each numeric observation. Use it to check that the situations a test is meant to exercise actually occur, and at the sizes you expect.
+
 ## 0.36.0 - 2026-09-02
 
 This release removes the 12-component limit on `one_of!`: it now accepts any number of generators. Components stay unboxed, and the result is a `PrintableGenerator` exactly when every component is one.

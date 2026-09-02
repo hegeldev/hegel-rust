@@ -151,6 +151,9 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
+    /// Print event statistics (`tc.event()` / `tc.event_value()`
+    /// observations from the generation phase) at the end of the run.
+    pub(crate) show_statistics: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -185,6 +188,7 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: true,
+            show_statistics: false,
             backend: None,
         }
     }
@@ -312,6 +316,14 @@ impl Settings {
     /// Maps to Hypothesis's `report_multiple_bugs` setting.
     pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
         self.report_multiple_failures = report_multiple_failures;
+        self
+    }
+
+    /// Print event statistics (`tc.event()` / `tc.event_value()`
+    /// observations from the generation phase) on the run's output at the
+    /// end of the run. Defaults to off.
+    pub fn show_statistics(mut self, show_statistics: bool) -> Self {
+        self.show_statistics = show_statistics;
         self
     }
 }

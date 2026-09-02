@@ -62,6 +62,10 @@ pub struct RunResult {
     /// for folding into the choice tree. Empty on a result reconstructed from
     /// the tree (the events are already recorded there).
     pub span_events: Vec<(usize, SpanEvent)>,
+    /// `tc.event()` / `tc.event_value()` observations from this execution,
+    /// in recording order. Empty for tests that record no events and on a
+    /// result reconstructed from the tree.
+    pub events: Vec<(String, Option<f64>)>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -264,6 +268,7 @@ impl<'a> Engine<'a> {
         if actually_generate {
             log_phase("Generate", "Start");
         }
+        self.collect_statistics = true;
 
         // The simplest-example probe counts against the test-case budget, so
         // a one-case budget skips it: the whole budget goes to the randomly
@@ -446,6 +451,7 @@ impl<'a> Engine<'a> {
         if actually_generate {
             log_phase("Generate", "End");
         }
+        self.collect_statistics = false;
 
         if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.nondeterministic
         {
@@ -599,6 +605,12 @@ impl<'a> Engine<'a> {
             if let Some(last) = origins_sorted.pop() {
                 origins_sorted.clear();
                 origins_sorted.push(last);
+            }
+        }
+
+        if settings.show_statistics {
+            for line in self.statistics.render() {
+                output.line(&line);
             }
         }
 
@@ -940,6 +952,13 @@ pub(crate) struct Engine<'a> {
     /// several distinct bugs surface each one.
     pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
     pub(crate) targeting: crate::native::targeting::TargetingState,
+    /// Event statistics for the end-of-run report, folded in by
+    /// [`Self::record_run`] while [`Self::collect_statistics`] is set.
+    pub(crate) statistics: crate::native::events::RunStatistics,
+    /// Set for the duration of the generation phase, the only phase whose
+    /// cases feed [`Self::statistics`]: shrinking replays the same target
+    /// over and over and would swamp the reported distributions.
+    pub(crate) collect_statistics: bool,
     pub(crate) calls: u64,
     pub(crate) valid_test_cases: u64,
     pub(crate) invalid_test_cases: u64,
@@ -982,6 +1001,8 @@ impl<'a> Engine<'a> {
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::default(),
             targeting: crate::native::targeting::TargetingState::new(),
+            statistics: crate::native::events::RunStatistics::default(),
+            collect_statistics: false,
             calls: 0,
             valid_test_cases: 0,
             invalid_test_cases: 0,
@@ -1065,6 +1086,9 @@ impl<'a> Engine<'a> {
             let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             self.targeting.record(&choices, &run.target_observations);
         }
+        if self.collect_statistics && matches!(run.status, Status::Valid | Status::Interesting) {
+            self.statistics.record_case(&run.events);
+        }
         match run.status {
             Status::Valid => self.valid_test_cases += 1,
             Status::Invalid => self.invalid_test_cases += 1,
@@ -1109,6 +1133,7 @@ impl<'a> Engine<'a> {
         let spans = NativeDataSource::take_spans(&handle);
         let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
+        let events = NativeDataSource::take_events(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
@@ -1125,6 +1150,7 @@ impl<'a> Engine<'a> {
             origin,
             target_observations,
             span_events,
+            events,
         })
     }
 
@@ -1166,6 +1192,7 @@ impl<'a> Engine<'a> {
                     origin: out.origin,
                     target_observations: out.target_observations,
                     span_events: Vec::new(),
+                    events: Vec::new(),
                 });
             }
         }
