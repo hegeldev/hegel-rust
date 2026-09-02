@@ -2126,3 +2126,37 @@ fn a_double_flip_in_one_verify_prints_the_warn_notice_once() {
         .count();
     assert_eq!(notices, 1, "the notice is printed exactly once per run");
 }
+
+#[test]
+fn nd_handling_confirms_and_shrinks_a_clone_bearing_body() {
+    let result = reuse_run(
+        nd_settings()
+            .phases([Phase::Generate, Phase::Shrink])
+            .test_cases(200),
+        "k",
+        |ds| {
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            let clone = match ds.clone_stream() {
+                Ok(c) => c,
+                Err(_) => return TestCaseResult::Overrun,
+            };
+            let b = match rbool(&*clone) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if a && b {
+                boom("clone bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: clone bug");
+    assert!(result.failures[0].reproduce_blob.is_some());
+    assert!(!result.nondeterministic);
+}
