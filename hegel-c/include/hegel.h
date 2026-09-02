@@ -792,13 +792,13 @@ typedef struct {
 
 /*
  A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
- `[0, 59]`, `microsecond` in `[0, 999999]`.
+ `[0, 59]`, `nanosecond` in `[0, 999999999]`.
  */
 typedef struct {
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
-    uint32_t microsecond;
+    uint32_t nanosecond;
 } hegel_time_t;
 
 /*
@@ -1886,7 +1886,7 @@ hegel_result_t hegel_generate_date(hegel_context_t *ctx,
 /*
  Parameters:
  `min_value` / `max_value`: Inclusive bounds. Pass all-zeros and
-   `{23, 59, 59, 999999}` for the full day.
+   `{23, 59, 59, 999999999}` for the full day.
 
  Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
 

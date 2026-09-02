@@ -3605,7 +3605,7 @@ pub struct hegel_date_t {
 }
 
 /// A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
-/// `[0, 59]`, `microsecond` in `[0, 999999]`.
+/// `[0, 59]`, `nanosecond` in `[0, 999999999]`.
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -3613,7 +3613,7 @@ pub struct hegel_time_t {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
-    pub microsecond: u32,
+    pub nanosecond: u32,
 }
 
 /// A drawn naive datetime (a date plus a time of day, no timezone).
@@ -3638,7 +3638,7 @@ fn rust_time(t: &hegel_time_t) -> crate::native::draws::special::Time {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3662,7 +3662,7 @@ fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3700,7 +3700,7 @@ pub unsafe extern "C" fn hegel_generate_date(
 
 /// Parameters:
 /// `min_value` / `max_value`: Inclusive bounds. Pass all-zeros and
-///   `{23, 59, 59, 999999}` for the full day.
+///   `{23, 59, 59, 999999999}` for the full day.
 ///
 /// Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
 ///
