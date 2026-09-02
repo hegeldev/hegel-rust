@@ -40,6 +40,7 @@ use crate::native::data_tree::generate_novel_prefix;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
+use crate::native::nd;
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
@@ -74,8 +75,7 @@ const SPAN_MUTATION_ATTEMPTS: usize = 5;
 /// Outcome of one discovery-confirmation batch (experiment 005).
 struct NdConfirm {
     accepted: bool,
-    fails: u64,
-    runs: u64,
+    evidence: nd::Evidence,
     witness: Option<RunResult>,
     captured: Vec<Vec<ChoiceValue>>,
 }
@@ -249,12 +249,12 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    let reuse_tries =
-                        if self.nd_experiment() == crate::settings::NdExperiment::Off {
-                            1
-                        } else {
-                            ND_REUSE_TRIES
-                        };
+                    let reuse_tries = if self.nd_experiment() == crate::settings::NdExperiment::Off
+                    {
+                        1
+                    } else {
+                        nd::reuse_replay_budget()
+                    };
                     let mut attempt = 0u64;
                     let (run, mismatch) = loop {
                         attempt += 1;
@@ -601,10 +601,10 @@ impl<'a> Engine<'a> {
                         shrunk_origins.insert(origin);
                         continue;
                     };
-                    probe_anchor = wilson_bound(confirm.fails, confirm.runs, false);
+                    probe_anchor = confirm.evidence.lower_bound();
                     let mut pool = Vec::from([choices.clone()]);
                     for timeline in confirm.captured {
-                        if pool.len() < ND_POOL_CAP && !pool.contains(&timeline) {
+                        if pool.len() < nd::POOL_CAP && !pool.contains(&timeline) {
                             pool.push(timeline);
                         }
                     }
@@ -752,8 +752,9 @@ impl<'a> Engine<'a> {
             && self.nd_experiment() != crate::settings::NdExperiment::Off
             && !self.nd_unconfirmed.is_empty()
         {
-            let mut unconfirmed: Vec<(String, u64)> =
-                core::mem::take(&mut self.nd_unconfirmed).into_iter().collect();
+            let mut unconfirmed: Vec<(String, u64)> = core::mem::take(&mut self.nd_unconfirmed)
+                .into_iter()
+                .collect();
             unconfirmed.sort();
             for (origin, observations) in unconfirmed {
                 failures.push(Failure {
@@ -1181,48 +1182,43 @@ impl<'a> Engine<'a> {
         self.settings.nd_experiment
     }
 
-    /// Experiment 005: the discovery-confirmation bar (decision 23) with
-    /// capture-at-confirmation. Replays `choices` with a small continuation
-    /// budget; rejects on zero failures in the first [`ND_GATE_RUNS`], else
-    /// continues to [`ND_CONFIRM_CAP`] accepting early on the
-    /// [`ND_CONFIRM_MIN_FAILS`]th failure. The triggering run is selection,
-    /// not evidence — only these fresh replays count.
+    /// Experiment 005: the discovery-confirmation bar
+    /// ([`nd::discovery_bar`], decision 23) with capture-at-confirmation.
+    /// Replays `choices` with a small continuation budget until the bar
+    /// decides. The triggering run is selection, not evidence — only these
+    /// fresh replays count.
     async fn nd_confirm(
         &mut self,
         origin: &str,
         choices: &[ChoiceValue],
     ) -> Result<NdConfirm, RunError> {
-        let len = crate::native::core::flattened_values_len(choices);
-        let budget = len + (len / 8).max(4);
-        let mut fails = 0u64;
-        let mut runs = 0u64;
+        let budget = nd::continuation_budget(crate::native::core::flattened_values_len(choices));
+        let mut evidence = nd::Evidence::default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
-        loop {
+        let accepted = loop {
             let ntc = NativeTestCase::for_probe(choices, self.rng.spawn(), budget)?;
             let (run, _mismatch) = self.test_function(ntc).await?;
-            runs += 1;
-            if run.status == Status::Interesting && run.origin.as_deref() == Some(origin) {
-                fails += 1;
+            let failed = run.status == Status::Interesting && run.origin.as_deref() == Some(origin);
+            if failed {
                 let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
-                if captured.len() < ND_POOL_CAP && !captured.contains(&realized) {
+                if captured.len() < nd::POOL_CAP && !captured.contains(&realized) {
                     captured.push(realized);
                 }
                 if witness.is_none() {
                     witness = Some(run);
                 }
             }
-            if fails >= ND_CONFIRM_MIN_FAILS
-                || (runs >= ND_GATE_RUNS && fails == 0)
-                || fails + (ND_CONFIRM_CAP - runs) < ND_CONFIRM_MIN_FAILS
-            {
-                break;
+            evidence.record(failed, 1.0);
+            match nd::discovery_bar(&evidence) {
+                nd::BarVerdict::Accept => break true,
+                nd::BarVerdict::Reject => break false,
+                nd::BarVerdict::Continue => {}
             }
-        }
+        };
         Ok(NdConfirm {
-            accepted: fails >= ND_CONFIRM_MIN_FAILS,
-            fails,
-            runs,
+            accepted,
+            evidence,
             witness,
             captured,
         })
@@ -1242,40 +1238,35 @@ impl<'a> Engine<'a> {
         let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
         if let Some(pool) = self.nd_pool.get(origin) {
             for timeline in pool {
-                if candidates.len() < ND_BOOST_POOL && !candidates.contains(timeline) {
+                if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
                     candidates.push(timeline.clone());
                 }
             }
         }
         let mut attempts = 0;
-        while candidates.len() < ND_BOOST_POOL && attempts < ND_BOOST_POOL * 3 {
+        while candidates.len() < nd::BOOST_POOL && attempts < nd::BOOST_POOL * 3 {
             attempts += 1;
             let cut = self.rng.random_range(0..=incumbent.len());
             let budget = crate::native::core::flattened_values_len(incumbent) + 8;
-            let ntc =
-                NativeTestCase::for_probe(&incumbent[..cut], self.rng.spawn(), budget)?;
+            let ntc = NativeTestCase::for_probe(&incumbent[..cut], self.rng.spawn(), budget)?;
             let (run, _mismatch) = self.test_function(ntc).await?;
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             if !candidates.contains(&realized) {
                 candidates.push(realized);
             }
         }
-        let mut scores: Vec<(usize, u64, u64)> =
-            (0..candidates.len()).map(|i| (i, 0, 0)).collect();
+        let mut scores: Vec<(usize, u64, u64)> = (0..candidates.len()).map(|i| (i, 0, 0)).collect();
         let mut replays_per_round: u64 = 2;
         while scores.len() > 1 {
             for (idx, fails, runs) in scores.iter_mut() {
                 let candidate = &candidates[*idx];
-                let flat = crate::native::core::flattened_values_len(candidate);
-                let budget = flat + (flat / 8).max(4);
+                let budget =
+                    nd::continuation_budget(crate::native::core::flattened_values_len(candidate));
                 for _ in 0..replays_per_round {
-                    let ntc =
-                        NativeTestCase::for_probe(candidate, self.rng.spawn(), budget)?;
+                    let ntc = NativeTestCase::for_probe(candidate, self.rng.spawn(), budget)?;
                     let (run, _mismatch) = self.test_function(ntc).await?;
                     *runs += 1;
-                    if run.status == Status::Interesting
-                        && run.origin.as_deref() == Some(origin)
-                    {
+                    if run.status == Status::Interesting && run.origin.as_deref() == Some(origin) {
                         *fails += 1;
                     }
                 }
@@ -1285,25 +1276,23 @@ impl<'a> Engine<'a> {
                 let rate_b = b.1 as f64 / b.2.max(1) as f64;
                 rate_b.total_cmp(&rate_a)
             });
-            scores.truncate(scores.len().div_ceil(2));
+            scores.truncate(nd::boost_keep(scores.len()));
             replays_per_round *= 2;
         }
         let winner = &candidates[scores[0].0];
-        let flat = crate::native::core::flattened_values_len(winner);
-        let budget = flat + (flat / 8).max(4);
-        let mut fails = 0u64;
+        let budget = nd::continuation_budget(crate::native::core::flattened_values_len(winner));
+        let mut holdout = nd::Evidence::default();
         let mut witness = None;
-        for _ in 0..ND_BOOST_HOLDOUT {
+        for _ in 0..nd::BOOST_HOLDOUT {
             let ntc = NativeTestCase::for_probe(winner, self.rng.spawn(), budget)?;
             let (run, _mismatch) = self.test_function(ntc).await?;
-            if run.status == Status::Interesting && run.origin.as_deref() == Some(origin) {
-                fails += 1;
-                if witness.is_none() {
-                    witness = Some(run);
-                }
+            let failed = run.status == Status::Interesting && run.origin.as_deref() == Some(origin);
+            holdout.record(failed, 1.0);
+            if failed && witness.is_none() {
+                witness = Some(run);
             }
         }
-        let lcb = wilson_bound(fails, ND_BOOST_HOLDOUT, false);
+        let lcb = holdout.lower_bound();
         Ok(match (witness, lcb > anchor) {
             (Some(witness), true) => Some((witness, lcb)),
             _ => None,
@@ -1337,22 +1326,22 @@ impl<'a> Engine<'a> {
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
                     "nd discovery confirm: origin={origin} fails={}/{} accepted={}",
-                    confirm.fails, confirm.runs, confirm.accepted
+                    confirm.evidence.fails(),
+                    confirm.evidence.runs(),
+                    confirm.accepted
                 ));
             }
             if confirm.accepted {
                 self.nd_confirmed.insert(origin.clone());
                 let mut pool = Vec::from([choices]);
                 for timeline in confirm.captured {
-                    if pool.len() < ND_POOL_CAP && !pool.contains(&timeline) {
+                    if pool.len() < nd::POOL_CAP && !pool.contains(&timeline) {
                         pool.push(timeline);
                     }
                 }
                 self.nd_pool.insert(origin.clone(), pool);
-                self.nd_anchor.insert(
-                    origin.clone(),
-                    wilson_bound(confirm.fails, confirm.runs, false),
-                );
+                self.nd_anchor
+                    .insert(origin.clone(), confirm.evidence.lower_bound());
                 if let Some(witness) = confirm.witness {
                     self.nd_witness.insert(origin, witness);
                 }
@@ -1580,38 +1569,8 @@ struct EngineShrinkProbe<'e, 'a> {
     /// shrink of one origin, so pass repetitions add power to retried
     /// rejects instead of starting over.
     mode: crate::settings::NdExperiment,
-    ledger: HashMap<Vec<u8>, (u64, u64)>,
+    ledger: HashMap<Vec<u8>, nd::Evidence>,
     anchor: f64,
-}
-
-const ND_GATE_RUNS: u64 = 10;
-const ND_CONFIRM_CAP: u64 = 40;
-const ND_CONFIRM_MIN_FAILS: u64 = 4;
-const ND_POOL_CAP: usize = 10;
-const ND_REUSE_TRIES: u64 = 10;
-const ND_BOOST_POOL: usize = 16;
-const ND_BOOST_HOLDOUT: u64 = 10;
-const ND_GAUNTLET_CAP: u64 = 30;
-const ND_GAMMA: f64 = 0.8;
-const ND_THRESHOLD_FLOOR: f64 = 0.05;
-
-fn wilson_bound(fails: u64, runs: u64, upper: bool) -> f64 {
-    if runs == 0 {
-        return if upper { 1.0 } else { 0.0 };
-    }
-    let z = 1.96f64;
-    let n = runs as f64;
-    let p = fails as f64 / n;
-    let z2 = z * z;
-    let denom = 1.0 + z2 / n;
-    let center = p + z2 / (2.0 * n);
-    let margin = z * libm::sqrt((p * (1.0 - p) + z2 / (4.0 * n)) / n);
-    let bound = if upper {
-        (center + margin) / denom
-    } else {
-        (center - margin) / denom
-    };
-    bound.clamp(0.0, 1.0)
 }
 
 impl EngineShrinkProbe<'_, '_> {
@@ -1620,13 +1579,11 @@ impl EngineShrinkProbe<'_, '_> {
             && run.origin.as_deref() == Some(self.target_origin.as_str())
     }
 
-    fn record_evidence(&mut self, key: &[u8], matched: bool) -> (u64, u64) {
-        let e = self.ledger.entry(key.to_vec()).or_insert((0, 0));
-        e.0 += 1;
-        if matched {
-            e.1 += 1;
-        }
-        *e
+    fn record_evidence(&mut self, key: &[u8], matched: bool) {
+        self.ledger
+            .entry(key.to_vec())
+            .or_default()
+            .record(matched, 1.0);
     }
 }
 
@@ -1659,18 +1616,19 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             if !matched {
                 return Ok((false, run.nodes, Spans::from(run.spans)));
             }
-            let threshold = (ND_GAMMA * self.anchor).max(ND_THRESHOLD_FLOOR);
             loop {
-                let (runs, fails) = *self.ledger.get(&key).unwrap();
-                let lcb = wilson_bound(fails, runs, false);
-                if lcb >= threshold {
-                    if lcb > self.anchor {
-                        self.anchor = lcb;
+                let evidence = *self.ledger.get(&key).unwrap();
+                match nd::gauntlet(&evidence, self.anchor) {
+                    nd::GauntletVerdict::Accept { lower_bound } => {
+                        if lower_bound > self.anchor {
+                            self.anchor = lower_bound;
+                        }
+                        return Ok((true, run.nodes, Spans::from(run.spans)));
                     }
-                    return Ok((true, run.nodes, Spans::from(run.spans)));
-                }
-                if wilson_bound(fails, runs, true) < threshold || runs >= ND_GAUNTLET_CAP {
-                    return Ok((false, run.nodes, Spans::from(run.spans)));
+                    nd::GauntletVerdict::Reject => {
+                        return Ok((false, run.nodes, Spans::from(run.spans)));
+                    }
+                    nd::GauntletVerdict::Continue => {}
                 }
                 let rerun = self
                     .engine

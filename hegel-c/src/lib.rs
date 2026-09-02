@@ -100,8 +100,14 @@ pub mod __bench {
             let calls_before = engine.calls;
             let start = crate::sys::Instant::now();
             for _ in 0..reps {
-                let run = engine.cached_test_function(&choices, Some(&nodes), 0).await.unwrap();
-                assert!(matches!(run.status, crate::native::core::Status::Interesting));
+                let run = engine
+                    .cached_test_function(&choices, Some(&nodes), 0)
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    run.status,
+                    crate::native::core::Status::Interesting
+                ));
             }
             let total = start.map_or(core::time::Duration::ZERO, |s| s.elapsed());
             (engine.calls - calls_before, total)

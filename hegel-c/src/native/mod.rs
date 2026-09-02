@@ -12,6 +12,7 @@ pub mod draws;
 pub(crate) mod events;
 pub mod floats;
 pub mod intervalsets;
+pub(crate) mod nd;
 pub mod printer;
 pub mod re;
 pub mod rng;
