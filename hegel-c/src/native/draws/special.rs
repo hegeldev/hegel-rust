@@ -160,9 +160,8 @@ fn draw_date_in(
 /// The unspanned bounded time draw shared by [`generate_time`] and
 /// [`generate_datetime`].
 ///
-/// Mirrors Hypothesis's `TimeStrategy`: one integer draw of a nanosecond
-/// offset from `min_ns`, shrinking toward `min_ns` (the representable time
-/// closest to midnight).
+/// One integer draw of a nanosecond offset from `min_ns`, shrinking toward `min_ns`
+/// (the representable time closest to midnight).
 fn draw_time_in(ntc: &mut NativeTestCase, min_ns: i64, max_ns: i64) -> Result<Time, EngineError> {
     let offset = draw_i64(ntc, 0, max_ns - min_ns)?;
     Ok(time_from_ns(min_ns + offset))
