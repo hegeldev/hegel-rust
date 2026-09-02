@@ -613,6 +613,25 @@ impl<'a> Engine<'a> {
                     witness
                 };
 
+                let mut verify = verify;
+                if self.settings.nd_boost
+                    && self.nd_experiment() != crate::settings::NdExperiment::Off
+                {
+                    let incumbent: Vec<ChoiceValue> =
+                        verify.nodes.iter().map(|n| n.value()).collect();
+                    if let Some((witness, lcb)) =
+                        self.nd_boost(&origin, &incumbent, probe_anchor).await?
+                    {
+                        if verbosity == Verbosity::Debug {
+                            output.line(&format!(
+                                "nd boost: origin={origin} anchor {probe_anchor:.3} -> {lcb:.3}"
+                            ));
+                        }
+                        verify = witness;
+                        probe_anchor = lcb;
+                    }
+                }
+
                 let initial_spans = Spans::from(verify.spans.clone());
                 let shrunk = {
                     let mode = self.nd_experiment();
@@ -1209,6 +1228,88 @@ impl<'a> Engine<'a> {
         })
     }
 
+    /// Experiment 006: the boost phase — successive halving over the
+    /// incumbent, its pool, and probe mutants, scored by failure rate under
+    /// budgeted replay. Returns a witness run and new anchor when the
+    /// winner's holdout LCB beats the confirmation anchor (holdout because
+    /// the in-race rate of a halving winner is selection-biased upward).
+    async fn nd_boost(
+        &mut self,
+        origin: &str,
+        incumbent: &[ChoiceValue],
+        anchor: f64,
+    ) -> Result<Option<(RunResult, f64)>, RunError> {
+        let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
+        if let Some(pool) = self.nd_pool.get(origin) {
+            for timeline in pool {
+                if candidates.len() < ND_BOOST_POOL && !candidates.contains(timeline) {
+                    candidates.push(timeline.clone());
+                }
+            }
+        }
+        let mut attempts = 0;
+        while candidates.len() < ND_BOOST_POOL && attempts < ND_BOOST_POOL * 3 {
+            attempts += 1;
+            let cut = self.rng.random_range(0..=incumbent.len());
+            let budget = crate::native::core::flattened_values_len(incumbent) + 8;
+            let ntc =
+                NativeTestCase::for_probe(&incumbent[..cut], self.rng.spawn(), budget)?;
+            let (run, _mismatch) = self.test_function(ntc).await?;
+            let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+            if !candidates.contains(&realized) {
+                candidates.push(realized);
+            }
+        }
+        let mut scores: Vec<(usize, u64, u64)> =
+            (0..candidates.len()).map(|i| (i, 0, 0)).collect();
+        let mut replays_per_round: u64 = 2;
+        while scores.len() > 1 {
+            for (idx, fails, runs) in scores.iter_mut() {
+                let candidate = &candidates[*idx];
+                let flat = crate::native::core::flattened_values_len(candidate);
+                let budget = flat + (flat / 8).max(4);
+                for _ in 0..replays_per_round {
+                    let ntc =
+                        NativeTestCase::for_probe(candidate, self.rng.spawn(), budget)?;
+                    let (run, _mismatch) = self.test_function(ntc).await?;
+                    *runs += 1;
+                    if run.status == Status::Interesting
+                        && run.origin.as_deref() == Some(origin)
+                    {
+                        *fails += 1;
+                    }
+                }
+            }
+            scores.sort_by(|a, b| {
+                let rate_a = a.1 as f64 / a.2.max(1) as f64;
+                let rate_b = b.1 as f64 / b.2.max(1) as f64;
+                rate_b.total_cmp(&rate_a)
+            });
+            scores.truncate(scores.len().div_ceil(2));
+            replays_per_round *= 2;
+        }
+        let winner = &candidates[scores[0].0];
+        let flat = crate::native::core::flattened_values_len(winner);
+        let budget = flat + (flat / 8).max(4);
+        let mut fails = 0u64;
+        let mut witness = None;
+        for _ in 0..ND_BOOST_HOLDOUT {
+            let ntc = NativeTestCase::for_probe(winner, self.rng.spawn(), budget)?;
+            let (run, _mismatch) = self.test_function(ntc).await?;
+            if run.status == Status::Interesting && run.origin.as_deref() == Some(origin) {
+                fails += 1;
+                if witness.is_none() {
+                    witness = Some(run);
+                }
+            }
+        }
+        let lcb = wilson_bound(fails, ND_BOOST_HOLDOUT, false);
+        Ok(match (witness, lcb > anchor) {
+            (Some(witness), true) => Some((witness, lcb)),
+            _ => None,
+        })
+    }
+
     /// Experiment 005: confirm every interesting origin that hasn't passed
     /// the discovery bar yet. Swept after each generation iteration (and once
     /// after the loop) rather than keyed on the iteration's own run, because
@@ -1488,6 +1589,8 @@ const ND_CONFIRM_CAP: u64 = 40;
 const ND_CONFIRM_MIN_FAILS: u64 = 4;
 const ND_POOL_CAP: usize = 10;
 const ND_REUSE_TRIES: u64 = 10;
+const ND_BOOST_POOL: usize = 16;
+const ND_BOOST_HOLDOUT: u64 = 10;
 const ND_GAUNTLET_CAP: u64 = 30;
 const ND_GAMMA: f64 = 0.8;
 const ND_THRESHOLD_FLOOR: f64 = 0.05;

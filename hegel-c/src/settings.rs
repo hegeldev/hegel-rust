@@ -185,6 +185,9 @@ pub struct Settings {
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
     pub(crate) nd_experiment: NdExperiment,
+    /// Experiment 006: run the boost phase (successive halving to raise the
+    /// incumbent's failure rate) before shrinking in ND modes.
+    pub(crate) nd_boost: bool,
 }
 
 impl Settings {
@@ -219,6 +222,7 @@ impl Settings {
             show_statistics: false,
             backend: None,
             nd_experiment: NdExperiment::Off,
+            nd_boost: false,
         }
     }
 

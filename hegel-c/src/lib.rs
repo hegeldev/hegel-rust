@@ -238,6 +238,19 @@ pub mod __bench {
         }
     }
 
+    /// Experiment 006 (`notes/experiments/006-graft-boost`): like
+    /// [`nd_shrink_experiment`] with the boost phase toggled.
+    pub fn nd_boost_experiment(
+        mode: NdShrinkMode,
+        boost: bool,
+        seed: u64,
+        test_cases: u64,
+        debug: bool,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
+        nd_shrink_settings_experiment(mode, boost, seed, test_cases, debug, run_case)
+    }
+
     /// Experiment 003 (`notes/experiments/003-nd-shrink`): one full explore
     /// run (generation + shrink) of the caller's test body under the given
     /// nondeterminism mode. Returns each reported failure's choice sequence
@@ -250,7 +263,19 @@ pub mod __bench {
         debug: bool,
         run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
     ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
+        nd_shrink_settings_experiment(mode, false, seed, test_cases, debug, run_case)
+    }
+
+    fn nd_shrink_settings_experiment(
+        mode: NdShrinkMode,
+        boost: bool,
+        seed: u64,
+        test_cases: u64,
+        debug: bool,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<Vec<Option<Vec<i64>>>, alloc::string::String> {
         let mut settings = crate::settings::Settings::new().test_cases(test_cases);
+        settings.nd_boost = boost;
         settings.database = crate::settings::Database::Disabled;
         settings.derandomize = false;
         settings.seed = Some(seed);

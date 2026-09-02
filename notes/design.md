@@ -236,10 +236,23 @@ wall-clock budget. Not the Optimiser: its budget gate exits once any failure exi
 rate is not an observable it can score, and `is_climbable` excludes Clone nodes — the structure
 of the top workload.
 
+Measured (006A, ~250 replays/invocation, holdout-gated): the gauntlet's monotone anchor alone
+already lands deterministic-core landscapes deterministic in 90% of runs (an accept touching
+the core raises the anchor and prices the flaky region out); boost closes the tail to 100% at
++14% cost and is harmless on flat landscapes. On coreless rising landscapes it is a
+size-for-reliability trade (final p 0.26 -> 0.42, len 3 -> 5, +46% cost) — shipping default
+is reporting policy (reliability-floor heuristic or setting), decision 25.
+
 Cross-timeline passes: donor splicing of failing-timeline content onto candidates, at span
 granularity initially (reusing `try_span_mutation` / `pass_to_descendant` /
 `mutate_and_shrink`'s divergence-repair shapes). Finer, anchor-addressed grafting is deferred
 with the representation question.
+
+Measured (006B): even position-random splices of pool pairs rescue 65-100% of full-pool
+replay misses at ~6 replays each, lifting heterogeneous-shift reproduction from 72% to ~90%.
+Replay-until-failure order (decision 25): pool first-fit, then a handful of splices, then
+fresh generation. Span-anchored split points are an optimization over this, not a
+prerequisite; the same prefix+suffix construction serves as the boost's variant generator.
 
 ### Data tree in ND mode
 
@@ -301,7 +314,7 @@ mode still aborts.
 
 | Decision | Default for now | Revisit when |
 | --- | --- | --- |
-| Per-position divergence anchors; anchoring inside clone streams | None anywhere; whole-timeline machinery only | Experiment 004 measured: fall-off is early and unpredictable where ND is heavy (watermark p10 0.11-0.14), so no stable anchor position exists; a whole-timeline pool of K=10 plateaus at 73% on heterogeneous-shift bodies — the residue is the anchoring/realignment target. Revisit via 006 span grafting |
+| Per-position divergence anchors; anchoring inside clone streams | Closed: none anywhere | 004: no stable anchor position exists (fall-off early and unpredictable, watermark p10 0.11-0.14); 006B: the K=10 pool's 73% plateau residue is reached by position-random splicing of stored timelines (65-100% of misses rescued), so anchoring buys nothing recombination doesn't already provide |
 | Merged trie (ND-node) encoding | Timeline pool — now measured, not just argued | Closed harder by 004: prefix sharing is anticorrelated with pool need (0.93+ where K=1 suffices, 0.32-0.48 where the pool matters) |
 | extend=0 vs continuation budget on shrink Full replays | Small budget (constant + small fraction of stored length) | 004: extend 4 captures the whole benefit (absorbs net elongation); larger budgets are free but useless; bare replay loses 22-47% to end-of-sequence overruns on count-shifting bodies |
 | Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |

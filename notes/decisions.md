@@ -144,3 +144,16 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     ~55% of the time. Caveated `[unconfirmed]` failures are reported only when nothing
     confirmed (caveat fatigue otherwise). Generalizes decision 20 from displacement to
     admission. (Experiment 005B result.)
+
+25. **Replay-until-failure order: pool first-fit, then positional splices, then fresh
+    generation; boost ships as machinery, defaulting off outside deterministic-core
+    rescue.** Experiment 006: cheap positional splicing of pool pairs recovers 65-100% of
+    full-pool replay misses (~6 replays/miss), so the 004 residue needs recombination of
+    stored content, not per-position anchoring or a trie — span-anchored grafting is an
+    optimization for implementation, not a prerequisite. Successive-halving boost (~250
+    replays, holdout-gated) closes the deterministic-core tail (27/30 -> 30/30 deterministic
+    finals) and is harmless on flat landscapes, but on coreless rising landscapes it trades
+    size and cost for reliability (p 0.26 -> 0.42, len 3 -> 5, +46% execs) — that trade is
+    reporting policy, deferred to implementation (a reliability-floor heuristic or setting).
+    The gauntlet's monotone anchor alone already finds deterministic cores in 90% of runs.
+    (Experiment result.)

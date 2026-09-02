@@ -172,8 +172,14 @@ struct TrialResult {
     repro_by_extend: [usize; 4],
     pool_hits: [usize; 5],
     pool_replays: [usize; 5],
+    splice_attempts: usize,
+    splice_rescues: usize,
+    splice_replays: usize,
     fresh_hits: usize,
 }
+
+const SPLICE_TRIES: usize = 10;
+const SPLICE_BASE_K: usize = 10;
 
 fn run_trial(body: Body, trial: u64) -> Option<TrialResult> {
     let hidden = RefCell::new(Rng::new(trial.wrapping_mul(0xC0FFEE) ^ 0xD15EA5E));
@@ -250,6 +256,44 @@ fn run_trial(body: Body, trial: u64) -> Option<TrialResult> {
         }
     }
 
+    let mut splice_attempts = 0;
+    let mut splice_rescues = 0;
+    let mut splice_replays = 0;
+    let base = &pool[..SPLICE_BASE_K.min(pool.len())];
+    let mut splice_rng = Rng::new(trial ^ 0x5EA5_1DE5);
+    for _ in 0..R {
+        let mut hit = false;
+        for entry in base {
+            if run(body, &hidden, entry, POOL_EXTEND, next_seed()).0 {
+                hit = true;
+                break;
+            }
+        }
+        if hit || base.len() < 2 {
+            continue;
+        }
+        splice_attempts += 1;
+        for _ in 0..SPLICE_TRIES {
+            let i = (splice_rng.f64() * base.len() as f64) as usize % base.len();
+            let mut j = (splice_rng.f64() * base.len() as f64) as usize % base.len();
+            if j == i {
+                j = (j + 1) % base.len();
+            }
+            let max_w = base[i].len().min(base[j].len());
+            if max_w < 2 {
+                continue;
+            }
+            let w = 1 + (splice_rng.f64() * (max_w - 1) as f64) as usize % (max_w - 1);
+            let mut candidate = base[i][..w].to_vec();
+            candidate.extend_from_slice(&base[j][w..]);
+            splice_replays += 1;
+            if run(body, &hidden, &candidate, POOL_EXTEND, next_seed()).0 {
+                splice_rescues += 1;
+                break;
+            }
+        }
+    }
+
     let mut fresh_hits = 0;
     for _ in 0..R {
         if run(body, &hidden, &[], FRESH_EXTEND, next_seed()).0 {
@@ -266,6 +310,9 @@ fn run_trial(body: Body, trial: u64) -> Option<TrialResult> {
         repro_by_extend,
         pool_hits,
         pool_replays,
+        splice_attempts,
+        splice_rescues,
+        splice_replays,
         fresh_hits,
     })
 }
@@ -362,5 +409,30 @@ fn main() {
             })
             .collect();
         println!("| {} | {} |", body.name(), cells.join(" | "));
+    }
+
+    println!("\n## Splice fallback after a full pool miss (K={SPLICE_BASE_K}, {SPLICE_TRIES} positional splices, e={POOL_EXTEND})\n");
+    println!("| body | pool misses | rescued | rescue % | splice replays/miss |");
+    println!("| --- | --- | --- | --- | --- |");
+    for (body, results) in &all {
+        let misses = results.iter().map(|r| r.splice_attempts).sum::<usize>();
+        let rescues = results.iter().map(|r| r.splice_rescues).sum::<usize>();
+        let replays = results.iter().map(|r| r.splice_replays).sum::<usize>();
+        println!(
+            "| {} | {} | {} | {} | {} |",
+            body.name(),
+            misses,
+            rescues,
+            if misses == 0 {
+                "n/a".to_string()
+            } else {
+                format!("{:.0}", 100.0 * rescues as f64 / misses as f64)
+            },
+            if misses == 0 {
+                "n/a".to_string()
+            } else {
+                format!("{:.1}", replays as f64 / misses as f64)
+            },
+        );
     }
 }
