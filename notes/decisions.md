@@ -157,3 +157,13 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     reporting policy, deferred to implementation (a reliability-floor heuristic or setting).
     The gauntlet's monotone anchor alone already finds deterministic cores in 90% of runs.
     (Experiment result.)
+
+## 2026-09-02 (continued)
+
+26. **Clarifying decision 15: this branch itself goes to production grade.** "Extract with
+    pruning" had been read as "the scaffolding is throwaway; a fresh implementation gets
+    extracted". Correct reading (DRM): the branch is brought to production quality in place —
+    experiments and messy history included — and *that* production-grade branch is the
+    artefact later extraction/pruning/history-rewriting works from. Consequence: the nd_*
+    scaffolding is the seed of the real implementation, to be refactored and hardened on this
+    branch, not discarded. (DRM, correcting a misreading.)

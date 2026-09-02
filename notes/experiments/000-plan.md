@@ -33,4 +33,6 @@ All six experiments done. What the implementation inherits, beyond the per-exper
   structural bugs).
 
 The engine scaffolding (`nd_experiment`, `nd_boost`, the `nd_*` fields in `test_runner.rs`)
-is experiment-grade: extract with pruning per decision 15, don't extend.
+is experiment-grade. Per decision 26 it is the seed of the real implementation: this branch
+is brought to production quality in place (see `notes/production-plan.md`), and extraction/
+pruning happens later, from the production-grade branch.
