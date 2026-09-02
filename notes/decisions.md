@@ -133,3 +133,14 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     noise-floor rejected for confirmation (26% false accept); SPRT rejected as paying 50+
     replays for power that recycling provides free. Replaces 003's placeholder >= 2-in-20.
     (Experiment result; completes the derivation decision 21 assigned to 005.)
+
+24. **Confirmation gates origin admission, not one code path.** Hooking discovery
+    confirmation on the generation run's own status let span-mutation executions fill vacant
+    origins unconfirmed; on pure noise those slipped to shrink and produced false confirms in
+    26/30 runs. The engine sweeps every unconfirmed interesting origin after each generation
+    step, and an untrusted origin reaching shrink (discovered mid-shrink) faces the full bar
+    there. Origins reproduced from the DB are trusted on reproduction — the prior run only
+    persisted confirmed origins, and re-running the bar would drop real p ~ 0.1 reused bugs
+    ~55% of the time. Caveated `[unconfirmed]` failures are reported only when nothing
+    confirmed (caveat fatigue otherwise). Generalizes decision 20 from displacement to
+    admission. (Experiment 005B result.)

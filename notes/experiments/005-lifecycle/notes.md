@@ -78,9 +78,96 @@ fluke, 4.4 replays for a p = 0.9 bug.
 
 ## B: lifecycle prototype
 
-(spec next: capture-at-confirmation -> pool, blob v2 persistence, pool-first-fit DB replay
-with 004's extend, strictness, caveated reporting; two-run harness)
+Scaffold changes (all gated on `NdExperiment != Off`):
 
-## Results
+1. **Discovery confirmation adopts the 005A bar** via a shared `nd_confirm` helper: replays
+   are budgeted (`for_probe`, extend max(4, len/8) per 004), the discovery run itself is
+   selection and counts nothing, gate 1/10 then 4/40 with early accept/reject. Rejected
+   origins are removed from the interesting map and remembered with observation counts.
+2. **Capture at confirmation**: failing confirmation replays' realized timelines feed a
+   per-origin pool (incumbent first, dedup, cap 10 per decision 22), the anchor is seeded
+   from the confirmation evidence, and the witness run is stored — the pre-shrink verify
+   step consumes it instead of running its own 20-replay batch (the double-work the design
+   said capture-at-confirmation removes). Origins that arrive without discovery-time stats
+   (DB reuse) fall back to a fresh `nd_confirm` at verify time.
+3. **Persistence under ND**: the end-of-run save keeps the shrunk incumbent and adds the
+   origin's pool entries as further primary entries. No blob v2 needed for the DB path —
+   entries are already one timeline each, so incumbent + pool is just more entries; the v2
+   *reproduce-blob* format (prefix byte, pool, entropy budget) is deferred to
+   implementation as pure format work.
+4. **Reuse under ND**: each stored entry gets up to 10 replay attempts (early exit on
+   reproduction, ~1/p expected per decision 11) before deletion. Demote-to-secondary is
+   deferred with the format work.
+5. **Caveated reporting**: when a run observed interesting executions but confirmed
+   nothing, it fails with `[unconfirmed] <origin>` failures instead of passing silently
+   (decision 3). Unconfirmed observations are reported only when no confirmed failure
+   exists — a confirmed failure plus fluke chatter would be caveat fatigue.
+6. **Strictness setting**: not prototyped — it is presentation-layer mapping onto existing
+   scaffolding (`error` = today's aborts, `quiet`/`warn` = ND handling with/without a
+   notice) with no open statistical or mechanism question.
 
-(part A above; part B pending)
+Harness (`/experiments/nd-lifecycle`): per (body, seed), run 1 with a fresh in-memory DB
+copied into run 2 — run 1 generates/confirms/shrinks/persists, run 2 (Reuse phase, no
+generation once reproduced) measures cross-run reproduction. Bodies: 003's outcome-ND
+landscapes (L1/L3/L4) plus 004-style structural ND (step-coins, het-shift) and a pure-noise
+body (p = 0.02 everywhere, no real bug) for the caveated-report path.
+
+## B results
+
+Two-run lifecycle, gauntlet mode, 30 seeds/body. At the default 300-case budget and at
+1000 (`ND_CASES`):
+
+| body | budget | r1 confirmed | r1 caveated | r2 reproduced | r2 execs med |
+| --- | --- | --- | --- | --- | --- |
+| L1 rising | 300 | 30/30 | 0 | 30/30 | 4 |
+| L3 constant | 300 | 30/30 | 0 | 30/30 | 4 |
+| L4 noise-floor | 300 | 30/30 | 0 | 30/30 | 2 |
+| S2 step-coins | 300 | 30/30 | 0 | 30/30 | 1950 |
+| S5 het-shift | 300 | 20/30 | 4 | 20/20 | 8285 |
+| N0 noise-only | 300 | 0/30 | 30 | — | — |
+| S5 het-shift | 1000 | 29/30 | 1 | 29/29 | 8429 |
+| N0 noise-only | 1000 | 0/30 | 30 | — | — |
+
+Zero run errors anywhere; every confirmed run-1 failure reproduced in run 2 (139/139 across
+both budgets).
+
+## What we learned
+
+1. **The lifecycle holds together end to end.** Discover -> confirm (gate 1/10 then 4/40,
+   capture, anchor) -> gauntlet shrink -> persist incumbent + pool -> reproduce from the DB
+   next run, with no Flaky/NonDeterministic aborts anywhere and the DB needing no format
+   change (the pool is just more primary entries under the same key). Blob v2 remains pure
+   format work for the reproduce-blob path.
+2. **Confirmation is a property of origin admission, not of one execution path.** The first
+   cut hooked confirmation on the generation run's own interesting status; span-mutation
+   (and in principle targeting) executions also fill vacant origins, and those slipped to
+   shrink unconfirmed — on pure noise, 26/30 runs "confirmed" a fluke through the
+   witness-only pre-shrink fallback. Fixed by sweeping every unconfirmed interesting origin
+   after each generation iteration (and once after the loop), and holding untrusted origins
+   reaching shrink (novel origins discovered mid-shrink) to the full bar. This generalizes
+   decision 20: every path into the interesting map needs the same gate, and every origin
+   in it needs the same confirmation.
+3. **Caveated reporting works as designed** (decision 3): N0 fails all 60 runs with
+   `[unconfirmed after N observation(s)] bug` instead of passing silently or confidently,
+   persists nothing, and holds zero false confirms across ~hundreds of fluke confirmations
+   (the 005A alpha on display).
+4. **Cross-run cost splits exactly on structure.** Outcome-ND bodies reproduce from the DB
+   in 2-4 executions: the stored timeline realizes identically, `replay_aligned` holds, and
+   shrink is skipped. Structurally-ND bodies misalign, so every run re-shrinks (1.9k/8.4k
+   median executions) — the deferred `replay_aligned`-replacement decision now has its
+   price tag.
+5. **Reused entries are trusted on reproduction** (up to 10 replay attempts each): the
+   prior run only persisted confirmed origins, so re-running the full bar would drop real
+   p ~ 0.1 reused bugs ~55% of the time at verify. Residual hazard — noise persisted by a
+   prior run's false accept surviving via reuse — is bounded by the ~3%-per-run false-accept
+   rate and that entry's own ~18%-per-run reproduction chance.
+6. **Small budgets starve narrow structural bugs of discoveries**, not of confirmations:
+   S5's 300-budget shortfall (20/30) was runs with zero or one discovery — span-mutation
+   probes of small passing cases dominate the execution budget and rarely hit a narrow
+   deterministic predicate. At 1000 cases discovery recovers (29/30). A generation-strategy
+   note for implementation (ND mode currently disables the novel-prefix walk), not a
+   lifecycle defect.
+
+Caveats: strictness setting not prototyped (presentation-layer; `error` = today's aborts);
+demote-to-secondary not prototyped (single-step delete after 10 misses); blob v2 untouched;
+single origin per body; reuse trust is prototype policy, revisit with the demote work.

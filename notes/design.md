@@ -179,6 +179,14 @@ recycle through re-discovery, so per-discovery power is the cheap thing to trade
 false-accept floor and low fluke cost. Wilson-over-noise-floor and SPRT shapes both lose to
 the gate (005A table).
 
+005B correction: confirmation gates origin *admission*, not one code path. Span-mutation and
+targeting executions fill vacant origins too, and an origin that slips in unconfirmed rides
+to shrink and gets reported (26/30 false confirms on pure noise before the fix). The engine
+sweeps every unconfirmed interesting origin after each generation step; an untrusted origin
+reaching shrink faces the full bar there; DB-reused origins are trusted on reproduction (the
+prior run only persisted confirmed origins — re-running the bar would drop real p ~ 0.1
+reused bugs ~55% at verify). Caveated failures are reported only when nothing confirmed.
+
 ### Shrinking
 
 One principle: **charge accepts, not rejects.**
@@ -298,7 +306,7 @@ mode still aborts.
 | extend=0 vs continuation budget on shrink Full replays | Small budget (constant + small fraction of stored length) | 004: extend 4 captures the whole benefit (absorbs net elongation); larger budgets are free but useless; bare replay loses 22-47% to end-of-sequence overruns on count-shifting bodies |
 | Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |
 | Checkpoint/rollback on top of gauntleted accepts | Dropped | Experiment 1 follow-up (mixture landscape): rollback-on-uncertainty rescues mispins but poisons good candidates (L1 missed 9% -> 52%, 2.3x cost); rollback-on-proof never fires (mispinned rate sits inside Wilson noise of the bar). Capture-at-confirmation kills the hazard at source; final validation at report time annotates the residue |
-| `replay_aligned` replacement | Accept re-shrinking | Measured local-run cost |
+| `replay_aligned` replacement | Accept re-shrinking | 005B measured it: outcome-ND reuse runs cost 2-4 executions (aligned, shrink skipped); structurally-ND reuse runs re-shrink every time at 1.9k-8.4k executions. Revisit if that price bites on slow real bodies |
 | FAILED vs FAILED_NONDETERMINISTIC semantics | Undecided | ABI implementation, with binding-compat notes |
 
 ## Known risks (accepted, not solved)

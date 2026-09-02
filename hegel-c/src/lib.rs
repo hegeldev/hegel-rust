@@ -183,6 +183,61 @@ pub mod __bench {
         Gauntlet,
     }
 
+    /// Experiment 005 (`notes/experiments/005-lifecycle`): like
+    /// [`nd_shrink_experiment`] but with a directory database, so a second
+    /// run against the same path exercises the Reuse phase. Returns
+    /// `(origin, decoded choices)` per reported failure — caveated failures
+    /// carry the `[unconfirmed ...]` origin prefix and no choices.
+    pub fn nd_lifecycle_experiment(
+        mode: NdShrinkMode,
+        seed: u64,
+        test_cases: u64,
+        db_path: &str,
+        db_key: &str,
+        debug: bool,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<Vec<(alloc::string::String, Option<Vec<i64>>)>, alloc::string::String> {
+        let mut settings = crate::settings::Settings::new().test_cases(test_cases);
+        settings.database = crate::settings::Database::Path(db_path.into());
+        settings.derandomize = false;
+        settings.seed = Some(seed);
+        settings.verbosity = if debug {
+            crate::settings::Verbosity::Debug
+        } else {
+            crate::settings::Verbosity::Quiet
+        };
+        settings.nd_experiment = match mode {
+            NdShrinkMode::Baseline => crate::settings::NdExperiment::Off,
+            NdShrinkMode::Resample => crate::settings::NdExperiment::Resample,
+            NdShrinkMode::Gauntlet => crate::settings::NdExperiment::Gauntlet,
+        };
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = crate::embed::run_native_async(&settings, Some(db_key), &exchange);
+        match crate::exchange::drive(&exchange, fut, run_case) {
+            Ok(result) => Ok(result
+                .failures
+                .iter()
+                .map(|f| {
+                    let decoded = f
+                        .reproduce_blob
+                        .as_deref()
+                        .and_then(crate::native::blob::decode_failure)
+                        .and_then(|choices| {
+                            choices
+                                .iter()
+                                .map(|c| match c {
+                                    crate::native::core::ChoiceValue::Integer(b) => b.to_i64(),
+                                    _ => None,
+                                })
+                                .collect()
+                        });
+                    (f.origin.clone(), decoded)
+                })
+                .collect()),
+            Err(e) => Err(alloc::format!("{e}")),
+        }
+    }
+
     /// Experiment 003 (`notes/experiments/003-nd-shrink`): one full explore
     /// run (generation + shrink) of the caller's test body under the given
     /// nondeterminism mode. Returns each reported failure's choice sequence

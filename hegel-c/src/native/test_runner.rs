@@ -71,6 +71,15 @@ pub struct RunResult {
 const RANDOM_GENERATION_BATCH: u64 = 10;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
+/// Outcome of one discovery-confirmation batch (experiment 005).
+struct NdConfirm {
+    accepted: bool,
+    fails: u64,
+    runs: u64,
+    witness: Option<RunResult>,
+    captured: Vec<Vec<ChoiceValue>>,
+}
+
 /// Maximum number of *total* filtered (assume()-failed) test cases — counted
 /// while fewer than [`HEALTH_CHECK_MAX_VALID`] valid test cases have been seen —
 /// before FilterTooMuch is reported. Mirrors Hypothesis's `max_invalid_draws`
@@ -240,13 +249,34 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    let ntc =
-                        NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE)?;
-                    let (run, mismatch) = self.test_function(ntc).await?;
+                    let reuse_tries =
+                        if self.nd_experiment() == crate::settings::NdExperiment::Off {
+                            1
+                        } else {
+                            ND_REUSE_TRIES
+                        };
+                    let mut attempt = 0u64;
+                    let (run, mismatch) = loop {
+                        attempt += 1;
+                        let ntc = NativeTestCase::for_probe(
+                            &stored_choices,
+                            self.rng.spawn(),
+                            BUFFER_SIZE,
+                        )?;
+                        let out = self.test_function(ntc).await?;
+                        if out.0.status == Status::Interesting || attempt >= reuse_tries {
+                            break out;
+                        }
+                    };
                     if let Some(msg) = mismatch {
                         return Err(RunError::NonDeterministic(msg));
                     }
                     if run.status == Status::Interesting {
+                        if self.nd_experiment() != crate::settings::NdExperiment::Off {
+                            if let Some(o) = run.origin.clone() {
+                                self.nd_confirmed.insert(o);
+                            }
+                        }
                         if i < primary_count {
                             found_interesting_in_primary = true;
                             if run.nodes.len() != stored_choices.len()
@@ -375,36 +405,6 @@ impl<'a> Engine<'a> {
                     return Err(RunError::NonDeterministic(msg));
                 }
 
-                if self.nd_experiment() != crate::settings::NdExperiment::Off
-                    && run.status == Status::Interesting
-                {
-                    let origin = run.origin.clone().unwrap_or_default();
-                    if !self.nd_confirmed.contains(&origin) {
-                        let choices: Vec<ChoiceValue> =
-                            run.nodes.iter().map(|n| n.value()).collect();
-                        let mut fails = 1u64;
-                        for _ in 1..ND_CONFIRM_RUNS {
-                            let ntc = NativeTestCase::for_choices(&choices, Some(&run.nodes), None);
-                            let (rerun, _mismatch) = self.test_function(ntc).await?;
-                            if rerun.status == Status::Interesting
-                                && rerun.origin.as_deref() == Some(origin.as_str())
-                            {
-                                fails += 1;
-                            }
-                        }
-                        if verbosity == Verbosity::Debug {
-                            output.line(&format!(
-                                "nd discovery confirm: origin={origin} fails={fails}/{ND_CONFIRM_RUNS}"
-                            ));
-                        }
-                        if fails >= ND_DISCOVERY_MIN_FAILS {
-                            self.nd_confirmed.insert(origin);
-                        } else {
-                            self.interesting.remove(&origin);
-                        }
-                    }
-                }
-
                 if verbosity == Verbosity::Debug {
                     output.line(&format!(
                         "test case #{}: status = {:?}, choices = {}",
@@ -475,8 +475,12 @@ impl<'a> Engine<'a> {
                 {
                     self.try_span_mutation(&run.nodes, &run.spans).await?;
                 }
+
+                self.nd_discovery_sweep(verbosity, &output).await?;
             }
         }
+
+        self.nd_discovery_sweep(verbosity, &output).await?;
 
         if self.tree_root.is_exhausted
             && self.valid_test_cases == 0
@@ -578,26 +582,34 @@ impl<'a> Engine<'a> {
                         return Err(RunError::Flaky(flaky_diagnostic()));
                     }
                     verify
+                } else if let (Some(witness), Some(anchor)) = (
+                    self.nd_witness.remove(&origin),
+                    self.nd_anchor.get(&origin).copied(),
+                ) {
+                    probe_anchor = anchor;
+                    witness
                 } else {
-                    let mut fails = 0u64;
-                    let mut witness = None;
-                    for _ in 0..ND_CONFIRM_RUNS {
-                        let ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                        let (run, _mismatch) = self.test_function(ntc).await?;
-                        if run.status == Status::Interesting
-                            && run.origin.as_deref() == Some(origin.as_str())
-                        {
-                            fails += 1;
-                            if witness.is_none() {
-                                witness = Some(run);
-                            }
-                        }
+                    let trusted = self.nd_confirmed.contains(&origin);
+                    let confirm = self.nd_confirm(&origin, &choices).await?;
+                    if !trusted && !confirm.accepted {
+                        self.interesting.remove(&origin);
+                        *self.nd_unconfirmed.entry(origin.clone()).or_insert(0) += 1;
+                        shrunk_origins.insert(origin);
+                        continue;
                     }
-                    let Some(witness) = witness else {
+                    let Some(witness) = confirm.witness else {
                         shrunk_origins.insert(origin);
                         continue;
                     };
-                    probe_anchor = wilson_bound(fails, ND_CONFIRM_RUNS, false);
+                    probe_anchor = wilson_bound(confirm.fails, confirm.runs, false);
+                    let mut pool = Vec::from([choices.clone()]);
+                    for timeline in confirm.captured {
+                        if pool.len() < ND_POOL_CAP && !pool.contains(&timeline) {
+                            pool.push(timeline);
+                        }
+                    }
+                    self.nd_pool.insert(origin.clone(), pool);
+                    self.nd_confirmed.insert(origin.clone());
                     witness
                 };
 
@@ -646,10 +658,12 @@ impl<'a> Engine<'a> {
             output.line("Skipping shrink: reused aligned database replay");
         }
 
-        if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), database_key) {
+        let persist =
+            !self.nondeterministic || self.nd_experiment() != crate::settings::NdExperiment::Off;
+        if let (true, Some(db), Some(key)) = (persist, self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-            let new_entries: crate::native::HashSet<Vec<u8>> = self
+            let mut new_entries: crate::native::HashSet<Vec<u8>> = self
                 .interesting
                 .values()
                 .map(|nodes| {
@@ -657,6 +671,13 @@ impl<'a> Engine<'a> {
                     serialize_choices(&choices)
                 })
                 .collect();
+            if self.nd_experiment() != crate::settings::NdExperiment::Off {
+                for origin in self.interesting.keys() {
+                    for timeline in self.nd_pool.get(origin).map(Vec::as_slice).unwrap_or(&[]) {
+                        new_entries.insert(serialize_choices(timeline));
+                    }
+                }
+            }
             let primary_now = db.fetch(key_bytes);
             for old in primary_now {
                 if !new_entries.contains(&old) {
@@ -693,7 +714,7 @@ impl<'a> Engine<'a> {
         }
 
         let nondeterministic = self.nondeterministic;
-        let failures = origins_sorted
+        let mut failures: Vec<Failure> = origins_sorted
             .into_iter()
             .map(|(origin, nodes)| {
                 let reproduce_blob = if nondeterministic {
@@ -708,6 +729,20 @@ impl<'a> Engine<'a> {
                 }
             })
             .collect();
+        if failures.is_empty()
+            && self.nd_experiment() != crate::settings::NdExperiment::Off
+            && !self.nd_unconfirmed.is_empty()
+        {
+            let mut unconfirmed: Vec<(String, u64)> =
+                core::mem::take(&mut self.nd_unconfirmed).into_iter().collect();
+            unconfirmed.sort();
+            for (origin, observations) in unconfirmed {
+                failures.push(Failure {
+                    origin: format!("[unconfirmed after {observations} observation(s)] {origin}"),
+                    reproduce_blob: None,
+                });
+            }
+        }
         Ok(TestRunResult {
             failures,
             nondeterministic,
@@ -1067,6 +1102,19 @@ pub(crate) struct Engine<'a> {
     /// the interesting map so generation keeps looking — a noise fluke must
     /// not become the shrink target.
     nd_confirmed: crate::native::HashSet<String>,
+    /// Experiment 005 scaffolding: per-origin timeline pool captured from
+    /// failing confirmation replays (incumbent first), persisted alongside
+    /// the shrunk incumbent so a later run has fallback timelines.
+    nd_pool: HashMap<String, Vec<Vec<ChoiceValue>>>,
+    /// Anchor seeded from discovery-confirmation evidence, consumed by the
+    /// pre-shrink step so it doesn't re-run its own batch.
+    nd_anchor: HashMap<String, f64>,
+    /// Witness run from discovery confirmation, consumed as the shrinker's
+    /// starting realization.
+    nd_witness: HashMap<String, RunResult>,
+    /// Origins observed interesting but never confirmed, with observation
+    /// counts — reported as caveated failures when nothing confirms.
+    nd_unconfirmed: HashMap<String, u64>,
 }
 
 impl<'a> Engine<'a> {
@@ -1103,11 +1151,115 @@ impl<'a> Engine<'a> {
             nondeterministic: false,
             serve_replays: settings.nd_experiment == crate::settings::NdExperiment::Off,
             nd_confirmed: crate::native::HashSet::default(),
+            nd_pool: HashMap::default(),
+            nd_anchor: HashMap::default(),
+            nd_witness: HashMap::default(),
+            nd_unconfirmed: HashMap::default(),
         })
     }
 
     fn nd_experiment(&self) -> crate::settings::NdExperiment {
         self.settings.nd_experiment
+    }
+
+    /// Experiment 005: the discovery-confirmation bar (decision 23) with
+    /// capture-at-confirmation. Replays `choices` with a small continuation
+    /// budget; rejects on zero failures in the first [`ND_GATE_RUNS`], else
+    /// continues to [`ND_CONFIRM_CAP`] accepting early on the
+    /// [`ND_CONFIRM_MIN_FAILS`]th failure. The triggering run is selection,
+    /// not evidence — only these fresh replays count.
+    async fn nd_confirm(
+        &mut self,
+        origin: &str,
+        choices: &[ChoiceValue],
+    ) -> Result<NdConfirm, RunError> {
+        let len = crate::native::core::flattened_values_len(choices);
+        let budget = len + (len / 8).max(4);
+        let mut fails = 0u64;
+        let mut runs = 0u64;
+        let mut witness = None;
+        let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
+        loop {
+            let ntc = NativeTestCase::for_probe(choices, self.rng.spawn(), budget)?;
+            let (run, _mismatch) = self.test_function(ntc).await?;
+            runs += 1;
+            if run.status == Status::Interesting && run.origin.as_deref() == Some(origin) {
+                fails += 1;
+                let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+                if captured.len() < ND_POOL_CAP && !captured.contains(&realized) {
+                    captured.push(realized);
+                }
+                if witness.is_none() {
+                    witness = Some(run);
+                }
+            }
+            if fails >= ND_CONFIRM_MIN_FAILS
+                || (runs >= ND_GATE_RUNS && fails == 0)
+                || fails + (ND_CONFIRM_CAP - runs) < ND_CONFIRM_MIN_FAILS
+            {
+                break;
+            }
+        }
+        Ok(NdConfirm {
+            accepted: fails >= ND_CONFIRM_MIN_FAILS,
+            fails,
+            runs,
+            witness,
+            captured,
+        })
+    }
+
+    /// Experiment 005: confirm every interesting origin that hasn't passed
+    /// the discovery bar yet. Swept after each generation iteration (and once
+    /// after the loop) rather than keyed on the iteration's own run, because
+    /// span-mutation and targeting executions also fill vacant origins.
+    /// Loops because confirmation replays can themselves discover origins.
+    async fn nd_discovery_sweep(
+        &mut self,
+        verbosity: Verbosity,
+        output: &crate::settings::Output,
+    ) -> Result<(), RunError> {
+        if self.nd_experiment() == crate::settings::NdExperiment::Off {
+            return Ok(());
+        }
+        loop {
+            let Some((origin, nodes)) = self
+                .interesting
+                .iter()
+                .find(|(o, _)| !self.nd_confirmed.contains(o.as_str()))
+                .map(|(o, n)| (o.clone(), n.clone()))
+            else {
+                return Ok(());
+            };
+            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+            let confirm = self.nd_confirm(&origin, &choices).await?;
+            if verbosity == Verbosity::Debug {
+                output.line(&format!(
+                    "nd discovery confirm: origin={origin} fails={}/{} accepted={}",
+                    confirm.fails, confirm.runs, confirm.accepted
+                ));
+            }
+            if confirm.accepted {
+                self.nd_confirmed.insert(origin.clone());
+                let mut pool = Vec::from([choices]);
+                for timeline in confirm.captured {
+                    if pool.len() < ND_POOL_CAP && !pool.contains(&timeline) {
+                        pool.push(timeline);
+                    }
+                }
+                self.nd_pool.insert(origin.clone(), pool);
+                self.nd_anchor.insert(
+                    origin.clone(),
+                    wilson_bound(confirm.fails, confirm.runs, false),
+                );
+                if let Some(witness) = confirm.witness {
+                    self.nd_witness.insert(origin, witness);
+                }
+            } else {
+                self.interesting.remove(&origin);
+                *self.nd_unconfirmed.entry(origin).or_insert(0) += 1;
+            }
+        }
     }
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
@@ -1331,8 +1483,11 @@ struct EngineShrinkProbe<'e, 'a> {
     anchor: f64,
 }
 
-const ND_CONFIRM_RUNS: u64 = 20;
-const ND_DISCOVERY_MIN_FAILS: u64 = 2;
+const ND_GATE_RUNS: u64 = 10;
+const ND_CONFIRM_CAP: u64 = 40;
+const ND_CONFIRM_MIN_FAILS: u64 = 4;
+const ND_POOL_CAP: usize = 10;
+const ND_REUSE_TRIES: u64 = 10;
 const ND_GAUNTLET_CAP: u64 = 30;
 const ND_GAMMA: f64 = 0.8;
 const ND_THRESHOLD_FLOOR: f64 = 0.05;
