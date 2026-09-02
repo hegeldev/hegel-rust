@@ -183,6 +183,15 @@
 //! When set and non-empty, it takes precedence over any value configured in
 //! source, including explicit `test_cases` attributes.
 //!
+//! To see what a test actually generates, record events with
+//! [`TestCase::event`] and [`TestCase::event_value`] and enable the
+//! end-of-run statistics report with the `HEGEL_STATISTICS` environment
+//! variable (or [`Settings::show_statistics`]):
+//!
+//! ```bash
+//! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
+//! ```
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone

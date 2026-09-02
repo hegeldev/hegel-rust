@@ -16,9 +16,10 @@ use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelCollection, HegelContext, HegelFailure, HegelPool,
     HegelRecursion, HegelRun, HegelRunResult, HegelStateMachine, HegelTestCase, hegel_backend_t,
     hegel_collection_free, hegel_collection_more, hegel_collection_reject, hegel_context_free,
-    hegel_context_last_error, hegel_context_new, hegel_failure_free, hegel_failure_origin,
-    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
-    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
+    hegel_context_last_error, hegel_context_new, hegel_event, hegel_event_value,
+    hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
+    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
+    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
     hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free,
     hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
     hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
@@ -137,6 +138,10 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_settings_set_report_multiple_failures(ctx, ptr::null_mut(), true),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_set_show_statistics(ctx, ptr::null_mut(), true),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -894,6 +899,19 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("would overwrite previous"));
 
+        assert_eq!(hegel_event(ctx, tc, ptr::null()), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("label is null"));
+        assert_eq!(hegel_event(ctx, tc, bad_utf8.as_ptr()), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        assert_eq!(
+            hegel_event_value(ctx, tc, f64::NAN, c"x".as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("finite value"));
+        assert_eq!(hegel_event(ctx, tc, c"seen".as_ptr()), HEGEL_OK);
+        assert_eq!(hegel_event(ctx, tc, c"seen".as_ptr()), HEGEL_OK);
+        assert_eq!(hegel_event_value(ctx, tc, 3.5, c"seen".as_ptr()), HEGEL_OK);
+
         assert_eq!(
             hegel_mark_complete(
                 ctx,
@@ -1489,6 +1507,10 @@ fn state_machine_and_primitive_boolean_paths() {
         let mut bv = false;
         assert_eq!(
             hegel_generate_boolean(ctx, null_tc, 0.5, false, false, &mut bv),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_event(ctx, null_tc, c"x".as_ptr()),
             HEGEL_E_INVALID_HANDLE
         );
 

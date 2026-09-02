@@ -996,6 +996,20 @@ hegel_result_t hegel_settings_set_report_multiple_failures(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `yes`: When `true`, libhegel prints a statistics block on the run's
+   output at the end of the run: for each label recorded with
+   `hegel_event`, the fraction of generation-phase test cases it
+   occurred in, and for each label recorded with `hegel_event_value`, a
+   distribution summary of the observed values. Defaults to off.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
+                                                  hegel_settings_t *s,
+                                                  bool yes);
+
+/*
+ Parameters:
  `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
    disables the database entirely. Discovered failures will not be
    stored. Anything else is used as the database root directory. The
@@ -1981,6 +1995,44 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
                             hegel_test_case_t *tc,
                             double value,
                             const char *label);
+
+/*
+ Record an event for the current test case, for the end-of-run
+ statistics report: the report shows, per label, the fraction of
+ generation-phase test cases in which the label was recorded at least
+ once. The report prints only when the `show_statistics` setting is on
+ (`hegel_settings_set_show_statistics`); without it events cost almost
+ nothing and report nothing.
+
+ Parameters:
+ `label`: Non-NULL, valid UTF-8.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+ label.
+ */
+hegel_result_t hegel_event(hegel_context_t *ctx, hegel_test_case_t *tc, const char *label);
+
+/*
+ Record a numeric observation under `label` for the current test case,
+ for the end-of-run statistics report: the report shows, per label, a
+ summary of the observed distribution (count, min, median, mean, p90,
+ max) over generation-phase test cases. The report prints only when the
+ `show_statistics` setting is on
+ (`hegel_settings_set_show_statistics`); without it observations cost
+ almost nothing and report nothing.
+
+ Parameters:
+ `value`: The observation. Must be finite.
+ `label`: Non-NULL, valid UTF-8. Unlike `hegel_target`, a label may be
+   observed any number of times per test case.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+ label or a non-finite value.
+ */
+hegel_result_t hegel_event_value(hegel_context_t *ctx,
+                                 hegel_test_case_t *tc,
+                                 double value,
+                                 const char *label);
 
 /*
  Create a printer-options handle with every option at its default

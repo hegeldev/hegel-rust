@@ -137,6 +137,7 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
+    pub(crate) show_statistics: bool,
     pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
@@ -172,6 +173,7 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: false,
+            show_statistics: false,
             print_blob: false,
             backend: None,
         }
@@ -301,6 +303,21 @@ impl Settings {
         self.phases.contains(&phase)
     }
 
+    /// Print event statistics at the end of the run (default: off): for
+    /// each label recorded with [`TestCase::event`](crate::TestCase::event),
+    /// the fraction of generation-phase test cases it occurred in, and for
+    /// each label recorded with
+    /// [`TestCase::event_value`](crate::TestCase::event_value), a summary of
+    /// the observed distribution.
+    ///
+    /// The `HEGEL_STATISTICS` environment variable, when set to anything
+    /// but `"0"` or the empty string, turns this on at runtime without
+    /// editing source.
+    pub fn show_statistics(mut self, show_statistics: bool) -> Self {
+        self.show_statistics = show_statistics;
+        self
+    }
+
     /// Apply environment-variable overrides to these settings. Called once
     /// per run, after all builder configuration, so the environment wins
     /// over values set in source.
@@ -324,6 +341,11 @@ impl Settings {
                 } else {
                     Database::Path(value)
                 };
+            }
+        }
+        if let Some(value) = env("HEGEL_STATISTICS") {
+            if !value.is_empty() && value != "0" {
+                self.show_statistics = true;
             }
         }
         self
