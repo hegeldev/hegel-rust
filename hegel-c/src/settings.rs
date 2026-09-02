@@ -43,18 +43,6 @@ pub enum Phase {
     Shrink,
 }
 
-/// Controls the test execution mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Mode {
-    /// Run a full test (multiple test cases with shrinking). This is the default.
-    TestRun,
-    /// Run a single test case with no shrinking or replay. Useful for
-    /// Antithesis workloads and other contexts where you want pure data
-    /// generation without property-testing overhead.
-    SingleTestCase,
-}
-
 /// Selects the source of randomness the engine draws from.
 ///
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
@@ -153,7 +141,6 @@ pub enum Verbosity {
 /// and tests are derandomized by default.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
@@ -181,7 +168,6 @@ impl Settings {
 
     fn for_ci(in_ci: bool) -> Self {
         Self {
-            mode: Mode::TestRun,
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
@@ -205,12 +191,6 @@ impl Settings {
             show_statistics: false,
             backend: None,
         }
-    }
-
-    /// Set the execution mode. Defaults to [`Mode::TestRun`].
-    pub fn mode(mut self, mode: Mode) -> Self {
-        self.mode = mode;
-        self
     }
 
     /// Select the randomness backend.

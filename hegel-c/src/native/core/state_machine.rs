@@ -284,9 +284,7 @@ impl NativeStateMachine {
     /// [`MIN_ATTEMPTS_WITHOUT_SUCCESS`] while no rule has succeeded.
     ///
     /// Must be called from the root handle at each join point, including
-    /// before the first `next_rule` call. Families marked as unbounded
-    /// (single-test-case runs) never return `None`: rounds continue
-    /// forever.
+    /// before the first `next_rule` call.
     pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
         let counted_rounds = self.rounds_started - self.rounds_rejected;
         let step_count = ntc.family().stateful_step_count();
@@ -297,9 +295,7 @@ impl NativeStateMachine {
         } else {
             step_count.saturating_mul(ATTEMPT_MULTIPLIER)
         };
-        let forced = if ntc.family().state_machine_steps_unbounded() {
-            Some(false)
-        } else if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
+        let forced = if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
             Some(true)
         } else if self.rounds_started == 0 {
             Some(false)

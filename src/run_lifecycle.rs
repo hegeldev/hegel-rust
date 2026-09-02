@@ -23,7 +23,7 @@ use crate::control::{
     hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
-use crate::runner::{Mode, Settings, Verbosity};
+use crate::runner::{Settings, Verbosity};
 use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -274,7 +274,6 @@ pub(crate) fn run_test_case(
     c_tc: CTestCase,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
-    mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
     case_sink: Option<crate::test_case::OutputSink>,
@@ -297,7 +296,6 @@ pub(crate) fn run_test_case(
     let tc = TestCase::new(
         Arc::clone(&c_tc),
         should_emit,
-        mode,
         case_sink.or_else(|| output.sink().cloned()),
     );
     let reporter = tc.child(0);
@@ -434,9 +432,7 @@ fn render_diagnostic(
 ///
 /// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
 /// enabled *and* the failure carries a reproduce blob. A replayed
-/// counterexample always has one; a blobless failure (e.g.
-/// `Mode::SingleTestCase`, whose one random case has no shrunk choice
-/// sequence to encode) prints nothing.
+/// counterexample always has one; a blobless failure prints nothing.
 fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<String> {
     if !settings.print_blob {
         return None;
@@ -504,10 +500,6 @@ const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced differen
 /// several distinct bugs, a panic carrying the count). A run-level error — a
 /// failed health check, nondeterminism, an engine panic — surfaces with the
 /// engine's own message instead of the `Property test failed:` framing.
-///
-/// `Mode::SingleTestCase` has no exploration, shrinking, or blob: the engine
-/// emits one case, and if it fails the run re-raises that case's own panic
-/// straight away (see [`drive_single_case`]).
 pub(crate) fn drive<F>(
     test_fn: F,
     settings: &Settings,
@@ -519,7 +511,6 @@ pub(crate) fn drive<F>(
     init_panic_hook();
     require_antithesis_feature();
     let mut test_fn = test_fn;
-    let mode = settings.mode;
     let verbosity = settings.verbosity;
     let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
@@ -529,11 +520,6 @@ pub(crate) fn drive<F>(
         Ok(run) => run,
         Err(message) => panic!("{message}"), // nocov
     };
-
-    if mode == Mode::SingleTestCase {
-        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
-        return;
-    }
 
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
@@ -554,15 +540,8 @@ pub(crate) fn drive<F>(
                     .push(line.to_string());
             }))
         };
-        let (tc_result, payload, diagnostic) = run_test_case(
-            c_tc,
-            &mut test_fn,
-            false,
-            mode,
-            verbosity,
-            &output,
-            case_sink,
-        );
+        let (tc_result, payload, diagnostic) =
+            run_test_case(c_tc, &mut test_fn, false, verbosity, &output, case_sink);
         if matches!(tc_result, TestCaseResult::Interesting(_)) {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             stash = Some(NondetStash {
@@ -618,7 +597,7 @@ pub(crate) fn drive<F>(
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output, None);
+                    run_test_case(c_tc, &mut test_fn, true, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
                     panic!("{FLAKY_DIAGNOSTIC}");
                 }
@@ -642,43 +621,6 @@ pub(crate) fn drive<F>(
             }
         }
     }
-}
-
-/// Drive a `Mode::SingleTestCase` run: the engine emits exactly one case and
-/// the run's verdict is that case's outcome. The case is still run through
-/// [`run_test_case`] — the engine needs its `mark_complete`, and `assume()` /
-/// out-of-data must be classified rather than escape — but a real failure is
-/// re-raised straight away. There is no shrinking or replay, so no report to
-/// build and no run-level error to consult.
-fn drive_single_case(
-    run: &RunHandle,
-    test_fn: &mut dyn FnMut(TestCase),
-    verbosity: Verbosity,
-    test_location: Option<&TestLocation>,
-    output: &RunOutput,
-) {
-    let c_tc = run
-        .next_test_case()
-        .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
-        test_fn,
-        true,
-        Mode::SingleTestCase,
-        verbosity,
-        output,
-        None,
-    );
-    if matches!(result, TestCaseResult::Interesting(_)) {
-        emit_antithesis_assertion(true, test_location);
-        if let Some(diagnostic) = diagnostic {
-            output.block(&diagnostic);
-        }
-        std::panic::resume_unwind(
-            payload.expect("an interesting case carries the caught panic payload"),
-        );
-    }
-    emit_antithesis_assertion(false, test_location);
 }
 
 /// Replay a single base64 failure blob through the C ABI
@@ -706,15 +648,8 @@ pub(crate) fn drive_blob_replay<F>(
         Ok(c_tc) => c_tc,
         Err(message) => panic!("{message}"),
     };
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
-        &mut test_fn,
-        true,
-        settings.mode,
-        settings.verbosity,
-        &output,
-        None,
-    );
+    let (result, payload, diagnostic) =
+        run_test_case(c_tc, &mut test_fn, true, settings.verbosity, &output, None);
     if let Some(diagnostic) = diagnostic {
         output.block(&diagnostic);
     }

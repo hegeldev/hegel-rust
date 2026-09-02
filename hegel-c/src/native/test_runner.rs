@@ -129,28 +129,6 @@ pub(crate) async fn explore(
     .await
 }
 
-/// Run one test case (used by `Mode::SingleTestCase`) and return its
-/// failure, if any.
-///
-/// A single test case is not a property-test run — there is no exploration,
-/// shrinking, or replay — so it bypasses [`explore`] entirely; the one case
-/// offered through the exchange is its own report.
-pub(crate) async fn run_single_case(
-    settings: &Settings,
-    database_key: Option<&str>,
-    exchange: &CaseExchange,
-) -> Result<Option<Failure>, RunError> {
-    let mut rng = create_rng(settings, database_key)?;
-    let ntc = NativeTestCase::new_random(rng.spawn())?;
-    ntc.family().set_state_machine_steps_unbounded();
-    let (data_source, handle) = NativeDataSource::new(ntc);
-    exchange.offer(Box::new(data_source)).await;
-    match NativeDataSource::take_outcome(&handle)? {
-        TestCaseResult::Interesting(failure) => Ok(Some(failure)),
-        _ => Ok(None),
-    }
-}
-
 /// The full multi-test-case engine: database replay, generation, and
 /// shrinking, ending at the exploration report.
 async fn run_main(
@@ -292,10 +270,15 @@ impl<'a> Engine<'a> {
         }
         self.collect_statistics = true;
 
+        // The simplest-example probe counts against the test-case budget, so
+        // a one-case budget skips it: the whole budget goes to the randomly
+        // generated case, instead of every run executing only the
+        // deterministic simplest case.
         if settings.phases.contains(&Phase::Generate)
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
+            && max_test_cases > 1
         {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)

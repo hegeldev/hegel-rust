@@ -1,0 +1,11 @@
+error: #[hegel::main] binaries always run a single test case; remove the test_cases argument.
+ --> tests/ui/main_test_cases_arg.rs:4:15
+  |
+4 | #[hegel::main(test_cases = 5)]
+  |               ^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/main_test_cases_arg.rs:7:2
+  |
+7 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/ui/main_test_cases_arg.rs`

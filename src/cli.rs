@@ -2,10 +2,10 @@
 //! `#[hegel::main]`.
 //!
 //! The parser starts from a caller-provided [`Settings`] value (so that
-//! `#[hegel::main(test_cases = 500)]` produces a binary whose `--test-cases`
-//! flag defaults to 500) and applies CLI overrides on top of it.
+//! `#[hegel::main(seed = 42)]` produces a binary whose `--seed` flag
+//! defaults to 42) and applies CLI overrides on top of it.
 
-use crate::runner::{Backend, HealthCheck, Mode, Settings, Verbosity};
+use crate::runner::{Backend, HealthCheck, Settings, Verbosity};
 
 /// Result of applying CLI overrides. The macro wrapper in `#[hegel::main]`
 /// dispatches on this to print messages and exit the process; keeping the
@@ -62,15 +62,6 @@ where
             "--help" | "-h" => {
                 return Err(CliError::Help(usage()));
             }
-            "--test-cases" => {
-                let value = next_value(&args, &mut i, "--test-cases")?;
-                let n: u64 = value.parse().map_err(|_| {
-                    CliError::Parse(format!(
-                        "--test-cases expects a non-negative integer, got {value:?}"
-                    ))
-                })?;
-                settings = settings.test_cases(n);
-            }
             "--seed" => {
                 let value = next_value(&args, &mut i, "--seed")?;
                 if value == "none" {
@@ -106,9 +97,6 @@ where
                 let value = next_value(&args, &mut i, "--suppress-health-check")?;
                 let checks = parse_health_check(&value)?;
                 settings = settings.suppress_health_check(checks);
-            }
-            "--single-test-case" => {
-                settings = settings.mode(Mode::SingleTestCase);
             }
             "--backend" => {
                 let value = next_value(&args, &mut i, "--backend")?;
@@ -191,10 +179,9 @@ fn usage() -> String {
     let mut s = String::new();
     s.push_str("Usage: <program> [options]\n");
     s.push('\n');
-    s.push_str("Hegel property-based testing binary.\n");
+    s.push_str("Hegel property-based testing binary. Runs exactly one test case.\n");
     s.push('\n');
     s.push_str("Options:\n");
-    s.push_str("  --test-cases <N>                     Number of test cases to run\n");
     s.push_str(
         "  --seed <N|none>                      Seed for randomisation ('none' for unset)\n",
     );
@@ -205,9 +192,6 @@ fn usage() -> String {
     );
     s.push_str(
         "  --suppress-health-check <NAMES>      Comma-separated health check names, or 'all'\n",
-    );
-    s.push_str(
-        "  --single-test-case                   Run one test case, no shrinking or replay\n",
     );
     s.push_str(
         "  --backend <default|urandom>          Randomness source (urandom reads /dev/urandom)\n",

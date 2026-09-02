@@ -31,7 +31,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/run_lifecycle.rs` — Cross-cutting per-test-case lifecycle: panic hook, `catch_unwind` wrapping, translating panics into `TestCaseResult`, and the final re-raise
 - `src/backend.rs` — The result types the lifecycle speaks (`TestCaseResult`, `Failure`)
 - `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, the `Collection` helper, and the span `labels` module
-- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Mode`, `Backend`, `Verbosity`
+- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Backend`, `Verbosity`
 - `src/cli.rs` — CLI argument parsing for standalone `#[hegel::main]` binaries
 - `src/generators/` — All first-party generator implementations (the `Generator` trait lives in `generators.rs`)
 - `src/extras/` — Feature-gated third-party integrations (`chrono`, `jiff`, `serde_json`, `rand`)

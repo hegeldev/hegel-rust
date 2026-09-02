@@ -4,7 +4,7 @@
 use hegel::TestCase;
 use hegel::generators as gs;
 
-#[hegel::main(test_cases = 1)]
+#[hegel::main]
 #[hegel::explicit_test_case(x = 77i32)]
 fn main(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers());

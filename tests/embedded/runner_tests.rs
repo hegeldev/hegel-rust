@@ -254,6 +254,20 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
+#[test]
+fn hegel_single_test_case_runs_exactly_one_case() {
+    use crate::generators as gs;
+    let mut count = 0;
+    Hegel::new(|tc: TestCase| {
+        tc.draw(gs::booleans());
+        count += 1;
+    })
+    .settings(Settings::new().test_cases(50).verbosity(Verbosity::Quiet))
+    .__single_test_case()
+    .run();
+    assert_eq!(count, 1);
+}
+
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
@@ -283,7 +297,6 @@ mod reproduce {
                 c_tc,
                 &mut test_fn,
                 false,
-                Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
                 None,

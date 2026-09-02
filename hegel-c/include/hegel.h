@@ -209,11 +209,7 @@ typedef enum {
      whatever it captured while running the discovering test case (the
      engine stamps every case of such a run nondeterministic up front,
      see `hegel_test_case_is_nondeterministic`, precisely so the caller
-     captures each case's output as it runs). Only full test runs report
-     this status; a failing single-test-case run reports
-     `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-     machine, since the caller reports such a case from its own execution
-     anyway.
+     captures each case's output as it runs).
      */
     HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 } hegel_run_status_t;
@@ -447,24 +443,6 @@ typedef enum {
      */
     HEGEL_LABEL_RECURSIVE = 35,
 } hegel_label_t;
-
-/*
- How the engine should treat the run: a full property-test loop or a
- single test case. Set via `hegel_settings_set_mode`.
- */
-typedef enum {
-    /*
-     libhegel drives a full generate / shrink / replay loop until the
-     test-case budget or the choice tree is exhausted. The default.
-     */
-    HEGEL_MODE_TEST_RUN = 0,
-    /*
-     libhegel produces exactly one test case and stops, with no shrinking.
-     Useful for replaying a stored counterexample or running an
-     exploratory probe.
-     */
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-} hegel_mode_t;
 
 /*
  Which source of randomness the engine draws from. Set via
@@ -899,22 +877,13 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
 /*
  Parameters:
- `mode`: A full run loop or a single test case with no shrinking. See
-   `hegel_mode_t`.
+ `backend`: A `hegel_backend_t` value selecting the source of
+   randomness.
 
  Returns `HEGEL_OK`.
 
  The enum-valued setters take `uint32_t` rather than the enum type so
  that an out-of-range value is an error instead of undefined behavior.
- */
-hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx, hegel_settings_t *s, uint32_t mode);
-
-/*
- Parameters:
- `backend`: A `hegel_backend_t` value selecting the source of
-   randomness.
-
- Returns `HEGEL_OK`.
 
  Once an explicit backend has been set on a handle there is no way to
  change it within a run.
@@ -1504,8 +1473,8 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  carry no reproduce blob. A notice explaining this is printed once, on
  the run's output, unless verbosity is quiet. This applies even to test
  cases whose drawn concurrency level is 1: the declared bound is what
- counts. Standalone test cases — single-test-case runs and
- `hegel_test_case_from_blob` replays — are never rejected.
+ counts. Standalone test cases — `hegel_test_case_from_blob` replays —
+ are never rejected.
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /
@@ -1553,9 +1522,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  `hegel_state_machine_next_rule` stream is exhausted — including before the
  first rule is requested. This applies to sequential machines too: the
  frontend must advance the group when the rule stream is exhausted, even
- though there is only a single group. In single-test-case mode (steps
- unbounded, e.g. under Antithesis) `*out_group_id` is never set to
- `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
+ though there is only a single group.
 
  `state_machine` must be a handle returned by `hegel_new_state_machine`
  on this test-case family. Returns `HEGEL_E_STOP_TEST` when the

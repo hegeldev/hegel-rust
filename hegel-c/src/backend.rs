@@ -329,9 +329,9 @@ pub struct Failure {
     pub origin: String,
     /// A base64 "failure blob" encoding the minimal counterexample's choice
     /// sequence. `Some` for an interesting counterexample surfaced by a full
-    /// run (the shrunk choices are available); `None` for a single-test-case
-    /// run, which has no shrunk choice sequence to encode. The client replays
-    /// it via `hegel_test_case_from_blob`; paste into
+    /// run (the shrunk choices are available); `None` for a nondeterministic
+    /// run, which has no replayable choice sequence to encode. The client
+    /// replays it via `hegel_test_case_from_blob`; paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
 }

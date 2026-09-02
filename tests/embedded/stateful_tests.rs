@@ -1,5 +1,4 @@
 use super::*;
-use crate::Mode;
 use crate::ffi::{RunHandle, SettingsHandle};
 use crate::generators as gs;
 use crate::runner::Settings;
@@ -26,7 +25,7 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
             .unwrap_or_else(|e| e.into_inner())
             .push(msg.to_string());
     });
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, Some(sink));
+    let tc = TestCase::new(Arc::new(c_tc), true, Some(sink));
     (run, tc, lines)
 }
 
