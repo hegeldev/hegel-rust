@@ -12,3 +12,25 @@
 Each experiment gets `notes/experiments/NNN-name/notes.md`: spec before, results and what we
 learned after. Update `design.md` when a result changes the design; log reversals in
 `decisions.md`.
+
+## Outcome (2026-09-02)
+
+All six experiments done. What the implementation inherits, beyond the per-experiment notes:
+
+- **Statistics** (001, 005A): gauntlet accepts at LCB >= max(0.8 x anchor, 0.05), monotone
+  anchor never fed by pinned-regime evidence, confirmed-dry stopping, no checkpointing, no
+  decay; discovery bar = gate 1/10 then 4/40 (decision 23).
+- **Mechanism** (002, 003, 005B): `serve_replays` is the whole resampling seam; confirmation
+  gates origin admission on every path (decisions 20, 21, 24); the lifecycle runs end to end
+  in-engine with 100% cross-run reproduction and correct caveated reporting.
+- **Representation** (004, 006B): whole-timeline pool, cap 10, first-fit, small continuation
+  budget; replay order pool -> splices -> fresh (decision 25); trie and per-position
+  anchoring closed.
+- **Boost** (006A): works, cheap, holdout-gated; ships behind reporting policy.
+- **Deliberately left for implementation**: blob v2 format, strictness setting surface,
+  demote-to-secondary, span-anchored split points, FAILED_NONDETERMINISTIC ABI semantics,
+  generation strategy under ND (novel-prefix replacement; small budgets starve narrow
+  structural bugs).
+
+The engine scaffolding (`nd_experiment`, `nd_boost`, the `nd_*` fields in `test_runner.rs`)
+is experiment-grade: extract with pruning per decision 15, don't extend.

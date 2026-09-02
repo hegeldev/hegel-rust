@@ -61,7 +61,7 @@ attempt, up to 10 positional splices of random pool pairs (extend 16):
 | B3 kind-flip | 15 | 15 | 100 | 1.6 |
 | B5 het-shift | 541 | 350 | 65 | 6.3 |
 
-(B0/B1/B4 never miss the pool; earlier tables unchanged.)
+(B0/B1 never miss the pool; B4 missed once, rescued. Earlier tables unchanged.)
 
 ## What we learned
 
