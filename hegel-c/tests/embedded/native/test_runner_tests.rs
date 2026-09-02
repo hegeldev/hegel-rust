@@ -1412,3 +1412,476 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         ChoiceValue::Integer(crate::native::bignum::BigInt::from(0))
     );
 }
+
+/// Settings entering ND handling directly, for lifecycle tests.
+fn nd_settings() -> Settings {
+    let mut settings = Settings::new().database(None).verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings
+}
+
+/// Like [`with_counting_ctx`] but with caller-supplied settings and database
+/// key, for tests that drive `Engine` internals under ND handling.
+fn with_engine<T, B>(settings: Settings, key: Option<&str>, mut body: T, after: B)
+where
+    T: FnMut(&dyn DataSource) -> TestCaseResult,
+    B: AsyncFnOnce(&mut Engine<'_>),
+{
+    let exchange = CaseExchange::new();
+    let fut = async {
+        let mut ctx = Engine::new(&settings, key, &exchange).unwrap();
+        after(&mut ctx).await;
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    });
+}
+
+/// An interesting [`RunResult`] at `origin` realizing `nodes`, standing in
+/// for a raw execution's outcome.
+fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
+    RunResult {
+        status: Status::Interesting,
+        nodes,
+        spans: Vec::new(),
+        origin: Some(origin.to_string()),
+        target_observations: crate::native::HashMap::default(),
+        span_events: Vec::new(),
+        events: Vec::new(),
+    }
+}
+
+#[test]
+fn nd_raw_interesting_never_displaces_an_occupied_origin() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            let origin = "Panic: bug";
+            let big = vec![bool_node(true), bool_node(true)];
+            ctx.record_run(&interesting_at(origin, big), Duration::ZERO);
+            assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
+
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(false)]),
+                Duration::ZERO,
+            );
+            assert_eq!(
+                ctx.interesting.get(origin).unwrap().len(),
+                2,
+                "a raw interesting run must not displace an occupied origin"
+            );
+
+            ctx.nd_origins.confirm(origin, 0.9, None, Vec::new());
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(false)]),
+                Duration::ZERO,
+            );
+            assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
+        },
+    );
+}
+
+#[test]
+fn nd_admission_leaves_the_origin_unconfirmed() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+            );
+            assert!(ctx.interesting.contains_key("Panic: bug"));
+            assert!(ctx.nd_origins.needs_confirmation("Panic: bug"));
+        },
+    );
+}
+
+#[test]
+fn nd_discovery_sweep_evicts_an_unconfirmable_origin() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let settings = nd_settings().output(Output::callback(move |line| {
+        sink.lock().unwrap().push(line.to_string());
+    }));
+    with_engine(
+        settings,
+        None,
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: fluke", vec![bool_node(true)]),
+                Duration::ZERO,
+            );
+            let output = ctx.settings.output.clone();
+            ctx.nd_discovery_sweep(Verbosity::Debug, &output)
+                .await
+                .unwrap();
+            assert!(ctx.interesting.is_empty());
+            assert_eq!(
+                ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
+                vec![("Panic: fluke", 1)]
+            );
+        },
+    );
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("nd discovery confirm"))
+    );
+}
+
+#[test]
+fn nd_discovery_sweep_confirms_a_real_failure() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() || rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+            );
+            let output = ctx.settings.output.clone();
+            ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
+                .await
+                .unwrap();
+            assert!(!ctx.nd_origins.needs_confirmation("Panic: bug"));
+            assert!(
+                ctx.nd_origins.pool("Panic: bug").len() > 1,
+                "confirmation replays realizing fresh continuations must be captured"
+            );
+            let (witness, anchor) = ctx.nd_origins.take_witness("Panic: bug").unwrap();
+            assert_eq!(witness.origin.as_deref(), Some("Panic: bug"));
+            assert!(anchor > 0.0);
+            assert!(ctx.interesting.contains_key("Panic: bug"));
+        },
+    );
+}
+
+#[test]
+fn nd_persists_only_validated_incumbents() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    with_engine(
+        settings,
+        Some("k"),
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+            );
+            assert!(
+                db.fetch(b"k").is_empty(),
+                "raw interesting must not persist before confirmation"
+            );
+            let output = ctx.settings.output.clone();
+            ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
+                .await
+                .unwrap();
+            assert!(
+                !db.fetch(b"k").is_empty(),
+                "confirmation commits the validated incumbent"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_boost_raises_the_anchor_or_declines() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let incumbent = vec![ChoiceValue::Boolean(true)];
+            ctx.nd_origins.confirm(
+                "Panic: bug",
+                0.1,
+                None,
+                vec![vec![ChoiceValue::Boolean(false)]],
+            );
+            let (witness, lcb) = ctx
+                .nd_boost("Panic: bug", &incumbent, 0.0)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(witness.origin.as_deref(), Some("Panic: bug"));
+            assert!(lcb > 0.5);
+            assert!(
+                ctx.nd_boost("Panic: bug", &incumbent, 0.99)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let output = ctx.settings.output.clone();
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: bug".to_string(),
+                verbosity: Verbosity::Quiet,
+                output,
+                mode: crate::settings::NdExperiment::Gauntlet,
+                ledger: HashMap::default(),
+                anchor: 0.99,
+            };
+            let nodes = vec![bool_node(true)];
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(
+                !matched,
+                "the evidence upper bound must fall below the anchor-derived threshold"
+            );
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(!matched, "a non-matching first run is a single-run reject");
+        },
+    );
+}
+
+#[test]
+fn nd_gauntlet_run_shrinks_a_deterministic_core_end_to_end() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(20)
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    settings.nd_boost = true;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("always")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("Panic: always"));
+    assert!(result.failures[0].reproduce_blob.is_some());
+    assert!(!result.nondeterministic);
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("nd boost")));
+}
+
+#[test]
+fn nd_gauntlet_run_holds_a_flaky_failure_end_to_end() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(20)
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if execs.fetch_add(1, Ordering::SeqCst) % 5 != 0 {
+            boom("flaky")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("Panic: flaky"));
+    assert!(
+        !result.failures[0].origin.contains("[unconfirmed"),
+        "an 80%-failure bug must confirm"
+    );
+    assert!(result.failures[0].reproduce_blob.is_some());
+}
+
+#[test]
+fn nd_unconfirmed_failure_is_reported_with_a_caveat() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(10)
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if execs.fetch_add(1, Ordering::SeqCst) == 1 {
+            boom("once")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0]
+            .origin
+            .starts_with("[unconfirmed after 1 observation(s)]")
+    );
+    assert!(result.failures[0].origin.contains("Panic: once"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+}
+
+#[test]
+fn nd_reuse_retries_a_stored_flaky_timeline_until_it_reproduces() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .phases([Phase::Reuse])
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if execs.fetch_add(1, Ordering::SeqCst) % 3 == 2 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("Panic: bug"));
+    assert!(
+        !db.fetch(b"k").is_empty(),
+        "a reproduced entry stays in the primary corpus"
+    );
+}
+
+#[test]
+fn nd_misaligned_trusted_reuse_confirms_at_shrink_and_persists_its_pool() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    let result = reuse_run(settings, "k", |ds| {
+        let n = execs.fetch_add(1, Ordering::SeqCst);
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if n % 2 == 0 && rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if n == 4 {
+            boom("a fluke discovered mid-shrink")
+        } else if n % 3 == 2 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        result.failures.len(),
+        1,
+        "the mid-shrink fluke must face the full bar and be evicted"
+    );
+    assert!(result.failures[0].origin.contains("Panic: bug"));
+    assert!(
+        !result.failures[0].origin.contains("[unconfirmed"),
+        "a trusted origin confirmed at shrink time reports as a plain failure"
+    );
+    assert!(!db.fetch(b"k").is_empty());
+}
+
+#[test]
+fn nd_trusted_failure_that_stops_reproducing_is_still_reported() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_experiment = crate::settings::NdExperiment::Gauntlet;
+    let result = reuse_run(settings, "k", |ds| {
+        let first = match rbool(ds) {
+            Ok(v) => v,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        let n = execs.fetch_add(1, Ordering::SeqCst);
+        if n == 2 && first {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("Panic: bug"));
+    assert!(
+        !result.failures[0].origin.contains("[unconfirmed"),
+        "a database-trusted origin is never demoted to a caveat"
+    );
+}

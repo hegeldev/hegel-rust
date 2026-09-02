@@ -41,6 +41,7 @@ use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
 };
 use crate::native::nd;
+use crate::native::nd::lifecycle::OriginLifecycle;
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
@@ -258,11 +259,8 @@ impl<'a> Engine<'a> {
                     let mut attempt = 0u64;
                     let (run, mismatch) = loop {
                         attempt += 1;
-                        let ntc = NativeTestCase::for_probe(
-                            &stored_choices,
-                            self.rng.spawn(),
-                            BUFFER_SIZE,
-                        )?;
+                        let rng = self.rng.spawn();
+                        let ntc = NativeTestCase::for_probe(&stored_choices, rng, BUFFER_SIZE)?;
                         let out = self.test_function(ntc).await?;
                         if out.0.status == Status::Interesting || attempt >= reuse_tries {
                             break out;
@@ -273,8 +271,8 @@ impl<'a> Engine<'a> {
                     }
                     if run.status == Status::Interesting {
                         if self.nd_experiment() != crate::settings::NdExperiment::Off {
-                            if let Some(o) = run.origin.clone() {
-                                self.nd_confirmed.insert(o);
+                            if let Some(o) = run.origin.as_deref() {
+                                self.nd_origins.trust(o);
                             }
                         }
                         if i < primary_count {
@@ -582,18 +580,13 @@ impl<'a> Engine<'a> {
                         return Err(RunError::Flaky(flaky_diagnostic()));
                     }
                     verify
-                } else if let (Some(witness), Some(anchor)) = (
-                    self.nd_witness.remove(&origin),
-                    self.nd_anchor.get(&origin).copied(),
-                ) {
+                } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
                     probe_anchor = anchor;
                     witness
                 } else {
-                    let trusted = self.nd_confirmed.contains(&origin);
                     let confirm = self.nd_confirm(&origin, &choices).await?;
-                    if !trusted && !confirm.accepted {
+                    if !confirm.accepted && self.nd_origins.reject(&origin) {
                         self.interesting.remove(&origin);
-                        *self.nd_unconfirmed.entry(origin.clone()).or_insert(0) += 1;
                         shrunk_origins.insert(origin);
                         continue;
                     }
@@ -608,8 +601,8 @@ impl<'a> Engine<'a> {
                             pool.push(timeline);
                         }
                     }
-                    self.nd_pool.insert(origin.clone(), pool);
-                    self.nd_confirmed.insert(origin.clone());
+                    self.nd_origins.confirm(&origin, probe_anchor, None, pool);
+                    self.persister.record(&origin, &initial);
                     witness
                 };
 
@@ -692,7 +685,7 @@ impl<'a> Engine<'a> {
                 .collect();
             if self.nd_experiment() != crate::settings::NdExperiment::Off {
                 for origin in self.interesting.keys() {
-                    for timeline in self.nd_pool.get(origin).map(Vec::as_slice).unwrap_or(&[]) {
+                    for timeline in self.nd_origins.pool(origin) {
                         new_entries.insert(serialize_choices(timeline));
                     }
                 }
@@ -748,15 +741,8 @@ impl<'a> Engine<'a> {
                 }
             })
             .collect();
-        if failures.is_empty()
-            && self.nd_experiment() != crate::settings::NdExperiment::Off
-            && !self.nd_unconfirmed.is_empty()
-        {
-            let mut unconfirmed: Vec<(String, u64)> = core::mem::take(&mut self.nd_unconfirmed)
-                .into_iter()
-                .collect();
-            unconfirmed.sort();
-            for (origin, observations) in unconfirmed {
+        if failures.is_empty() && self.nd_experiment() != crate::settings::NdExperiment::Off {
+            for (origin, observations) in self.nd_origins.unconfirmed() {
                 failures.push(Failure {
                     origin: format!("[unconfirmed after {observations} observation(s)] {origin}"),
                     reproduce_blob: None,
@@ -1117,24 +1103,10 @@ pub(crate) struct Engine<'a> {
     /// nondeterminism-mode replay resamples through this seam by turning it
     /// off (`notes/experiments/002-cache-seam`).
     pub(crate) serve_replays: bool,
-    /// Experiment 003 scaffolding: origins whose discovery passed the
-    /// confirmation batch. An unconfirmed interesting origin is removed from
-    /// the interesting map so generation keeps looking — a noise fluke must
-    /// not become the shrink target.
-    nd_confirmed: crate::native::HashSet<String>,
-    /// Experiment 005 scaffolding: per-origin timeline pool captured from
-    /// failing confirmation replays (incumbent first), persisted alongside
-    /// the shrunk incumbent so a later run has fallback timelines.
-    nd_pool: HashMap<String, Vec<Vec<ChoiceValue>>>,
-    /// Anchor seeded from discovery-confirmation evidence, consumed by the
-    /// pre-shrink step so it doesn't re-run its own batch.
-    nd_anchor: HashMap<String, f64>,
-    /// Witness run from discovery confirmation, consumed as the shrinker's
-    /// starting realization.
-    nd_witness: HashMap<String, RunResult>,
-    /// Origins observed interesting but never confirmed, with observation
-    /// counts — reported as caveated failures when nothing confirms.
-    nd_unconfirmed: HashMap<String, u64>,
+    /// Per-origin confirmation lifecycle under ND handling: admission,
+    /// trust, confirmation state (anchor/witness/pool), and the caveated
+    /// unconfirmed report. See [`OriginLifecycle`].
+    nd_origins: OriginLifecycle,
 }
 
 impl<'a> Engine<'a> {
@@ -1170,11 +1142,7 @@ impl<'a> Engine<'a> {
             first_bug_time: None,
             nondeterministic: false,
             serve_replays: settings.nd_experiment == crate::settings::NdExperiment::Off,
-            nd_confirmed: crate::native::HashSet::default(),
-            nd_pool: HashMap::default(),
-            nd_anchor: HashMap::default(),
-            nd_witness: HashMap::default(),
-            nd_unconfirmed: HashMap::default(),
+            nd_origins: OriginLifecycle::default(),
         })
     }
 
@@ -1236,11 +1204,9 @@ impl<'a> Engine<'a> {
         anchor: f64,
     ) -> Result<Option<(RunResult, f64)>, RunError> {
         let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
-        if let Some(pool) = self.nd_pool.get(origin) {
-            for timeline in pool {
-                if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
-                    candidates.push(timeline.clone());
-                }
+        for timeline in self.nd_origins.pool(origin) {
+            if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
+                candidates.push(timeline.clone());
             }
         }
         let mut attempts = 0;
@@ -1316,7 +1282,7 @@ impl<'a> Engine<'a> {
             let Some((origin, nodes)) = self
                 .interesting
                 .iter()
-                .find(|(o, _)| !self.nd_confirmed.contains(o.as_str()))
+                .find(|(o, _)| self.nd_origins.needs_confirmation(o.as_str()))
                 .map(|(o, n)| (o.clone(), n.clone()))
             else {
                 return Ok(());
@@ -1332,22 +1298,21 @@ impl<'a> Engine<'a> {
                 ));
             }
             if confirm.accepted {
-                self.nd_confirmed.insert(origin.clone());
                 let mut pool = Vec::from([choices]);
                 for timeline in confirm.captured {
                     if pool.len() < nd::POOL_CAP && !pool.contains(&timeline) {
                         pool.push(timeline);
                     }
                 }
-                self.nd_pool.insert(origin.clone(), pool);
-                self.nd_anchor
-                    .insert(origin.clone(), confirm.evidence.lower_bound());
-                if let Some(witness) = confirm.witness {
-                    self.nd_witness.insert(origin, witness);
-                }
-            } else {
+                self.nd_origins.confirm(
+                    &origin,
+                    confirm.evidence.lower_bound(),
+                    confirm.witness,
+                    pool,
+                );
+                self.persister.record(&origin, &nodes);
+            } else if self.nd_origins.reject(&origin) {
                 self.interesting.remove(&origin);
-                *self.nd_unconfirmed.entry(origin).or_insert(0) += 1;
             }
         }
     }
@@ -1438,12 +1403,13 @@ impl<'a> Engine<'a> {
                 }
                 self.last_bug_at = Some(self.calls);
                 let origin = run.origin.clone().unwrap_or_default();
-                if !self.nondeterministic {
-                    self.persister.record(&origin, &run.nodes);
-                }
-                if self.nd_experiment() == crate::settings::NdExperiment::Off
-                    || !self.interesting.contains_key(&origin)
-                {
+                if self.nd_experiment() == crate::settings::NdExperiment::Off {
+                    if !self.nondeterministic {
+                        self.persister.record(&origin, &run.nodes);
+                    }
+                    update_interesting(&mut self.interesting, origin, run.nodes.clone());
+                } else if !self.interesting.contains_key(&origin) {
+                    self.nd_origins.observe(&origin);
                     update_interesting(&mut self.interesting, origin, run.nodes.clone());
                 }
             }
@@ -1623,6 +1589,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         if lower_bound > self.anchor {
                             self.anchor = lower_bound;
                         }
+                        self.engine
+                            .persister
+                            .record(&self.target_origin, &run.nodes);
                         return Ok((true, run.nodes, Spans::from(run.spans)));
                     }
                     nd::GauntletVerdict::Reject => {

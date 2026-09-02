@@ -167,6 +167,8 @@ pub(crate) fn reuse_replay_budget() -> u64 {
     replay_budget(TARGET_FAILURE_RATE, REUSE_MISS_TOLERANCE)
 }
 
+pub(crate) mod lifecycle;
+
 #[cfg(test)]
-#[path = "../../tests/embedded/native/nd_tests.rs"]
+#[path = "../../../tests/embedded/native/nd/mod_tests.rs"]
 mod tests;
