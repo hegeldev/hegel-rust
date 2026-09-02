@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.38.0 - 2026-09-02
+
+This release makes generated times and datetimes nanosecond resolution instead of microsecond.
+
+`extras::jiff::times()` now generates every `jiff::civil::Time`. A range whose bounds are between two consecutive microseconds is no longer an error.
+
 ## 0.37.0 - 2026-09-02
 
 This release removes `Mode::SingleTestCase` and, with it, the ways it silently changed test semantics: state machines no longer run rules forever in any configuration (they are always bounded by `stateful_step_count`), and `tc.repeat(...)` always uses the engine-driven loop protocol. The `Mode` enum, `Settings::mode`, and the `--single-test-case` CLI flag are gone.

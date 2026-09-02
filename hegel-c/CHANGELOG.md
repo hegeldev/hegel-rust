@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.36.0 - 2026-09-02
+
+This release changes `hegel_time_t` from microsecond to nanosecond resolution. The `microsecond` field (in `[0, 999999]`) is now `nanosecond` (in `[0, 999999999]`). `hegel_generate_time` and `hegel_generate_datetime` now also draw whole nanoseconds.
+
 ## 0.35.0 - 2026-09-02
 
 This release removes single-test-case mode from the C ABI: the `hegel_mode_t` enum and `hegel_settings_set_mode` are gone, and every run drives the full property-test loop. Frontends that want one test case per invocation should set the test-case budget to 1 with `hegel_settings_set_test_cases` instead. To make that budget useful, a run with a one-case budget now skips the simplest-example probe that opens the generate phase. The single case is randomly generated, at the cost of the `LargeInitialTestCase` health check not running for such runs.
