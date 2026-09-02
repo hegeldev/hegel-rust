@@ -164,21 +164,6 @@ fn test_one_of_thirty_components(tc: TestCase) {
     assert!((0..30).contains(&value));
 }
 
-mod custom_arity {
-    use hegel::TestCase;
-    use hegel::generators as gs;
-
-    hegel::impl_one_of!(OneOf2Custom, one_of2_custom, 2, (0, gen1, G1); (gen2, G2));
-
-    #[hegel::test]
-    fn test_impl_one_of_defines_a_usable_generator(tc: TestCase) {
-        let value = tc.draw(one_of2_custom(gs::just(1), gs::just(2)));
-        assert!(value == 1 || value == 2);
-        let silent = tc.draw_silent(one_of2_custom(gs::just(3), gs::just(4)));
-        assert!(silent == 3 || silent == 4);
-    }
-}
-
 #[hegel::test]
 fn test_flat_map(tc: TestCase) {
     let value = tc.draw(
@@ -1130,12 +1115,15 @@ mod nocover_given_reuse {
 }
 
 mod one_of_named_types {
-    use hegel::generators::{self as gs, OneOf2Generator};
+    use hegel::generators::{self as gs, OneOfCons, OneOfGenerator, OneOfLast};
     use hegel::{Hegel, Settings};
 
     struct Holder {
-        generator:
-            OneOf2Generator<gs::IntegerGenerator<i64>, gs::SampledFromGenerator<'static, i64>, i64>,
+        generator: OneOfGenerator<
+            'static,
+            i64,
+            OneOfCons<gs::IntegerGenerator<i64>, OneOfLast<gs::SampledFromGenerator<'static, i64>>>,
+        >,
     }
 
     #[test]
@@ -1236,5 +1224,6 @@ mod one_of_arity_dispatch {
         assert_arity_reachable!(28: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27);
         assert_arity_reachable!(29: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28);
         assert_arity_reachable!(30: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
+        assert_arity_reachable!(40: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39);
     }
 }
