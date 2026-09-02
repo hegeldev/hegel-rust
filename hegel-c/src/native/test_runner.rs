@@ -285,6 +285,7 @@ impl<'a> Engine<'a> {
                         }
                         (run.status == Status::Interesting).then_some(run)
                     } else {
+                        self.capture_replays = true;
                         let (run, _evidence) = self
                             .nd_reproduce(
                                 None,
@@ -294,6 +295,7 @@ impl<'a> Engine<'a> {
                                 0,
                             )
                             .await?;
+                        self.capture_replays = false;
                         run
                     };
                     if let Some(run) = run {
@@ -623,7 +625,8 @@ impl<'a> Engine<'a> {
                     witness
                 } else {
                     let confirm = self.nd_confirm(&origin, &choices).await?;
-                    if !confirm.accepted && self.nd_origins.reject(&origin) {
+                    let batch = (confirm.evidence.fails(), confirm.evidence.runs());
+                    if !confirm.accepted && self.nd_origins.reject(&origin, batch) {
                         self.interesting.remove(&origin);
                         shrunk_origins.insert(origin);
                         continue;
@@ -639,7 +642,8 @@ impl<'a> Engine<'a> {
                             pool.push(timeline);
                         }
                     }
-                    self.nd_origins.confirm(&origin, probe_anchor, None, pool);
+                    self.nd_origins
+                        .confirm(&origin, probe_anchor, None, pool, batch);
                     self.record_nd_incumbent(&origin, &initial);
                     witness
                 };
@@ -702,6 +706,8 @@ impl<'a> Engine<'a> {
         } else if replay_aligned && verbosity == Verbosity::Debug {
             output.line("Skipping shrink: reused aligned database replay");
         }
+
+        self.final_replay().await?;
 
         let persist = !self.concurrent;
         if let (true, Some(db), Some(key)) = (persist, self.db(), database_key) {
@@ -769,26 +775,41 @@ impl<'a> Engine<'a> {
         let nd_blobs = self.nd_handling();
         let mut failures: Vec<Failure> = Vec::with_capacity(origins_sorted.len());
         for (origin, nodes) in origins_sorted {
-            let reproduce_blob = if nondeterministic {
-                None
+            let (reproduce_blob, caveat) = if nondeterministic {
+                (
+                    None,
+                    Some(String::from(
+                        "concurrent-machine run: failure reported from the discovering execution",
+                    )),
+                )
             } else {
                 let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                 if nd_blobs {
                     let state = self.nd_state_for(&origin, choices);
-                    Some(crate::native::blob::encode_nd_failure(&state))
+                    (
+                        Some(crate::native::blob::encode_nd_failure(&state)),
+                        self.nd_origins.caveat(&origin),
+                    )
                 } else {
-                    Some(crate::native::blob::encode_failure(&choices))
+                    (Some(crate::native::blob::encode_failure(&choices)), None)
                 }
             };
             failures.push(Failure {
                 origin,
                 reproduce_blob,
+                caveat,
             });
         }
         if failures.is_empty() && self.nd_handling() {
-            for (origin, observations) in self.nd_origins.unconfirmed() {
+            let unconfirmed: Vec<String> = self
+                .nd_origins
+                .unconfirmed()
+                .map(|(origin, _)| origin.to_string())
+                .collect();
+            for origin in unconfirmed {
                 failures.push(Failure {
-                    origin: format!("[unconfirmed after {observations} observation(s)] {origin}"),
+                    caveat: self.nd_origins.caveat(&origin),
+                    origin,
                     reproduce_blob: None,
                 });
             }
@@ -1186,6 +1207,13 @@ pub(crate) struct Engine<'a> {
     /// trust, confirmation state (anchor/witness/pool), and the caveated
     /// unconfirmed report. See [`OriginLifecycle`].
     nd_origins: OriginLifecycle,
+    /// While set, every measurement execution is stamped nondeterministic
+    /// (`hegel_test_case_is_nondeterministic`), telling the client to
+    /// capture its output and diagnostic — the material for the failure
+    /// report. Set around confirmation batches, database-reuse replays,
+    /// and the final replay; shrink-gauntlet and boost replays stay
+    /// cheap and unstamped.
+    capture_replays: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -1223,6 +1251,7 @@ impl<'a> Engine<'a> {
             concurrent: false,
             serve_replays: !settings.nd_force,
             nd_origins: OriginLifecycle::default(),
+            capture_replays: false,
         })
     }
 
@@ -1348,6 +1377,83 @@ impl<'a> Engine<'a> {
         Ok((None, evidence))
     }
 
+    /// The report-time final replay: every failure re-executes before it
+    /// is reported, stamped so the client captures the failing execution's
+    /// output and diagnostic — the failure report's material. A
+    /// deterministic run replays each shrunk incumbent once; a replay that
+    /// no longer fails is nondeterminism detected post-shrink — today's
+    /// Flaky abort under `error` strictness, a flip into ND handling
+    /// otherwise. Under ND handling each origin replays until failure —
+    /// incumbent, pool, splices, then [`nd::FINAL_REPLAY_FRESH`] fresh
+    /// generations, up to the standard reuse budget — and the evidence
+    /// lands in the lifecycle: a reproducing replay confirms a
+    /// yet-unconfirmed origin, a dry one switches the caveat's wording
+    /// instead of unreporting the failure (decision 3).
+    async fn final_replay(&mut self) -> Result<(), RunError> {
+        if self.concurrent || self.interesting.is_empty() {
+            return Ok(());
+        }
+        let mut origins: Vec<String> = self.interesting.keys().cloned().collect();
+        origins.sort();
+        for origin in origins {
+            let nodes = self.interesting.get(&origin).cloned().unwrap_or_default();
+            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+            if !self.nd_handling() {
+                self.capture_replays = true;
+                let ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
+                let (run, mismatch) = self.measure(ntc).await?;
+                self.capture_replays = false;
+                if let Some(msg) = mismatch {
+                    return Err(RunError::NonDeterministic(msg));
+                }
+                if run.status == Status::Interesting
+                    && run.origin.as_deref() == Some(origin.as_str())
+                {
+                    continue;
+                }
+                if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
+                    return Err(RunError::Flaky(flaky_diagnostic()));
+                }
+                self.nd_flip();
+            }
+            let mut timelines: Vec<Vec<ChoiceValue>> = Vec::from([choices]);
+            for timeline in self.nd_origins.pool(&origin) {
+                if timelines.len() <= nd::POOL_CAP && !timelines.contains(timeline) {
+                    timelines.push(timeline.clone());
+                }
+            }
+            self.capture_replays = true;
+            let (_, evidence) = self
+                .nd_reproduce(
+                    Some(&origin),
+                    &timelines,
+                    nd::reuse_replay_budget() as f64 / timelines.len() as f64,
+                    nd::REPRODUCE_SPLICES,
+                    nd::FINAL_REPLAY_FRESH,
+                )
+                .await?;
+            self.capture_replays = false;
+            let batch = (evidence.fails(), evidence.runs());
+            if self.nd_origins.needs_confirmation(&origin) {
+                if batch.0 > 0 {
+                    self.nd_origins.confirm(
+                        &origin,
+                        evidence.lower_bound(),
+                        None,
+                        timelines,
+                        batch,
+                    );
+                } else {
+                    self.nd_origins.observe(&origin);
+                    self.nd_origins.reject(&origin, batch);
+                }
+            } else {
+                self.nd_origins.record_final_replay(&origin, batch);
+            }
+        }
+        Ok(())
+    }
+
     /// Experiment 005: the discovery-confirmation bar
     /// ([`nd::discovery_bar`], decision 23) with capture-at-confirmation
     /// and divergence-weighted misses (decision 22). Replays `choices`
@@ -1361,6 +1467,7 @@ impl<'a> Engine<'a> {
         let mut evidence = nd::Evidence::default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
+        self.capture_replays = true;
         let accepted = loop {
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
             evidence.record(replay.failed, replay.weight);
@@ -1378,6 +1485,7 @@ impl<'a> Engine<'a> {
                 nd::BarVerdict::Continue => {}
             }
         };
+        self.capture_replays = false;
         Ok(NdConfirm {
             accepted,
             evidence,
@@ -1498,6 +1606,7 @@ impl<'a> Engine<'a> {
                     confirm.accepted
                 ));
             }
+            let batch = (confirm.evidence.fails(), confirm.evidence.runs());
             if confirm.accepted {
                 let mut pool = Vec::from([choices]);
                 for timeline in confirm.captured {
@@ -1510,9 +1619,10 @@ impl<'a> Engine<'a> {
                     confirm.evidence.lower_bound(),
                     confirm.witness,
                     pool,
+                    batch,
                 );
                 self.record_nd_incumbent(&origin, &nodes);
-            } else if self.nd_origins.reject(&origin) {
+            } else if self.nd_origins.reject(&origin, batch) {
                 self.interesting.remove(&origin);
             }
         }
@@ -1596,7 +1706,7 @@ impl<'a> Engine<'a> {
         mut ntc: NativeTestCase,
         measurement: bool,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        if self.concurrent {
+        if self.concurrent || self.capture_replays {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());

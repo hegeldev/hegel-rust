@@ -198,6 +198,11 @@ pub(crate) fn verbatim_weight(
 /// experiment 006: ~6 splice replays recover 65-100% of full-pool misses).
 pub(crate) const REPRODUCE_SPLICES: u64 = 6;
 
+/// Fresh generations tried at the end of the report-time final replay,
+/// after the pool and its splices miss. A fresh reproduction is still a
+/// reportable failing execution; its misses carry no weight.
+pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
+
 pub(crate) mod lifecycle;
 
 #[cfg(test)]

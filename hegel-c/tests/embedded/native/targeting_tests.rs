@@ -249,6 +249,7 @@ fn interesting() -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
         origin: "Panic at <targeting-test>".to_string(),
         reproduce_blob: None,
+        caveat: None,
     })
 }
 

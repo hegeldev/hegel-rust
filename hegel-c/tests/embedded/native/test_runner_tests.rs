@@ -48,6 +48,7 @@ fn boom(msg: &str) -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
+        caveat: None,
     })
 }
 
@@ -1042,8 +1043,8 @@ fn reuse_found_bug_skips_generation_entirely() {
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        1,
-        "expected exactly one reuse replay and no generation or final replay"
+        2,
+        "expected exactly one reuse replay plus the final replay, no generation"
     );
 }
 
@@ -1097,6 +1098,52 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
         Settings::new()
             .database(None)
             .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
+}
+
+/// Same kind-switch body as [`shrink_verify_surfaces_generator_nondeterminism`],
+/// but with no shrink phase the execution after the first failure is the
+/// report-time final replay — its kind mismatch must abort under `Error`
+/// strictness too.
+#[test]
+fn final_replay_surfaces_generator_nondeterminism_under_error_strictness() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate])
             .report_multiple_failures(false)
             .nondeterminism_strictness(NondeterminismStrictness::Error)
             .verbosity(Verbosity::Quiet),
@@ -1495,7 +1542,8 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
                 "a raw interesting run must not displace an occupied origin"
             );
 
-            ctx.nd_origins.confirm(origin, 0.9, None, Vec::new());
+            ctx.nd_origins
+                .confirm(origin, 0.9, None, Vec::new(), (4, 4));
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
@@ -1667,6 +1715,7 @@ fn nd_boost_raises_the_anchor_or_declines() {
                 0.1,
                 None,
                 vec![vec![ChoiceValue::Boolean(false)]],
+                (4, 9),
             );
             let (witness, lcb) = ctx
                 .nd_boost("Panic: bug", &incumbent, 0.0)
@@ -1795,6 +1844,45 @@ fn nd_gauntlet_run_holds_a_flaky_failure_end_to_end() {
 }
 
 #[test]
+fn nd_reports_each_origin_with_its_own_caveat_and_blob() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(30)
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        let first = match rbool(ds) {
+            Ok(v) => v,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if execs.fetch_add(1, Ordering::SeqCst) % 5 == 4 {
+            return TestCaseResult::Valid;
+        }
+        if first { boom("one") } else { boom("two") }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 2);
+    let mut origins: Vec<&str> = result.failures.iter().map(|f| f.origin.as_str()).collect();
+    origins.sort_unstable();
+    assert_eq!(origins, ["Panic: one", "Panic: two"]);
+    let blobs: Vec<&str> = result
+        .failures
+        .iter()
+        .map(|f| f.reproduce_blob.as_deref().unwrap())
+        .collect();
+    assert_ne!(blobs[0], blobs[1], "each origin encodes its own incumbent");
+    for f in &result.failures {
+        let caveat = f.caveat.as_deref().unwrap();
+        assert!(
+            caveat.starts_with("nondeterministic failure"),
+            "each origin carries its own confirmed caveat: {caveat}"
+        );
+    }
+}
+
+#[test]
 fn nd_unconfirmed_failure_is_reported_with_a_caveat() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
@@ -1815,12 +1903,13 @@ fn nd_unconfirmed_failure_is_reported_with_a_caveat() {
     })
     .unwrap();
     assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: once");
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        result.failures[0]
-            .origin
-            .starts_with("[unconfirmed after 1 observation(s)]")
+        caveat.starts_with("unconfirmed failure: failed 0 of "),
+        "zero reproductions must weight the environment hypothesis: {caveat}"
     );
-    assert!(result.failures[0].origin.contains("Panic: once"));
+    assert!(caveat.contains("environment"));
     assert!(result.failures[0].reproduce_blob.is_none());
 }
 
@@ -2114,9 +2203,13 @@ fn outcome_flake_under_quiet_that_never_reproduces_reports_a_caveat() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    assert_eq!(
-        result.failures[0].origin,
-        "[unconfirmed after 1 observation(s)] Panic: outcome"
+    assert_eq!(result.failures[0].origin, "Panic: outcome");
+    assert!(
+        result.failures[0]
+            .caveat
+            .as_deref()
+            .unwrap()
+            .starts_with("unconfirmed failure: failed 0 of ")
     );
     assert!(result.failures[0].reproduce_blob.is_none());
     assert!(!result.nondeterministic);
@@ -2158,10 +2251,8 @@ fn a_double_flip_in_one_verify_prints_the_warn_notice_once() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    assert_eq!(
-        result.failures[0].origin,
-        "[unconfirmed after 1 observation(s)] Panic: shift"
-    );
+    assert_eq!(result.failures[0].origin, "Panic: shift");
+    assert!(result.failures[0].caveat.is_some());
     let notices = lines
         .lock()
         .unwrap()

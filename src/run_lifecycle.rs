@@ -7,12 +7,13 @@
 //!
 //! The engine lives behind libhegel's C ABI; `drive` owns everything around
 //! it — installing the panic hook, wrapping each test body with
-//! `catch_unwind` plus `mark_complete`, the antithesis integration, the final
-//! replay of each discovered counterexample (with its report printed around
-//! it), and the closing re-raise of the failing test's own panic.
+//! `catch_unwind` plus `mark_complete`, the antithesis integration, printing
+//! each reported failure from its captured material, and the closing
+//! re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Once};
 
@@ -20,7 +21,7 @@ use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
-    hegel_internal_error, with_test_context,
+    with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
@@ -249,23 +250,27 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// On the `Interesting` path the panic site is captured as a
 /// `file:line:col` string and stored on the [`Failure`] so per-origin
 /// shrinking can key on it, and the rendered diagnostic block (panic
-/// location, message, backtrace) is printed here, at the moment the panic
+/// location, message, backtrace) is built here, at the moment the panic
 /// is caught — on a non-quiet final replay it is returned to the caller to
 /// print (right after the live draw/note lines, which is what keeps each
 /// failure one block), for a non-final case in verbose mode it goes to
-/// `output`, the run's resolved destination, and at a nondeterministic
-/// run's discovery it is returned to the caller for the deferred failure
-/// report (and, in verbose mode, printed to `output` as well, like any
-/// other non-final case's).
+/// `output`, the run's resolved destination, and for a stamped non-final
+/// case it is returned to the caller for the deferred failure report (and,
+/// in verbose mode, printed to `output` as well, like any other non-final
+/// case's).
 ///
-/// The capture-at-discovery decision is the engine's, read once at case
-/// start ([`CTestCase::is_nondeterministic`]): the engine stamps every case
-/// of a run it already knows to be nondeterministic before the case starts.
-/// The case that *makes* a run nondeterministic — the first to ask
-/// `stateful::run_concurrent` for real concurrency — is discarded (the
-/// engine rejects its machine creation like a failed assumption), so every
-/// case that can fail was stamped up front and captures its whole trace,
-/// draws and notes made before `run_concurrent` included.
+/// The capture decision is the engine's, read once at case start
+/// ([`CTestCase::is_nondeterministic`]): the engine stamps every case of a
+/// concurrent-machine run and every replay of an already-discovered
+/// failure — confirmation batches, database-reuse replays, and the
+/// report-time final replay — so the executions a failure report can be
+/// built from carry their diagnostics, while ordinary exploration cases
+/// skip backtrace capture. In a concurrent run the case that *makes* it
+/// concurrent — the first to ask `stateful::run_concurrent` for real
+/// concurrency — is discarded (the engine rejects its machine creation
+/// like a failed assumption), so every case that can fail was stamped up
+/// front and captures its whole trace, draws and notes made before
+/// `run_concurrent` included.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -285,8 +290,8 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    let capture_at_discovery = !is_final && c_tc.is_nondeterministic();
-    let should_emit = ((is_final || capture_at_discovery) && !quiet) || verbose;
+    let stamped = !is_final && c_tc.is_nondeterministic();
+    let should_emit = ((is_final || stamped) && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
     // Drop any capture left over from a previous test case on this thread
     // (e.g. a body that caught its own panic and then passed): a later panic
@@ -323,11 +328,11 @@ pub(crate) fn run_test_case(
             let (thread_name, thread_id, location, backtrace) =
                 take_panic_info().unwrap_or_else(unknown_panic_info);
 
-            let captured = if (is_final || capture_at_discovery) && !quiet {
+            let captured = if (is_final || stamped) && !quiet {
                 let msg = panic_message(&e);
                 let diagnostic =
                     render_diagnostic(&thread_name, &thread_id, &location, &msg, &backtrace);
-                if verbose && capture_at_discovery {
+                if verbose && stamped {
                     output.block(&diagnostic);
                 }
                 Some(diagnostic)
@@ -448,62 +453,50 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
     ))
 }
 
-/// The run's failure candidate: everything captured at discovery time from
-/// the last test case that classified interesting frontend-side. Stashed
-/// unconditionally, but *read* only when the run turns out nondeterministic
-/// (a test case created a concurrent state machine) — the verdict then
-/// comes back `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`: such a run
-/// has no final replay, so discovery is the only chance to capture — but printing
-/// it *as the failure report* is deferred to the run verdict (verbose runs
-/// stream the lines live at discovery too, like any other case's), because
-/// a frontend-interesting report can lose silently to an engine-side family
-/// conclusion (an overrunning or invalidating draw concluded the family
-/// first, and `mark_complete` after a conclusion is a no-op). If the run
-/// comes back failed the stash is the accepted bug and the report is
-/// printed then; if the run passes the stash lost, and is discarded — a
-/// genuine racy bug resurfaces in a later case. A deterministic run never
-/// reads the stash: its failures are replayed from their reproduce blobs.
-struct NondetStash {
+/// One origin's failure report material, captured from the most recent
+/// test case that classified interesting frontend-side under that origin.
+/// The engine runs every reported failure one last time before concluding
+/// (its final replay, with the case stamped for capture — see
+/// [`CTestCase::is_nondeterministic`]), so the freshest capture per origin
+/// is normally that failing final-replay execution; for a failure the
+/// final replay could not reproduce, it is the newest earlier capture
+/// (a confirmation replay, or the discovering case). Printing is deferred
+/// to the run verdict (verbose runs stream the lines live too), because a
+/// frontend-interesting report can lose silently to an engine-side family
+/// conclusion, and because a captured bug may not be reported at all —
+/// the engine's confirmation may reject it, and the run may pass.
+struct CapturedReport {
     /// The buffered draw/note lines of the case (empty under
     /// [`Verbosity::Quiet`], where nothing would be printed), already in
     /// report order: the case's document renders with each round's output
     /// grouped worker by worker.
     lines: Vec<String>,
     /// The rendered panic diagnostic (thread, location, message, backtrace);
-    /// `None` under quiet.
+    /// `None` under quiet and for unstamped, non-final cases.
     diagnostic: Option<String>,
     /// The caught panic payload, re-raised as the run's closing unwind.
     payload: Box<dyn std::any::Any + Send>,
 }
-
-/// Message for a flaky test — one whose outcome changed when re-run with the
-/// same generated data. After the engine shrinks and verifies a counterexample,
-/// the client replays its blob one final time; if that replay does not fail,
-/// the test is non-deterministic.
-const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced different outcomes \
-     when run with the same generated data — it failed when it \
-     previously succeeded, or succeeded when it previously failed. \
-     This usually means your test depends on external state such as \
-     global variables, system time, or external random number generators.";
 
 /// Drive a libhegel run to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, starts the engine through the C ABI
 /// (`hegel_run_start`), and pulls each test case the engine schedules
 /// (`hegel_next_test_case`), wrapping every one in [`run_test_case`]. The
-/// engine only *explores* — generation and shrinking — so every pumped case is
-/// non-final. The client owns the final replays: once the loop drains, it reads
-/// each discovered counterexample's reproduce blob from `hegel_run_result` and
-/// replays it via [`drive`]'s own `from_blob` path, marking it final itself.
+/// engine owns the whole exploration — generation, shrinking, and the final
+/// replay of every failure it is about to report — so every pumped case is
+/// non-final, and the report material is captured as the cases run: each
+/// interesting case's buffered output, diagnostic, and panic payload is
+/// kept per origin, the freshest capture winning (see [`CapturedReport`]).
 ///
-/// Because the failures (and their count) are known up front once the loop
-/// drains, the "N distinct failures" headline is printed before replaying, and
-/// each replay's draws/notes flow live (to the active sink or stderr) followed
-/// by its diagnostic and reproducer line, so each failure prints as one grouped
-/// block. The run ends by re-raising the failing test's own panic (or, for
-/// several distinct bugs, a panic carrying the count). A run-level error — a
-/// failed health check, nondeterminism, an engine panic — surfaces with the
-/// engine's own message instead of the `Property test failed:` framing.
+/// Once the loop drains, a failed verdict prints each distinct failure as
+/// one grouped block — the captured lines and diagnostic, the caveat when
+/// the run handled nondeterminism, and the reproducer line when the
+/// failure carries a blob — and ends by re-raising the failing test's own
+/// panic (or, for several distinct bugs, a panic carrying the count). A
+/// run-level error — a failed health check, a nondeterminism abort under
+/// `error` strictness, an engine panic — surfaces with the engine's own
+/// message instead of the `Property test failed:` framing.
 ///
 /// `Mode::SingleTestCase` has no exploration, shrinking, or blob: the engine
 /// emits one case, and if it fails the run re-raises that case's own panic
@@ -536,7 +529,7 @@ pub(crate) fn drive<F>(
     }
 
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
-    let mut stash: Option<NondetStash> = None;
+    let mut captured: HashMap<String, CapturedReport> = HashMap::new();
     while let Some(c_tc) = run.next_test_case() {
         let buffer: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
@@ -563,13 +556,16 @@ pub(crate) fn drive<F>(
             &output,
             case_sink,
         );
-        if matches!(tc_result, TestCaseResult::Interesting(_)) {
+        if let TestCaseResult::Interesting(failure) = &tc_result {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
-            stash = Some(NondetStash {
-                lines: records,
-                diagnostic,
-                payload: payload.expect("an interesting case carries the caught panic payload"),
-            });
+            captured.insert(
+                failure.origin.clone(),
+                CapturedReport {
+                    lines: records,
+                    diagnostic,
+                    payload: payload.expect("an interesting case carries the caught panic payload"),
+                },
+            );
         }
     }
 
@@ -586,16 +582,6 @@ pub(crate) fn drive<F>(
                 .unwrap_or_else(|| "the run failed with an unknown error".to_string());
             panic!("{message}");
         }
-        RunStatus::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC => {
-            let stash = stash.expect("a failed nondeterministic run has a stashed failure");
-            for line in &stash.lines {
-                output.line(line);
-            }
-            if let Some(diagnostic) = stash.diagnostic {
-                output.block(&diagnostic);
-            }
-            std::panic::resume_unwind(stash.payload);
-        }
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
             let multiple = count > 1;
@@ -609,26 +595,25 @@ pub(crate) fn drive<F>(
                 if multiple && !quiet {
                     output.line("");
                 }
-                let blob = result
-                    .failure(index)
-                    .reproduce_blob
-                    .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
-                let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
-                    Ok(c_tc) => c_tc,
-                    Err(message) => panic!("{message}"), // nocov
-                };
-                let (tc_result, payload, diagnostic) =
-                    run_test_case(c_tc, &mut test_fn, true, mode, verbosity, &output, None);
-                if !matches!(tc_result, TestCaseResult::Interesting(_)) {
-                    panic!("{FLAKY_DIAGNOSTIC}");
+                let failure = result.failure(index);
+                let report = captured
+                    .remove(&failure.origin)
+                    .expect("every reported failure had an interesting test case");
+                for line in &report.lines {
+                    output.line(line);
                 }
-                if let Some(diagnostic) = diagnostic {
+                if let Some(diagnostic) = report.diagnostic {
                     output.block(&diagnostic);
                 }
-                if let Some(line) = reproducer_line(settings, Some(blob.as_str())) {
+                if !quiet {
+                    if let Some(caveat) = &failure.caveat {
+                        output.line(&format!("note: {caveat}"));
+                    }
+                }
+                if let Some(line) = reproducer_line(settings, failure.reproduce_blob.as_deref()) {
                     output.block(&format!("{line}\n"));
                 }
-                last_payload = payload;
+                last_payload = Some(report.payload);
             }
 
             if multiple {
@@ -637,7 +622,7 @@ pub(crate) fn drive<F>(
                 )));
             } else {
                 std::panic::resume_unwind(
-                    last_payload.expect("a re-failing replay carries a panic payload"),
+                    last_payload.expect("a failed run reports at least one failure"),
                 );
             }
         }

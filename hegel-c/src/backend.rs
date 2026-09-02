@@ -334,6 +334,13 @@ pub struct Failure {
     /// it via `hegel_test_case_from_blob`; paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
+    /// The failure's confirmation standing when the run handled
+    /// nondeterminism — quoting the run's own replay evidence, per
+    /// decision 3 — for the caller to print alongside the report. `None`
+    /// for a deterministic failure, and always `None` on the per-case
+    /// results the client reports in; only a run's aggregate failures
+    /// carry it.
+    pub caveat: Option<String>,
 }
 
 /// Result of running a single test case.

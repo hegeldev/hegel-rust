@@ -109,6 +109,7 @@ impl NativeDataSource {
             Status::Interesting => TestCaseResult::Interesting(Failure {
                 origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
+                caveat: None,
             }),
         })
     }

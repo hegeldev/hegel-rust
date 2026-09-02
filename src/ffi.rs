@@ -1457,16 +1457,23 @@ impl RunResult {
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
         }));
+        let mut origin: *const c_char = ptr::null();
         let mut blob: *const c_char = ptr::null();
+        let mut caveat: *const c_char = ptr::null();
         // SAFETY: f is the failure snapshot allocated above; it is freed
-        // exactly once, after the blob has been copied out by cstr_opt.
-        let reproduce_blob = with_context(|ctx| unsafe {
+        // exactly once, after the strings have been copied out by cstr_opt.
+        with_context(|ctx| unsafe {
+            require_ok(hegel_c::hegel_failure_origin(ctx, f, &mut origin));
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
-            let reproduce_blob = cstr_opt(blob);
+            require_ok(hegel_c::hegel_failure_caveat(ctx, f, &mut caveat));
+            let failure = Failure {
+                origin: cstr_opt(origin).unwrap_or_default(),
+                reproduce_blob: cstr_opt(blob),
+                caveat: cstr_opt(caveat),
+            };
             require_ok(hegel_c::hegel_failure_free(ctx, f));
-            reproduce_blob
-        });
-        Failure { reproduce_blob }
+            failure
+        })
     }
 }
 
@@ -1477,12 +1484,14 @@ impl Drop for RunResult {
     }
 }
 
-/// A distinct failure read out of a finished run.
-///
-/// The client needs only the reproduce blob: it replays the blob to produce
-/// the diagnostic and re-raise the test's own panic.
+/// A distinct failure read out of a finished run: the origin it was
+/// grouped under (matching the origin the client reported the failing
+/// cases with), the reproduce blob when the engine produced one, and the
+/// confirmation caveat when the run handled nondeterminism.
 pub(crate) struct Failure {
+    pub(crate) origin: String,
     pub(crate) reproduce_blob: Option<String>,
+    pub(crate) caveat: Option<String>,
 }
 
 fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {

@@ -17,9 +17,9 @@ use hegel_c::{
     HegelRecursion, HegelRun, HegelRunResult, HegelStateMachine, HegelTestCase, hegel_backend_t,
     hegel_collection_free, hegel_collection_more, hegel_collection_reject, hegel_context_free,
     hegel_context_last_error, hegel_context_new, hegel_event, hegel_event_value,
-    hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
-    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
-    hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
+    hegel_failure_caveat, hegel_failure_free, hegel_failure_origin,
+    hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
+    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
     hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free,
     hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
     hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
@@ -91,6 +91,12 @@ unsafe fn repro_blob_of(ctx: *mut HegelContext, f: *const HegelFailure) -> *cons
         unsafe { hegel_failure_reproduction_blob(ctx, f, &mut p) },
         HEGEL_OK
     );
+    p
+}
+
+unsafe fn caveat_of(ctx: *mut HegelContext, f: *const HegelFailure) -> *const c_char {
+    let mut p: *const c_char = ptr::null();
+    assert_eq!(unsafe { hegel_failure_caveat(ctx, f, &mut p) }, HEGEL_OK);
     p
 }
 
@@ -232,6 +238,10 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_failure_reproduction_blob(ctx, ptr::null(), &mut p),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_failure_caveat(ctx, ptr::null(), &mut p),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -1153,11 +1163,16 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
             hegel_failure_reproduction_blob(ctx, f, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        assert_eq!(
+            hegel_failure_caveat(ctx, f, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
         let origin = std::ffi::CStr::from_ptr(origin_of(ctx, f))
             .to_string_lossy()
             .into_owned();
         assert!(origin.contains("Panic at <unknown>"), "got {origin:?}");
         let _ = repro_blob_of(ctx, f);
+        assert!(caveat_of(ctx, f).is_null());
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
 
@@ -1222,6 +1237,7 @@ fn single_test_case_failure_has_origin_but_no_blob() {
             "got {origin_back:?}"
         );
         assert!(repro_blob_of(ctx, f).is_null());
+        assert!(caveat_of(ctx, f).is_null());
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
 
@@ -1236,12 +1252,12 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 /// creation is rejected with `HEGEL_E_ASSUME` — the case is discarded like
 /// a failed assumption while the run flips — and from the next case on the
 /// creation succeeds. The run stops at the first bug and reports
-/// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, surfacing the bug with an
-/// origin but no reproduce blob: with replay and shrinking off, there is no
-/// shrunk choice sequence to encode, and the caller reports the bug from
-/// its own captured output instead.
+/// `HEGEL_RUN_STATUS_FAILED`, surfacing the bug with an origin and the
+/// concurrent-run caveat but no reproduce blob: with replay and shrinking
+/// off, there is no shrunk choice sequence to encode, and the caller
+/// reports the bug from its own captured output instead.
 #[test]
-fn nondeterministic_run_failure_has_origin_but_no_blob() {
+fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
@@ -1315,9 +1331,7 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
         );
 
         let res = result(ctx, run);
-        assert!(
-            status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC
-        );
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
         assert_eq!(failure_count_of(ctx, res), 1);
         let f = failure_at(ctx, res, 0);
         assert!(!f.is_null());
@@ -1329,6 +1343,13 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
             "got {origin_back:?}"
         );
         assert!(repro_blob_of(ctx, f).is_null());
+        let caveat_back = std::ffi::CStr::from_ptr(caveat_of(ctx, f))
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            caveat_back,
+            "concurrent-machine run: failure reported from the discovering execution"
+        );
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
 

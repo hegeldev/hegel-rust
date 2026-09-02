@@ -39,7 +39,7 @@ type CharKey = (u32, u32);
 /// the alphabet-constrained character sets (category classes like
 /// `\w` cost a full alphabet scan to materialise).
 #[derive(Debug)]
-pub(crate) struct CompiledRegex {
+pub struct CompiledRegex {
     parsed: ParsedPattern,
     alphabet: Option<IntervalSet>,
     in_cache: Mutex<HashMap<InKey, Arc<[char]>>>,

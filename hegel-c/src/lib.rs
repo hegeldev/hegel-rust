@@ -120,6 +120,7 @@ pub mod __bench {
                 crate::backend::Failure {
                     origin: alloc::string::String::from("experiment"),
                     reproduce_blob: None,
+                    caveat: None,
                 },
             ));
         });
@@ -313,23 +314,17 @@ pub enum hegel_run_status_t {
     /// The property failed. Inspect each distinct counterexample.
     HEGEL_RUN_STATUS_FAILED = 1,
     /// The run itself failed — a failed health check, a nondeterminism
-    /// mismatch, a violated engine invariant — and produced no verdict on
-    /// the property. There are no failures to inspect; read the message with
-    /// `hegel_run_result_error`.
+    /// abort under `error` strictness, a violated engine invariant — and
+    /// produced no verdict on the property. There are no failures to
+    /// inspect; read the message with `hegel_run_result_error`.
+    ///
+    /// A failing nondeterministic run reports plain
+    /// `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
+    /// (`hegel_failure_caveat`) and, unless the run created a concurrent
+    /// state machine, a reproduce blob. A blobless failure is reported
+    /// from what the caller captured while running the stamped test cases
+    /// (see `hegel_test_case_is_nondeterministic`).
     HEGEL_RUN_STATUS_ERROR = 2,
-    /// The property failed on a run that was declared nondeterministic (a
-    /// test case created a state machine with `max_concurrency > 1`). The
-    /// failures carry no reproduce blob — there was no shrinking and there
-    /// is no final replay — so the caller should report the bug from
-    /// whatever it captured while running the discovering test case (the
-    /// engine stamps every case of such a run nondeterministic up front,
-    /// see `hegel_test_case_is_nondeterministic`, precisely so the caller
-    /// captures each case's output as it runs). Only full test runs report
-    /// this status; a failing single-test-case run reports
-    /// `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-    /// machine, since the caller reports such a case from its own execution
-    /// anyway.
-    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
@@ -784,10 +779,6 @@ pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
-    /// Whether the run was nondeterministic: a failing run then reports
-    /// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` and its failures carry no
-    /// reproduce blob.
-    nondeterministic: bool,
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -805,9 +796,14 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob (a
-    /// single-test-case run, or a nondeterministic run). Read via
+    /// single-test-case run, a concurrent-machine run, or an unconfirmed
+    /// nondeterministic failure). Read via
     /// `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
+    /// The failure's confirmation standing when the run handled
+    /// nondeterminism, quoting the run's own replay evidence; `None` for
+    /// a deterministic failure. Read via `hegel_failure_caveat`.
+    caveat: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
@@ -815,6 +811,7 @@ impl From<Failure> for HegelFailure {
         HegelFailure {
             origin: cstring_lossy(&f.origin),
             reproduce_blob: f.reproduce_blob.map(|b| cstring_lossy(&b)),
+            caveat: f.caveat.map(|c| cstring_lossy(&c)),
         }
     }
 }
@@ -824,7 +821,6 @@ impl From<TestRunResult> for HegelRunResult {
         HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
-            nondeterministic: r.nondeterministic,
         }
     }
 }
@@ -836,7 +832,6 @@ impl HegelRunResult {
         HegelRunResult {
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
-            nondeterministic: false,
         }
     }
 
@@ -845,8 +840,6 @@ impl HegelRunResult {
             hegel_run_status_t::HEGEL_RUN_STATUS_ERROR
         } else if self.failures.is_empty() {
             hegel_run_status_t::HEGEL_RUN_STATUS_PASSED
-        } else if self.nondeterministic {
-            hegel_run_status_t::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC
         } else {
             hegel_run_status_t::HEGEL_RUN_STATUS_FAILED
         }
@@ -1685,8 +1678,14 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
-/// Returns whether this test case belongs to a run already known to be
-/// nondeterministic.
+/// Returns whether the engine stamped this test case for capture: the
+/// caller should buffer the case's output and, if it fails, its rendered
+/// diagnostic, keyed by the failure's origin — a stamped failing
+/// execution is the material for that origin's failure report. The
+/// engine stamps every case of a concurrent-machine run, and the
+/// replays it makes under nondeterministic handling whose failures can
+/// become the report: confirmation batches, database-reuse replays, and
+/// the report-time final replay. Read the stamp once at case start.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_test_case_is_nondeterministic(
     ctx: *mut HegelContext,
@@ -5145,6 +5144,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
             TestCaseResult::Interesting(Failure {
                 origin: origin_str,
                 reproduce_blob: None,
+                caveat: None,
             })
         }
         _ => {
@@ -5199,8 +5199,7 @@ unsafe fn failure_ref<'a>(
 
 /// Parameters:
 /// `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-///   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
-///   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
+///   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
@@ -5384,6 +5383,38 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     unsafe {
         *out_blob = match &f.reproduce_blob {
             Some(blob) => blob.as_ptr(),
+            None => ptr::null(),
+        };
+    }
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_caveat`: Receives the failure's confirmation caveat — its
+///   standing under the run's nondeterministic handling, quoting the
+///   run's own replay evidence — or NULL for a deterministic failure.
+///   Valid until `hegel_failure_free`. Print it alongside the failure
+///   report so the reader sees how reliably the failure reproduced.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_caveat(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_caveat: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_caveat") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_caveat.is_null() {
+        set_last_error(ctx, "hegel_failure_caveat: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_caveat = match &f.caveat {
+            Some(caveat) => caveat.as_ptr(),
             None => ptr::null(),
         };
     }

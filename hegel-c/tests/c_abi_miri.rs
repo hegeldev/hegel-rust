@@ -18,15 +18,15 @@ use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HegelCollection, HegelContext, HegelPool, HegelRun, HegelRunResult, HegelSettings,
     HegelStateMachine, HegelTestCase, hegel_collection_free, hegel_collection_more,
-    hegel_context_free, hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob,
-    hegel_generate_integer, hegel_mark_complete, hegel_new_collection, hegel_new_pool,
-    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free, hegel_run_free,
-    hegel_run_result, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_database, hegel_settings_set_seed,
-    hegel_settings_set_test_cases, hegel_settings_set_verbosity, hegel_start_span,
-    hegel_state_machine_free, hegel_status_t, hegel_stop_span, hegel_test_case_clone,
-    hegel_test_case_free, hegel_verbosity_t,
+    hegel_context_free, hegel_context_new, hegel_failure_caveat, hegel_failure_free,
+    hegel_failure_reproduction_blob, hegel_generate_integer, hegel_mark_complete,
+    hegel_new_collection, hegel_new_pool, hegel_new_state_machine, hegel_next_test_case,
+    hegel_pool_add, hegel_pool_free, hegel_run_free, hegel_run_result, hegel_run_result_failure,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_database, hegel_settings_set_seed, hegel_settings_set_test_cases,
+    hegel_settings_set_verbosity, hegel_start_span, hegel_state_machine_free, hegel_status_t,
+    hegel_stop_span, hegel_test_case_clone, hegel_test_case_free, hegel_verbosity_t,
 };
 use std::ffi::{CString, c_void};
 use std::ptr;
@@ -362,6 +362,9 @@ fn full_run_generates_fails_and_shrinks() {
             !blob.is_null(),
             "a shrunk failure carries a reproduction blob"
         );
+        let mut caveat: *const std::os::raw::c_char = ptr::null();
+        ok(hegel_failure_caveat(ctx, f, &mut caveat));
+        assert!(caveat.is_null(), "a deterministic failure has no caveat");
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
         ok(hegel_context_free(ctx));

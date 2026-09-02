@@ -196,26 +196,18 @@ typedef enum {
     HEGEL_RUN_STATUS_FAILED = 1,
     /*
      The run itself failed — a failed health check, a nondeterminism
-     mismatch, a violated engine invariant — and produced no verdict on
-     the property. There are no failures to inspect; read the message with
-     `hegel_run_result_error`.
+     abort under `error` strictness, a violated engine invariant — and
+     produced no verdict on the property. There are no failures to
+     inspect; read the message with `hegel_run_result_error`.
+
+     A failing nondeterministic run reports plain
+     `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
+     (`hegel_failure_caveat`) and, unless the run created a concurrent
+     state machine, a reproduce blob. A blobless failure is reported
+     from what the caller captured while running the stamped test cases
+     (see `hegel_test_case_is_nondeterministic`).
      */
     HEGEL_RUN_STATUS_ERROR = 2,
-    /*
-     The property failed on a run that was declared nondeterministic (a
-     test case created a state machine with `max_concurrency > 1`). The
-     failures carry no reproduce blob — there was no shrinking and there
-     is no final replay — so the caller should report the bug from
-     whatever it captured while running the discovering test case (the
-     engine stamps every case of such a run nondeterministic up front,
-     see `hegel_test_case_is_nondeterministic`, precisely so the caller
-     captures each case's output as it runs). Only full test runs report
-     this status; a failing single-test-case run reports
-     `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-     machine, since the caller reports such a case from its own execution
-     anyway.
-     */
-    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 } hegel_run_status_t;
 
 /*
@@ -1213,8 +1205,14 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
- Returns whether this test case belongs to a run already known to be
- nondeterministic.
+ Returns whether the engine stamped this test case for capture: the
+ caller should buffer the case's output and, if it fails, its rendered
+ diagnostic, keyed by the failure's origin — a stamped failing
+ execution is the material for that origin's failure report. The
+ engine stamps every case of a concurrent-machine run, and the
+ replays it makes under nondeterministic handling whose failures can
+ become the report: confirmation batches, database-reuse replays, and
+ the report-time final replay. Read the stamp once at case start.
  */
 hegel_result_t hegel_test_case_is_nondeterministic(hegel_context_t *ctx,
                                                    const hegel_test_case_t *tc,
@@ -2429,8 +2427,7 @@ hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
 /*
  Parameters:
  `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
-   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
+   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
 
  Returns `HEGEL_OK`.
  */
@@ -2509,6 +2506,20 @@ hegel_result_t hegel_failure_origin(hegel_context_t *ctx,
 hegel_result_t hegel_failure_reproduction_blob(hegel_context_t *ctx,
                                                const hegel_failure_t *f,
                                                const char **out_blob);
+
+/*
+ Parameters:
+ `out_caveat`: Receives the failure's confirmation caveat — its
+   standing under the run's nondeterministic handling, quoting the
+   run's own replay evidence — or NULL for a deterministic failure.
+   Valid until `hegel_failure_free`. Print it alongside the failure
+   report so the reader sees how reliably the failure reproduced.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_failure_caveat(hegel_context_t *ctx,
+                                    const hegel_failure_t *f,
+                                    const char **out_caveat);
 
 /*
  Parameters:

@@ -8,8 +8,15 @@
 //! database are `Trusted` on reproduction — the prior run persisted only
 //! confirmed origins, and re-running the bar would drop real p ~ 0.1 bugs
 //! ~55% of the time.
+//!
+//! The lifecycle also accumulates each origin's physical replay evidence —
+//! fails and replays across confirmation batches and the final replay — and
+//! renders the failure's caveat from it (decision 3): the wording quotes
+//! only in-run measurements and weights the environment-modification
+//! hypothesis only when non-reproduction is surprising given the evidence.
 
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -23,8 +30,13 @@ use crate::native::test_runner::RunResult;
 /// never removes state.
 pub(crate) enum OriginState {
     /// Observed interesting; hasn't passed the discovery bar. `rejections`
-    /// counts failed confirmation batches, for the caveated report.
-    Unconfirmed { rejections: u64 },
+    /// counts failed confirmation batches, `fails`/`replays` the cumulative
+    /// physical evidence behind them, for the caveated report.
+    Unconfirmed {
+        rejections: u64,
+        fails: u64,
+        replays: u64,
+    },
     /// Reproduced from the database: exempt from eviction (decision 24).
     /// Carries the stored entry's timeline pool (empty for v1 entries) but
     /// no anchor until a confirmation batch gathers evidence.
@@ -45,6 +57,13 @@ pub(crate) enum OriginState {
         /// Captured failing timelines, incumbent first, for replay
         /// fallback and persistence.
         pool: Vec<Vec<ChoiceValue>>,
+        /// Cumulative physical replay evidence — confirmation batches plus
+        /// the final replay — quoted by the caveat.
+        fails: u64,
+        replays: u64,
+        /// Whether the report-time final replay failed to reproduce the
+        /// origin within its budget; switches the caveat's wording.
+        report_dry: bool,
     },
 }
 
@@ -61,7 +80,11 @@ impl OriginLifecycle {
         if !self.origins.contains_key(origin) {
             self.origins.insert(
                 origin.to_string(),
-                OriginState::Unconfirmed { rejections: 0 },
+                OriginState::Unconfirmed {
+                    rejections: 0,
+                    fails: 0,
+                    replays: 0,
+                },
             );
         }
     }
@@ -98,19 +121,30 @@ impl OriginLifecycle {
     }
 
     /// The discovery bar accepted `origin`: store its replay state.
+    /// `evidence` is the accepting batch's physical (fails, replays),
+    /// folded into the origin's cumulative counts.
     pub(crate) fn confirm(
         &mut self,
         origin: &str,
         anchor: f64,
         witness: Option<RunResult>,
         pool: Vec<Vec<ChoiceValue>>,
+        evidence: (u64, u64),
     ) {
+        let (prior_fails, prior_replays) = match self.origins.get(origin) {
+            Some(OriginState::Unconfirmed { fails, replays, .. })
+            | Some(OriginState::Confirmed { fails, replays, .. }) => (*fails, *replays),
+            _ => (0, 0),
+        };
         self.origins.insert(
             origin.to_string(),
             OriginState::Confirmed {
                 anchor,
                 witness,
                 pool,
+                fails: prior_fails + evidence.0,
+                replays: prior_replays + evidence.1,
+                report_dry: false,
             },
         );
     }
@@ -127,20 +161,49 @@ impl OriginLifecycle {
         }
     }
 
-    /// The discovery bar rejected `origin`. Returns whether the caller
-    /// must evict it from the interesting map: true for unconfirmed
-    /// origins (recording the rejection for the caveated report), false
-    /// for trusted and confirmed ones, which are exempt.
-    pub(crate) fn reject(&mut self, origin: &str) -> bool {
+    /// Fold the report-time final replay's physical (fails, replays) into
+    /// `origin`'s evidence; a replay that never reproduced marks the
+    /// origin dry at report time, switching its caveat wording. No-op
+    /// unless confirmed — only confirmed origins reach the final replay.
+    pub(crate) fn record_final_replay(&mut self, origin: &str, evidence: (u64, u64)) {
+        if let Some(OriginState::Confirmed {
+            fails,
+            replays,
+            report_dry,
+            ..
+        }) = self.origins.get_mut(origin)
+        {
+            *fails += evidence.0;
+            *replays += evidence.1;
+            *report_dry = evidence.0 == 0;
+        }
+    }
+
+    /// The discovery bar rejected `origin`, with the rejecting batch's
+    /// physical (fails, replays). Returns whether the caller must evict it
+    /// from the interesting map: true for unconfirmed origins (recording
+    /// the rejection for the caveated report), false for trusted and
+    /// confirmed ones, which are exempt.
+    pub(crate) fn reject(&mut self, origin: &str, evidence: (u64, u64)) -> bool {
         match self.origins.get_mut(origin) {
-            Some(OriginState::Unconfirmed { rejections }) => {
+            Some(OriginState::Unconfirmed {
+                rejections,
+                fails,
+                replays,
+            }) => {
                 *rejections += 1;
+                *fails += evidence.0;
+                *replays += evidence.1;
                 true
             }
             None => {
                 self.origins.insert(
                     origin.to_string(),
-                    OriginState::Unconfirmed { rejections: 1 },
+                    OriginState::Unconfirmed {
+                        rejections: 1,
+                        fails: evidence.0,
+                        replays: evidence.1,
+                    },
                 );
                 true
             }
@@ -168,6 +231,52 @@ impl OriginLifecycle {
         }
     }
 
+    /// The caveat attached to `origin`'s reported failure (decision 3):
+    /// its confirmation standing with the in-run replay evidence, worded
+    /// per the state. `None` for an origin the lifecycle never saw — a
+    /// deterministic failure carries no caveat.
+    pub(crate) fn caveat(&self, origin: &str) -> Option<String> {
+        Some(match self.origins.get(origin)? {
+            OriginState::Confirmed {
+                fails,
+                replays,
+                report_dry,
+                ..
+            } => {
+                if *report_dry {
+                    format!(
+                        "nondeterministic failure, confirmed earlier this run \
+                         (failed {fails} of {replays} replays) but not reproduced \
+                         at report time — a rare failure, or something in the \
+                         environment changed after discovery"
+                    )
+                } else {
+                    format!(
+                        "nondeterministic failure, confirmed: failed {fails} of \
+                         {replays} replays this run"
+                    )
+                }
+            }
+            OriginState::Trusted { .. } => {
+                "nondeterministic failure: reproduced from the stored entry this run".to_string()
+            }
+            OriginState::Unconfirmed { fails, replays, .. } => {
+                if *fails > 0 {
+                    format!(
+                        "unconfirmed failure: failed {fails} of {replays} replays \
+                         this run, below the confirmation bar — likely rare"
+                    )
+                } else {
+                    format!(
+                        "unconfirmed failure: failed 0 of {replays} replays after \
+                         the observed failure — a rare failure, or the environment \
+                         changed between executions"
+                    )
+                }
+            }
+        })
+    }
+
     /// Origins observed but never confirmed, with rejection counts, in
     /// origin order — the caveated-failure report (decision 3), used only
     /// when nothing confirmed (decision 24).
@@ -175,7 +284,7 @@ impl OriginLifecycle {
         self.origins
             .iter()
             .filter_map(|(origin, state)| match state {
-                OriginState::Unconfirmed { rejections } if *rejections > 0 => {
+                OriginState::Unconfirmed { rejections, .. } if *rejections > 0 => {
                     Some((origin.as_str(), *rejections))
                 }
                 _ => None,
