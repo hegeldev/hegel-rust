@@ -242,3 +242,29 @@ fn continuation_budget_floors_at_four() {
     assert_eq!(continuation_budget(10), 14);
     assert_eq!(continuation_budget(80), 90);
 }
+
+#[test]
+fn verbatim_weight_is_the_tracked_fraction_of_the_stored_timeline() {
+    use crate::native::core::ChoiceValue as CV;
+    let stored = alloc::vec![
+        CV::Boolean(true),
+        CV::Boolean(false),
+        CV::Boolean(true),
+        CV::Boolean(false),
+    ];
+    assert_eq!(verbatim_weight(&stored, &stored), 1.0);
+    let half = alloc::vec![
+        CV::Boolean(true),
+        CV::Boolean(false),
+        CV::Boolean(false),
+        CV::Boolean(true),
+    ];
+    assert_eq!(verbatim_weight(&stored, &half), 0.5);
+    assert_eq!(verbatim_weight(&stored, &stored[..1]), 0.25);
+    assert_eq!(verbatim_weight(&stored, &[]), 0.0);
+    assert_eq!(verbatim_weight(&stored, &[CV::Boolean(false)]), 0.0);
+    assert_eq!(verbatim_weight(&[], &[CV::Boolean(false)]), 1.0);
+    let mut longer = stored.clone();
+    longer.push(CV::Boolean(true));
+    assert_eq!(verbatim_weight(&stored, &longer), 1.0);
+}

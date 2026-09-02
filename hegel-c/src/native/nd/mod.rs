@@ -167,6 +167,31 @@ pub(crate) fn reuse_replay_budget() -> u64 {
     replay_budget(TARGET_FAILURE_RATE, REUSE_MISS_TOLERANCE)
 }
 
+/// The verbatim watermark (decision 22): the fraction of `stored` a replay
+/// tracked before first diverging, which is the weight of that replay's
+/// non-failure as evidence about `stored` — a diverged run says little
+/// about the timeline it abandoned. Linear, no floor; the physical caps
+/// bound the cost of heavily-diverged probing. An empty timeline is
+/// trivially fully tracked.
+pub(crate) fn verbatim_weight(
+    stored: &[crate::native::core::ChoiceValue],
+    realized: &[crate::native::core::ChoiceValue],
+) -> f64 {
+    if stored.is_empty() {
+        return 1.0;
+    }
+    let matched = stored
+        .iter()
+        .zip(realized)
+        .take_while(|(s, r)| *s == *r)
+        .count();
+    matched as f64 / stored.len() as f64
+}
+
+/// Positional splices tried after the whole pool misses (decision 25;
+/// experiment 006: ~6 splice replays recover 65-100% of full-pool misses).
+pub(crate) const REPRODUCE_SPLICES: u64 = 6;
+
 pub(crate) mod lifecycle;
 
 #[cfg(test)]

@@ -1400,7 +1400,11 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
     assert!(result.failures[0].origin.contains("child too big"));
 
     let blob = result.failures[0].reproduce_blob.as_ref().unwrap();
-    let choices = crate::native::blob::decode_failure(blob).unwrap();
+    let crate::native::blob::DecodedBlob::Choices(choices) =
+        crate::native::blob::decode_blob(blob).unwrap()
+    else {
+        panic!("expected a deterministic blob");
+    };
     assert_eq!(choices.len(), 2);
     let crate::native::core::ChoiceValue::Clone(record) = &choices[0] else {
         panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
@@ -1465,12 +1469,13 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
         async |ctx| {
             let origin = "Panic: bug";
             let big = vec![bool_node(true), bool_node(true)];
-            ctx.record_run(&interesting_at(origin, big), Duration::ZERO);
+            ctx.record_run(&interesting_at(origin, big), Duration::ZERO, false);
             assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
 
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
+                false,
             );
             assert_eq!(
                 ctx.interesting.get(origin).unwrap().len(),
@@ -1482,6 +1487,7 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
+                false,
             );
             assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
         },
@@ -1498,6 +1504,7 @@ fn nd_admission_leaves_the_origin_unconfirmed() {
             ctx.record_run(
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
+                false,
             );
             assert!(ctx.interesting.contains_key("Panic: bug"));
             assert!(ctx.nd_origins.needs_confirmation("Panic: bug"));
@@ -1524,6 +1531,7 @@ fn nd_discovery_sweep_evicts_an_unconfirmable_origin() {
             ctx.record_run(
                 &interesting_at("Panic: fluke", vec![bool_node(true)]),
                 Duration::ZERO,
+                false,
             );
             let output = ctx.settings.output.clone();
             ctx.nd_discovery_sweep(Verbosity::Debug, &output)
@@ -1560,6 +1568,7 @@ fn nd_discovery_sweep_confirms_a_real_failure() {
             ctx.record_run(
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
+                false,
             );
             let output = ctx.settings.output.clone();
             ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
@@ -1600,6 +1609,7 @@ fn nd_persists_only_validated_incumbents() {
             ctx.record_run(
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
+                false,
             );
             assert!(
                 db.fetch(b"k").is_empty(),
@@ -1679,6 +1689,7 @@ fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
                 output,
                 gauntlet: true,
                 ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
                 anchor: 0.99,
             };
             let nodes = vec![bool_node(true)];
@@ -2159,4 +2170,457 @@ fn nd_handling_confirms_and_shrinks_a_clone_bearing_body() {
     assert_eq!(result.failures[0].origin, "Panic: clone bug");
     assert!(result.failures[0].reproduce_blob.is_some());
     assert!(!result.nondeterministic);
+}
+
+#[test]
+fn measurement_runs_move_no_counters_but_still_admit_origins() {
+    with_engine(
+        Settings::new().database(None).verbosity(Verbosity::Quiet),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.nd_active = true;
+            let valid = RunResult {
+                status: Status::Valid,
+                nodes: vec![bool_node(true)],
+                spans: Vec::new(),
+                origin: None,
+                target_observations: crate::native::HashMap::default(),
+                span_events: Vec::new(),
+                events: Vec::new(),
+            };
+            ctx.record_run(&valid, Duration::from_secs(1), true);
+            ctx.record_run(
+                &interesting_at("Panic: measured", vec![bool_node(true)]),
+                Duration::ZERO,
+                true,
+            );
+            assert_eq!(ctx.calls, 0);
+            assert_eq!(ctx.valid_test_cases, 0);
+            assert_eq!(ctx.total_test_time, Duration::ZERO);
+            assert!(ctx.first_bug_at.is_none());
+            assert!(ctx.last_bug_at.is_none());
+            assert!(
+                ctx.interesting.contains_key("Panic: measured"),
+                "a measurement run still admits a vacant origin"
+            );
+            assert!(ctx.nd_origins.needs_confirmation("Panic: measured"));
+
+            ctx.record_run(&valid, Duration::from_secs(1), false);
+            assert_eq!(ctx.calls, 1);
+            assert_eq!(ctx.valid_test_cases, 1);
+            assert_eq!(ctx.total_test_time, Duration::from_secs(1));
+        },
+    );
+}
+
+#[test]
+fn a_diverged_replay_miss_carries_the_verbatim_watermark_weight() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let diverge = AtomicBool::new(false);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let second = if diverge.load(Ordering::SeqCst) {
+                rint(ds, 0, 100).map(|_| ())
+            } else {
+                rbool(ds).map(|_| ())
+            };
+            match second {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx| {
+            let stored = vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)];
+            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(!replay.failed);
+            assert_eq!(replay.weight, 1.0, "an aligned miss weighs in full");
+            diverge.store(true, Ordering::SeqCst);
+            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(!replay.failed);
+            assert_eq!(
+                replay.weight, 0.5,
+                "a replay that diverged after tracking half the timeline weighs half"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
+    with_engine(
+        nd_settings().seed(Some(3)),
+        None,
+        |ds| {
+            let (a, b) = match (rbool(ds), rbool(ds)) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => return TestCaseResult::Overrun,
+            };
+            if a && b {
+                boom("splice")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let stored = vec![
+                vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(false)],
+                vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
+            ];
+            let (run, evidence) = ctx
+                .nd_reproduce(Some("Panic: splice"), &stored, 2.0, 50, 0)
+                .await
+                .unwrap();
+            let run = run.expect("a splice of the two stored timelines must fail");
+            assert_eq!(run.origin.as_deref(), Some("Panic: splice"));
+            assert!(
+                evidence.runs() > 4,
+                "both timelines face the first-fit tier before the splices"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_reproduce_falls_back_to_fresh_generation_and_reports_a_dry_pool() {
+    with_engine(
+        nd_settings().seed(Some(1)),
+        None,
+        |ds| match rbool(ds) {
+            Ok(true) => boom("fresh"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            let stored = vec![vec![ChoiceValue::Boolean(false)]];
+            let (run, _) = ctx
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2.0, 0, 0)
+                .await
+                .unwrap();
+            assert!(run.is_none(), "the stored timeline never fails");
+            let (run, _) = ctx
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2.0, 0, 40)
+                .await
+                .unwrap();
+            assert!(
+                run.is_some(),
+                "fresh generation past a dry pool still finds the failure"
+            );
+        },
+    );
+}
+
+#[test]
+fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_again() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("boom")
+        },
+        async |ctx| {
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: boom".to_string(),
+                verbosity: Verbosity::Quiet,
+                output: Output::callback(|_| {}),
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.3,
+            };
+            let nodes = vec![bool_node(true)];
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(matched);
+            let raised_anchor = probe.anchor;
+            assert!(
+                raised_anchor > 0.3,
+                "the first accept of a candidate raises the monotone anchor"
+            );
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(matched);
+            assert_eq!(
+                probe.anchor, raised_anchor,
+                "re-accepting the same timeline draws on replay evidence and \
+                 must not keep raising the anchor"
+            );
+            assert_eq!(
+                ctx.calls, 2,
+                "the two candidate proposals count; their gauntlet reruns are \
+                 measurement runs and do not"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_failures_persist_v2_state_and_reproduce_across_runs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        {
+            let mut s = Settings::new()
+                .database(Some(path.clone()))
+                .phases([Phase::Generate, Phase::Shrink])
+                .verbosity(Verbosity::Quiet);
+            s.nd_force = true;
+            s
+        },
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                boom("nd")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let blob = result.failures[0].reproduce_blob.as_deref().unwrap();
+    assert!(
+        matches!(
+            crate::native::blob::decode_blob(blob),
+            Some(crate::native::blob::DecodedBlob::Nd(_))
+        ),
+        "a nondeterministic failure's blob carries replay state"
+    );
+
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let entries = db.fetch(b"k");
+    assert_eq!(entries.len(), 1, "one v2 entry per confirmed origin");
+    assert!(
+        deserialize_choices(&entries[0]).is_none(),
+        "a v1 reader rejects the v2 entry instead of misreading it"
+    );
+    let state = crate::native::blob::decode_nd_state(&entries[0]).unwrap();
+    assert!(!state.timelines.is_empty());
+
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                boom("nd")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        result.failures.len(),
+        1,
+        "a later run reproduces the flaky failure from its v2 entry alone"
+    );
+    assert_eq!(result.failures[0].origin, "Panic: nd");
+    let blob = result.failures[0].reproduce_blob.as_deref().unwrap();
+    assert!(matches!(
+        crate::native::blob::decode_blob(blob),
+        Some(crate::native::blob::DecodedBlob::Nd(_))
+    ));
+    assert_eq!(
+        db.fetch(b"k").len(),
+        1,
+        "an aligned reuse hit re-persists the stored state"
+    );
+}
+
+#[test]
+fn stale_nd_entries_demote_to_secondary_then_delete() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+
+    let settings = || {
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .verbosity(Verbosity::Quiet)
+    };
+    let body = |ds: &dyn DataSource| match rbool(ds) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    };
+    let result = reuse_run(settings(), "k", body).unwrap();
+    assert!(result.failures.is_empty());
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(b"k").is_empty(),
+        "a primary miss demotes the entry instead of deleting it"
+    );
+    assert_eq!(db.fetch(&secondary).len(), 1);
+
+    let result = reuse_run(settings(), "k", body).unwrap();
+    assert!(result.failures.is_empty());
+    assert!(db.fetch(b"k").is_empty());
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a secondary miss deletes the entry"
+    );
+}
+
+#[test]
+fn nd_reproduction_holds_across_runs_for_a_family_of_flaky_bodies() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for period in [3usize, 4, 5] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        let body = |execs: &AtomicUsize, ds: &dyn DataSource| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) % period == period - 1 {
+                boom("periodic")
+            } else {
+                TestCaseResult::Valid
+            }
+        };
+
+        let execs = AtomicUsize::new(0);
+        let result = reuse_run(
+            {
+                let mut s = Settings::new()
+                    .database(Some(path.clone()))
+                    .phases([Phase::Generate, Phase::Shrink])
+                    .verbosity(Verbosity::Quiet);
+                s.nd_force = true;
+                s
+            },
+            "k",
+            |ds| body(&execs, ds),
+        )
+        .unwrap();
+        assert_eq!(
+            result.failures.len(),
+            1,
+            "period {period}: first run finds the bug"
+        );
+
+        let execs = AtomicUsize::new(0);
+        let result = reuse_run(
+            Settings::new()
+                .database(Some(path.clone()))
+                .phases([Phase::Reuse])
+                .verbosity(Verbosity::Quiet),
+            "k",
+            |ds| body(&execs, ds),
+        )
+        .unwrap();
+        assert_eq!(
+            result.failures.len(),
+            1,
+            "period {period}: the second run reproduces from the v2 entry"
+        );
+        assert_eq!(result.failures[0].origin, "Panic: periodic");
+    }
+}
+
+#[test]
+fn a_v2_entry_replay_that_detects_nondeterminism_under_error_strictness_aborts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            let r = if execs.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 0, 100).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    );
+    match result {
+        Err(crate::backend::RunError::NonDeterministic(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("non-deterministic"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected RunError::NonDeterministic, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_fresh_tier_replay_that_detects_nondeterminism_under_error_strictness_aborts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        Settings::new()
+            .database(None)
+            .nondeterminism_strictness(NondeterminismStrictness::Error)
+            .verbosity(Verbosity::Quiet),
+        None,
+        |ds| {
+            let r = if execs.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 0, 100).map(|_| ())
+            };
+            match r {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx| {
+            let stored = vec![vec![ChoiceValue::Boolean(true)]];
+            let result = ctx.nd_reproduce(None, &stored, 0.0, 0, 4).await;
+            match result {
+                Err(crate::backend::RunError::NonDeterministic(msg)) => {
+                    assert!(
+                        msg.to_lowercase().contains("non-deterministic"),
+                        "got: {msg}"
+                    );
+                }
+                Err(other) => panic!("expected RunError::NonDeterministic, got {other:?}"),
+                Ok(_) => panic!("expected RunError::NonDeterministic, got a result"),
+            }
+        },
+    );
 }

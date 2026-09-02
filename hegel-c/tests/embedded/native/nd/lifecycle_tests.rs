@@ -65,7 +65,7 @@ fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
 fn trusted_origins_survive_rejection_without_a_caveat() {
     let mut lc = OriginLifecycle::default();
     lc.observe("a");
-    lc.trust("a");
+    lc.trust("a", Vec::new());
     assert!(!lc.needs_confirmation("a"));
     assert!(!lc.reject("a"));
     assert_eq!(lc.unconfirmed().count(), 0);
@@ -73,10 +73,21 @@ fn trusted_origins_survive_rejection_without_a_caveat() {
 }
 
 #[test]
+fn trust_carries_a_stored_pool_and_never_replaces_it_with_an_empty_one() {
+    let mut lc = OriginLifecycle::default();
+    lc.trust("a", vec![vec![ChoiceValue::Boolean(true)]]);
+    assert_eq!(lc.pool("a").len(), 1);
+    lc.trust("a", Vec::new());
+    assert_eq!(lc.pool("a").len(), 1);
+    lc.trust("a", vec![Vec::new(), vec![ChoiceValue::Boolean(false)]]);
+    assert_eq!(lc.pool("a").len(), 2);
+}
+
+#[test]
 fn trust_is_idempotent_and_covers_unobserved_origins() {
     let mut lc = OriginLifecycle::default();
-    lc.trust("a");
-    lc.trust("a");
+    lc.trust("a", Vec::new());
+    lc.trust("a", Vec::new());
     assert!(!lc.needs_confirmation("a"));
 }
 
@@ -84,9 +95,10 @@ fn trust_is_idempotent_and_covers_unobserved_origins() {
 fn trust_never_demotes_a_confirmed_origin() {
     let mut lc = OriginLifecycle::default();
     lc.confirm("a", 0.7, Some(witness("a")), Vec::new());
-    lc.trust("a");
+    lc.trust("a", vec![Vec::new()]);
     let (_, anchor) = lc.take_witness("a").unwrap();
     assert_eq!(anchor, 0.7);
+    assert!(lc.pool("a").is_empty());
 }
 
 #[test]

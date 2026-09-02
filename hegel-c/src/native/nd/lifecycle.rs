@@ -25,9 +25,15 @@ pub(crate) enum OriginState {
     /// Observed interesting; hasn't passed the discovery bar. `rejections`
     /// counts failed confirmation batches, for the caveated report.
     Unconfirmed { rejections: u64 },
-    /// Reproduced from the database: exempt from eviction (decision 24),
-    /// carrying no replay state until a confirmation batch gathers it.
-    Trusted,
+    /// Reproduced from the database: exempt from eviction (decision 24).
+    /// Carries the stored entry's timeline pool (empty for v1 entries) but
+    /// no anchor until a confirmation batch gathers evidence.
+    Trusted {
+        /// Timelines decoded from the reproducing v2 entry, so an aligned
+        /// reuse hit that skips shrink re-persists them instead of
+        /// forgetting the pool.
+        pool: Vec<Vec<ChoiceValue>>,
+    },
     /// Past the discovery bar (or trusted with gathered evidence).
     Confirmed {
         /// Failure-rate anchor the gauntlet prices shrink candidates
@@ -61,14 +67,23 @@ impl OriginLifecycle {
     }
 
     /// The database reproduced `origin` this run: trusted without
-    /// re-running the bar (decision 24). Never demotes `Confirmed`.
-    pub(crate) fn trust(&mut self, origin: &str) {
+    /// re-running the bar (decision 24). `pool` carries the reproducing
+    /// entry's stored timelines (empty for v1 entries). Never demotes
+    /// `Confirmed`, and never replaces an existing pool with an empty one.
+    pub(crate) fn trust(&mut self, origin: &str, pool: Vec<Vec<ChoiceValue>>) {
         match self.origins.get_mut(origin) {
-            Some(OriginState::Confirmed { .. }) | Some(OriginState::Trusted) => {}
-            Some(state @ OriginState::Unconfirmed { .. }) => *state = OriginState::Trusted,
+            Some(OriginState::Confirmed { .. }) => {}
+            Some(OriginState::Trusted { pool: existing }) => {
+                if !pool.is_empty() {
+                    *existing = pool;
+                }
+            }
+            Some(state @ OriginState::Unconfirmed { .. }) => {
+                *state = OriginState::Trusted { pool };
+            }
             None => {
                 self.origins
-                    .insert(origin.to_string(), OriginState::Trusted);
+                    .insert(origin.to_string(), OriginState::Trusted { pool });
             }
         }
     }
@@ -117,7 +132,7 @@ impl OriginLifecycle {
                 );
                 true
             }
-            Some(OriginState::Trusted) | Some(OriginState::Confirmed { .. }) => false,
+            Some(OriginState::Trusted { .. }) | Some(OriginState::Confirmed { .. }) => false,
         }
     }
 
@@ -132,10 +147,11 @@ impl OriginLifecycle {
         }
     }
 
-    /// The captured timeline pool for `origin`; empty unless confirmed.
+    /// The captured timeline pool for `origin`; empty unless confirmed or
+    /// trusted from a v2 entry.
     pub(crate) fn pool(&self, origin: &str) -> &[Vec<ChoiceValue>] {
         match self.origins.get(origin) {
-            Some(OriginState::Confirmed { pool, .. }) => pool,
+            Some(OriginState::Confirmed { pool, .. }) | Some(OriginState::Trusted { pool }) => pool,
             _ => &[],
         }
     }

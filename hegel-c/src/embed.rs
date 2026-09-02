@@ -77,25 +77,45 @@ pub(crate) async fn run_native_async(
 /// base64 failure blob, or `None` if the blob cannot be decoded (corrupt or
 /// from an incompatible Hegel version).
 ///
-/// The replay is a single deterministic test case: the embedding caller
-/// drives the returned data source directly (generate, spans, targets) and
-/// concludes it with [`DataSource::mark_complete`], deciding for itself
-/// whether the blob reproduced its failure (the property failed) or is stale
-/// (it passed). A blob whose choices no longer match the caller's generators
-/// surfaces as a stop-test error from the draw that overruns.
+/// The replay is a single test case: the embedding caller drives the
+/// returned data source directly (generate, spans, targets) and concludes
+/// it with [`DataSource::mark_complete`], deciding for itself whether the
+/// blob reproduced its failure (the property failed) or is stale (it
+/// passed). A deterministic blob replays exactly, and choices that no
+/// longer match the caller's generators surface as a stop-test error from
+/// the draw that overruns; a nondeterministic blob replays its incumbent
+/// timeline with the stored entropy seed and continuation budget, so a
+/// diverging replay completes with fresh draws instead.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
     blob: &str,
 ) -> Option<Box<dyn DataSource + Send + Sync>> {
-    let choices = crate::native::blob::decode_failure(blob)?;
-    if settings.verbosity == Verbosity::Debug {
-        settings.output.line(&format!(
-            "replaying failure blob: choices = {}",
-            choices.len()
-        ));
-    }
-    let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
+    let ntc = match crate::native::blob::decode_blob(blob)? {
+        crate::native::blob::DecodedBlob::Choices(choices) => {
+            if settings.verbosity == Verbosity::Debug {
+                settings.output.line(&format!(
+                    "replaying failure blob: choices = {}",
+                    choices.len()
+                ));
+            }
+            crate::native::core::NativeTestCase::for_choices(&choices, None, None)
+        }
+        crate::native::blob::DecodedBlob::Nd(state) => {
+            let incumbent = state.incumbent();
+            if settings.verbosity == Verbosity::Debug {
+                settings.output.line(&format!(
+                    "replaying nondeterministic failure blob: choices = {}, pool = {}",
+                    incumbent.len(),
+                    state.timelines.len() - 1
+                ));
+            }
+            let budget =
+                crate::native::core::flattened_values_len(incumbent) + state.extension as usize;
+            let rng = crate::native::rng::EngineRng::seeded(state.entropy);
+            crate::native::core::NativeTestCase::for_probe(incumbent, rng, budget).ok()?
+        }
+    };
     ntc.family()
         .set_stateful_step_count(settings.stateful_step_count);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);

@@ -454,3 +454,40 @@ fn run_native_single_test_case_passes_cleanly() {
     .unwrap();
     assert!(result.failures.is_empty());
 }
+
+#[test]
+fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budget() {
+    use crate::native::blob::{NdReproState, encode_nd_failure};
+    use crate::native::core::ChoiceValue;
+    use crate::settings::{Output, Verbosity};
+    use std::sync::{Arc, Mutex};
+    let state = NdReproState {
+        timelines: alloc::vec![alloc::vec![ChoiceValue::Boolean(true)]],
+        entropy: 7,
+        extension: 4,
+    };
+    let blob = encode_nd_failure(&state);
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let settings = quiet_settings(1)
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    let ds = data_source_for_blob(&settings, &blob).unwrap();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("replaying nondeterministic failure blob")),
+        "debug verbosity names the replay"
+    );
+    assert!(
+        ds.generate_boolean(0.5, None).unwrap(),
+        "the incumbent timeline replays verbatim"
+    );
+    ds.generate_boolean(0.5, None)
+        .expect("a draw past the stored timeline draws fresh within the extension budget");
+    ds.mark_complete(&TestCaseResult::Valid);
+}

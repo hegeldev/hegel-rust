@@ -4,6 +4,14 @@ use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use alloc::vec;
 
+/// [`decode_blob`] narrowed to the deterministic (prefix 0/1) form.
+fn decode_failure(blob: &str) -> Option<Vec<ChoiceValue>> {
+    match decode_blob(blob)? {
+        DecodedBlob::Choices(choices) => Some(choices),
+        DecodedBlob::Nd(_) => None,
+    }
+}
+
 fn sample_choices() -> Vec<ChoiceValue> {
     vec![
         ChoiceValue::Integer(BigInt::from(42)),
@@ -99,4 +107,115 @@ fn blob_roundtrips_clone_values() {
     ];
     let blob = encode_failure(&choices);
     assert_eq!(decode_failure(&blob), Some(choices));
+}
+
+fn sample_nd_state() -> NdReproState {
+    NdReproState {
+        timelines: vec![
+            sample_choices(),
+            vec![ChoiceValue::Boolean(true)],
+            vec![ChoiceValue::Boolean(false), ChoiceValue::Float(1.5)],
+        ],
+        entropy: 0xDEAD_BEEF_CAFE_F00D,
+        extension: 12,
+    }
+}
+
+#[test]
+fn nd_blob_round_trips_pool_entropy_and_extension() {
+    let state = sample_nd_state();
+    let blob = encode_nd_failure(&state);
+    let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
+        panic!("expected nd state");
+    };
+    assert_eq!(decoded.timelines, state.timelines);
+    assert_eq!(decoded.incumbent(), state.timelines[0].as_slice());
+    assert_eq!(decoded.entropy, state.entropy);
+    assert_eq!(decoded.extension, state.extension);
+}
+
+#[test]
+fn incompressible_nd_state_uses_the_raw_prefix() {
+    let noise: Vec<u8> = (0..200u32)
+        .map(|i| (i.wrapping_mul(197).wrapping_add(i * i * 31) % 251) as u8)
+        .collect();
+    let state = NdReproState {
+        timelines: vec![vec![ChoiceValue::Bytes(noise)]],
+        entropy: 1,
+        extension: 4,
+    };
+    let blob = encode_nd_failure(&state);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ND_RAW);
+    assert!(matches!(decode_blob(&blob), Some(DecodedBlob::Nd(_))));
+}
+
+#[test]
+fn long_nd_state_uses_the_zlib_prefix_and_round_trips() {
+    let state = NdReproState {
+        timelines: vec![
+            (0..500)
+                .map(|_| ChoiceValue::Integer(BigInt::from(1)))
+                .collect(),
+        ],
+        entropy: 7,
+        extension: 4,
+    };
+    let blob = encode_nd_failure(&state);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ND_ZLIB);
+    let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
+        panic!("expected nd state");
+    };
+    assert_eq!(decoded.timelines, state.timelines);
+}
+
+#[test]
+fn nd_state_bytes_are_rejected_by_the_choice_deserializer() {
+    let bytes = encode_nd_state(&sample_nd_state());
+    assert!(deserialize_choices(&bytes).is_none());
+}
+
+#[test]
+fn nd_state_decode_rejects_malformed_bytes() {
+    let good = encode_nd_state(&sample_nd_state());
+    assert!(decode_nd_state(&good).is_some());
+    assert!(decode_nd_state(&[]).is_none());
+    assert!(decode_nd_state(&good[1..]).is_none(), "wrong magic");
+    assert!(
+        decode_nd_state(&good[..good.len() - 1]).is_none(),
+        "truncated timeline"
+    );
+    let mut wrong_version = good.clone();
+    wrong_version[4] = 9;
+    assert!(decode_nd_state(&wrong_version).is_none());
+    let mut zero_count = good.clone();
+    zero_count[17..21].copy_from_slice(&0u32.to_le_bytes());
+    assert!(decode_nd_state(&zero_count).is_none());
+    let mut absurd_count = good.clone();
+    absurd_count[17..21].copy_from_slice(&1_000u32.to_le_bytes());
+    assert!(decode_nd_state(&absurd_count).is_none());
+    let mut corrupt_timeline = good.clone();
+    corrupt_timeline[29] = 9;
+    assert!(
+        decode_nd_state(&corrupt_timeline).is_none(),
+        "an unknown choice tag inside a timeline is rejected"
+    );
+}
+
+#[test]
+fn nd_blob_decode_rejects_corrupt_payloads() {
+    let blob = base64_encode(&[PREFIX_ND_RAW, 0xAB]);
+    assert!(decode_blob(&blob).is_none());
+    let blob = base64_encode(&[PREFIX_ND_ZLIB, 0xFF, 0xFF, 0xFF, 0xFF]);
+    assert!(decode_blob(&blob).is_none());
+}
+
+#[test]
+fn v1_blobs_still_decode_as_plain_choice_sequences() {
+    let blob = encode_failure(&sample_choices());
+    assert!(matches!(
+        decode_blob(&blob),
+        Some(DecodedBlob::Choices(choices)) if choices == sample_choices()
+    ));
 }

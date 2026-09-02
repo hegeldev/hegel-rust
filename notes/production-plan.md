@@ -241,8 +241,11 @@ regenerated, header-drift test green.
   persisted counters. Only confirmed origins persist (decision 24: reproduced DB entries
   are trusted without re-running the bar).
 - **Serialization.** `serialize_choices`'s Clone encoding (tag 5, values only) loses
-  realized clone kinds — round-trip puns to unit rather than simplest. Fix or explicitly
-  scope to phase 7; a pool that can't round-trip clone timelines can't serve workload #1.
+  realized clone kinds — round-trip puns to unit rather than simplest. Scoped to phase 7
+  (recorded in the experiment 007 notes): the early smoke showed the ND pipeline
+  completing on clone-bearing bodies, and clone round-trip fidelity belongs with the
+  clone-splice-safety work; a pool that can't round-trip clone timelines can't serve
+  workload #1, so phase 7 owns closing it.
 
 Tests: replay-order integration tests with bodies from 004/006 shapes (pool hit, splice
 rescue, fresh fallback); blob v2 round-trip incl. pool contents, v1 compat, and
