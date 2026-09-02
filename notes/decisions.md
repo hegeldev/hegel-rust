@@ -167,3 +167,24 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     artefact later extraction/pruning/history-rewriting works from. Consequence: the nd_*
     scaffolding is the seed of the real implementation, to be refactored and hardened on this
     branch, not discarded. (DRM, correcting a misreading.)
+
+27. **ABI: ND failures report as FAILED plus a per-failure caveat accessor** (plan gate G1).
+    `FAILED_NONDETERMINISTIC = 3` is retired — the caveat is per-origin information a
+    run-level status can't carry; frontends that never call the accessor keep working.
+    Before the header change lands: survey hegel-go/-ocaml/-typescript/-cpp for status-3
+    references and decide reserved-vs-removed. (DRM accepted recommendation. Rejected:
+    reusing value 3 with changed semantics; appending a v2 status.)
+
+28. **Boost ships as a reliability-floor heuristic** (plan gate G2): boost runs only when
+    the confirmed incumbent's LCB is below the floor (0.5), accepts only holdout-passing
+    improvements; no public setting until demanded. (DRM accepted recommendation. Rejected:
+    default-off behind a setting; always-on, foreclosed by decision 25.)
+
+29. **Data tree stays disabled under ND on this branch** (plan gate G3); kind-set tolerance
+    (positions that ever flipped kind become unexpandable) is the follow-up if generation
+    cost shows up. Experiment 007 measures the cost on workload #1. (DRM accepted
+    recommendation. Rejected for now: per-(kind,value) child edges.)
+
+30. **Strictness surface confirmed** (plan gate G4): `nondeterminism_strictness = quiet |
+    warn | error`, default quiet; `error` reproduces today's abort diagnostics verbatim;
+    `warn` prints once per run. (DRM accepted recommendation.)
