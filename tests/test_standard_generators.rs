@@ -250,7 +250,7 @@ mod direct_strategies {
         expect_panic(
             move || {
                 Hegel::new(move |tc| {
-                    tc.draw(&generator);
+                    tc.draw_silent(&generator);
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();

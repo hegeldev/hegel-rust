@@ -1,4 +1,6 @@
-use super::{Generator, TestCase};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use std::marker::PhantomData;
 
 /// A generator built from imperative code. Created by [`compose!`](crate::compose).
@@ -37,6 +39,16 @@ where
     }
 }
 
+impl<T, F> PrintableGenerator<T> for ComposedGenerator<T, F>
+where
+    T: PrettyPrintable,
+    F: Fn(&TestCase) -> T + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Compile-time FNV-1a hash of a byte slice, producing a u64 label.
 #[doc(hidden)]
 // nocov start
@@ -62,6 +74,10 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// receives a `&TestCase` parameter. Use `tc.draw()` to draw values from
 /// other generators within the compose block.
 ///
+/// The closure captures its environment by move whether or not the `move`
+/// keyword is written; `compose!(move |tc| { .. })` and
+/// `compose!(|tc| { .. })` are identical.
+///
 /// # Example
 ///
 /// ```no_run
@@ -78,6 +94,9 @@ pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
 /// ```
 #[macro_export]
 macro_rules! compose {
+    (move |$tc:ident| { $($body:tt)* }) => {
+        $crate::compose!(|$tc| { $($body)* })
+    };
     (|$tc:ident| { $($body:tt)* }) => {{
         const LABEL: u64 = $crate::generators::fnv1a_hash(stringify!($($body)*).as_bytes());
         $crate::generators::ComposedGenerator::new(LABEL, move |$tc: &$crate::TestCase| { $($body)* })

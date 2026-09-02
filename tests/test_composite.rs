@@ -169,7 +169,7 @@ mod composite_structs {
 
     #[hegel::composite]
     fn doubled<G: Generator<i64>>(tc: &TestCase, inner: G) -> i64 {
-        tc.draw(&inner).wrapping_mul(2)
+        tc.draw_silent(&inner).wrapping_mul(2)
     }
 
     #[hegel::test(test_cases = 10)]
@@ -180,7 +180,7 @@ mod composite_structs {
 
     #[hegel::composite]
     fn from_boxed(tc: &TestCase, inner: BoxedGenerator<'static, i64>) -> i64 {
-        tc.draw(&inner)
+        tc.draw_silent(&inner)
     }
 
     #[hegel::test(test_cases = 10)]
@@ -240,6 +240,8 @@ mod composite_borrowed_data {
         y: u8,
     }
 
+    hegel::pretty_print_as_debug!(Object);
+
     #[hegel::composite]
     fn object_from_borrowed_name(tc: &TestCase, name: &str) -> Object {
         let x = tc.draw(gs::integers().max_value(3));
@@ -282,6 +284,8 @@ mod composite_borrowed_data {
         name: &'a str,
         x: u8,
     }
+
+    hegel::pretty_print_as_debug!(BorrowedObject<'_>);
 
     #[hegel::composite]
     fn borrowed_object_from_name<'a>(

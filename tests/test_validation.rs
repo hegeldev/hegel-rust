@@ -12,7 +12,7 @@ where
     expect_panic(
         move || {
             Hegel::new(move |tc| {
-                tc.draw(&generator);
+                tc.draw_silent(&generator);
             })
             .settings(Settings::new().test_cases(1).database(None))
             .run();
@@ -27,7 +27,7 @@ where
     T: std::fmt::Debug + Send + 'static,
 {
     Hegel::new(move |tc| {
-        tc.draw(&generator);
+        tc.draw_silent(&generator);
     })
     .settings(Settings::new().test_cases(5).database(None))
     .run();
@@ -201,6 +201,46 @@ fn test_hashmaps_min_greater_than_max() {
 }
 
 #[test]
+fn test_samples_min_greater_than_max() {
+    expect_draw_panic(
+        gs::samples(vec![1, 2, 3]).min_size(3).max_size(2),
+        "max_size < min_size",
+    );
+}
+
+#[test]
+fn test_samples_nonempty_from_empty_sequence() {
+    expect_draw_panic(
+        gs::samples(Vec::<i32>::new()).min_size(1),
+        "non-empty sample from an empty sequence",
+    );
+}
+
+#[test]
+fn test_samples_without_replacement_min_size_too_large() {
+    expect_draw_panic(
+        gs::samples(vec![1, 2, 3]).without_replacement().min_size(4),
+        "min_size 4 is larger than the 3 elements",
+    );
+}
+
+#[test]
+fn test_subsequences_min_greater_than_max() {
+    expect_draw_panic(
+        gs::subsequences(vec![1, 2, 3]).min_size(3).max_size(2),
+        "max_size < min_size",
+    );
+}
+
+#[test]
+fn test_subsequences_min_size_too_large() {
+    expect_draw_panic(
+        gs::subsequences(vec![1, 2, 3]).min_size(4),
+        "min_size 4 is larger than the 3 elements",
+    );
+}
+
+#[test]
 fn test_domains_max_length_too_small() {
     expect_draw_panic(
         gs::domains().max_length(2),
@@ -239,7 +279,7 @@ mod validation {
         expect_panic(
             move || {
                 Hegel::new(move |tc| {
-                    tc.draw(&generator);
+                    tc.draw_silent(&generator);
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();

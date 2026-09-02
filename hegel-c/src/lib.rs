@@ -79,6 +79,7 @@ use crate::control::hegel_internal_unwrap;
 use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
+use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
 use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call. See "Calling convention" in the header
@@ -127,10 +128,13 @@ pub enum hegel_result_t {
     /// the handle instead.
     HEGEL_E_CONCURRENT_USE = -9,
 
-    /// A recursive draw exceeded its leaf budget (`hegel_recursion_leaf`).
-    /// Unwind the current generation attempt — drawing nothing further for
-    /// it — back to where `hegel_new_recursion` was called, then call
-    /// `hegel_recursion_retry` to discard the attempt and try again.
+    /// A recursive generation attempt must be regenerated from the root.
+    /// From `hegel_recursion_leaf`, the attempt exceeded its leaf budget:
+    /// unwind it — drawing nothing further for it — back to where
+    /// `hegel_new_recursion` was called, then call `hegel_recursion_retry`
+    /// to discard it. From `hegel_recursion_finish`, the completed value
+    /// was mispriced and the engine has already discarded it: drop it and
+    /// start again from the root directly.
     HEGEL_E_RETRY = -10,
 }
 
@@ -513,6 +517,18 @@ struct FamilyShared {
     /// which handle reports it. For a run-owned family this is also the gate
     /// `hegel_next_test_case` checks before resuming the engine.
     completed: AtomicBool,
+    /// The family's pretty-printer document, created (empty, at the default
+    /// width) with the family so that every handle's print region can anchor
+    /// deterministically the moment the handle is cloned. Family-wide so the
+    /// client can keep appending to — and finally read — the document after
+    /// the case completes. Each handle writes into its own region of it; see
+    /// [`HegelTestCase::print_target`].
+    printer: Arc<Mutex<Printer>>,
+    /// Whether an explicit `max_width` has been configured through
+    /// `hegel_test_case_printer` options. The first explicit configuration
+    /// wins; later conflicting ones error. Only read and written under the
+    /// `printer` lock.
+    printer_width_configured: AtomicBool,
 }
 
 impl FamilyShared {
@@ -554,6 +570,13 @@ pub struct HegelTestCase {
     /// stream for the root handle, a cloned stream for a
     /// `hegel_test_case_clone` handle.
     stream: Arc<dyn DataSource + Send + Sync>,
+    /// This handle's region of the family document: the document body for
+    /// the root handle, and for a clone a hole opened in its parent's region
+    /// at the moment the clone was made. Because a handle is only cloned
+    /// from its owning thread, the anchor position — and therefore where the
+    /// clone's output appears in the final document — is deterministic,
+    /// however the threads are later scheduled.
+    print_target: PrinterTarget,
     local: Mutex<LocalState>,
 }
 
@@ -1482,7 +1505,14 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         Ok(stream) => stream,
         Err(e) => return translate_ds_error(ctx, e),
     };
-    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream));
+    let print_target = match src.family.printer.lock().deferred(src.print_target) {
+        Ok(slot) => PrinterTarget::Slot(slot),
+        // The source's region is already dead (the document was read while
+        // this branch of the family straggled): share the dead region, so
+        // the clone's prints are no-ops like its parent's.
+        Err(_) => src.print_target,
+    };
+    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream), print_target);
     unsafe { *out_test_case = clone };
     HEGEL_OK
 }
@@ -1492,26 +1522,33 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
+        printer: Arc::new(Mutex::new(Printer::new(size_arg(
+            DEFAULT_PRINTER_MAX_WIDTH,
+        )))),
+        printer_width_configured: AtomicBool::new(false),
     })
 }
 
 /// Allocate the root handle for `family` — drawing from the family's root
-/// stream — and return its raw pointer.
+/// stream, printing into the document body — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
     let stream = Arc::clone(&family.ds);
-    handle_from_stream(family, stream)
+    handle_from_stream(family, stream, PrinterTarget::Main)
 }
 
 /// Allocate a handle holding one reference to `family` that draws from
-/// `stream`, and return its raw pointer. Each handle has its own `local`
-/// buffer so concurrent handles do not stomp each other's borrowed values.
+/// `stream` and prints into `print_target`, and return its raw pointer. Each
+/// handle has its own `local` buffer so concurrent handles do not stomp each
+/// other's borrowed values.
 fn handle_from_stream(
     family: Arc<FamilyShared>,
     stream: Arc<dyn DataSource + Send + Sync>,
+    print_target: PrinterTarget,
 ) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
         stream,
+        print_target,
         local: Mutex::new(LocalState { completed: false }),
     })
 }
@@ -1903,10 +1940,11 @@ pub unsafe extern "C" fn hegel_collection_free(
 ///
 /// Created by `hegel_new_recursion` on a test case, once per recursive
 /// value drawn; driven by `hegel_recursion_branch` / `hegel_recursion_leaf`
-/// / `hegel_recursion_retry` through any handle of the *same* test-case
-/// family (the root or any clone) — decisions are drawn from whichever
-/// handle makes the call. Like a pool, the scope holds an internal lock, so
-/// clone handles driven from parallel threads share the leaf budget safely.
+/// / `hegel_recursion_retry` / `hegel_recursion_finish` through any handle
+/// of the *same* test-case family (the root or any clone) — decisions are
+/// drawn from whichever handle makes the call. Like a pool, the scope holds
+/// an internal lock, so clone handles driven from parallel threads share
+/// the leaf budget safely.
 ///
 /// The protocol, for one sub-value (starting with the root at depth 0):
 /// call `hegel_recursion_branch`; on `true` invoke the user's branch
@@ -1915,10 +1953,14 @@ pub unsafe extern "C" fn hegel_collection_free(
 /// When `hegel_recursion_leaf` returns `HEGEL_E_RETRY` the attempt has
 /// outgrown the leaf budget: unwind out of the user's generators without
 /// drawing anything further, call `hegel_recursion_retry`, and on `HEGEL_OK`
-/// start the whole value again from the root. All policy — the branch
-/// probabilities, the depth and leaf limits, and when to give up — lives in
-/// the engine, so recursive values are identically distributed in every
-/// language frontend.
+/// start the whole value again from the root. Once the root sub-value has
+/// finished, call `hegel_recursion_finish`: `HEGEL_OK` accepts the value,
+/// while `HEGEL_E_RETRY` means the engine discarded the attempt as
+/// mispriced — drop the value and start again from the root (without
+/// calling `hegel_recursion_retry`). All policy — the branch probabilities
+/// and their adaptation to the branch arities actually produced, the depth
+/// and leaf limits, and when to give up — lives in the engine, so recursive
+/// values are identically distributed in every language frontend.
 ///
 /// The handle is independent of the test case and run it was created under:
 /// free it with `hegel_recursion_free` exactly once, at any point — before
@@ -1947,13 +1989,17 @@ unsafe fn recursion_ref<'a>(
 /// Open a recursive generation scope: libhegel decides where the value
 /// branches, where it bottoms out in leaves, and when an attempt has grown
 /// too large and must be retried. See `hegel_recursion_t` for the protocol.
+/// Draws the scope's target size from `tc`'s stream (when `max_leaves` is
+/// at least 2), so it must be called at the point in the draw sequence
+/// where the recursive value begins.
 ///
 /// Parameters:
 /// `max_depth`: Branches nest at most this deep; sub-values at this depth
 ///   are always leaves, so 0 generates only leaves.
-/// `max_leaves`: The most leaves one generated value may contain. Attempts
-///   that outgrow it are discarded and retried with a lower branching
-///   probability, and the test case is rejected as invalid when several
+/// `max_leaves`: The most leaves one generated value may contain. Each
+///   value steers toward a target size drawn from this range. Attempts
+///   that outgrow the budget are discarded and retried steering toward a
+///   smaller target, and the test case is rejected as invalid when several
 ///   attempts in a row fail to fit.
 /// `out_recursion`: Receives a caller-owned handle to pass to the calls
 ///   below (through any handle of the same test-case family). Release it
@@ -2020,8 +2066,8 @@ pub unsafe extern "C" fn hegel_recursion_branch(
         set_last_error(ctx, "hegel_recursion_branch: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let state = recursion.state.lock();
-    match tc.stream.recursion_branch(&state, depth) {
+    let mut state = recursion.state.lock();
+    match tc.stream.recursion_branch(&mut state, depth) {
         Ok(b) => {
             unsafe { *out_branch = b };
             HEGEL_OK
@@ -2097,6 +2143,46 @@ pub unsafe extern "C" fn hegel_recursion_retry(
     let mut state = recursion.state.lock();
     match tc.stream.recursion_retry(&mut state) {
         Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Report that the recursive value has finished generating: its root
+/// sub-value (and therefore the whole tree) is complete. The engine checks
+/// the branch pricing the attempt started from against the branch arities
+/// it actually produced.
+///
+/// Returns `HEGEL_OK` (the value is accepted — use it),
+/// `HEGEL_E_RETRY` (the attempt was mispriced and has been discarded, its
+/// spans closed as discarded: drop the value and start again from the
+/// root, *without* calling `hegel_recursion_retry`), or
+/// `HEGEL_E_STOP_TEST`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_recursion_finish(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    recursion: *mut HegelRecursion,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_recursion_finish", tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let recursion = match unsafe { recursion_ref(ctx, "hegel_recursion_finish", recursion) } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    let mut state = recursion.state.lock();
+    match tc.stream.recursion_finish(&mut state) {
+        Ok(true) => HEGEL_OK,
+        Ok(false) => {
+            set_last_error(
+                ctx,
+                "recursive value was priced for branches with more children than its \
+                 branch function draws; regenerate it from the root",
+            );
+            HEGEL_E_RETRY
+        }
         Err(e) => translate_ds_error(ctx, e),
     }
 }
@@ -2706,6 +2792,70 @@ pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
         .state_machine_rule_rejected(&mut machine, worker_index)
     {
         Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Decide whether the caller should run invariant `invariant_index` at the
+/// current join point, writing the decision into `*out_should_check`: a
+/// recorded boolean draw that is true with probability
+/// `1 / stateful_step_count`, so each invariant's expected number of
+/// sampled runs over a full-length test case is one, regardless of the
+/// step count. The caller owns the machine's guaranteed invariant checks —
+/// its initial state, and its final state once
+/// `hegel_state_machine_next_group` signals termination — and should run
+/// those unconditionally, without calling this.
+///
+/// `invariant_index` identifies the invariant by its position in the
+/// creating `invariant_names`. Call once per invariant per join point,
+/// from the same handle that makes the `hegel_state_machine_next_group`
+/// calls.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_ARG` when `invariant_index` is
+/// outside the machine's registered invariants or `out_should_check` is
+/// null, or `HEGEL_E_STOP_TEST` when the engine's choice budget is
+/// exhausted (the caller should abort the body and call
+/// `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_state_machine_should_check_invariant(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    state_machine: *mut HegelStateMachine,
+    invariant_index: i64,
+    out_should_check: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) =
+        match unsafe { tc_guard(ctx, "hegel_state_machine_should_check_invariant", tc) } {
+            Ok(t) => t,
+            Err(rc) => return rc,
+        };
+    let state_machine = match unsafe {
+        state_machine_ref(
+            ctx,
+            "hegel_state_machine_should_check_invariant",
+            state_machine,
+        )
+    } {
+        Ok(m) => m,
+        Err(rc) => return rc,
+    };
+    if out_should_check.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_state_machine_should_check_invariant: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    let mut machine = state_machine.machine.lock();
+    match tc
+        .stream
+        .state_machine_should_check_invariant(&mut machine, invariant_index)
+    {
+        Ok(should_check) => {
+            unsafe { *out_should_check = should_check };
+            HEGEL_OK
+        }
         Err(e) => translate_ds_error(ctx, e),
     }
 }
@@ -3705,6 +3855,917 @@ pub unsafe extern "C" fn hegel_target(
     match tc.stream.target_observation(value, label) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// A pretty-printer document.
+///
+/// Built from three primitives: `hegel_printer_text` emits unbreakable text,
+/// `hegel_printer_breakable` marks a point that renders as a separator if the
+/// enclosing group fits on one line and as a newline plus indentation if it
+/// does not, and `hegel_printer_begin_group` / `hegel_printer_end_group`
+/// delimit the groups those decisions are made over. Breaking is
+/// all-or-nothing per group, decided outermost groups first. The engine only
+/// provides the layout machinery; what gets printed — and in which language's
+/// syntax — is entirely the client's choice.
+///
+/// Two facilities support printing values *while generating them*:
+/// `hegel_printer_deferred` opens a hole whose content is written later
+/// (while the test body runs) and spliced in by `hegel_printer_resolve`, and
+/// `hegel_printer_begin_speculative` buffers output that a rejected draw
+/// (a filter retry, a failed assumption) can retract.
+///
+/// Create a standalone document with `hegel_printer_new`, or fetch a handle
+/// onto a test-case handle's region of the family document with
+/// `hegel_test_case_printer`.
+///
+/// # Ownership and concurrency
+///
+/// A printer handle addresses one *region* of a document — the document
+/// body for a root handle, or a hole for a handle from
+/// `hegel_printer_deferred`. Handles follow the test-case handles' model: a
+/// handle may move between threads, but belongs to one thread at a time —
+/// concurrent operations on the *same* handle return
+/// `HEGEL_E_CONCURRENT_USE`. To print from several threads, give each
+/// thread its own region: `hegel_printer_deferred` opens a hole at the
+/// handle's current position, and content written into it from any thread,
+/// on any schedule, renders at that anchor point — so concurrent output is
+/// deterministic, and two handles never interleave within one region.
+///
+/// Every handle — including those returned by `hegel_printer_deferred` —
+/// must be released with `hegel_printer_free`.
+pub struct HegelPrinter {
+    inner: Arc<Mutex<Printer>>,
+    target: PrinterTarget,
+    /// Whether some thread is mid-operation on this handle. Handles are
+    /// single-owner — see the concurrent-use contract on the struct docs —
+    /// and this flag is how a second thread caught racing the same handle
+    /// gets `HEGEL_E_CONCURRENT_USE` instead of silently interleaving.
+    busy: AtomicBool,
+}
+
+/// The line width a printer document is laid out to when the client does not
+/// set one: the width of a lazily-created family document, of an options
+/// handle whose `hegel_printer_options_set_max_width` was never called, and
+/// of a construction call passed NULL options.
+const DEFAULT_PRINTER_MAX_WIDTH: u64 = 79;
+
+/// Options for constructing a pretty-printer document.
+///
+/// Construct with `hegel_printer_options_new`, configure via the
+/// `hegel_printer_options_set_*` functions, pass to `hegel_printer_new` /
+/// `hegel_test_case_printer`, and free with `hegel_printer_options_free`.
+/// Every option has a default, and a NULL options pointer means "all
+/// defaults", so callers that are happy with the defaults never construct
+/// one. New options are added as new setters, never by changing existing
+/// signatures.
+///
+/// An options handle only parameterizes construction: it is read during the
+/// construction call and may be freed (or reconfigured and reused)
+/// immediately afterwards.
+pub struct HegelPrinterOptions {
+    max_width: Option<u64>,
+}
+
+impl HegelPrinterOptions {
+    /// The width to lay documents out to: the configured value, or the
+    /// default. `options` is the (possibly NULL-derived) reference a
+    /// construction call received.
+    fn resolve_max_width(options: Option<&HegelPrinterOptions>) -> u64 {
+        options
+            .and_then(|o| o.max_width)
+            .unwrap_or(DEFAULT_PRINTER_MAX_WIDTH)
+    }
+}
+
+/// Create a printer-options handle with every option at its default
+/// (`max_width` 79).
+///
+/// On success writes a caller-owned handle into `*out_options` (release with
+/// `hegel_printer_options_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_new(
+    ctx: *mut HegelContext,
+    out_options: *mut *mut HegelPrinterOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_options.is_null() {
+        set_last_error(ctx, "hegel_printer_options_new: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let options = Box::into_raw(Box::new(HegelPrinterOptions { max_width: None }));
+    unsafe { *out_options = options };
+    HEGEL_OK
+}
+
+/// Free an options handle previously returned by `hegel_printer_options_new`.
+/// Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_free(
+    ctx: *mut HegelContext,
+    options: *mut HegelPrinterOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !options.is_null() {
+        drop(unsafe { Box::from_raw(options) });
+    }
+    HEGEL_OK
+}
+
+/// Set the line width documents constructed with these options are laid out
+/// to: lines stay within `max_width` characters where the group structure
+/// allows it. The default is 79.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `options` and
+/// `HEGEL_E_INVALID_ARG` for a `max_width` of 0 (a document cannot lay
+/// anything out inside zero columns).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_options_set_max_width(
+    ctx: *mut HegelContext,
+    options: *mut HegelPrinterOptions,
+    max_width: u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_options_set_max_width";
+    let Some(options) = (unsafe { options.as_mut() }) else {
+        set_last_error(ctx, &format!("{FN}: options pointer is null"));
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if max_width == 0 {
+        set_last_error(ctx, &format!("{FN}: max_width must be positive"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    options.max_width = Some(max_width);
+    HEGEL_OK
+}
+
+/// Resolve a printer handle pointer, reporting NULL as
+/// `HEGEL_E_INVALID_HANDLE`.
+unsafe fn printer_arg<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    printer: *const HegelPrinter,
+) -> Result<&'a HegelPrinter, hegel_result_t> {
+    match unsafe { printer.as_ref() } {
+        Some(p) => Ok(p),
+        None => {
+            set_last_error(ctx, &format!("{fn_name}: printer handle is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
+    }
+}
+
+/// One thread's exclusive claim on a printer handle for the duration of a
+/// call, released on drop. Mirrors the test-case handles' concurrent-use
+/// detection.
+struct PrinterBusyGuard<'a>(&'a AtomicBool);
+
+impl Drop for PrinterBusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Resolve a printer handle for an operation, claiming it for the calling
+/// thread: `HEGEL_E_INVALID_HANDLE` for a NULL pointer, and
+/// `HEGEL_E_CONCURRENT_USE` — with a diagnostic — if another thread is
+/// mid-operation on the same handle (each handle may be driven by at most
+/// one thread at a time; clone a region per thread instead).
+unsafe fn printer_guard<'a>(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    printer: *const HegelPrinter,
+) -> Result<(&'a HegelPrinter, PrinterBusyGuard<'a>), hegel_result_t> {
+    let handle = unsafe { printer_arg(ctx, fn_name, printer) }?;
+    if handle
+        .busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        set_last_error(
+            ctx,
+            &format!("{fn_name}: printer handle is in use by another thread"),
+        );
+        return Err(HEGEL_E_CONCURRENT_USE);
+    }
+    Ok((handle, PrinterBusyGuard(&handle.busy)))
+}
+
+/// Translate a printer-core error onto `ctx`. Every printer error reports
+/// API misuse. A dead slot is a handle in an invalid *state* — the handle
+/// itself has expired — so it maps to `HEGEL_E_INVALID_HANDLE`, matching how
+/// the rest of the ABI classifies handle-state errors; everything else
+/// (unbalanced groups, resolve with nothing outstanding, …) describes the
+/// call and maps to `HEGEL_E_INVALID_ARG`.
+fn translate_printer_error(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    e: PrinterError,
+) -> hegel_result_t {
+    set_last_error(ctx, &format!("{fn_name}: {e}"));
+    match e {
+        PrinterError::DeadSlot => HEGEL_E_INVALID_HANDLE,
+        _ => HEGEL_E_INVALID_ARG,
+    }
+}
+
+/// Read a required length-delimited UTF-8 text argument for a printer call.
+/// A NULL pointer is accepted only with `len == 0` (the empty string), and
+/// the text must not contain newlines — line structure is expressed through
+/// `hegel_printer_hard_break` and breakable points so the printer's column
+/// accounting stays correct.
+unsafe fn printer_text_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const u8,
+    len: usize,
+) -> Result<String, hegel_result_t> {
+    let text = match unsafe { optional_utf8_buffer_arg(ctx, fn_name, arg_name, p, len) }? {
+        Some(s) => s,
+        None if len == 0 => String::new(),
+        None => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
+            return Err(HEGEL_E_INVALID_ARG);
+        }
+    };
+    if text.contains('\n') {
+        set_last_error(
+            ctx,
+            &format!("{fn_name}: {arg_name} must not contain newlines"),
+        );
+        return Err(HEGEL_E_INVALID_ARG);
+    }
+    Ok(text)
+}
+
+/// Create a standalone pretty-printer document laid out per `options`
+/// (NULL for all defaults; see `hegel_printer_options_t`).
+///
+/// On success writes a caller-owned handle into `*out_printer` (release with
+/// `hegel_printer_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_new(
+    ctx: *mut HegelContext,
+    options: *const HegelPrinterOptions,
+    out_printer: *mut *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_printer.is_null() {
+        set_last_error(ctx, "hegel_printer_new: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let max_width = HegelPrinterOptions::resolve_max_width(unsafe { options.as_ref() });
+    let handle = HegelPrinter {
+        inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
+        target: PrinterTarget::Main,
+        busy: AtomicBool::new(false),
+    };
+    unsafe { *out_printer = into_raw_send_sync(handle) };
+    HEGEL_OK
+}
+
+/// Release a printer handle (from `hegel_printer_new`,
+/// `hegel_printer_deferred`, or `hegel_test_case_printer`). Safe to call
+/// with NULL (a no-op that returns `HEGEL_OK`). Freeing a handle never
+/// discards document content — a deferred slot's content stays spliced in —
+/// it only releases this reference to the shared document.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_free(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if printer.is_null() {
+        return HEGEL_OK;
+    }
+    // SAFETY: `printer` came from `into_raw_send_sync` in a printer
+    // constructor and is freed exactly once here.
+    drop(unsafe { Box::from_raw(printer) });
+    HEGEL_OK
+}
+
+/// Emit `len` bytes of UTF-8 at `text` only if the innermost group open at
+/// this point renders broken; a group that fits on one line renders nothing
+/// here. The text never counts toward width (measurement uses the flat
+/// form, which is empty).
+///
+/// This is how a layout expresses text that only the multi-line form needs
+/// — e.g. Go's mandatory trailing comma before a composite literal's
+/// closing brace: emit each element, then
+/// `hegel_printer_if_break(",")` and an empty `hegel_printer_breakable`
+/// before the `hegel_printer_end_group` that closes the literal.
+///
+/// The text must not contain newlines. Errors as `hegel_printer_text`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_if_break(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_if_break";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().if_break(handle.target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Emit `len` bytes of UTF-8 at `text` as literal, unbreakable text.
+///
+/// The text must not contain newlines: express line structure with
+/// `hegel_printer_hard_break` (or breakable points) so column accounting
+/// stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
+/// `hegel_context_last_error` — for a NULL `printer` or a handle whose
+/// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+/// or newline-containing text or a NULL `text` with `len > 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_text(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_text";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().text(handle.target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Emit a potential break point: renders as the given separator if the
+/// enclosing group fits on one line, and as a newline plus the current
+/// indentation if the group breaks.
+///
+/// `sep` follows the same rules as `hegel_printer_text` (UTF-8, no
+/// newlines, NULL only with `len == 0`), and errors are reported the same
+/// way.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_breakable(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    sep: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_breakable";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let sep = match unsafe { printer_text_arg(ctx, FN, "sep", sep, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().breakable(handle.target, &sep) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Attach a comment to the line currently being written: the text is
+/// emitted verbatim at the end of that line, every group open at this
+/// position is forced to break — a comment poisons the rest of its line, so
+/// nothing else may share it — and the text contributes nothing to width
+/// accounting. A comment-forced group also breaks before its closing text,
+/// so a trailing delimiter is not annotated by a comment on the group's last
+/// element.
+///
+/// The engine stores the text verbatim: pass the full rendered form of the
+/// comment, in the comment syntax of the language being printed (e.g.
+/// `"  // like this"` or `"  (* like this *)"`), including any separating
+/// whitespace.
+///
+/// `text` follows the same rules as `hegel_printer_text` (UTF-8, no
+/// newlines, NULL only with `len == 0`), and errors are reported the same
+/// way.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_comment(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_comment";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { printer_text_arg(ctx, FN, "text", text, len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().comment(handle.target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Emit an unconditional newline followed by the current indentation.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+/// deferred slot is already dead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_hard_break(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_hard_break";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().hard_break(handle.target) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Open a group: emit `open` (same rules as `hegel_printer_text`), then
+/// increase the indentation applied by subsequent break points by `indent`.
+/// Whether to break is decided per group — a group either fits on the
+/// current line or every one of its break points becomes a newline.
+///
+/// Errors as `hegel_printer_text`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_begin_group(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    indent: u64,
+    open: *const u8,
+    open_len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_begin_group";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let open = match unsafe { printer_text_arg(ctx, FN, "open", open, open_len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle
+        .inner
+        .lock()
+        .begin_group(handle.target, size_arg(indent), &open)
+    {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Close the innermost group: undo the indentation its
+/// `hegel_printer_begin_group` added, then emit `close` (same rules as
+/// `hegel_printer_text`).
+///
+/// Errors as `hegel_printer_text`; closing with no group open is
+/// `HEGEL_E_INVALID_ARG` (reported by `hegel_printer_resolve` instead when
+/// the unbalanced close was recorded into a deferred session).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_end_group(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    close: *const u8,
+    close_len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_end_group";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let close = match unsafe { printer_text_arg(ctx, FN, "close", close, close_len) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().end_group(handle.target, &close) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Adjust the indentation applied by subsequent break points by `delta`
+/// (may be negative to undo an earlier shift).
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+/// deferred slot is already dead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_shift_indent(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    delta: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_shift_indent";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let delta = isize::try_from(delta.clamp(isize::MIN as i64, isize::MAX as i64)).unwrap();
+    match handle.inner.lock().shift_indent(handle.target, delta) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Open a deferred hole at the handle's current position and write a
+/// caller-owned handle for it into `*out_printer` (release with
+/// `hegel_printer_free`).
+///
+/// Content written through the returned handle — at any later point, e.g.
+/// while the test body runs — is spliced in at the hole's position when
+/// `hegel_printer_resolve` runs on the document's root handle, with
+/// line-breaking behaving exactly as if it had been printed inline. After
+/// resolve the slot is dead and writes to it return
+/// `HEGEL_E_INVALID_HANDLE`; use `hegel_printer_is_live` to probe. Holes
+/// nest: calling this on a deferred handle opens a hole inside that slot.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` for a NULL `out_printer`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_deferred(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    out_printer: *mut *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_deferred";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    if out_printer.is_null() {
+        set_last_error(ctx, "hegel_printer_deferred: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_printer = ptr::null_mut() };
+    match handle.inner.lock().deferred(handle.target) {
+        Ok(slot) => {
+            let child = HegelPrinter {
+                inner: Arc::clone(&handle.inner),
+                target: PrinterTarget::Slot(slot),
+                busy: AtomicBool::new(false),
+            };
+            unsafe { *out_printer = into_raw_send_sync(child) };
+            HEGEL_OK
+        }
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Open a speculative region on this handle: subsequent writes through it
+/// buffer until `hegel_printer_commit_speculative` emits them or
+/// `hegel_printer_abort_speculative` discards them. Regions nest. This is
+/// how draw-time printing survives rejection: print each attempt inside a
+/// region, commit on acceptance, abort on rejection.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_begin_speculative(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_begin_speculative";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().begin_speculative(handle.target) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Close the innermost speculative region on this handle, keeping its
+/// content.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+/// open.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_commit_speculative(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_commit_speculative";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().commit_speculative(handle.target) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Close the innermost speculative region on this handle, discarding its
+/// content. Deferred slots opened inside the region die with it.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a dead slot
+/// handle and `HEGEL_E_INVALID_ARG` — with a diagnostic — when no region is
+/// open.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_abort_speculative(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_abort_speculative";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    match handle.inner.lock().abort_speculative(handle.target) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Splice every deferred hole's content in at its position and seal the
+/// document. Must be called on the document's root handle (from
+/// `hegel_printer_new` / `hegel_test_case_printer`). Sealing ends all
+/// writing: every slot dies, a speculative region still open on any target —
+/// a straggler thread caught mid-draw — is aborted (uncommitted content was
+/// never part of the document), and every later write on any handle reports
+/// `HEGEL_E_INVALID_HANDLE` like any other dead region, so a straggler's
+/// late writes are harmless to tolerate.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — when called on a deferred
+/// handle, with no deferred session outstanding, or when a recorded
+/// `hegel_printer_end_group` turns out to be unbalanced at replay.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_resolve(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_resolve";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    if handle.target != PrinterTarget::Main {
+        set_last_error(ctx, "hegel_printer_resolve: not the document's root handle");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match handle.inner.lock().resolve() {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Write whether this handle can still be written to into `*out_live`:
+/// `true` for a root handle, and for a deferred handle whose session has not
+/// yet been resolved or aborted.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_live`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_is_live(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    out_live: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_is_live";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    if out_live.is_null() {
+        set_last_error(ctx, "hegel_printer_is_live: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let live = match handle.target {
+        PrinterTarget::Main => handle.inner.lock().main_is_live(),
+        PrinterTarget::Slot(slot) => handle.inner.lock().slot_is_live(slot),
+    };
+    unsafe { *out_live = live };
+    HEGEL_OK
+}
+
+/// An engine-allocated string buffer returned by `hegel_printer_value`.
+///
+/// `data` points to `len` bytes of UTF-8. The buffer is **not**
+/// NUL-terminated (printed values can contain any character), so always use
+/// `len`. The caller owns the buffer and must release it with
+/// `hegel_printer_value_result_free` (freeing through any other allocator is
+/// undefined behaviour). `data` is never NULL after a successful call, even
+/// for `len == 0`.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct hegel_printer_value_result_t {
+    pub data: *mut c_char,
+    pub len: usize,
+}
+
+/// Read everything printed to the document, flushing pending break points.
+/// Must be called on the document's root handle. Reading seals the document
+/// exactly like `hegel_printer_resolve` does: open speculative regions on
+/// any target are aborted and every later write on any handle reports
+/// `HEGEL_E_INVALID_HANDLE`. Reading again is fine and returns the same
+/// document.
+///
+/// On success fills `*out_result` with an engine-allocated UTF-8 buffer the
+/// caller owns (release with `hegel_printer_value_result_free`) and returns
+/// `HEGEL_OK`. Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer`, and
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_result`, a
+/// deferred handle, or an unresolved deferred session (call
+/// `hegel_printer_resolve` first).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_value(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    out_result: *mut hegel_printer_value_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_value";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    if out_result.is_null() {
+        set_last_error(ctx, "hegel_printer_value: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if handle.target != PrinterTarget::Main {
+        set_last_error(ctx, "hegel_printer_value: not the document's root handle");
+        return HEGEL_E_INVALID_ARG;
+    }
+    match handle.inner.lock().value() {
+        Ok(s) => {
+            let boxed = s.as_bytes().to_vec().into_boxed_slice();
+            let len = boxed.len();
+            let data = Box::into_raw(boxed).cast::<c_char>();
+            unsafe { *out_result = hegel_printer_value_result_t { data, len } };
+            HEGEL_OK
+        }
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Release a buffer returned by `hegel_printer_value` and reset the struct
+/// to `{NULL, 0}`. Safe to call with a NULL `result` or an already-freed
+/// (zeroed) struct — both are no-ops that return `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_value_result_free(
+    ctx: *mut HegelContext,
+    result: *mut hegel_printer_value_result_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(result) = (unsafe { result.as_mut() }) else {
+        return HEGEL_OK;
+    };
+    if !result.data.is_null() {
+        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
+        // `hegel_printer_value` and are freed exactly once here (the struct
+        // is zeroed below, making a second call a no-op).
+        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len) };
+    }
+    result.data = ptr::null_mut();
+    result.len = 0;
+    HEGEL_OK
+}
+
+/// Fetch a handle onto this test-case handle's *print region* of the family
+/// document, writing a caller-owned handle into `*out_printer` (release
+/// with `hegel_printer_free`; the document itself lives as long as any
+/// handle or the family).
+///
+/// The family document exists from the family's creation. Each test-case
+/// handle owns one region of it: the root handle's region is the document
+/// body, and a `hegel_test_case_clone` handle's region is a hole opened in
+/// its parent's region at the moment the clone was made. Regions make
+/// concurrent printing deterministic: a clone's output appears at its
+/// anchor point — where the clone was created — however the threads that
+/// produced it were scheduled, and two handles never interleave within one
+/// region. The document remains readable after the case completes, so the
+/// client can assemble output while drawing and read it back after
+/// `hegel_mark_complete` (through a root-handle printer).
+///
+/// `options` may be NULL for defaults (see `hegel_printer_options_t`). The
+/// first call that explicitly configures `max_width` fixes the document's
+/// width; later calls may restate it, but a *different* explicit width is
+/// an error — the width of the shared document cannot be two things.
+/// Content printed before the width is configured (`hegel_note` never
+/// configures it) still renders at the configured width: layout happens
+/// when the document is read.
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` and
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for a NULL `out_printer` or a
+/// width conflict.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_printer(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    options: *const HegelPrinterOptions,
+    out_printer: *mut *mut HegelPrinter,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(tc) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_printer: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_printer.is_null() {
+        set_last_error(ctx, "hegel_test_case_printer: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let options = unsafe { options.as_ref() };
+    let inner = Arc::clone(&tc.family.printer);
+    if let Some(requested) = options.and_then(|o| o.max_width) {
+        let mut printer = inner.lock();
+        if !tc.family.printer_width_configured.load(Ordering::Acquire) {
+            printer.set_max_width(size_arg(requested));
+            tc.family
+                .printer_width_configured
+                .store(true, Ordering::Release);
+        } else if printer.max_width() != size_arg(requested) {
+            let actual = printer.max_width();
+            set_last_error(
+                ctx,
+                &format!(
+                    "hegel_test_case_printer: the family's document is laid out to \
+                     max_width {actual} and cannot change to {requested}"
+                ),
+            );
+            return HEGEL_E_INVALID_ARG;
+        }
+    }
+    let handle = HegelPrinter {
+        inner,
+        target: tc.print_target,
+        busy: AtomicBool::new(false),
+    };
+    unsafe { *out_printer = into_raw_send_sync(handle) };
+    HEGEL_OK
+}
+
+/// Append a note — `len` bytes of UTF-8 at `text` — to this test-case
+/// handle's print region (see `hegel_test_case_printer` for the region
+/// model). Each `\n`-separated line of the note becomes its own output
+/// line, so notes may contain newlines. Notes and drawn values from *one
+/// handle* appear in the order they were appended; a clone's notes appear
+/// in the clone's region.
+///
+/// Notes never configure the document's width; they render at whatever
+/// width ends up configured (default 79).
+///
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
+/// region is dead (the document was already read), and
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
+/// `text` with `len > 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_note(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_note";
+    let Some(tc) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_note: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
+        Ok(Some(s)) => s,
+        Ok(None) if len == 0 => String::new(),
+        Ok(None) => {
+            set_last_error(ctx, "hegel_note: text is null");
+            return HEGEL_E_INVALID_ARG;
+        }
+        Err(rc) => return rc,
+    };
+    match tc.family.printer.lock().note(tc.print_target, &text) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
     }
 }
 

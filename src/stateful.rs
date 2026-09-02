@@ -2,8 +2,10 @@
 //!
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
-//! methods annotated with `#[invariant]` become invariants (checked after each successful rule
-//! application). Both take a [`TestCase`] parameter and borrow the state machine: rules
+//! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
+//! and final state, and sampled in between — each invariant runs after any given rule with
+//! probability `1 / stateful_step_count`, so its expected cost per test case stays constant
+//! as the step count grows). Both take a [`TestCase`] parameter and borrow the state machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
@@ -284,6 +286,14 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     }
 }
 
+impl<'a, T: crate::PrettyPrintable> crate::generators::PrintableGenerator<&'a T>
+    for ValuesReusable<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> &'a T {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// A generator that consumes values from a [`Pool`], removing each value it
 /// yields.
 ///
@@ -300,6 +310,12 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool, true);
         self.values.borrow_mut().remove(&variable_id).unwrap()
+    }
+}
+
+impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T> for ValuesConsumed<'_, T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -426,6 +442,14 @@ impl<T: Clone> Generator<T> for ConcurrentValuesReusable<'_, T> {
     }
 }
 
+impl<T: Clone + crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+    for ConcurrentValuesReusable<'_, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// A generator that consumes values from a [`ConcurrentPool`], removing
 /// each value it yields. Returned by [`ConcurrentPool::values_consumed`].
 pub struct ConcurrentValuesConsumed<'a, T> {
@@ -442,6 +466,14 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
                 raise_for_rc(rc)
             }
         }
+    }
+}
+
+impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+    for ConcurrentValuesConsumed<'_, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -466,12 +498,28 @@ pub fn concurrent_pool<T>(tc: &TestCase) -> ConcurrentPool<T> {
 pub trait StateMachine {
     /// The rules (actions) that can be applied to this state machine.
     fn rules(&self) -> Vec<Rule<Self>>;
-    /// Invariants checked after each successful rule application.
+    /// Invariants: checked on the machine's initial and final state, and
+    /// sampled after rules in between with probability
+    /// `1 / stateful_step_count` each.
     fn invariants(&self) -> Vec<Rule<Self>>;
 }
 
-fn check_invariants<M: StateMachine>(m: &mut M, invariants: &[Rule<M>], tc: &TestCase) {
-    for invariant in invariants {
+/// Run invariants at a join point. With a machine, each invariant runs only
+/// when the engine's sampling draw says to (see
+/// [`machine_should_check_invariant`]); with `None` — the guaranteed checks
+/// of the machine's initial and final state — every invariant runs.
+fn check_invariants<M: StateMachine>(
+    m: &mut M,
+    invariants: &[Rule<M>],
+    tc: &TestCase,
+    machine: Option<&StateMachineHandle>,
+) {
+    for (index, invariant) in invariants.iter().enumerate() {
+        if let Some(machine) = machine {
+            if !machine_should_check_invariant(tc, machine, index as i64) {
+                continue;
+            }
+        }
         let inv_tc = tc.child(2); // nocov
         (invariant.apply)(m, inv_tc); // nocov
     }
@@ -515,15 +563,34 @@ fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_ind
     }
 }
 
+/// Ask the engine whether invariant `invariant_index` should run at the
+/// current join point — a recorded draw that is true with probability
+/// `1 / stateful_step_count`, making an invariant's expected sampled runs
+/// per test case one regardless of step count.
+fn machine_should_check_invariant(
+    tc: &TestCase,
+    machine: &StateMachineHandle,
+    invariant_index: i64,
+) -> bool {
+    match tc.with_ctc(|ctc| ctc.state_machine_should_check_invariant(machine, invariant_index)) {
+        Ok(should_check) => should_check,
+        Err(rc) => raise_for_rc(rc),
+    }
+}
+
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 ///
 /// A sequential machine is the special case of the engine's concurrent
 /// state-machine protocol with a single group and concurrency 1: the engine
-/// hands out exactly one rule per round, so the join-point invariant check
-/// after each round runs after each rule. One consequence of the join-point
-/// timing: the invariants run after a rule that stopped on a violated
-/// assumption too (rules are expected to reject before mutating the model,
-/// and nothing restores model state on rejection anyway).
+/// hands out exactly one rule per round, so the join points where sampled
+/// invariant checks may run fall after each rule. Invariants run in full on
+/// the machine's initial and final state; in between, each invariant runs at
+/// a join point only when the engine's sampling draw (probability
+/// `1 / stateful_step_count`) says to, keeping an invariant's expected cost
+/// per test case constant as the step count grows. One consequence of the
+/// join-point timing: a sampled check can land after a rule that stopped on
+/// a violated assumption (rules are expected to reject before mutating the
+/// model, and nothing restores model state on rejection anyway).
 pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
@@ -538,7 +605,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     };
 
     tc.note("Initial invariant check.");
-    check_invariants(&mut m, &invariants, &tc);
+    check_invariants(&mut m, &invariants, &tc, None);
 
     let mut steps_attempted: i64 = 0;
 
@@ -584,8 +651,11 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         }
         tc.stop_span(round_rejected);
 
-        check_invariants(&mut m, &invariants, &tc);
+        check_invariants(&mut m, &invariants, &tc, Some(&machine));
     }
+
+    tc.note("Final invariant check.");
+    check_invariants(&mut m, &invariants, &tc, None);
 }
 
 /// A rule of a [`ConcurrentStateMachine`]: an action worker threads may
@@ -661,17 +731,27 @@ pub trait ConcurrentStateMachine {
     /// The rules (actions) that worker threads may apply to this state
     /// machine, each with its concurrency-group assignment.
     fn rules(&self) -> Vec<ConcurrentRule<Self>>;
-    /// Invariants checked at every join point, on the main thread, while
-    /// the worker threads are parked.
+    /// Invariants, run on the main thread while the worker threads are
+    /// parked: checked on the machine's initial and final state, and
+    /// sampled at the join points in between with probability
+    /// `1 / stateful_step_count` each.
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>>;
 }
 
+/// Concurrent counterpart of [`check_invariants`]: sampled per invariant
+/// when given a machine, a guaranteed full sweep with `None`.
 fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
     m: &M,
     invariants: &[ConcurrentInvariant<M>],
     tc: &TestCase,
+    machine: Option<&StateMachineHandle>,
 ) {
-    for invariant in invariants {
+    for (index, invariant) in invariants.iter().enumerate() {
+        if let Some(machine) = machine {
+            if !machine_should_check_invariant(tc, machine, index as i64) {
+                continue;
+            }
+        }
         let inv_tc = tc.child(2);
         (invariant.apply)(m, inv_tc);
     }
@@ -784,6 +864,14 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// setting, then run one round per `rounds` message until the channel
 /// closes.
 ///
+/// Each `rounds` message carries a fresh [`TestCase`] clone made by the
+/// main thread right after it noted the round's header, so the clone's
+/// print region — where everything this worker draws or notes during the
+/// round lands — is anchored under the header that labels the round.
+/// Cloning once per worker up front would instead pool a worker's output
+/// across all rounds at its single anchor, detaching the headers from the
+/// rounds they label.
+///
 /// The closed channel is what terminates workers: the main thread holds
 /// the senders as locals of its `thread::scope` body, so *any* exit from
 /// that body — the normal end of the test case or an unwind from a join
@@ -792,18 +880,17 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// lets the scope's implicit join complete instead of hanging.
 fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     worker: usize,
-    tc: TestCase,
     m: &M,
     rules: &[ConcurrentRule<M>],
     machine: &StateMachineHandle,
     capture_backtraces: bool,
-    rounds: mpsc::Receiver<()>,
+    rounds: mpsc::Receiver<TestCase>,
     events: mpsc::Sender<WorkerEvent>,
 ) {
     WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
-        while rounds.recv().is_ok() {
+        while let Ok(tc) = rounds.recv() {
             let event = run_worker_round(worker, &tc, m, rules, machine);
             if events.send(event).is_err() {
                 break;
@@ -817,8 +904,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// thread then runs a short (possibly empty) random sequence of rules from
 /// that group — and only that group — concurrently with the other workers. Rules in the same
 /// group may overlap each other, and rules in different groups never
-/// overlap. Once every worker has finished its rules for the round, we run
-/// all invariants.
+/// overlap. Once every worker has finished its rules for the round, the
+/// main thread runs the invariants the engine's sampling draws select
+/// (probability `1 / stateful_step_count` each); every invariant runs in
+/// full on the machine's initial and final state.
 ///
 /// The number of worker threads is drawn per test case, when the state
 /// machine is created, in `[min_concurrency, max_concurrency]` and weighted
@@ -912,7 +1001,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     tc.note(&format!("Concurrency level: {concurrency}"));
 
     tc.note("Initial invariant check.");
-    check_concurrent_invariants(&m, &invariants, &tc);
+    check_concurrent_invariants(&m, &invariants, &tc, None);
 
     let capture_backtraces = run_lifecycle::backtrace_capture_enabled();
     let concurrency = concurrency as usize;
@@ -921,18 +1010,16 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     let machine = &machine;
 
     std::thread::scope(|scope| {
-        let mut round_txs: Vec<mpsc::Sender<()>> = Vec::with_capacity(concurrency);
+        let mut round_txs: Vec<mpsc::Sender<TestCase>> = Vec::with_capacity(concurrency);
         let mut event_rxs: Vec<mpsc::Receiver<WorkerEvent>> = Vec::with_capacity(concurrency);
         for worker in 0..concurrency {
             let (round_tx, round_rx) = mpsc::channel();
             let (event_tx, event_rx) = mpsc::channel();
             round_txs.push(round_tx);
             event_rxs.push(event_rx);
-            let worker_tc = tc.clone();
             scope.spawn(move || {
                 worker_loop(
                     worker,
-                    worker_tc,
                     m,
                     rules,
                     machine,
@@ -956,7 +1043,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             ));
 
             for tx in &round_txs {
-                let _ = tx.send(());
+                let _ = tx.send(tc.clone());
             }
             let events: Vec<WorkerEvent> = event_rxs
                 .iter()
@@ -965,8 +1052,11 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
 
             resolve_round(events, &tc);
 
-            check_concurrent_invariants(m, &invariants, &tc);
+            check_concurrent_invariants(m, &invariants, &tc, Some(machine));
         }
+
+        tc.note("Final invariant check.");
+        check_concurrent_invariants(m, &invariants, &tc, None);
     });
 }
 

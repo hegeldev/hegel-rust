@@ -60,21 +60,45 @@ impl ManyState {
     }
 }
 
-/// State for an engine-managed recursive generator: the leaf budget and
-/// retry bookkeeping for one recursive draw. All generation policy — branch
-/// probabilities, budget enforcement, and the give-up rule — lives on the
-/// engine side (see `draws::recursion_branch` / `draws::recursion_retry`),
-/// so every language frontend generates identically distributed trees.
+/// State for an engine-managed recursive generator: the leaf budget, retry
+/// bookkeeping, and branch-arity observations for one recursive draw. All
+/// generation policy — branch probabilities, budget enforcement, and the
+/// give-up rule — lives on the engine side (see `draws::recursion_branch` /
+/// `draws::recursion_retry` / `draws::recursion_finish`), so every language
+/// frontend generates identically distributed trees.
 pub struct RecursionState {
     pub max_depth: u64,
     pub max_leaves: u64,
     pub attempt: u64,
     pub leaves: u64,
     pub base_span_depth: usize,
-    /// The branch probability for the current attempt, computed once per
-    /// attempt by `draws::recursion_branch_probability` (at creation and on
-    /// each retry) rather than at every branch decision.
+    /// The leaf count this draw aims for, drawn once at creation (see
+    /// `draws::new_recursion_state`): 1 to aim for a minimal value, or a
+    /// uniform sample from `[2, max_leaves]` to aim for a value of that
+    /// size. Budget-exceeded retries steer toward `target >> attempt`
+    /// rather than redrawing it.
+    pub target: u64,
+    /// The branch probability the current attempt started from, computed by
+    /// `draws::recursion_priced_probability` at creation and on each retry.
+    /// Individual decisions may be repriced below or above this as arity
+    /// evidence accumulates; when the effective target is a single leaf,
+    /// `draws::recursion_finish` compares against it to detect an attempt
+    /// whose starting price was badly stale.
     pub branch_probability: f64,
+    /// Children observed across all branches this draw has finished
+    /// observing (over every attempt, including discarded ones).
+    pub closed_children: u64,
+    /// The number of branches those children are spread over.
+    pub closed_branches: u64,
+    /// Branches whose child count is still being observed: the current
+    /// node's ancestors plus the finished branches behind them on the
+    /// rightmost path, each as `(depth, children observed so far)`, in
+    /// depth order. Depth-first generation closes one as soon as a decision
+    /// at the same or a shallower depth proves no more children can arrive.
+    pub open_branches: Vec<(u64, u64)>,
+    /// How many completed attempts this draw has discarded as mispriced
+    /// (see `draws::recursion_finish`).
+    pub reprices: u64,
 }
 
 impl RecursionState {
@@ -88,6 +112,47 @@ impl RecursionState {
         }
         self.leaves += 1;
         true
+    }
+
+    /// Record the structural bookkeeping for a leaf-or-branch decision at
+    /// `depth`: open branches at the same or a greater depth can receive no
+    /// further children (generation is depth-first), so their arity is now
+    /// exact and they move into the closed totals, and the decision itself
+    /// is one more child of its parent, the deepest branch still open.
+    pub fn observe_decision(&mut self, depth: u64) {
+        while self.open_branches.last().is_some_and(|&(d, _)| d >= depth) {
+            let (_, children) = self.open_branches.pop().unwrap();
+            self.closed_children += children;
+            self.closed_branches += 1;
+        }
+        if depth > 0 {
+            if let Some(parent) = self.open_branches.last_mut() {
+                parent.1 += 1;
+            }
+        }
+    }
+
+    /// Record that the decision at `depth` came out as a branch, opening it
+    /// for child observations.
+    pub fn observe_branch(&mut self, depth: u64) {
+        self.open_branches.push((depth, 0));
+    }
+
+    /// Close every branch still open — the rightmost path of a completed
+    /// value, whose child counts are all final once the value has finished
+    /// generating.
+    pub fn close_remaining_branches(&mut self) {
+        while let Some((_, children)) = self.open_branches.pop() {
+            self.closed_children += children;
+            self.closed_branches += 1;
+        }
+    }
+
+    /// Drop the still-open branches of an abandoned attempt: their child
+    /// counts were cut short by the unwind, so they would understate the
+    /// branch function's arity.
+    pub fn discard_open_branches(&mut self) {
+        self.open_branches.clear();
     }
 }
 
@@ -1135,7 +1200,16 @@ pub enum SpanEvent {
 
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.
-pub const MAX_DEPTH: u32 = 100;
+///
+/// A guard against runaway recursion: span-only loops (bounded by no other
+/// budget) and recursive generators headed for a stack overflow. It must
+/// sit far above any depth legitimate generation reaches — combinator
+/// layers each open a span, so recursive generators nest several spans per
+/// recursion level, and a cap within reach of real values silently
+/// truncates the distribution. 1000 corresponds to recursion ~150+ levels
+/// deep, several times anything a plausible `max_depth` produces, yet
+/// usually below the depth where the frontend's drawing stack overflows.
+pub const MAX_DEPTH: u32 = 1000;
 
 /// A tag identifying a structural-coverage class for a span label.
 ///
@@ -1926,6 +2000,54 @@ impl NativeTestCase {
         };
 
         let params = self.family.generation_parameters();
+        let v =
+            self.draw_integer_from(&kind, |kind, rng| biased_integer_sample(kind, rng, params))?;
+
+        Ok(hegel_internal_unwrap!(
+            T::try_from(v).ok(),
+            "draw_integer: validated value does not fit the requested width"
+        ))
+    }
+
+    /// Draw a random integer *uniformly* from `[min_value, max_value]`,
+    /// without the boundary-and-distribution shaping of [`Self::draw_integer`].
+    /// For draws whose value parameterizes later generation — such as a
+    /// recursive draw's target size — where the shaped distribution's bias
+    /// toward small magnitudes would defeat the point of drawing at all.
+    pub fn draw_integer_uniform(
+        &mut self,
+        min_value: u64,
+        max_value: u64,
+    ) -> Result<u64, EngineError> {
+        hegel_internal_assert!(
+            min_value <= max_value,
+            "Invalid range [{min_value:?}, {max_value:?}]"
+        );
+
+        let kind = IntegerChoice {
+            min_value: min_value.into(),
+            max_value: max_value.into(),
+            shrink_towards: BigInt::zero(),
+        };
+
+        let v = self.draw_integer_from(&kind, |_, rng| {
+            Ok(BigInt::from(rng.random_range(min_value..=max_value)))
+        })?;
+
+        Ok(hegel_internal_unwrap!(
+            u64::try_from(v).ok(),
+            "draw_integer_uniform: validated value does not fit u64"
+        ))
+    }
+
+    /// Shared body of the integer draws: resolve the choice against the
+    /// prefix, falling back to `sample` for fresh generation, then record
+    /// and observe it.
+    fn draw_integer_from(
+        &mut self,
+        kind: &IntegerChoice,
+        sample: impl Fn(&IntegerChoice, &mut EngineRng) -> Result<BigInt, InternalError>,
+    ) -> Result<BigInt, EngineError> {
         let (v, was_forced) = self.resolve_choice(
             || Ok(kind.simplest()),
             || Ok(kind.unit()),
@@ -1933,7 +2055,7 @@ impl NativeTestCase {
                 ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
             },
-            |rng| biased_integer_sample(&kind, rng, params),
+            |rng| sample(kind, rng),
         )?;
 
         if let Some(ref mut obs) = self.observer {
@@ -1941,12 +2063,9 @@ impl NativeTestCase {
         }
 
         self.nodes
-            .push(ChoiceNode::integer(kind, v.clone(), was_forced));
+            .push(ChoiceNode::integer(kind.clone(), v.clone(), was_forced));
 
-        Ok(hegel_internal_unwrap!(
-            T::try_from(v).ok(),
-            "draw_integer: validated value does not fit the requested width"
-        ))
+        Ok(v)
     }
 
     /// Record a forced integer draw in `[min_value, max_value]`.

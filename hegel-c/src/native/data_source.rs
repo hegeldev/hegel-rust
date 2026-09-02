@@ -265,18 +265,12 @@ impl DataSource for NativeDataSource {
         max_depth: u64,
         max_leaves: u64,
     ) -> Result<RecursionState, DataSourceError> {
-        self.with_ntc(|ntc| {
-            Ok(draws::new_recursion_state(
-                max_depth,
-                max_leaves,
-                ntc.span_depth(),
-            ))
-        })
+        self.with_ntc(|ntc| draws::new_recursion_state(ntc, max_depth, max_leaves))
     }
 
     fn recursion_branch(
         &self,
-        state: &RecursionState,
+        state: &mut RecursionState,
         depth: u64,
     ) -> Result<bool, DataSourceError> {
         self.with_ntc(|ntc| draws::recursion_branch(ntc, state, depth))
@@ -290,11 +284,15 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| draws::recursion_retry(ntc, state))
     }
 
+    fn recursion_finish(&self, state: &mut RecursionState) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| draws::recursion_finish(ntc, state))
+    }
+
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
-        _invariant_names: Vec<String>,
+        invariant_names: Vec<String>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<NativeStateMachine, DataSourceError> {
@@ -325,7 +323,13 @@ impl DataSource for NativeDataSource {
                     return Err(EngineError::AssumeViolation);
                 }
             }
-            NativeStateMachine::new(ntc, rule_groups, min_concurrency, max_concurrency)
+            NativeStateMachine::new(
+                ntc,
+                rule_groups,
+                invariant_names.len(),
+                min_concurrency,
+                max_concurrency,
+            )
         })
     }
 
@@ -350,6 +354,14 @@ impl DataSource for NativeDataSource {
         worker_index: i64,
     ) -> Result<(), DataSourceError> {
         self.with_ntc(|_ntc| machine.rule_rejected(worker_index))
+    }
+
+    fn state_machine_should_check_invariant(
+        &self,
+        machine: &mut NativeStateMachine,
+        invariant_index: i64,
+    ) -> Result<bool, DataSourceError> {
+        self.with_ntc(|ntc| machine.should_check_invariant(ntc, invariant_index))
     }
 
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError> {

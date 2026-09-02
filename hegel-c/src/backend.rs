@@ -161,8 +161,11 @@ pub trait DataSource: Send + Sync {
     /// Draw the leaf-or-branch decision for a recursive sub-value at
     /// `depth`, from this stream. At `max_depth` the decision is forced to
     /// false but still recorded as a choice.
-    fn recursion_branch(&self, state: &RecursionState, depth: u64)
-    -> Result<bool, DataSourceError>;
+    fn recursion_branch(
+        &self,
+        state: &mut RecursionState,
+        depth: u64,
+    ) -> Result<bool, DataSourceError>;
 
     /// Count one leaf against the current attempt's budget. `Ok(false)`
     /// means the budget is exhausted: the caller must unwind the attempt
@@ -174,6 +177,13 @@ pub trait DataSource: Send + Sync {
     /// as discarded — and prepare the next one, or reject the test case as
     /// invalid when the attempts are exhausted.
     fn recursion_retry(&self, state: &mut RecursionState) -> Result<(), DataSourceError>;
+
+    /// Report that the value has finished generating. `Ok(true)` accepts
+    /// it; `Ok(false)` means the attempt's branch pricing turned out to be
+    /// stale against the arities it actually produced and it has been
+    /// discarded (its spans closed as discarded): the caller must drop the
+    /// value and regenerate it from the root.
+    fn recursion_finish(&self, state: &mut RecursionState) -> Result<bool, DataSourceError>;
 
     /// Register a state machine for engine-owned (swarm) rule selection:
     /// rules (each assigned to a concurrency group via `rule_groups`,
@@ -232,6 +242,20 @@ pub trait DataSource: Send + Sync {
         machine: &mut NativeStateMachine,
         worker_index: i64,
     ) -> Result<(), DataSourceError>;
+
+    /// Decide whether the caller should run invariant `invariant_index` at
+    /// the current join point: a recorded boolean draw that is `true` with
+    /// probability `1 / stateful_step_count`, so each invariant's expected
+    /// number of sampled runs over a full-length test case is one. The
+    /// caller runs its guaranteed checks — the machine's initial state and
+    /// its final state after the last round — without consulting this.
+    /// Errors with `InvalidArgument` when `invariant_index` is outside the
+    /// machine's registered invariants.
+    fn state_machine_should_check_invariant(
+        &self,
+        machine: &mut NativeStateMachine,
+        invariant_index: i64,
+    ) -> Result<bool, DataSourceError>;
 
     /// Draw a boolean that is `true` with probability `p`.
     ///

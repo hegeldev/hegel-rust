@@ -199,6 +199,9 @@ pub struct NativeStateMachine {
     /// round counts and rejections refund only the worker's within-round
     /// budget.
     rounds_rejected: i64,
+    /// Number of registered invariants, bounding the indices
+    /// [`Self::should_check_invariant`] accepts.
+    num_invariants: usize,
     workers: Vec<WorkerState>,
 }
 
@@ -211,6 +214,7 @@ impl NativeStateMachine {
     pub fn new(
         ntc: &mut NativeTestCase,
         rule_groups: Vec<i64>,
+        num_invariants: usize,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<Self, EngineError> {
@@ -253,6 +257,7 @@ impl NativeStateMachine {
             current_group: 0,
             rounds_started: 0,
             rounds_rejected: 0,
+            num_invariants,
             workers,
         })
     }
@@ -401,6 +406,34 @@ impl NativeStateMachine {
             self.rounds_rejected += 1;
         }
         Ok(())
+    }
+
+    /// Decide whether the caller should run invariant `invariant_index` at
+    /// the current join point: a recorded boolean draw that is `true` with
+    /// probability `1 / stateful_step_count`, so over a full-length test
+    /// case each invariant's expected number of sampled runs is one,
+    /// regardless of the step count. The caller owns the machine's
+    /// guaranteed checks — its initial state and the final state after the
+    /// last round — and runs those without consulting this draw.
+    ///
+    /// Errors with `InvalidArgument` when `invariant_index` is outside the
+    /// registered invariants.
+    pub fn should_check_invariant(
+        &mut self,
+        ntc: &mut NativeTestCase,
+        invariant_index: i64,
+    ) -> Result<bool, EngineError> {
+        let valid = usize::try_from(invariant_index)
+            .ok()
+            .filter(|&i| i < self.num_invariants);
+        if valid.is_none() {
+            return Err(EngineError::InvalidArgument(format!(
+                "invariant_index must be in [0, {}), got {invariant_index}",
+                self.num_invariants
+            )));
+        }
+        let p = 1.0 / ntc.family().stateful_step_count() as f64;
+        ntc.weighted_precise(p, None)
     }
 
     /// Validate a caller-supplied worker index against the drawn

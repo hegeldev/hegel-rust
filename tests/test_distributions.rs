@@ -47,7 +47,9 @@ fn sample_pairs<T: std::fmt::Debug + Send + 'static>(
     first: impl Generator<T> + Send + Sync + 'static,
     second: impl Generator<T> + Send + Sync + 'static,
 ) -> Vec<(T, T)> {
-    sample(20_000, seed, move |tc| (tc.draw(&first), tc.draw(&second)))
+    sample(20_000, seed, move |tc| {
+        (tc.draw_silent(&first), tc.draw_silent(&second))
+    })
 }
 
 /// Like [`sample_pairs`] for claims about a non-numeric value: the deliberate
@@ -57,7 +59,7 @@ fn sample_with_u64_companion<T: std::fmt::Debug + Send + 'static>(
     g: impl Generator<T> + Send + Sync + 'static,
 ) -> Vec<T> {
     sample(20_000, seed, move |tc| {
-        let v = tc.draw(&g);
+        let v = tc.draw_silent(&g);
         tc.draw(gs::integers::<u64>());
         v
     })
@@ -498,7 +500,7 @@ mod booleans {
         let vs = sample(2_000, seed, move |tc| {
             let mut trues = 0u32;
             for _ in 0..64 {
-                if tc.draw(&g) {
+                if tc.draw_silent(&g) {
                     trues += 1;
                 }
             }
@@ -611,30 +613,159 @@ mod recursive {
         }
     }
 
-    fn trees() -> gs::RecursiveGenerator<Tree> {
-        gs::recursive(gs::integers::<i32>().map(Tree::Leaf), |subtrees| {
-            hegel::tuples!(subtrees.clone(), subtrees)
-                .map(|(left, right)| Tree::Branch(Box::new(left), Box::new(right)))
-        })
+    macro_rules! trees {
+        () => {
+            gs::recursive(gs::integers::<i32>().map(Tree::Leaf), |subtrees| {
+                hegel::tuples!(subtrees.clone(), subtrees)
+                    .map(|(left, right)| Tree::Branch(Box::new(left), Box::new(right)))
+            })
+        };
     }
 
     /// Sizes must cover the whole range the default caps allow: bare leaves,
-    /// mid-size trees, and trees close to the 100-leaf cap.
+    /// mid-size trees, and trees close to the 100-leaf cap. Each draw
+    /// steers toward a target size sampled across the whole budget, and
+    /// the engine's novelty-seeking exploration concentrates on the large
+    /// targets, so single-leaf values are uncommon — but they must never
+    /// vanish.
     #[test]
     fn recursive_trees_have_diverse_sizes() {
-        let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees()));
-        assert_min_rate(&vs, |t| t.leaf_count() == 1, 0.1, "single leaf");
+        let vs = sample(4000, 0xE3, |tc| tc.draw_silent(trees!()));
+        assert_min_rate(&vs, |t| t.leaf_count() == 1, 0.015, "single leaf");
         assert_min_rate(&vs, |t| t.leaf_count() >= 25, 0.06, "25+ leaves");
         assert_min_rate(&vs, |t| t.leaf_count() >= 90, 0.004, "near the leaf cap");
     }
 
-    /// The branch probability is fixed for a whole generation attempt rather
-    /// than decaying as the leaf budget is consumed, so subtrees drawn first
-    /// (on the left) must not be systematically bigger or branchier than
-    /// their later siblings.
+    #[derive(Debug, Clone)]
+    enum Expr {
+        Value,
+        Negate(Box<Expr>),
+        Add(Box<Expr>, Box<Expr>),
+    }
+
+    impl Expr {
+        fn leaf_count(&self) -> usize {
+            match self {
+                Expr::Value => 1,
+                Expr::Negate(e) => e.leaf_count(),
+                Expr::Add(a, b) => a.leaf_count() + b.leaf_count(),
+            }
+        }
+
+        fn depth(&self) -> usize {
+            match self {
+                Expr::Value => 0,
+                Expr::Negate(e) => 1 + e.depth(),
+                Expr::Add(a, b) => 1 + a.depth().max(b.depth()),
+            }
+        }
+    }
+
+    /// A grammar shaped like a real expression language — many unary
+    /// operators per binary one, mean branch arity well below 2. The engine
+    /// reprices the branch probability from the arities the branch function
+    /// actually draws, so sizes must fill the leaf budget the way a purely
+    /// binary grammar's do instead of collapsing to a handful of nodes.
+    #[test]
+    fn mixed_arity_trees_use_the_whole_size_range() {
+        let vs = sample(4000, 0xE4, |tc| {
+            tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
+                hegel::compose!(|tc| {
+                    if tc.draw(gs::integers::<u8>().max_value(23)) < 17 {
+                        Expr::Negate(Box::new(tc.draw_silent(&exprs)))
+                    } else {
+                        Expr::Add(
+                            Box::new(tc.draw_silent(&exprs)),
+                            Box::new(tc.draw_silent(&exprs)),
+                        )
+                    }
+                })
+            }))
+        });
+        let mean = vs.iter().map(Expr::leaf_count).sum::<usize>() as f64 / vs.len() as f64;
+        assert!(mean > 10.0, "mean leaf count {mean:.2}; expected > 10");
+        assert_min_rate(&vs, |e| e.leaf_count() == 1, 0.1, "single leaf");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 25, 0.15, "25+ leaves");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 90, 0.003, "near the leaf cap");
+    }
+
+    /// The same expression-language grammar spelled with combinators — a
+    /// `one_of` whose binary arms pair subtrees with `tuples!` — nests
+    /// several spans per recursion level, so deep values must survive the
+    /// engine's span-depth guard. Regression test: with the guard at 100,
+    /// every tree past ~24 levels was silently concluded invalid, and the
+    /// size distribution collapsed to a seventh of the `compose!` style's.
+    #[test]
+    fn combinator_style_trees_match_the_compose_style_distribution() {
+        let vs = sample(4000, 0xE7, |tc| {
+            tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
+                let mut arms = Vec::new();
+                for _ in 0..17 {
+                    arms.push(exprs.clone().map(|e| Expr::Negate(Box::new(e))).boxed());
+                }
+                for _ in 0..7 {
+                    arms.push(
+                        hegel::tuples!(exprs.clone(), exprs.clone())
+                            .map(|(a, b)| Expr::Add(Box::new(a), Box::new(b)))
+                            .boxed(),
+                    );
+                }
+                gs::one_of(arms)
+            }))
+        });
+        let mean = vs.iter().map(Expr::leaf_count).sum::<usize>() as f64 / vs.len() as f64;
+        assert!(mean > 10.0, "mean leaf count {mean:.2}; expected > 10");
+        assert_min_rate(&vs, |e| e.leaf_count() == 1, 0.1, "single leaf");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 90, 0.003, "near the leaf cap");
+        assert_min_rate(&vs, |e| e.depth() >= 28, 0.15, "28+ levels deep");
+    }
+
+    /// A grammar with only unary branches can never grow past one leaf, so
+    /// the leaf budget says nothing about it. The adaptive pricing pushes
+    /// the branch probability up to its cap instead, spreading chain
+    /// lengths from bare leaves up to the depth limit.
+    #[test]
+    fn chain_only_trees_spread_over_the_whole_depth_range() {
+        let vs = sample(4000, 0xE5, |tc| {
+            tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
+                exprs.map(|e| Expr::Negate(Box::new(e)))
+            }))
+        });
+        assert_min_rate(&vs, |e| e.depth() == 0, 0.005, "bare leaf");
+        assert_min_rate(&vs, |e| e.depth() >= 10, 0.3, "chain of 10+");
+        assert_min_rate(&vs, |e| e.depth() >= 25, 0.08, "chain of 25+");
+    }
+
+    /// Branch functions with more than two children per branch reprice
+    /// downward as their branches close, so fewer attempts bust the leaf
+    /// budget and accepted sizes still span it.
+    #[test]
+    fn ternary_trees_use_the_whole_size_range() {
+        let vs = sample(4000, 0xE6, |tc| {
+            tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
+                hegel::compose!(|tc| {
+                    Expr::Add(
+                        Box::new(tc.draw_silent(&exprs)),
+                        Box::new(Expr::Add(
+                            Box::new(tc.draw_silent(&exprs)),
+                            Box::new(tc.draw_silent(&exprs)),
+                        )),
+                    )
+                })
+            }))
+        });
+        assert_min_rate(&vs, |e| e.leaf_count() == 1, 0.01, "single leaf");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 25, 0.15, "25+ leaves");
+        assert_min_rate(&vs, |e| e.leaf_count() >= 90, 0.008, "near the leaf cap");
+    }
+
+    /// The branch probability never depends on how much of the leaf budget
+    /// an attempt has already spent (and for a fixed-arity branch function
+    /// it never moves at all), so subtrees drawn first (on the left) must
+    /// not be systematically bigger or branchier than their later siblings.
     #[test]
     fn recursive_trees_are_not_left_biased() {
-        let vs = sample(4000, 0xE2, |tc| tc.draw_silent(trees().max_leaves(8)));
+        let vs = sample(4000, 0xE2, |tc| tc.draw_silent(trees!().max_leaves(8)));
         let mut roots = 0usize;
         let mut left_leaves = 0usize;
         let mut right_leaves = 0usize;

@@ -210,6 +210,11 @@
 //! generate concurrently without perturbing each other's values and the
 //! same seed replays the same values on every stream.
 //!
+//! In a failing example's report, a clone's drawn values appear together,
+//! at the point where the clone was created — not interleaved by wall-clock
+//! timing — so the report is deterministic no matter how the threads were
+//! scheduled.
+//!
 //! Determinism extends only as far as your own code's determinism: if your
 //! threads race on shared state, Hegel replays each stream faithfully but
 //! the test may still behave differently run to run — see [`TestCase`]'s
@@ -234,6 +239,7 @@ pub mod explicit_test_case;
 pub mod extras;
 pub(crate) mod ffi;
 pub mod generators;
+pub mod pretty;
 #[doc(hidden)]
 pub mod run_lifecycle;
 pub(crate) mod runner;
@@ -243,6 +249,8 @@ mod test_case;
 pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
+pub use generators::PrintableGenerator;
+pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
 #[doc(hidden)]
@@ -262,6 +270,21 @@ pub use hegel_c::__bench;
 ///
 /// Deriving only works on type definitions you own; for a struct defined in
 /// another crate, see [`derive_generator!`](crate::derive_generator) instead.
+///
+/// The derived generator prints values field by field as it draws them, in
+/// the same Rust-expression format `#[derive(PrettyPrintable)]` produces,
+/// so the type itself needs no [`PrettyPrintable`] implementation. It is
+/// generic over its field generators — mirroring `one_of!` and tuples — and
+/// is a [`PrintableGenerator`] exactly when every field generator is one:
+/// the builder methods accept any [`Generator`] of the field's type, and a
+/// non-printable field generator simply makes the result silent-only (or
+/// printable again via [`print_as_value`](generators::Generator::print_as_value),
+/// [`print_as_debug`](generators::Generator::print_as_debug), or
+/// [`print_with`](generators::Generator::print_with)). Because the derived
+/// generator prints compositionally, a hand-written [`PrettyPrintable`]
+/// implementation on the type is **not consulted** for its failing-example
+/// output; a type that wants a different printed representation implements
+/// [`DefaultGenerator`] by hand.
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
@@ -335,6 +358,50 @@ pub use hegel_c::__bench;
 /// ```
 pub use hegel_macros::DefaultGenerator;
 
+/// Derive [`PrettyPrintable`] for a struct or enum.
+///
+/// The generated implementation prints the value in Rust-expression syntax —
+/// `Name { field: value, … }`, `Name(value, …)`, and `Name::Variant …` for
+/// enums — using the printer's group machinery so values that do not fit on
+/// one line wrap with each field on its own line. Every generic type
+/// parameter is given a [`PrettyPrintable`] bound, mirroring how
+/// `derive(Debug)` bounds `Debug`.
+///
+/// For a type whose `Debug` output is already the representation you want
+/// (or one you cannot add a derive to), use
+/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
+///
+/// A field whose type cannot implement [`PrettyPrintable`] — a foreign type
+/// the orphan rule keeps out, say — can opt out with `#[pretty(debug)]`:
+/// that field prints its `Debug` representation (re-laid-out through the
+/// printer, like [`print_as_debug`](generators::Generator::print_as_debug)),
+/// and its type must implement `Debug` instead.
+///
+/// ```
+/// use hegel::{Document, PrettyPrintable};
+///
+/// #[derive(PrettyPrintable)]
+/// struct Person {
+///     name: String,
+///     age: u32,
+///     #[pretty(debug)]
+///     home: std::path::PathBuf,
+/// }
+///
+/// let person = Person {
+///     name: "Ada".to_string(),
+///     age: 36,
+///     home: "/home/ada".into(),
+/// };
+/// let mut doc = Document::new();
+/// person.pretty_print(doc.printer());
+/// assert_eq!(
+///     doc.finish(),
+///     "Person { name: \"Ada\".to_string(), age: 36, home: \"/home/ada\" }"
+/// );
+/// ```
+pub use hegel_macros::PrettyPrintable;
+
 /// Define a composite generator from a function.
 ///
 /// The first parameter must be a `&`[`TestCase`] and is passed automatically
@@ -373,7 +440,7 @@ pub use hegel_macros::DefaultGenerator;
 /// ```no_run
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, hegel::PrettyPrintable)]
 /// enum Tree {
 ///     Leaf,
 ///     Branch(Box<Tree>, Box<Tree>),
@@ -458,7 +525,8 @@ pub use hegel_macros::state_machine;
 ///
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
-/// invariants, checked at the join points between rounds. Rules in the same
+/// invariants, checked in full on the machine's initial and final state and
+/// sampled at the join points between rounds. Rules in the same
 /// group may run concurrently with each other; rules in different groups
 /// never overlap.
 ///
