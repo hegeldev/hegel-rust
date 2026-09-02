@@ -110,3 +110,15 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     the confirmation batch — an unconfirmed origin is dropped and generation keeps hunting.
     The confirmation bar must respect the noise-floor caution (a flat >= 2-fails-in-20 passes
     p = 0.02 noise ~5% of the time); deriving it is 005's job. (Experiment result.)
+
+22. **Replay: pool cap 5-10, first-fit, small continuation budget; trie stays rejected;
+    divergence signals weight evidence rather than abort.** Experiment 004 on structurally-ND
+    bodies: K=5 captures nearly all recoverable reproduction, K=10 reaches the plateau, K=20
+    adds nothing, worst-case cost ~3 replays/attempt; extend 4 absorbs all net elongation and
+    larger budgets buy nothing. Prefix sharing is anticorrelated with pool need, so the merged
+    trie's "revisit if heavy sharing" trigger fires only where pooling is unneeded. First
+    divergence is not replay death (punned replays stay aligned after the damaged position and
+    still reproduce), so divergence detection downweights diverged non-failures instead of
+    bailing early. Per-position anchoring (decision 14) stays deferred with a measured target:
+    the ~27% residue whole timelines can't reach on heterogeneous bodies; 006's span grafting
+    probes it. (Experiment result.)

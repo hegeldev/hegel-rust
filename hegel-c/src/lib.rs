@@ -122,6 +122,59 @@ pub mod __bench {
 
     pub use crate::backend::{DataSource, Failure, TestCaseResult};
     pub use crate::native::bignum::ToPrimitive;
+    pub use crate::native::core::ChoiceValue;
+
+    pub struct ReplayOutcome {
+        pub interesting: bool,
+        pub origin: Option<alloc::string::String>,
+        pub realized: Vec<ChoiceValue>,
+    }
+
+    /// Experiment 004 (`notes/experiments/004-replay-semantics`): run the
+    /// caller's body once against a replayed choice sequence — bare when
+    /// `extend == 0`, else with up to `extend` random draws past the stored
+    /// prefix (an empty prefix with a budget is fresh generation). Returns
+    /// the realized choices so the caller can measure fall-off points and
+    /// prefix sharing.
+    pub fn replay_once(
+        choices: &[ChoiceValue],
+        extend: usize,
+        seed: u64,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<ReplayOutcome, alloc::string::String> {
+        let ntc = if extend == 0 {
+            crate::native::core::NativeTestCase::for_choices(choices, None, None)
+        } else {
+            let budget = crate::native::core::flattened_values_len(choices) + extend;
+            match crate::native::core::NativeTestCase::for_probe(
+                choices,
+                EngineRng::seeded(seed),
+                budget,
+            ) {
+                Ok(ntc) => ntc,
+                Err(e) => return Err(alloc::format!("{e:?}")),
+            }
+        };
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = async {
+            let (data_source, handle) = crate::native::data_source::NativeDataSource::new(ntc);
+            exchange.offer(alloc::boxed::Box::new(data_source)).await;
+            let nodes = crate::native::data_source::NativeDataSource::take_nodes(&handle);
+            let outcome = crate::native::data_source::NativeDataSource::take_outcome(&handle);
+            (nodes, outcome)
+        };
+        let (nodes, outcome) = crate::exchange::drive(&exchange, fut, run_case);
+        let outcome = outcome.map_err(|e| alloc::format!("{e}"))?;
+        let (interesting, origin) = match outcome {
+            crate::backend::TestCaseResult::Interesting(f) => (true, Some(f.origin)),
+            _ => (false, None),
+        };
+        Ok(ReplayOutcome {
+            interesting,
+            origin,
+            realized: nodes.iter().map(|n| n.value()).collect(),
+        })
+    }
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum NdShrinkMode {

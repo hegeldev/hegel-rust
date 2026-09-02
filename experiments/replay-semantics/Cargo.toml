@@ -1,0 +1,13 @@
+[package]
+name = "replay-semantics"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hegel-c = { path = "../../hegel-c", package = "hegeltest-c", features = ["__bench"] }
+
+[workspace]
+
+[profile.release]
+debug = true

@@ -118,10 +118,21 @@ estimates are computed afresh each run. Consequences: every run stands alone (CI
 `Database::Disabled` gets the full detect-from-scratch experience), and there is no stale-flag
 or flag-flapping problem.
 
+Measured (experiment 004, structurally-ND bodies): pool cap 5-10 — K=5 captures nearly all
+recoverable reproduction (kind-flip 68% -> 99%, heterogeneous-shift 28% -> 65%), K=10 reaches
+the plateau, K=20 adds nothing; first-fit costs at most ~3 replays per attempt. The
+continuation budget only needs to absorb net elongation: extend 4 captured the whole
+single-timeline benefit on every body, extend 64 was free but useless. Capture-at-confirmation
+alone harvests enough pool diversity.
+
 Deferred (see table below): per-position divergence anchors, and any anchoring inside clone
-streams. Start with whole-timeline machinery only. Suspicion to test with data: heavy
-nondeterminism may demand tracking *more* alternatives, not fewer — instrument where replays
-fall off stored timelines and how much prefix sharing the pool exhibits.
+streams. Start with whole-timeline machinery only. 004's instrumentation on DRM's suspicion
+(heavy nondeterminism may demand tracking *more* alternatives): prefix sharing is
+anticorrelated with pool need — high (0.93+) only on bodies K=1 already handles, low
+(0.32-0.48) with early unpredictable fall-off where the pool earns its keep — so the merged
+trie stays rejected, while per-position anchoring keeps a measured target: the ~27% residue
+on heterogeneous-shift bodies that whole timelines plateau under. 006's span grafting is the
+probe for that residue.
 
 ### Detection signals
 
@@ -132,6 +143,13 @@ in one timeline only). Add a structural comparison — draw counts and span even
 recording and the replay — as the primary detected-divergence signal, plus a verbatim watermark
 (the position where replay stopped being verbatim: first pun, repair, or forced recompute) so
 downstream machinery knows how far positional claims are valid.
+
+004 correction on how to *use* these signals: first divergence does not mean the replay is
+dead — punning damages one position and stays aligned after it (kind-flip bodies fall off
+verbatim at 0.40 of stored length yet still reproduce 66%). Divergence is for evidence
+weighting — a structurally diverged non-failure says little about the stored timeline and
+should not count full weight toward demotion/deletion or confirmation misses — not for early
+abort or eager fallthrough to the next pool entry.
 
 ### Confirmation and budgets
 
@@ -266,9 +284,9 @@ mode still aborts.
 
 | Decision | Default for now | Revisit when |
 | --- | --- | --- |
-| Per-position divergence anchors; anchoring inside clone streams | None anywhere; whole-timeline machinery only | Instrumentation shows stable fall-off points / heavy prefix sharing (experiments 3-4) |
-| Merged trie (ND-node) encoding | Timeline pool | Pool shows heavy prefix sharing worth deduplicating |
-| extend=0 vs continuation budget on shrink Full replays | Undecided | Experiment 3/4: deterministic-realization invariant (deficit repair, divergence-observing passes) vs retry-shaped divergence that lengthens paths |
+| Per-position divergence anchors; anchoring inside clone streams | None anywhere; whole-timeline machinery only | Experiment 004 measured: fall-off is early and unpredictable where ND is heavy (watermark p10 0.11-0.14), so no stable anchor position exists; a whole-timeline pool of K=10 plateaus at 73% on heterogeneous-shift bodies — the residue is the anchoring/realignment target. Revisit via 006 span grafting |
+| Merged trie (ND-node) encoding | Timeline pool — now measured, not just argued | Closed harder by 004: prefix sharing is anticorrelated with pool need (0.93+ where K=1 suffices, 0.32-0.48 where the pool matters) |
+| extend=0 vs continuation budget on shrink Full replays | Small budget (constant + small fraction of stored length) | 004: extend 4 captures the whole benefit (absorbs net elongation); larger budgets are free but useless; bare replay loses 22-47% to end-of-sequence overruns on count-shifting bodies |
 | Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |
 | Checkpoint/rollback on top of gauntleted accepts | Dropped | Experiment 1 follow-up (mixture landscape): rollback-on-uncertainty rescues mispins but poisons good candidates (L1 missed 9% -> 52%, 2.3x cost); rollback-on-proof never fires (mispinned rate sits inside Wilson noise of the bar). Capture-at-confirmation kills the hazard at source; final validation at report time annotates the residue |
 | `replay_aligned` replacement | Accept re-shrinking | Measured local-run cost |
