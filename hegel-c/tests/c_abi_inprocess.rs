@@ -24,8 +24,8 @@ use hegel_c::{
     hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
     hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
     hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
-    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
-    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_start_blob,
+    hegel_run_status_t, hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
     hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
     hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
     hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_free,
@@ -488,6 +488,123 @@ fn from_blob_rejects_bad_input() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("could not be decoded"));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// `hegel_run_start_blob` validates its arguments like `hegel_run_start`,
+/// replays a good blob as a run that reports the reproducing failure, and
+/// surfaces an undecodable blob as the run's error.
+#[test]
+fn run_start_blob_replays_and_reports_the_failure() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let blob = shrunk_failure_blob_with_draws(ctx, 1);
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+
+        let mut run: *mut HegelRun = ptr::null_mut();
+        assert_eq!(
+            hegel_run_start_blob(
+                ctx,
+                s,
+                blob.as_ptr(),
+                None,
+                ptr::null_mut(),
+                ptr::null_mut()
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_run_start_blob(
+                ctx,
+                ptr::null(),
+                blob.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut run
+            ),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_run_start_blob(ctx, s, ptr::null(), None, ptr::null_mut(), &mut run),
+            HEGEL_E_INVALID_ARG
+        );
+        let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
+        assert_eq!(
+            hegel_run_start_blob(ctx, s, bad.as_ptr(), None, ptr::null_mut(), &mut run),
+            HEGEL_E_INVALID_ARG
+        );
+
+        ok(hegel_run_start_blob(
+            ctx,
+            s,
+            blob.as_ptr(),
+            None,
+            ptr::null_mut(),
+            &mut run,
+        ));
+        let origin = CString::new("boom").unwrap();
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut is_nondeterministic = false;
+            ok(hegel_test_case_is_nondeterministic(
+                ctx,
+                tc,
+                &mut is_nondeterministic,
+            ));
+            assert!(is_nondeterministic, "a blob replay is stamped for capture");
+            let mut value = 0i64;
+            let mut status = hegel_status_t::HEGEL_STATUS_INTERESTING as u32;
+            if hegel_generate_integer(ctx, tc, 0, 100, &mut value) != HEGEL_OK {
+                status = hegel_status_t::HEGEL_STATUS_OVERRUN as u32;
+            }
+            ok(hegel_mark_complete(ctx, tc, status, origin.as_ptr()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        assert_eq!(failure_count_of(ctx, res), 1);
+        let f = failure_at(ctx, res, 0);
+        assert_eq!(
+            std::ffi::CStr::from_ptr(origin_of(ctx, f))
+                .to_str()
+                .unwrap(),
+            "boom"
+        );
+        assert!(
+            repro_blob_of(ctx, f).is_null(),
+            "the caller already holds the blob"
+        );
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, run));
+
+        let garbage = CString::new("!!! not a blob !!!").unwrap();
+        let mut bad_run: *mut HegelRun = ptr::null_mut();
+        ok(hegel_run_start_blob(
+            ctx,
+            s,
+            garbage.as_ptr(),
+            None,
+            ptr::null_mut(),
+            &mut bad_run,
+        ));
+        assert!(next_case(ctx, bad_run).is_null());
+        let bad_res = result(ctx, bad_run);
+        assert!(status_of(ctx, bad_res) == hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+        let err = std::ffi::CStr::from_ptr(run_error_of(ctx, bad_res))
+            .to_str()
+            .unwrap();
+        assert!(err.contains("could not be decoded"), "{err}");
+        ok(hegel_run_result_free(ctx, bad_res));
+        ok(hegel_run_free(ctx, bad_run));
+
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
@@ -1247,17 +1364,14 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     }
 }
 
-/// A full run whose test case creates a state machine with
-/// `max_concurrency > 1` becomes nondeterministic. The first case's
-/// creation is rejected with `HEGEL_E_ASSUME` — the case is discarded like
-/// a failed assumption while the run flips — and from the next case on the
-/// creation succeeds. The run stops at the first bug and reports
-/// `HEGEL_RUN_STATUS_FAILED`, surfacing the bug with an origin and the
-/// concurrent-run caveat but no reproduce blob: with replay and shrinking
-/// off, there is no shrunk choice sequence to encode, and the caller
-/// reports the bug from its own captured output instead.
+/// A full run whose test cases create a state machine with
+/// `max_concurrency > 1` enters nondeterministic handling: creations
+/// always succeed, the always-failing bug is confirmed by replay and
+/// shrunk, and the run reports `HEGEL_RUN_STATUS_FAILED` with a reproduce
+/// blob and a confirmation caveat. The engine stamps the replay
+/// executions it makes for the report (`hegel_test_case_is_nondeterministic`).
 #[test]
-fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
+fn concurrent_run_failure_has_blob_and_caveat() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
@@ -1267,20 +1381,19 @@ fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
         let origin = CString::new("nondeterministic bug").unwrap();
         let rule = CString::new("only").unwrap();
 
-        let mut cases = 0usize;
+        let mut stamped = 0usize;
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
                 break;
             }
-            cases += 1;
             let mut is_nondeterministic = false;
             ok(hegel_test_case_is_nondeterministic(
                 ctx,
                 tc,
                 &mut is_nondeterministic,
             ));
-            assert_eq!(is_nondeterministic, cases > 1);
+            stamped += usize::from(is_nondeterministic);
             let rules = [rule.as_ptr()];
             let rule_groups: [i64; 1] = [0];
             let mut machine: *mut HegelStateMachine = ptr::null_mut();
@@ -1298,13 +1411,11 @@ fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
                 &mut machine,
                 &mut out_concurrency,
             );
-            if rc == HEGEL_E_ASSUME {
-                assert_eq!(cases, 1, "only the flipping case is rejected");
-                assert!(machine.is_null());
+            if rc == HEGEL_E_STOP_TEST {
                 ok(hegel_mark_complete(
                     ctx,
                     tc,
-                    hegel_status_t::HEGEL_STATUS_INVALID as u32,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
                     ptr::null(),
                 ));
                 ok(hegel_test_case_free(ctx, tc));
@@ -1313,21 +1424,17 @@ fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
             assert_eq!(rc, HEGEL_OK);
             ok(hegel_state_machine_free(ctx, machine));
             let mut value = 0i64;
-            assert_eq!(
-                hegel_generate_integer(ctx, tc, 0, 100, &mut value),
-                HEGEL_OK
-            );
-            ok(hegel_mark_complete(
-                ctx,
-                tc,
-                hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
-                origin.as_ptr(),
-            ));
+            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
+                hegel_status_t::HEGEL_STATUS_INTERESTING
+            } else {
+                hegel_status_t::HEGEL_STATUS_OVERRUN
+            };
+            ok(hegel_mark_complete(ctx, tc, status as u32, origin.as_ptr()));
             ok(hegel_test_case_free(ctx, tc));
         }
-        assert_eq!(
-            cases, 2,
-            "the discarded flipping case, then the run stops at the first bug"
+        assert!(
+            stamped > 0,
+            "confirmation and final-replay executions are stamped for capture"
         );
 
         let res = result(ctx, run);
@@ -1342,13 +1449,13 @@ fn concurrent_run_failure_has_origin_and_caveat_but_no_blob() {
             origin_back.contains("nondeterministic bug"),
             "got {origin_back:?}"
         );
-        assert!(repro_blob_of(ctx, f).is_null());
+        assert!(!repro_blob_of(ctx, f).is_null());
         let caveat_back = std::ffi::CStr::from_ptr(caveat_of(ctx, f))
             .to_string_lossy()
             .into_owned();
-        assert_eq!(
-            caveat_back,
-            "concurrent-machine run: failure reported from the discovering execution"
+        assert!(
+            caveat_back.starts_with("nondeterministic failure"),
+            "got {caveat_back:?}"
         );
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
@@ -1917,10 +2024,15 @@ fn state_machine_and_primitive_boolean_paths() {
                 &mut ranged,
                 &mut out_concurrency,
             ),
-            HEGEL_E_ASSUME,
-            "the first concurrent creation of a run is rejected while the run flips"
+            HEGEL_OK,
+            "a concurrent creation succeeds; the run enters nondeterministic handling"
         );
-        assert!(ranged.is_null());
+        assert!(!ranged.is_null());
+        assert!(
+            (2..=4).contains(&out_concurrency),
+            "the drawn level respects the bounds, got {out_concurrency}"
+        );
+        assert_eq!(hegel_state_machine_free(ctx, ranged), HEGEL_OK);
 
         assert_eq!(
             hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),
@@ -1935,39 +2047,6 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
 
-        ok(hegel_mark_complete(
-            ctx,
-            tc,
-            hegel_status_t::HEGEL_STATUS_VALID as u32,
-            ptr::null(),
-        ));
-        ok(hegel_test_case_free(ctx, tc));
-
-        let tc = next_case(ctx, run);
-        assert!(!tc.is_null());
-        assert_eq!(
-            hegel_new_state_machine(
-                ctx,
-                tc,
-                rules.as_ptr(),
-                rule_groups.as_ptr(),
-                1,
-                ptr::null(),
-                0,
-                2,
-                4,
-                &mut ranged,
-                &mut out_concurrency,
-            ),
-            HEGEL_OK,
-            "once the run is nondeterministic, concurrent creations succeed"
-        );
-        assert!(!ranged.is_null());
-        assert!(
-            (2..=4).contains(&out_concurrency),
-            "the drawn level respects the bounds, got {out_concurrency}"
-        );
-        assert_eq!(hegel_state_machine_free(ctx, ranged), HEGEL_OK);
         ok(hegel_mark_complete(
             ctx,
             tc,

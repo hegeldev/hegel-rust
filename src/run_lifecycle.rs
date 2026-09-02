@@ -260,17 +260,14 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// case's).
 ///
 /// The capture decision is the engine's, read once at case start
-/// ([`CTestCase::is_nondeterministic`]): the engine stamps every case of a
-/// concurrent-machine run and every replay of an already-discovered
-/// failure — confirmation batches, database-reuse replays, and the
-/// report-time final replay — so the executions a failure report can be
-/// built from carry their diagnostics, while ordinary exploration cases
-/// skip backtrace capture. In a concurrent run the case that *makes* it
-/// concurrent — the first to ask `stateful::run_concurrent` for real
-/// concurrency — is discarded (the engine rejects its machine creation
-/// like a failed assumption), so every case that can fail was stamped up
-/// front and captures its whole trace, draws and notes made before
-/// `run_concurrent` included.
+/// ([`CTestCase::is_nondeterministic`]): the engine stamps every replay of
+/// an already-discovered failure — confirmation batches, database-reuse
+/// replays, and the report-time final replay — so the executions a failure
+/// report can be built from carry their diagnostics, while ordinary
+/// exploration cases skip backtrace capture. A stamped replay executes the
+/// whole body, so its capture holds the case's full trace — for a
+/// concurrent-machine case, draws and notes made before
+/// `stateful::run_concurrent` included.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -512,9 +509,6 @@ pub(crate) fn drive<F>(
     init_panic_hook();
     require_antithesis_feature();
     let mut test_fn = test_fn;
-    let mode = settings.mode;
-    let verbosity = settings.verbosity;
-    let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
 
     let c_settings = SettingsHandle::build(settings, database_key);
@@ -523,11 +517,41 @@ pub(crate) fn drive<F>(
         Err(message) => panic!("{message}"), // nocov
     };
 
-    if mode == Mode::SingleTestCase {
-        drive_single_case(&run, &mut test_fn, verbosity, test_location, &output);
+    if settings.mode == Mode::SingleTestCase {
+        drive_single_case(
+            &run,
+            &mut test_fn,
+            settings.verbosity,
+            test_location,
+            &output,
+        );
         return;
     }
 
+    drive_run(run, &mut test_fn, settings, test_location, &output, None);
+}
+
+/// The shared pump-and-report loop behind [`drive`] and
+/// [`drive_blob_replay`]: pull every test case off `run`, capture report
+/// material per origin, then act on the run's verdict. A passing run
+/// returns — unless `stale_message` is set (a blob replay), where a pass
+/// means the blob no longer reproduces and panics with that message.
+///
+/// `#[inline(always)]`: without it the test body's call stops being
+/// inlined and panic backtraces lose the user closure's source location
+/// (pinned by `test_output`'s backtrace tests).
+#[inline(always)]
+fn drive_run<F: FnMut(TestCase)>(
+    run: RunHandle,
+    test_fn: &mut F,
+    settings: &Settings,
+    test_location: Option<&TestLocation>,
+    output: &RunOutput,
+    stale_message: Option<&str>,
+) {
+    let mode = settings.mode;
+    let verbosity = settings.verbosity;
+    let quiet = verbosity == Verbosity::Quiet;
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut captured: HashMap<String, CapturedReport> = HashMap::new();
     while let Some(c_tc) = run.next_test_case() {
@@ -547,15 +571,8 @@ pub(crate) fn drive<F>(
                     .push(line.to_string());
             }))
         };
-        let (tc_result, payload, diagnostic) = run_test_case(
-            c_tc,
-            &mut test_fn,
-            false,
-            mode,
-            verbosity,
-            &output,
-            case_sink,
-        );
+        let (tc_result, payload, diagnostic) =
+            run_test_case(c_tc, test_fn, false, mode, verbosity, output, case_sink);
         if let TestCaseResult::Interesting(failure) = &tc_result {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             captured.insert(
@@ -575,7 +592,11 @@ pub(crate) fn drive<F>(
     emit_antithesis_assertion(status != RunStatus::HEGEL_RUN_STATUS_PASSED, test_location);
 
     match status {
-        RunStatus::HEGEL_RUN_STATUS_PASSED => {}
+        RunStatus::HEGEL_RUN_STATUS_PASSED => {
+            if let Some(message) = stale_message {
+                panic!("{message}");
+            }
+        }
         RunStatus::HEGEL_RUN_STATUS_ERROR => {
             let message = result
                 .error()
@@ -666,13 +687,16 @@ fn drive_single_case(
     emit_antithesis_assertion(false, test_location);
 }
 
-/// Replay a single base64 failure blob through the C ABI
-/// (`hegel_test_case_from_blob`), bypassing generation and shrinking.
+/// Replay a base64 failure blob through the C ABI (`hegel_run_start_blob`),
+/// bypassing generation and shrinking.
 ///
-/// Decoding failures (corrupt or incompatible blobs) panic with the engine's
-/// diagnostic. A blob that decodes but no longer fails is a stale reproducer,
-/// reported as such. A reproduced failure re-raises the test's own panic; a
-/// replayed example has no fresh blob to print.
+/// The engine owns the replay: a deterministic blob replays its choices
+/// once; a nondeterministic blob replays its stored timelines until one
+/// fails, like database reuse. Decoding failures (corrupt or incompatible
+/// blobs) panic with the engine's diagnostic. A blob that decodes but no
+/// longer fails is a stale reproducer, reported as such. A reproduced
+/// failure re-raises the test's own panic; a replayed example has no fresh
+/// blob to print.
 pub(crate) fn drive_blob_replay<F>(
     test_fn: F,
     settings: &Settings,
@@ -687,38 +711,18 @@ pub(crate) fn drive_blob_replay<F>(
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
     let c_settings = SettingsHandle::build(settings, database_key);
-    let c_tc = match CTestCase::from_blob(&c_settings, blob, output.sink()) {
-        Ok(c_tc) => c_tc,
-        Err(message) => panic!("{message}"),
-    };
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
+    let run = RunHandle::start_blob(&c_settings, blob, output.sink());
+    drive_run(
+        run,
         &mut test_fn,
-        true,
-        settings.mode,
-        settings.verbosity,
+        settings,
+        test_location,
         &output,
-        None,
+        Some(
+            "reproduce_failure: the supplied failure blob no longer reproduces a \
+             failure. The failure may have been fixed, or the blob is stale.",
+        ),
     );
-    if let Some(diagnostic) = diagnostic {
-        output.block(&diagnostic);
-    }
-    match result {
-        TestCaseResult::Interesting(_) => {
-            emit_antithesis_assertion(true, test_location);
-            match payload {
-                Some(payload) => std::panic::resume_unwind(payload),
-                None => unreachable!(), // nocov
-            }
-        }
-        _ => {
-            emit_antithesis_assertion(false, test_location);
-            panic!(
-                "reproduce_failure: the supplied failure blob no longer reproduces a \
-                 failure. The failure may have been fixed, or the blob is stale."
-            );
-        }
-    }
 }
 
 /// Fail fast — before any test case runs — when running under Antithesis

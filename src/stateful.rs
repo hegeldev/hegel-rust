@@ -918,9 +918,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 ///
 /// Concurrency bugs are nondeterministic — thread scheduling is outside
 /// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
-/// makes the whole run nondeterministic. Failures are reported from the
-/// discovering execution, with no replay, shrinking, database persistence,
-/// or reproduce blob, with at most one failure per run.
+/// switches the whole run into nondeterministic handling: failures are
+/// confirmed by repeated replay before they are reported or shrunk, and
+/// each report carries a caveat quoting that replay evidence alongside its
+/// reproduce blob.
 ///
 /// # Abandoned rules and lock poisoning
 ///

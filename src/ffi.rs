@@ -239,13 +239,11 @@ impl Drop for SettingsHandle {
 }
 
 /// Engine-output trampoline passed to `hegel_run_start` /
-/// `hegel_test_case_from_blob`: `user_data` points at the [`OutputSink`] the
+/// `hegel_run_start_blob`: `user_data` points at the [`OutputSink`] the
 /// run resolved at start, and each engine output line is forwarded to it. The
 /// engine invokes this while it runs between test cases; the sink is
-/// `Send + Sync`, and
-/// the pointee stays alive for as long as the engine can emit — owned by the
-/// [`RunHandle`] for a run, borrowed across the creating call for a blob
-/// replay (whose only line is emitted during it).
+/// `Send + Sync`, and the pointee stays alive for as long as the engine can
+/// emit — owned by the [`RunHandle`].
 unsafe extern "C" fn engine_output_trampoline(
     user_data: *mut c_void,
     line: *const c_char,
@@ -307,6 +305,38 @@ impl RunHandle {
         Ok(run)
     }
 
+    /// [`start`](Self::start) for a blob-replay run (`hegel_run_start_blob`):
+    /// the engine replays the blob instead of exploring. Infallible from the
+    /// safe wrapper (an undecodable blob is the *run's* error, read off the
+    /// result), so unlike [`start`](Self::start) there is no error to return.
+    pub(crate) fn start_blob(
+        settings: &SettingsHandle,
+        blob: &str,
+        sink: Option<&OutputSink>,
+    ) -> Self {
+        let blob = cstring_lossy(blob);
+        let output = sink.map(|s| Box::into_raw(Box::new(s.clone())));
+        let (callback, user_data) = output_args(output.map(|p| p.cast_const()));
+        let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
+        // SAFETY: as in `start`; blob is a live NUL-terminated string for the
+        // duration of the call (libhegel copies it).
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_run_start_blob(
+                ctx,
+                settings.as_ptr(),
+                blob.as_ptr(),
+                callback,
+                user_data,
+                &mut raw,
+            )
+        });
+        // Construct the handle before checking rc so an error path (raw is
+        // still null, which hegel_run_free accepts) releases the sink box.
+        let run = RunHandle { raw, output };
+        require_ok(rc);
+        run
+    }
+
     /// Pull the next test case the engine wants to run, or `None` when the run
     /// is finished. The returned handle holds its own reference to the test
     /// case (the run keeps a separate reference internally), so the frontend
@@ -355,8 +385,8 @@ impl Drop for RunHandle {
 /// drives it with.
 ///
 /// Every `CTestCase` owns an independent libhegel handle — from
-/// [`from_blob`](CTestCase::from_blob), [`next_test_case`](RunHandle::next_test_case),
-/// or [`clone_handle`](CTestCase::clone_handle) — and drops its reference via
+/// [`next_test_case`](RunHandle::next_test_case) or
+/// [`clone_handle`](CTestCase::clone_handle) — and drops its reference via
 /// `hegel_test_case_free` on drop; the shared test case is released once its
 /// last reference is gone. Frontend code that needs several owners of *one*
 /// handle (the lifecycle and the body's `TestCase`, a `TestCase` and its
@@ -374,38 +404,6 @@ unsafe impl Send for CTestCase {}
 unsafe impl Sync for CTestCase {}
 
 impl CTestCase {
-    /// Build a standalone test case that replays a base64 failure blob, with
-    /// engine output (the debug-verbosity replay trace) going to `sink`
-    /// (stderr when `None`). Owned by the caller (freed on drop). Returns
-    /// `Err` with libhegel's diagnostic if the blob is
-    /// null/non-UTF-8/undecodable.
-    pub(crate) fn from_blob(
-        settings: &SettingsHandle,
-        blob: &str,
-        sink: Option<&OutputSink>,
-    ) -> Result<Self, String> {
-        let c_blob = cstring_lossy(blob);
-        let (callback, user_data) = output_args(sink.map(ptr::from_ref));
-        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
-        // SAFETY: settings is live; c_blob is a valid NUL-terminated string.
-        // The blob-replay trace is emitted synchronously during this call, so
-        // borrowing `sink` for its duration satisfies the trampoline contract.
-        let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_from_blob(
-                ctx,
-                settings.as_ptr(),
-                c_blob.as_ptr(),
-                callback,
-                user_data,
-                &mut raw,
-            )
-        });
-        if rc != hegel_result_t::HEGEL_OK {
-            return Err(last_error_string());
-        }
-        Ok(CTestCase { raw })
-    }
-
     /// Clone this handle via `hegel_test_case_clone`, yielding a new libhegel
     /// handle onto the same underlying test case. Clones have independent
     /// per-handle locks, so two of them may draw concurrently; this is how a

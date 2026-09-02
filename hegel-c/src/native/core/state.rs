@@ -1402,22 +1402,9 @@ pub struct FamilyCore {
     /// Set when a state machine with `max_concurrency > 1` was requested on
     /// any stream of this family: the test asked for real concurrency, so
     /// its behaviour depends on thread scheduling and the run driving this
-    /// family is nondeterministic. Set even when the creation itself is
-    /// rejected (see [`Self::reject_concurrent_machine`]). The engine reads
-    /// this after each execution and flips the whole run into
-    /// nondeterministic mode.
+    /// family is nondeterministic. The engine reads this after each
+    /// execution and flips the whole run into nondeterministic handling.
     concurrent_machine: AtomicBool,
-    /// Set by the engine on every test case of a run that is not (yet)
-    /// known to be nondeterministic: a state machine creation with
-    /// `max_concurrency > 1` must then fail with an assume violation, so
-    /// the case is discarded like a failed assumption while
-    /// [`Self::concurrent_machine`] still tells the engine to flip the run.
-    /// Every later case is stamped as nondeterministic up front, so its
-    /// whole execution — including draws made before the machine is
-    /// created — can be emitted for the failure report. Defaults to false
-    /// (allow), which standalone handles (single-test-case runs, blob
-    /// replays, embeddings driving the engine directly) keep.
-    reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<BTreeSet<i64>>,
@@ -1440,7 +1427,6 @@ impl FamilyCore {
             state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
             concurrent_machine: AtomicBool::new(false),
-            reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(BTreeSet::new()),
             generation_parameters: OnceBox::new(),
         }
@@ -1456,20 +1442,6 @@ impl FamilyCore {
     /// any stream of this family.
     pub(crate) fn concurrent_machine(&self) -> bool {
         self.concurrent_machine.load(Ordering::Relaxed)
-    }
-
-    /// Set whether a state machine creation with `max_concurrency > 1`
-    /// must be rejected on this family (see
-    /// [`Self::reject_concurrent_machine`]).
-    pub(crate) fn set_reject_concurrent_machine(&self, reject: bool) {
-        self.reject_concurrent_machine
-            .store(reject, Ordering::Relaxed);
-    }
-
-    /// Whether a state machine creation with `max_concurrency > 1` must be
-    /// rejected on this family.
-    pub(crate) fn reject_concurrent_machine(&self) -> bool {
-        self.reject_concurrent_machine.load(Ordering::Relaxed)
     }
 
     /// Record this test case's swarm parameters. Called once when the root

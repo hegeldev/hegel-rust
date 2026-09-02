@@ -173,6 +173,74 @@ pub(crate) async fn run_single_case(
     }
 }
 
+/// Replay a reproduce blob (used by `hegel_run_start_blob`) and return the
+/// reproducing failure, if any.
+///
+/// A deterministic blob replays its choices once. A nondeterministic blob
+/// replays its stored timelines through the same replay-until-failure
+/// sequence as database reuse — per-timeline first-fit, then positional
+/// splices — with no fresh-generation tier: a fresh case could fail for a
+/// reason unrelated to the blob. Every replay is stamped so the client
+/// captures the reproducing execution's output and diagnostic.
+///
+/// A run with no failures means the blob is stale; an undecodable blob is
+/// the run's error.
+pub(crate) async fn reproduce_blob(
+    settings: &Settings,
+    blob: &str,
+    exchange: &CaseExchange,
+) -> Result<TestRunResult, RunError> {
+    match crate::native::blob::decode_blob(blob) {
+        None => Err(RunError::UsageError(
+            "the supplied failure blob could not be decoded. It may be corrupt or from an \
+             incompatible Hegel version."
+                .to_string(),
+        )),
+        Some(crate::native::blob::DecodedBlob::Choices(choices)) => {
+            let mut ntc = NativeTestCase::for_choices(&choices, None, None);
+            ntc.set_nondeterministic();
+            ntc.family()
+                .set_stateful_step_count(settings.stateful_step_count);
+            let (data_source, handle) = NativeDataSource::new(ntc);
+            exchange.offer(Box::new(data_source)).await;
+            let failures = match NativeDataSource::take_outcome(&handle)? {
+                TestCaseResult::Interesting(failure) => Vec::from([failure]),
+                _ => Vec::new(),
+            };
+            Ok(TestRunResult { failures })
+        }
+        Some(crate::native::blob::DecodedBlob::Nd(state)) => {
+            let mut engine = Engine::new(settings, None, exchange)?;
+            if settings.nondeterminism_strictness != NondeterminismStrictness::Error {
+                engine.nd_flip();
+            }
+            engine.capture_replays = true;
+            let (run, _evidence) = engine
+                .nd_reproduce(
+                    None,
+                    &state.timelines,
+                    nd::reuse_replay_budget() as f64 / state.timelines.len() as f64,
+                    nd::REPRODUCE_SPLICES,
+                    0,
+                )
+                .await?;
+            let failures = match run.and_then(|run| run.origin) {
+                Some(origin) => {
+                    engine.nd_origins.trust(&origin, state.timelines);
+                    let caveat = engine.nd_origins.caveat(&origin);
+                    Vec::from([Failure {
+                        origin,
+                        reproduce_blob: None,
+                        caveat,
+                    }])
+                }
+                None => Vec::new(),
+            };
+            Ok(TestRunResult { failures })
+        }
+    }
+}
+
 /// The full multi-test-case engine: database replay, generation, and
 /// shrinking, ending at the exploration report.
 async fn run_main(
@@ -330,10 +398,6 @@ impl<'a> Engine<'a> {
                             db.delete(&secondary_key, &raw);
                         }
                     }
-                    if self.concurrent {
-                        replay_aligned = false;
-                        break;
-                    }
                 }
                 if self.interesting.is_empty() {
                     replay_aligned = false;
@@ -386,7 +450,7 @@ impl<'a> Engine<'a> {
                 self.calls,
                 self.first_bug_at,
                 self.last_bug_at,
-                shrink_phase && !self.concurrent,
+                shrink_phase,
                 report_multiple,
                 self.first_bug_time.map(|t| t.elapsed()),
             )
@@ -401,7 +465,7 @@ impl<'a> Engine<'a> {
                         self.calls,
                         self.first_bug_at,
                         self.last_bug_at,
-                        shrink_phase && !self.concurrent,
+                        shrink_phase,
                         report_multiple,
                         self.first_bug_time.map(|t| t.elapsed()),
                     )
@@ -496,8 +560,7 @@ impl<'a> Engine<'a> {
                     optimiser.optimise_targets().await?;
                 }
 
-                if !self.concurrent
-                    && run.status == Status::Valid
+                if run.status == Status::Valid
                     && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
                         || !self.interesting.is_empty())
                 {
@@ -534,7 +597,7 @@ impl<'a> Engine<'a> {
         }
         self.collect_statistics = false;
 
-        if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.concurrent {
+        if !self.interesting.is_empty() && !replay_aligned && shrink_phase {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
                 let total: usize = self.interesting.values().map(|n| n.len()).sum();
@@ -709,8 +772,7 @@ impl<'a> Engine<'a> {
 
         self.final_replay().await?;
 
-        let persist = !self.concurrent;
-        if let (true, Some(db), Some(key)) = (persist, self.db(), database_key) {
+        if let (Some(db), Some(key)) = (self.db(), database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
             let new_entries: crate::native::HashSet<Vec<u8>> = if self.nd_handling() {
@@ -771,28 +833,18 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let nondeterministic = self.concurrent;
         let nd_blobs = self.nd_handling();
         let mut failures: Vec<Failure> = Vec::with_capacity(origins_sorted.len());
         for (origin, nodes) in origins_sorted {
-            let (reproduce_blob, caveat) = if nondeterministic {
+            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+            let (reproduce_blob, caveat) = if nd_blobs {
+                let state = self.nd_state_for(&origin, choices);
                 (
-                    None,
-                    Some(String::from(
-                        "concurrent-machine run: failure reported from the discovering execution",
-                    )),
+                    Some(crate::native::blob::encode_nd_failure(&state)),
+                    self.nd_origins.caveat(&origin),
                 )
             } else {
-                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                if nd_blobs {
-                    let state = self.nd_state_for(&origin, choices);
-                    (
-                        Some(crate::native::blob::encode_nd_failure(&state)),
-                        self.nd_origins.caveat(&origin),
-                    )
-                } else {
-                    (Some(crate::native::blob::encode_failure(&choices)), None)
-                }
+                (Some(crate::native::blob::encode_failure(&choices)), None)
             };
             failures.push(Failure {
                 origin,
@@ -814,10 +866,7 @@ impl<'a> Engine<'a> {
                 });
             }
         }
-        Ok(TestRunResult {
-            failures,
-            nondeterministic,
-        })
+        Ok(TestRunResult { failures })
     }
 }
 
@@ -933,18 +982,6 @@ pub(crate) fn flaky_diagnostic() -> String {
      This usually means your test depends on external state such as \
      global variables, system time, or external random number generators."
         .to_string()
-}
-
-/// Notice emitted once, when the run first executes a test case that
-/// created a state machine with `max_concurrency > 1` and the run flips
-/// into nondeterministic mode (see [`Engine::concurrent`]).
-/// Informational rather than a warning: the concurrency was asked for
-/// explicitly, but the user should learn why their failure is reported
-/// unshrunk and without a reproduce blob.
-pub(crate) fn concurrent_machine_notice() -> &'static str {
-    "Concurrent state machine detected: this run is nondeterministic, so failures \
-     are reported from the execution that discovered them, without shrinking, \
-     replay, database persistence, or a reproduce blob."
 }
 
 /// Warning emitted when shrinking exhausts its wall-clock budget
@@ -1191,12 +1228,10 @@ pub(crate) struct Engine<'a> {
     /// Sticky flag for the concurrency subset of `nd_active`, flipped by
     /// the first executed test case that creates a state machine with
     /// `max_concurrency > 1` (see
-    /// [`crate::native::core::FamilyCore::concurrent_machine`]). Clone
-    /// streams don't survive today's replay machinery (experiment 007), so
-    /// while set the run also skips span mutation, the shrink phase (so
-    /// generation stops at the first bug), database persistence, and
-    /// reproduce-blob emission — failures are reported faithfully from the
-    /// execution that discovered them.
+    /// [`crate::native::core::FamilyCore::concurrent_machine`]). Declared
+    /// concurrency enters nondeterministic handling unconditionally — the
+    /// user asked for real threads, so even `error` strictness handles the
+    /// resulting nondeterminism rather than aborting on it.
     pub(crate) concurrent: bool,
     /// Whether [`Self::cached_test_function`] may serve a recorded path from
     /// the choice tree instead of executing the body. Always true today;
@@ -1257,11 +1292,10 @@ impl<'a> Engine<'a> {
 
     /// Whether the full nondeterministic pipeline — discovery confirmation,
     /// the shrink gauntlet, pools, validated persistence, caveated
-    /// reporting — is driving this run. Concurrent-machine runs detect as
-    /// nondeterministic but keep the legacy blobless regime until clone
-    /// streams survive replay (experiment 007).
+    /// reporting — is driving this run. Concurrent-machine runs flow
+    /// through it like any other nondeterministic run (experiment 007).
     fn nd_handling(&self) -> bool {
-        self.nd_active && !self.concurrent
+        self.nd_active
     }
 
     /// Switch the run into nondeterministic handling, per
@@ -1390,7 +1424,7 @@ impl<'a> Engine<'a> {
     /// yet-unconfirmed origin, a dry one switches the caveat's wording
     /// instead of unreporting the failure (decision 3).
     async fn final_replay(&mut self) -> Result<(), RunError> {
-        if self.concurrent || self.interesting.is_empty() {
+        if self.interesting.is_empty() {
             return Ok(());
         }
         let mut origins: Vec<String> = self.interesting.keys().cloned().collect();
@@ -1706,22 +1740,17 @@ impl<'a> Engine<'a> {
         mut ntc: NativeTestCase,
         measurement: bool,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        if self.concurrent || self.capture_replays {
+        if self.capture_replays {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_stateful_step_count(self.settings.stateful_step_count);
-        family.set_reject_concurrent_machine(!self.concurrent);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.concurrent && family.concurrent_machine() {
             self.concurrent = true;
-            self.nd_active = true;
-            self.serve_replays = false;
-            if self.settings.verbosity != Verbosity::Quiet {
-                self.settings.output.line(concurrent_machine_notice());
-            }
+            self.nd_flip();
         }
         let mut mismatch = self.record_run(&run, elapsed, measurement);
         if mismatch.is_some()
@@ -1763,7 +1792,7 @@ impl<'a> Engine<'a> {
         if !measurement {
             self.calls += 1;
             self.total_test_time += elapsed;
-            if run.nodes.is_empty() && run.status >= Status::Invalid && !self.concurrent {
+            if run.nodes.is_empty() && run.status >= Status::Invalid {
                 self.test_is_trivial = true;
             }
             if run.status >= Status::Valid && !run.target_observations.is_empty() {
@@ -1789,9 +1818,7 @@ impl<'a> Engine<'a> {
         }
         if run.status == Status::Interesting {
             let origin = run.origin.clone().unwrap_or_default();
-            if self.concurrent {
-                update_interesting(&mut self.interesting, origin, run.nodes.clone());
-            } else if !self.nd_active {
+            if !self.nd_active {
                 self.persister.record(&origin, &run.nodes);
                 update_interesting(&mut self.interesting, origin, run.nodes.clone());
             } else if !self.interesting.contains_key(&origin) {

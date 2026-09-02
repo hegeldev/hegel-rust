@@ -322,11 +322,7 @@ impl DataSource for NativeDataSource {
         }
         self.with_ntc(|ntc| {
             if max_concurrency > 1 {
-                let family = ntc.family();
-                family.set_concurrent_machine();
-                if family.reject_concurrent_machine() {
-                    return Err(EngineError::AssumeViolation);
-                }
+                ntc.family().set_concurrent_machine();
             }
             NativeStateMachine::new(
                 ntc,

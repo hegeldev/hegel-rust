@@ -223,13 +223,20 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         .expect("a shrunk failure carries a blob");
 
     let sh2 = SettingsHandle::build(&settings, None);
-    let replay = CTestCase::from_blob(&sh2, &blob, None).unwrap();
+    let replay_run = RunHandle::start_blob(&sh2, &blob, None);
+    let replay = replay_run.next_test_case().unwrap();
     assert_eq!(
         replay.generate_integer(0, 100).unwrap(),
         1,
         "the blob replays the minimal counterexample"
     );
     replay.mark_complete(INTERESTING, Some(origin)).unwrap();
+    assert!(replay_run.next_test_case().is_none());
+    let replay_result = replay_run.result();
+    assert!(
+        replay_result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED,
+        "the reproduced replay is the run's failure"
+    );
 }
 
 /// `clone_handle` yields an independent handle onto the same test case: both
@@ -258,14 +265,15 @@ fn ffi_clone_handle_shares_the_test_case() {
 }
 
 #[test]
-fn ffi_from_blob_rejects_undecodable_input() {
+fn ffi_start_blob_surfaces_an_undecodable_blob_as_the_runs_error() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None);
-    let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!", None) {
-        Err(e) => e,
-        Ok(_) => panic!("expected an undecodable blob to be rejected"),
-    };
-    assert!(!err.is_empty(), "an undecodable blob yields a diagnostic");
+    let run = RunHandle::start_blob(&sh, "not a valid base64 hegel blob!!!", None);
+    assert!(run.next_test_case().is_none());
+    let result = run.result();
+    assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+    let err = result.error().unwrap();
+    assert!(err.contains("could not be decoded"), "{err}");
 }
 
 #[test]

@@ -48,14 +48,14 @@ pub(crate) fn run_native(
 /// exploration. Suspends only at the offers, so it can be driven with a
 /// no-op waker (see [`crate::exchange`]).
 ///
-/// The engine only *explores* — database replay, generation, and shrinking —
-/// and every test case is non-final. Each returned
-/// [`Failure`](crate::backend::Failure) carries the origin the engine grouped
-/// on plus a reproduce blob; the caller replays each blob (via
-/// `hegel_test_case_from_blob`) to produce the final report and the panic
-/// message. `Err` is a [`RunError`] — a failure of the run itself (health
-/// check, nondeterminism) rather than of any test case; the embedding reports
-/// it through its own error channel.
+/// The engine owns the whole exploration — database replay, generation,
+/// shrinking, and the final replay of each failure it reports — and every
+/// test case is non-final. Each returned
+/// [`Failure`](crate::backend::Failure) carries the origin the engine
+/// grouped on, a reproduce blob when the failure has one, and the caveat
+/// when the run handled nondeterminism. `Err` is a [`RunError`] — a failure
+/// of the run itself (health check, nondeterminism) rather than of any test
+/// case; the embedding reports it through its own error channel.
 pub(crate) async fn run_native_async(
     settings: &Settings,
     database_key: Option<&str>,
@@ -66,7 +66,6 @@ pub(crate) async fn run_native_async(
             crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
         return Ok(TestRunResult {
             failures: failure.into_iter().collect(),
-            nondeterministic: false,
         });
     }
 

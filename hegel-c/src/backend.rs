@@ -407,20 +407,16 @@ impl core::error::Error for RunError {}
 /// Result of a full test run: the run's outcome once generation and
 /// shrinking are done.
 ///
-/// The engine only *explores*, so each [`Failure`] carries the origin the
-/// engine grouped on and the reproduce blob the client replays. The client
-/// (`run_lifecycle::drive` for the panic API) replays each blob itself and
-/// owns the resulting report. The run passed iff `failures` is empty.
+/// The engine owns the whole exploration — including the final replay of
+/// each failure it reports — so each [`Failure`] arrives ready to report:
+/// the origin the engine grouped on, the reproduce blob, and the caveat
+/// when the run handled nondeterminism. The run passed iff `failures` is
+/// empty.
 #[derive(Debug)]
 pub struct TestRunResult {
     /// One entry per distinct interesting example surfaced by the run, one
     /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
-    /// Whether the run was nondeterministic (a test case created a state
-    /// machine with `max_concurrency > 1`). Failures of such a run carry no
-    /// reproduce blob — there is no final replay — so the caller should
-    /// report them from whatever it captured at discovery time.
-    pub nondeterministic: bool,
 }
 
 #[cfg(test)]

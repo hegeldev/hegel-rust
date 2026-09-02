@@ -110,8 +110,8 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
     let text = lines.join("\n");
     assert!(
-        text.contains("Concurrent state machine detected"),
-        "the run must print the nondeterminism notice:\n{text}"
+        text.contains("note: nondeterministic failure"),
+        "the report must carry the confirmation caveat:\n{text}"
     );
     assert!(
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
@@ -135,9 +135,9 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         "the ferried panic info must replace the cross-thread fallback:\n{text}"
     );
     assert!(
-        !text.contains("To reproduce this failure"),
-        "a nondeterministic failure must not print a reproducer line even \
-         with print_blob on:\n{text}"
+        text.contains("To reproduce this failure"),
+        "a confirmed concurrent failure prints its reproducer line under \
+         print_blob:\n{text}"
     );
 }
 
@@ -153,10 +153,8 @@ fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
     assert!(lines.is_empty(), "quiet runs print nothing: {lines:?}");
 }
 
-/// The reason the first case to reach a concurrent machine is discarded:
-/// every case that can fail starts with the nondeterminism flag already
-/// set, so draws and notes made *before* `run_concurrent` are captured in
-/// the failure report too.
+/// The failure report is built from a stamped replay of the whole body, so
+/// draws and notes made *before* `run_concurrent` are captured in it too.
 #[test]
 fn output_before_the_machine_is_captured_in_the_failure_report() {
     let (lines, result) = capture_hegel_output(|| {
@@ -189,7 +187,7 @@ fn a_run_with_max_concurrency_one_stays_deterministic() {
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
     let text = lines.join("\n");
     assert!(
-        !text.contains("Concurrent state machine detected"),
+        !text.contains("note: nondeterministic"),
         "a single-worker machine must not flip the run nondeterministic:\n{text}"
     );
     assert!(
@@ -543,11 +541,11 @@ fn worker_of(line: &str) -> Option<usize> {
 }
 
 #[test]
-fn the_failure_report_groups_each_rounds_lines_by_worker() {
+fn a_rounds_lines_group_by_worker() {
     static TICKS: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc| run_concurrent(GroupedTicker { ticks: &TICKS }, tc, 2, 2))
-            .settings(Settings::new().database(None))
+            .settings(Settings::new().database(None).verbosity(Verbosity::Verbose))
             .run();
     });
     result.expect_err("the ticker must run out of ticks and fail");
@@ -707,7 +705,7 @@ fn flip_nondeterministic(tc: &TestCase) {
 }
 
 #[test]
-fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
+fn an_unconfirmed_one_shot_failure_reports_only_its_caveat() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
@@ -730,13 +728,14 @@ fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
     assert_matches_regex(&panic_message(&payload), "boom on the third case");
     let draw_lines = lines.iter().filter(|l| l.contains("let ")).count();
     assert_eq!(
-        draw_lines, 1,
-        "only the discovering case's buffer is printed: {lines:?}"
+        draw_lines, 0,
+        "unstamped exploration cases render no draw lines, so the \
+         unconfirmed report has none: {lines:?}"
     );
     let text = lines.join("\n");
     assert!(
-        text.contains("panicked at"),
-        "the diagnostic is printed after the buffer:\n{text}"
+        text.contains("note: unconfirmed failure: failed 0 of"),
+        "a one-shot failure reports unconfirmed with its caveat:\n{text}"
     );
     assert!(
         !text.contains("To reproduce this failure"),
@@ -767,15 +766,14 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     let payload = result.expect_err("the third case fails the run");
     assert_matches_regex(&panic_message(&payload), "boom on the third case");
     let draw_lines = lines.iter().filter(|l| l.contains("let ")).count();
-    assert_eq!(
-        draw_lines, 4,
-        "all three cases stream live and the failure report repeats the \
-         discovering case's draw: {lines:?}"
+    assert!(
+        draw_lines > 3,
+        "the generation cases and the confirmation replays all stream live: {lines:?}"
     );
     let diagnostics = lines.iter().filter(|l| l.contains("panicked at")).count();
     assert_eq!(
-        diagnostics, 2,
-        "the diagnostic prints live at discovery and again in the failure \
-         report: {lines:?}"
+        diagnostics, 1,
+        "the diagnostic prints live at discovery; the unconfirmed report \
+         carries the caveat instead: {lines:?}"
     );
 }

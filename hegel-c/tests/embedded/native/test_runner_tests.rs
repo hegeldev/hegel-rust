@@ -13,7 +13,7 @@ use super::*;
 use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
-use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
+use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Mode, Phase};
 use std::time::Duration;
@@ -53,10 +53,8 @@ fn boom(msg: &str) -> TestCaseResult {
 }
 
 /// Create (and immediately drop) a one-rule state machine whose declared
-/// concurrency bound is above 1. On the first such case of a run the
-/// engine rejects the creation with an assume violation (`Err(Invalid)`
-/// here): the case is discarded and the run flips into nondeterministic
-/// mode, and later cases create the machine successfully.
+/// concurrency bound is above 1, flipping the run into nondeterministic
+/// handling at the end of the executing case.
 fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
@@ -66,7 +64,6 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
         2,
     ) {
         Ok(_) => Ok(()),
-        Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
         Err(_) => Err(TestCaseResult::Overrun),
     }
 }
@@ -565,6 +562,133 @@ fn run_single_case_returns_none_for_a_passing_case() {
     assert!(failure.is_none(), "{failure:?}");
 }
 
+/// Drive [`reproduce_blob`] to completion with a synchronous body.
+fn reproduce_blob_sync(
+    settings: &Settings,
+    blob: &str,
+    mut body: impl FnMut(&dyn DataSource) -> TestCaseResult,
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
+    let exchange = CaseExchange::new();
+    crate::exchange::drive(&exchange, reproduce_blob(settings, blob, &exchange), |ds| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    })
+}
+
+fn quiet_settings() -> Settings {
+    Settings::new().database(None).verbosity(Verbosity::Quiet)
+}
+
+#[test]
+fn reproduce_blob_rejects_an_undecodable_blob_as_the_runs_error() {
+    let err = reproduce_blob_sync(&quiet_settings(), "!!! junk !!!", |_| TestCaseResult::Valid)
+        .unwrap_err();
+    let crate::backend::RunError::UsageError(msg) = err else {
+        panic!("expected a usage error, got {err:?}");
+    };
+    assert!(msg.contains("could not be decoded"), "{msg}");
+}
+
+#[test]
+fn reproduce_blob_replays_a_deterministic_blob_exactly_once() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let mut calls = 0u32;
+    let mut stamped = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        calls += 1;
+        stamped += u32::from(ds.is_nondeterministic());
+        match rbool(ds) {
+            Ok(true) => boom("deterministic replay"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert_eq!(calls, 1);
+    assert_eq!(stamped, 1, "the replay is stamped for capture");
+    assert_eq!(result.failures.len(), 1);
+    let failure = &result.failures[0];
+    assert_eq!(failure.origin, "Panic: deterministic replay");
+    assert!(failure.reproduce_blob.is_none());
+    assert!(failure.caveat.is_none());
+}
+
+#[test]
+fn reproduce_blob_reports_a_stale_deterministic_blob_as_passed() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(false)]);
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| match rbool(ds) {
+        Ok(true) => boom("never"),
+        Ok(false) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+}
+
+/// A one-timeline ND blob whose single stored choice is a `true` boolean.
+fn nd_blob() -> String {
+    crate::native::blob::encode_nd_failure(&crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 7,
+        extension: 4,
+    })
+}
+
+#[test]
+fn reproduce_blob_replays_an_nd_blob_until_a_replay_fails() {
+    let mut calls = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &nd_blob(), |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        calls += 1;
+        if calls == 3 {
+            boom("third replay")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(calls, 3, "the replay loop retries past the early misses");
+    assert_eq!(result.failures.len(), 1);
+    let failure = &result.failures[0];
+    assert_eq!(failure.origin, "Panic: third replay");
+    assert!(failure.reproduce_blob.is_none());
+    assert_eq!(
+        failure.caveat.as_deref(),
+        Some("nondeterministic failure: reproduced from the stored entry this run")
+    );
+}
+
+#[test]
+fn reproduce_blob_reports_an_exhausted_nd_blob_as_passed() {
+    let mut calls = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &nd_blob(), |ds| {
+        calls += 1;
+        match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(calls > 1, "a stale ND blob is retried before giving up");
+}
+
+#[test]
+fn reproduce_blob_replays_an_nd_blob_under_error_strictness() {
+    let mut settings = quiet_settings();
+    settings.nondeterminism_strictness = NondeterminismStrictness::Error;
+    let result = reproduce_blob_sync(&settings, &nd_blob(), |ds| match rbool(ds) {
+        Ok(true) => boom("error strictness"),
+        Ok(false) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: error strictness");
+}
+
 #[test]
 fn run_main_with_urandom_backend_generates_and_passes() {
     let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
@@ -612,7 +736,6 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Duration::from_secs(300),
     );
     let result = exploration.unwrap();
-    assert!(!result.nondeterministic);
     assert!(
         result.failures[0].origin.contains("always fails"),
         "{:?}",
@@ -1179,7 +1302,7 @@ fn final_replay_surfaces_generator_nondeterminism_under_error_strictness() {
 }
 
 #[test]
-fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
+fn a_concurrent_run_shrinks_and_reports_a_caveated_blob() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let seen_bug = AtomicBool::new(false);
     let result = reuse_run(
@@ -1213,8 +1336,9 @@ fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
     .unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("stable origin"));
-    assert!(result.failures[0].reproduce_blob.is_none());
-    assert!(result.nondeterministic);
+    assert!(result.failures[0].reproduce_blob.is_some());
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(caveat.starts_with("nondeterministic failure"), "{caveat}");
     assert!(
         seen_bug.load(Ordering::SeqCst),
         "the bug must have been discovered by generation"
@@ -1222,7 +1346,7 @@ fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
 }
 
 #[test]
-fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
+fn a_concurrent_one_shot_bug_is_reported_unconfirmed() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let failed_once = AtomicBool::new(false);
     let result = reuse_run(
@@ -1246,10 +1370,15 @@ fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("racy origin"));
     assert!(result.failures[0].reproduce_blob.is_none());
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.starts_with("unconfirmed failure: failed 0 of"),
+        "{caveat}"
+    );
 }
 
 #[test]
-fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
+fn a_concurrent_reuse_run_persists_v2_entries() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
@@ -1273,48 +1402,62 @@ fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(result.failures[0].reproduce_blob.is_some());
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(caveat.starts_with("nondeterministic failure"), "{caveat}");
+    let primary = db.fetch(b"k");
+    assert!(!primary.is_empty());
     assert!(
-        db.fetch(b"k").is_empty(),
-        "the stale replay is discarded like a failed assumption and deleted, \
-         and the fresh failure is not persisted"
+        primary
+            .iter()
+            .all(|e| crate::native::blob::decode_nd_state(e).is_some()),
+        "a concurrent run persists version-2 entries"
     );
     let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
-    assert!(db.fetch(&secondary).is_empty());
+    assert!(
+        db.fetch(&secondary).contains(&seeded),
+        "the stale v1 entry is demoted, not deleted"
+    );
 }
 
 #[test]
-fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
+fn a_concurrent_machine_notices_only_under_warn_strictness() {
     use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    let result = reuse_run(
-        Settings::new()
-            .database(None)
-            .test_cases(5)
-            .output(Output::callback(move |line| {
-                sink.lock().unwrap().push(line.to_string());
-            })),
-        "k",
-        |ds| {
-            if let Err(result) = concurrent_machine(ds) {
-                return result;
-            }
-            match rbool(ds) {
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        },
-    )
-    .unwrap();
-    assert!(result.failures.is_empty());
-    let notices = lines
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|l| l.contains("Concurrent state machine detected"))
-        .count();
-    assert_eq!(notices, 1, "the notice is printed exactly once per run");
+    for (strictness, expected) in [
+        (NondeterminismStrictness::Quiet, 0),
+        (NondeterminismStrictness::Warn, 1),
+    ] {
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&lines);
+        let result = reuse_run(
+            Settings::new()
+                .database(None)
+                .test_cases(5)
+                .nondeterminism_strictness(strictness)
+                .output(Output::callback(move |line| {
+                    sink.lock().unwrap().push(line.to_string());
+                })),
+            "k",
+            |ds| {
+                if let Err(result) = concurrent_machine(ds) {
+                    return result;
+                }
+                match rbool(ds) {
+                    Ok(_) => TestCaseResult::Valid,
+                    Err(()) => TestCaseResult::Overrun,
+                }
+            },
+        )
+        .unwrap();
+        assert!(result.failures.is_empty());
+        let notices = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.contains("Nondeterministic test behavior detected"))
+            .count();
+        assert_eq!(notices, expected, "under {expected} expected notices");
+    }
 }
 
 #[test]
@@ -1807,7 +1950,6 @@ fn nd_gauntlet_run_shrinks_a_deterministic_core_end_to_end() {
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("Panic: always"));
     assert!(result.failures[0].reproduce_blob.is_some());
-    assert!(!result.nondeterministic);
     assert!(
         !lines.lock().unwrap().iter().any(|l| l.contains("nd boost")),
         "an always-failing origin confirms above the reliability floor, so boost is skipped"
@@ -2073,7 +2215,6 @@ fn structure_flip_under_quiet_recovers_the_failure_without_a_notice() {
     assert_eq!(result.failures.len(), 1);
     assert_eq!(result.failures[0].origin, "Panic: stable origin");
     assert!(result.failures[0].reproduce_blob.is_some());
-    assert!(!result.nondeterministic);
     assert!(
         !lines
             .lock()
@@ -2145,7 +2286,6 @@ fn reuse_kind_flip_under_quiet_completes_without_failures() {
     )
     .unwrap();
     assert!(result.failures.is_empty());
-    assert!(!result.nondeterministic);
 }
 
 #[test]
@@ -2177,7 +2317,6 @@ fn outcome_flake_under_quiet_confirms_and_shrinks_the_failure() {
     assert_eq!(result.failures.len(), 1);
     assert_eq!(result.failures[0].origin, "Panic: outcome");
     assert!(result.failures[0].reproduce_blob.is_some());
-    assert!(!result.nondeterministic);
 }
 
 #[test]
@@ -2212,7 +2351,6 @@ fn outcome_flake_under_quiet_that_never_reproduces_reports_a_caveat() {
             .starts_with("unconfirmed failure: failed 0 of ")
     );
     assert!(result.failures[0].reproduce_blob.is_none());
-    assert!(!result.nondeterministic);
 }
 
 #[test]
@@ -2293,7 +2431,6 @@ fn nd_handling_confirms_and_shrinks_a_clone_bearing_body() {
     assert_eq!(result.failures.len(), 1);
     assert_eq!(result.failures[0].origin, "Panic: clone bug");
     assert!(result.failures[0].reproduce_blob.is_some());
-    assert!(!result.nondeterministic);
 }
 
 #[test]
@@ -2405,6 +2542,56 @@ fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
             assert!(
                 evidence.runs() > 4,
                 "both timelines face the first-fit tier before the splices"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_positional_splice_carries_whole_clone_records_across_intact() {
+    use crate::native::core::CloneRecord;
+    use alloc::sync::Arc;
+    let clone_of = |v: i64| {
+        ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
+            ChoiceValue::Integer(BigInt::from(v)),
+        ])))
+    };
+    with_engine(
+        nd_settings().seed(Some(3)),
+        None,
+        |ds| {
+            let armed = match rbool(ds) {
+                Ok(b) => b,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            let child = match ds.clone_stream() {
+                Ok(c) => c,
+                Err(_) => return TestCaseResult::Overrun,
+            };
+            match rint(&*child, 0, 1000) {
+                Ok(x) if armed && x >= 500 => boom("clone splice"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx| {
+            let stored = vec![
+                vec![ChoiceValue::Boolean(true), clone_of(0)],
+                vec![ChoiceValue::Boolean(false), clone_of(600)],
+            ];
+            let (run, _) = ctx
+                .nd_reproduce(Some("Panic: clone splice"), &stored, 2.0, 50, 0)
+                .await
+                .unwrap();
+            let run = run.expect("a splice pairs the armed flag with the large child");
+            assert_eq!(run.origin.as_deref(), Some("Panic: clone splice"));
+            let ChoiceValue::Clone(record) = run.nodes[1].value() else {
+                panic!("the clone position survives the splice: {:?}", run.nodes);
+            };
+            assert_eq!(
+                record.owned_values(),
+                vec![ChoiceValue::Integer(BigInt::from(600))],
+                "the spliced timeline replays the clone record verbatim"
             );
         },
     );
