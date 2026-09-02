@@ -251,7 +251,7 @@ mode still aborts.
 | Merged trie (ND-node) encoding | Timeline pool | Pool shows heavy prefix sharing worth deduplicating |
 | extend=0 vs continuation budget on shrink Full replays | Undecided | Experiment 3/4: deterministic-realization invariant (deficit repair, divergence-observing passes) vs retry-shaped divergence that lengthens paths |
 | Strict never-lower-p vs tolerance floor (gamma) | gamma < 1 | Experiment 1's deceptive landscape quantifies the size-vs-reliability tradeoff |
-| Checkpoint/rollback on top of gauntleted accepts | Include, measure | Experiment 1: does it add anything once accepts are strong? |
+| Checkpoint/rollback on top of gauntleted accepts | Leaning drop | Experiment 1 first run: identical results to gauntlet-only at 10-40% extra cost on every landscape; re-test with timeline mixtures in experiment 3 before deleting |
 | `replay_aligned` replacement | Accept re-shrinking | Measured local-run cost |
 | FAILED vs FAILED_NONDETERMINISTIC semantics | Undecided | ABI implementation, with binding-compat notes |
 
