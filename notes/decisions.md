@@ -122,3 +122,14 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     bailing early. Per-position anchoring (decision 14) stays deferred with a measured target:
     the ~27% residue whole timelines can't reach on heterogeneous bodies; 006's span grafting
     probes it. (Experiment result.)
+
+23. **Discovery-confirmation bar: gate then extend — 10 replays, reject on zero failures;
+    otherwise continue to 40 total, accept early on the 4th failure.** Exact-DP comparison
+    (experiment 005A) against flat k-of-B, SPRT, and Wilson-threshold rules: 0.6% false
+    accept per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, 15 replays per
+    rejected fluke, 4.4 per p = 0.9 confirmation. Rationale: false accepts are sticky (they
+    occupy the origin behind the displacement gate) while false rejects recycle through
+    re-discovery, so per-discovery power is the cheap thing to trade away. Wilson-LCB-over-
+    noise-floor rejected for confirmation (26% false accept); SPRT rejected as paying 50+
+    replays for power that recycling provides free. Replaces 003's placeholder >= 2-in-20.
+    (Experiment result; completes the derivation decision 21 assigned to 005.)

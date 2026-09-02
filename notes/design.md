@@ -170,6 +170,15 @@ abort refuses to shrink anything that doesn't reproduce. ND mode removes the abo
 unconfirmed origin must be dropped from the interesting map (generation keeps hunting) rather
 than carried forward.
 
+The bar (derived in 005A by exact DP; decision 23): **replay 10 times, reject on zero
+failures; any failure continues to 40 total, accepting early on the 4th failure**. 0.6% false
+accept per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, 15 replays per
+rejected fluke, 4.4 per near-deterministic confirmation. The governing asymmetry: false
+accepts are sticky (they occupy the origin behind the displacement gate), false rejects
+recycle through re-discovery, so per-discovery power is the cheap thing to trade for a hard
+false-accept floor and low fluke cost. Wilson-over-noise-floor and SPRT shapes both lose to
+the gate (005A table).
+
 ### Shrinking
 
 One principle: **charge accepts, not rejects.**
