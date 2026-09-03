@@ -318,3 +318,77 @@ confirmed-dry), not 003's in-engine totals, which include generation. L4's high-
 median cost (1.76x) exceeds the L1-specific letter and rides the same G6 trade as the
 +26%. The in-engine spot check (`experiments/gauntlet-calibration` re-running the 003
 cells on the fixed engine) is phase 12's, after the rules land.
+
+## In-engine spot check (phase 12)
+
+New frozen crate `/experiments/gauntlet-calibration`, driving the fixed engine (@
+c68a89eb) through the public C ABI — `hegel_run_start` pull loop, default settings
+(quiet strictness, database disabled), 500-test-case budget — on 003's body (n in
+0..=20, then n atoms in 0..=100, failing via a hidden per-trial PRNG at p(atoms)):
+003's L1/L3/L4 plus L4b (bug 0.1 / background 0.02) and a D2 body (atom >= 95 -> 1.0,
+else >= 3 bug atoms -> 0.7). No `nd_force` (the C ABI has no switch): runs start
+deterministic and flip on production detection (tree mismatch or a failed verify),
+which is itself part of what this measures. The final counterexample is read back by
+replaying the failure blob (`hegel_test_case_from_blob`); a blobless caveat-only
+report (decision 24's fallback) is its own column. Execs count body invocations.
+Seeds fixed in code: trial i uses engine seed `i ^ 0xF00D` and hidden PRNG
+`Rng::new(i·0xC0FFEE ^ 0xD15EA5E)` (003's scheme), 100 seeds per cell; output is
+byte-identical across reruns. The table reproduces from `cargo run --release -- spot`
+in `/experiments/gauntlet-calibration` (~5 s wall; `spot <cell>` for one cell, `one
+<cell> <seed>` for one trial, `ND_DEBUG=1` for engine traces).
+
+| cell | shrunk | aborted | no-bug | caveat-only | bug kept | len med | final p p10/p50/p90 | execs med (p90) | nd | det finals |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| L1 rising | 96 | 0 | 0 | 4 | 96/96 | 4 | 0.26 / 0.34 / 0.82 | 11426 (52267) | 91 | — |
+| L3 constant | 100 | 0 | 0 | 0 | 99/100 | 1 | 0.50 / 0.50 / 0.50 | 1680 (2004) | 78 | — |
+| L4 noise-floor | 85 | 0 | 0 | 15 | 83/85 | 1 | 0.90 / 0.90 / 0.90 | 1036 (1508) | 19 | — |
+| L4b noise-floor-lo | 51 | 0 | 0 | 49 | 50/51 | 1 | 0.10 / 0.10 / 0.10 | 2487 (12529) | 51 | — |
+| D2 det-core 0.7 | 100 | 0 | 0 | 0 | 100/100 | 1 | 1.00 / 1.00 / 1.00 | 1047 (1067) | 0 | 100/100 |
+
+("nd" = shrunk trials whose report carried a caveat; caveat-only trials are nd by
+definition.)
+
+Against 003's Gauntlet rows: aborts stay at zero, L3 and L4 finals match exactly (len
+1 at 0.50 / 0.90), and L1 cost is the same order (11.4k vs 13.6k median; the heavier
+52k p90 is the high-water gamma, bar batches, and boost). Against the drift envelope:
+L3, L4, L4b, and D2 finals match it wherever a confirmed origin entered shrinking —
+no confirmed L4b final is the 0.02 noise incumbent the shipped rules lost 33% to (50
+of 51 sit at 0.10; the one 0.02-scored final is the truncation artifact below).
+Verdicts on the headline direction:
+
+- **L1 final p median 0.34 — miss** (envelope 0.82, criterion >= 0.5; p10 0.26 is the
+  3-bug-atom floor, p90 0.82 the envelope value). Not shrink drift: the loss happens
+  before ND handling exists. Until the first flip the run is deterministic, so raw
+  `update_interesting` displacement (003's leak 1, fixed only under ND handling) walks
+  the incumbent down the landscape for the whole report-multiple window, and the
+  anchor then seeds from the already-degraded incumbent. 003 and the sim both started
+  ND at run zero, but production enters it lazily and the gauntlet cannot recover
+  what was lost before it engaged.
+- **L4 83/85, L4b 50/51 kept among shrunk — miss** of the >= 99% direction (97.6%,
+  and 98% measured for L4b — 51/51 once seed 14's truncated final is reclassified,
+  below), and the sharper miss is the caveat-only column: 15% / 49% of trials end
+  with the failure reported but no counterexample at all. Same seam as L1:
+  displacement leaves a p = 0.02 fluke standing, the flip arrives only at
+  shrink-verify, and the bar then correctly rejects the fluke, too late for
+  generation to re-hunt. L4's two noise finals (seeds 22/48, complete 2-choice
+  incumbents, unchanged by shrinking) were admitted by verify reproducing at 0.02 or
+  the report-time single-failure admission (~44% per dry origin over the ~29-replay
+  final budget), 003's false-accept rate on schedule.
+- **D2 deterministic finals 100/100 — pass**, but trivially: no D2 run ever flipped
+  (nd 0/100). Deletion passes reach [n=1, 95] before value-lowering can expose the
+  flaky region, and from there no flaky candidate is shortlex-smaller, so the S6
+  displacement never arises on this geometry and the high-water gamma goes
+  unexercised here (it stays pinned by the engine's unit tests).
+- L3's one "lost" final (seed 42, boost from anchor 0.299) and L4b's (seed 14, boost
+  from 0.043) are not losses: in both, the shrink deleted the atom choice and the
+  accepted incumbent is the truncated [n=1] timeline, whose replays draw a fresh atom
+  under the continuation budget. The gauntlet measured that distribution's real
+  failure rate, while this harness's atoms-based p scores one sampled completion (at
+  0 and 0.02 respectively).
+
+Net: the recalibrated mechanics (bar, min-fails, seeding, floor, gamma) reproduce
+their simulated behavior in-engine. Every headline miss lives in the
+deterministic-to-ND seam — pre-flip displacement racing lazy detection, and
+target-regime bar power (45%/attempt) getting one late attempt instead of many. That
+seam is outside 008's model (the sim conditions on a confirmed origin), and fixing
+it is remediation work beyond these constants.

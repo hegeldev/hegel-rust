@@ -13,3 +13,6 @@ below, and later API changes are expected to have broken some of them.
 - `concurrent-replay`: built against `7a4fd194` (experiment 007's full
   campaign); runs against the branch via its path dependency —
   `cargo build --release`, then `python3 drive.py [trials]`.
+- `gauntlet-calibration`: built against `c68a89eb` (experiment 008's
+  phase-12 in-engine spot check); drives the engine through the public
+  C ABI via its path dependency — `cargo run --release -- spot`.
