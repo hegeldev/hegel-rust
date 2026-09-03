@@ -116,6 +116,21 @@ estimable fresh-hit rate exists; (b) measure in 010; (c) document as chosen, not
 a bounded last chance to capture fresh failing output after the stored state's ~29-replay
 budget is spent. Recommendation: (c).
 
+**G20. The deterministic-to-ND seam** (new, from phase 12's in-engine spot check — see
+the 008 notes). Production enters ND handling lazily, and a run that flips late has
+already spent its deterministic window: pre-flip `update_interesting` displacement walks
+the incumbent down the landscape before decision 20's guard exists, and a bar rejection
+at shrink-verify leaves no generation budget to re-hunt. Measured on 003's bodies: L1
+final-p median 0.34 against the 0.82 envelope, and 49% of target-regime (L4b) trials
+report caveat-only — the failure still fails the run, but unshrunk, unconfirmed, and
+unpersisted. The shrink mechanics hold wherever a confirmed origin entered shrinking.
+Options: (a) accept and document — detection lag is inherent, declared concurrency does
+not pay it, and a rerun that finds persisted ND state skips the seam (though a
+caveat-only run persists nothing and re-races it); (b)
+on a late flip, re-enter generation with the remaining budget to re-hunt and confirm; (c)
+guard displacement pre-flip (costs deterministic-run behavior). Undecided — needs DRM;
+carried into the phase-13 audit as an open item.
+
 ## Experiments
 
 Numbered continuing the series; specs and results in `notes/experiments/<n>-<name>/`,
@@ -408,6 +423,10 @@ landscape` (end-to-end S1 regression: lands at the P0 value under shipped rules)
 
 Exit: the DP fixtures and both end-to-end tests green; 009b within its pass thresholds;
 D4/D5's final wording unblocked by the measured drift envelope.
+
+Spot-check outcome (in-engine, appended to the 008 notes): the recalibrated mechanics
+reproduce the simulated envelope wherever a confirmed origin entered shrinking; every
+headline miss lives in production's lazy ND entry, raised as gate G20.
 
 ### Phase 13: closing audit
 

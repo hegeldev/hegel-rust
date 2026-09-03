@@ -294,4 +294,12 @@ concurrent machine creation no longer rejects. Both crates' changelogs carry the
 - **Quiet-flip invisibility**: under quiet strictness nothing below `Debug` reveals that a
   run flipped into ND handling or what the measurement runs cost; G17's statistics line
   (phase 10) closes this.
+- **The deterministic-to-ND seam**: a run that flips only on late detection has already
+  spent its deterministic window — pre-flip `update_interesting` displacement walks the
+  incumbent down the landscape before decision 20's guard engages, and a bar rejection at
+  shrink-verify leaves no budget to re-hunt. Measured in 008's in-engine spot check: L1
+  final-p median 0.34 against the 0.82 envelope, 49% of target-regime trials caveat-only;
+  the shrink mechanics hold wherever a confirmed origin entered shrinking. Open as gate
+  G20. A rerun of a run that persisted ND state enters ND from the stored flip and skips
+  the seam; a caveat-only run persists nothing and re-races it.
 - **Bindings**: the ABI break needs a coordinated rollout; both RELEASE.md files call it out.
