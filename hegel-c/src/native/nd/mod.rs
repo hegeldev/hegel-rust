@@ -247,18 +247,14 @@ pub(crate) fn verbatim_weight(
     realized: &[crate::native::core::ChoiceValue],
 ) -> f64 {
     use crate::native::core::ChoiceValueRef;
-    let weight = if stored.is_empty() {
-        1.0
-    } else {
-        let credit = tracked_credit(
-            stored.iter().map(ChoiceValueRef::from),
-            realized.iter().map(ChoiceValueRef::from),
-        );
-        credit as f64 / crate::native::core::flattened_values_len(stored) as f64
-    };
-    #[cfg(feature = "__bench")]
-    watermark_dump::record(stored, realized, weight);
-    weight
+    if stored.is_empty() {
+        return 1.0;
+    }
+    let credit = tracked_credit(
+        stored.iter().map(ChoiceValueRef::from),
+        realized.iter().map(ChoiceValueRef::from),
+    );
+    credit as f64 / crate::native::core::flattened_values_len(stored) as f64
 }
 
 /// Flat weight of the stored prefix that `realized` tracked: a matched
@@ -287,8 +283,10 @@ fn tracked_credit<'s, 'r>(
     credit
 }
 
-/// Dump hook for experiment 009a: when armed, every [`verbatim_weight`]
-/// call records its inputs and result for the harness to drain.
+/// Dump hook for experiment 009a: when armed, every measurement replay
+/// (`test_runner::nd_replay_once`) records its stored and realized
+/// timelines, its evidence weight, and whether it reproduced the failure,
+/// for the harness to drain.
 #[cfg(feature = "__bench")]
 pub mod watermark_dump {
     use alloc::vec::Vec;
@@ -301,6 +299,7 @@ pub mod watermark_dump {
         pub stored: Vec<ChoiceValue>,
         pub realized: Vec<ChoiceValue>,
         pub weight: f64,
+        pub failed: bool,
     }
 
     static ARMED: AtomicBool = AtomicBool::new(false);
@@ -314,7 +313,12 @@ pub mod watermark_dump {
         core::mem::take(&mut *SAMPLES.lock())
     }
 
-    pub(super) fn record(stored: &[ChoiceValue], realized: &[ChoiceValue], weight: f64) {
+    pub(crate) fn record(
+        stored: &[ChoiceValue],
+        realized: &[ChoiceValue],
+        weight: f64,
+        failed: bool,
+    ) {
         if !ARMED.load(Ordering::Relaxed) {
             return;
         }
@@ -322,6 +326,7 @@ pub mod watermark_dump {
             stored: stored.to_vec(),
             realized: realized.to_vec(),
             weight,
+            failed,
         });
     }
 }

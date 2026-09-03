@@ -16,3 +16,8 @@ below, and later API changes are expected to have broken some of them.
 - `gauntlet-calibration`: built against `c68a89eb` (experiment 008's
   phase-12 in-engine spot check); drives the engine through the public
   C ABI via its path dependency — `cargo run --release -- spot`.
+- `watermark`: experiment 009a, built at its own commit (the dump-hook
+  extension and the `bind_deletion` fix land with it); runs against the
+  branch via its path dependency — `cargo run --release` reproduces the
+  notes' tables on stdout, byte-identical across reruns (~35 min
+  single-threaded).

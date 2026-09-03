@@ -1448,6 +1448,8 @@ impl<'a> Engine<'a> {
         } else {
             nd::verbatim_weight(timeline, &realized)
         };
+        #[cfg(feature = "__bench")]
+        nd::watermark_dump::record(timeline, &realized, weight, failed);
         Ok(NdReplayOnce {
             run,
             realized,

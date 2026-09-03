@@ -520,29 +520,6 @@ fn values_and_realized_records_weigh_interchangeably() {
     );
 }
 
-#[cfg(feature = "__bench")]
-#[test]
-fn the_watermark_dump_records_armed_weights_and_drains() {
-    use crate::native::core::ChoiceValue as CV;
-    let stored = alloc::vec![CV::Boolean(true), CV::Boolean(false)];
-    let diverged = alloc::vec![CV::Boolean(true), CV::Boolean(true)];
-    let mine = |s: &&watermark_dump::WatermarkSample| s.stored == stored && s.realized == diverged;
-    verbatim_weight(&stored, &diverged);
-    assert!(
-        !watermark_dump::drain().iter().any(|s| mine(&s)),
-        "unarmed, the hook records nothing"
-    );
-    watermark_dump::arm();
-    verbatim_weight(&stored, &diverged);
-    let samples = watermark_dump::drain();
-    let sample = samples.iter().find(mine).unwrap();
-    assert_eq!(sample.weight, 0.5);
-    assert!(
-        !watermark_dump::drain().iter().any(|s| mine(&s)),
-        "draining removes the recorded samples"
-    );
-}
-
 #[test]
 fn bar_cost_scales_with_fractional_weights() {
     let mut e = Evidence::default();

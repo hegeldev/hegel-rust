@@ -2768,6 +2768,69 @@ fn a_diverged_replay_miss_carries_the_verbatim_watermark_weight() {
     );
 }
 
+#[cfg(feature = "__bench")]
+#[test]
+fn the_watermark_dump_records_each_measurement_replay_with_its_verdict() {
+    use crate::native::nd::watermark_dump;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let phase = AtomicU32::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let p = phase.load(Ordering::SeqCst);
+            if rint(ds, 770000, 779999).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let second = if p == 1 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 770000, 779999).map(|_| ())
+            };
+            if second.is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if p == 2 {
+                boom("dump")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let stored = vec![
+                ChoiceValue::Integer(BigInt::from(771234)),
+                ChoiceValue::Integer(BigInt::from(775678)),
+            ];
+            let mine = |s: &&watermark_dump::WatermarkSample| s.stored == stored;
+            ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(
+                !watermark_dump::drain().iter().any(|s| mine(&s)),
+                "unarmed, the hook records nothing"
+            );
+            watermark_dump::arm();
+            phase.store(1, Ordering::SeqCst);
+            let miss = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(!miss.failed);
+            phase.store(2, Ordering::SeqCst);
+            let fail = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(fail.failed);
+            let samples = watermark_dump::drain();
+            let recorded: Vec<_> = samples.iter().filter(mine).collect();
+            assert_eq!(recorded.len(), 2);
+            assert_eq!(recorded[0].weight, 0.5);
+            assert!(!recorded[0].failed);
+            assert_ne!(recorded[0].realized, stored);
+            assert_eq!(recorded[1].weight, 1.0);
+            assert!(recorded[1].failed);
+            assert_eq!(recorded[1].realized, stored);
+            assert!(
+                !watermark_dump::drain().iter().any(|s| mine(&s)),
+                "draining removes the recorded samples"
+            );
+        },
+    );
+}
+
 #[test]
 fn a_diverged_clone_replay_records_a_fractional_miss_weight() {
     use crate::native::core::CloneRecord;
