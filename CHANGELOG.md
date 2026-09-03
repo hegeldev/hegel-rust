@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.0 - 2026-09-03
+
+This release removes the `antithesis` cargo feature. The Antithesis integration is now always compiled in and activates automatically when the `ANTITHESIS_OUTPUT_DIR` environment variable is set, so running inside Antithesis no longer requires a feature flag and no longer fails when the flag is missing. Remove `features = ["antithesis"]` from your `hegeltest` dependency; Cargo rejects unknown features, so builds that still name it will not compile until it is removed.
+
 ## 0.38.1 - 2026-09-03
 
 This patch fixes the ordering of step labels in stateful counterexamples. Each label used to print after the draws its rule made, so reading a failing sequence meant shifting every label back by one. Notes are also no longer deferred while an engine span is open, only while a drawn value is mid-print, so a note can never trail the output of a later draw.
