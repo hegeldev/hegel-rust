@@ -463,6 +463,12 @@ fixes with their pinning tests or decision entries (deliberate retentions — z 
 asymmetric miss weighting, FINAL_REPLAY_FRESH chosen not derived — are recorded in
 decisions 53/54). None untraceable.
 
+Full gate run green on e79994f4 (production-plan phase 8's list): `just check`,
+`check-coverage` (no ratchet increase, no new nocov), `c-test`, `c-test-abort`,
+`c-test-runtime`, `check-docs`, `check-tests-minimal-versions` (under nightly, as CI runs
+it), `miri`, and `cargo package --workspace` — the last after clearing a stale build-cache
+rlib that shadowed the packaged engine locally; a clean run, like CI's, is unaffected.
+
 ## Decision entries to record
 
 Numbers assigned in landing order at each phase boundary; content fixed here. Phase 9:
