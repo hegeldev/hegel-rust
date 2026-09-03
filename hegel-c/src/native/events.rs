@@ -20,6 +20,12 @@ pub(crate) struct RunStatistics {
     counts: BTreeMap<String, u64>,
     /// Per label: every numeric observation from recorded cases.
     values: BTreeMap<String, Vec<f64>>,
+    /// Executions the nondeterministic machinery made to measure
+    /// reproduction (confirmation batches, gauntlet reruns, boost, replay
+    /// until failure), and how many failed. Under quiet strictness this
+    /// line is the only sub-Debug sign of what ND handling cost.
+    measurement_calls: u64,
+    measurement_fails: u64,
 }
 
 impl RunStatistics {
@@ -42,6 +48,13 @@ impl RunStatistics {
         }
     }
 
+    /// Fold in one measurement execution — a replay the nondeterministic
+    /// machinery made — and whether it reproduced a failure.
+    pub(crate) fn record_measurement(&mut self, failed: bool) {
+        self.measurement_calls += 1;
+        self.measurement_fails += u64::from(failed);
+    }
+
     /// Render the end-of-run statistics block.
     pub(crate) fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
@@ -51,6 +64,7 @@ impl RunStatistics {
                  record them with tc.event(..) or tc.event_value(..)",
                 self.cases
             ));
+            self.render_measurement(&mut lines);
             return lines;
         }
         lines.push(format!("Statistics (over {} test cases):", self.cases));
@@ -76,7 +90,17 @@ impl RunStatistics {
                  mean {mean:.2}, p90 {p90}, max {max}"
             ));
         }
+        self.render_measurement(&mut lines);
         lines
+    }
+
+    fn render_measurement(&self, lines: &mut Vec<String>) {
+        if self.measurement_calls > 0 {
+            lines.push(format!(
+                "  * nondeterministic handling: measurement replays {}, failing {}",
+                self.measurement_calls, self.measurement_fails
+            ));
+        }
     }
 }
 

@@ -202,13 +202,17 @@ pub(crate) fn verbatim_weight(
     matched as f64 / stored.len() as f64
 }
 
-/// Positional splices tried after the whole pool misses (decision 25;
-/// experiment 006: ~6 splice replays recover 65-100% of full-pool misses).
-pub(crate) const REPRODUCE_SPLICES: u64 = 6;
+/// Positional splices tried after the whole pool misses (decision 25).
+/// Experiment 006 measured the 65-100% rescue rate at a cap of 10 splice
+/// candidates, costing 1.6-6.3 replays per rescue; the shipped 6 was a
+/// transcription error, corrected by decision 52.
+pub(crate) const REPRODUCE_SPLICES: u64 = 10;
 
 /// Fresh generations tried at the end of the report-time final replay,
 /// after the pool and its splices miss. A fresh reproduction is still a
-/// reportable failing execution; its misses carry no weight.
+/// reportable failing execution; its misses carry no weight. Chosen, not
+/// derived (decision 53): a small tail behind the budgeted pool and
+/// splice replays — no experiment prices it.
 pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 
 pub(crate) mod lifecycle;

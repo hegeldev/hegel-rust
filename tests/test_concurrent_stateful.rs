@@ -705,7 +705,7 @@ fn flip_nondeterministic(tc: &TestCase) {
 }
 
 #[test]
-fn an_unconfirmed_one_shot_failure_reports_only_its_caveat() {
+fn an_unconfirmed_one_shot_failure_reports_its_discovering_case() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
@@ -727,12 +727,16 @@ fn an_unconfirmed_one_shot_failure_reports_only_its_caveat() {
     let payload = result.expect_err("the third case fails the run");
     assert_matches_regex(&panic_message(&payload), "boom on the third case");
     let draw_lines = lines.iter().filter(|l| l.contains("let ")).count();
-    assert_eq!(
-        draw_lines, 0,
-        "unstamped exploration cases render no draw lines, so the \
-         unconfirmed report has none: {lines:?}"
+    assert!(
+        draw_lines > 0,
+        "generation cases are stamped under nondeterministic handling, so \
+         the unconfirmed report carries the discovering case's draws: {lines:?}"
     );
     let text = lines.join("\n");
+    assert!(
+        text.contains("panicked at"),
+        "the discovering case's diagnostic is printed:\n{text}"
+    );
     assert!(
         text.contains("note: unconfirmed failure: failed 0 of"),
         "a one-shot failure reports unconfirmed with its caveat:\n{text}"
@@ -772,8 +776,8 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     );
     let diagnostics = lines.iter().filter(|l| l.contains("panicked at")).count();
     assert_eq!(
-        diagnostics, 1,
-        "the diagnostic prints live at discovery; the unconfirmed report \
-         carries the caveat instead: {lines:?}"
+        diagnostics, 2,
+        "the diagnostic prints live at discovery and again in the failure \
+         report, from the stamped discovering case's capture: {lines:?}"
     );
 }

@@ -85,9 +85,13 @@ struct NdReplayOnce {
     weight: f64,
 }
 
-/// Outcome of one discovery-confirmation batch (experiment 005).
-struct NdConfirm {
-    accepted: bool,
+/// Outcome of one evidence batch (experiment 005): the replays, their
+/// weighted evidence, the first failing run, and the failing timelines.
+struct NdBatch {
+    /// Whether the discovery bar's arithmetic accepted. Decides admission
+    /// for unconfirmed origins; for trusted origins the bar is only the
+    /// batch's stopping rule and any failure is evidence enough.
+    bar_accepted: bool,
     evidence: nd::Evidence,
     witness: Option<RunResult>,
     captured: Vec<Vec<ChoiceValue>>,
@@ -198,7 +202,7 @@ pub(crate) async fn reproduce_blob(
         )),
         Some(crate::native::blob::DecodedBlob::Choices(choices)) => {
             let mut ntc = NativeTestCase::for_choices(&choices, None, None);
-            ntc.set_nondeterministic();
+            ntc.set_should_capture();
             ntc.family()
                 .set_stateful_step_count(settings.stateful_step_count);
             let (data_source, handle) = NativeDataSource::new(ntc);
@@ -215,7 +219,7 @@ pub(crate) async fn reproduce_blob(
                 engine.nd_flip();
             }
             engine.capture_replays = true;
-            let (run, _evidence) = engine
+            let (run, evidence) = engine
                 .nd_reproduce(
                     None,
                     &state.timelines,
@@ -226,7 +230,11 @@ pub(crate) async fn reproduce_blob(
                 .await?;
             let failures = match run.and_then(|run| run.origin) {
                 Some(origin) => {
-                    engine.nd_origins.trust(&origin, state.timelines);
+                    engine.nd_origins.trust(
+                        &origin,
+                        state.timelines,
+                        (evidence.fails(), evidence.runs()),
+                    );
                     let caveat = engine.nd_origins.caveat(&origin);
                     Vec::from([Failure {
                         origin,
@@ -344,17 +352,18 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     let nd_entry = is_v2 || self.nd_handling();
-                    let run = if !nd_entry {
+                    let (run, reuse_evidence) = if !nd_entry {
                         let rng = self.rng.spawn();
                         let ntc = NativeTestCase::for_probe(&stored[0], rng, BUFFER_SIZE)?;
                         let (run, mismatch) = self.test_function(ntc).await?;
                         if let Some(msg) = mismatch {
                             return Err(RunError::NonDeterministic(msg));
                         }
-                        (run.status == Status::Interesting).then_some(run)
+                        let failed = run.status == Status::Interesting;
+                        (failed.then_some(run), (u64::from(failed), 1))
                     } else {
                         self.capture_replays = true;
-                        let (run, _evidence) = self
+                        let (run, evidence) = self
                             .nd_reproduce(
                                 None,
                                 &stored,
@@ -364,11 +373,11 @@ impl<'a> Engine<'a> {
                             )
                             .await?;
                         self.capture_replays = false;
-                        run
+                        (run, (evidence.fails(), evidence.runs()))
                     };
                     if let Some(run) = run {
                         if let Some(o) = run.origin.as_deref() {
-                            self.nd_origins.trust(o, stored.clone());
+                            self.nd_origins.trust(o, stored.clone(), reuse_evidence);
                         }
                         let incumbent = &stored[0];
                         if i < primary_count {
@@ -439,6 +448,7 @@ impl<'a> Engine<'a> {
             }
         }
 
+        self.capture_discoveries = true;
         while settings.phases.contains(&Phase::Generate)
             && !found_in_reuse
             && !self.test_is_trivial
@@ -572,6 +582,7 @@ impl<'a> Engine<'a> {
         }
 
         self.nd_discovery_sweep(verbosity, &output).await?;
+        self.capture_discoveries = false;
 
         if self.tree_root.is_exhausted
             && self.valid_test_cases == 0
@@ -702,22 +713,48 @@ impl<'a> Engine<'a> {
                 } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
                     probe_anchor = anchor;
                     witness
-                } else {
-                    let confirm = self.nd_confirm(&origin, &choices).await?;
-                    let batch = (confirm.evidence.fails(), confirm.evidence.runs());
-                    if !confirm.accepted && self.nd_origins.reject(&origin, batch) {
-                        self.interesting.remove(&origin);
+                } else if !self.nd_origins.needs_confirmation(&origin) {
+                    // Trusted: already admitted (decision 24), so any
+                    // failure in the batch promotes with the batch's LCB
+                    // as anchor — the bar arithmetic is only the stopping
+                    // rule. Promotion merges the fresh captures with the
+                    // stored pool, fresh-first.
+                    let batch = self.nd_evidence_batch(&origin, &choices).await?;
+                    let evidence = (batch.evidence.fails(), batch.evidence.runs());
+                    if let Some(witness) = batch.witness {
+                        probe_anchor = batch.evidence.lower_bound();
+                        let stored = self.nd_origins.pool(&origin).to_vec();
+                        let pool = pooled_timelines(
+                            choices.clone(),
+                            batch.captured.into_iter().chain(stored),
+                        );
+                        self.nd_origins
+                            .confirm(&origin, probe_anchor, None, pool, evidence)?;
+                        self.record_nd_incumbent(&origin, &initial);
+                        witness
+                    } else {
+                        self.nd_origins.record_trusted_batch(&origin, evidence);
                         shrunk_origins.insert(origin);
                         continue;
                     }
-                    let Some(witness) = confirm.witness else {
+                } else {
+                    let batch = self.nd_evidence_batch(&origin, &choices).await?;
+                    let evidence = (batch.evidence.fails(), batch.evidence.runs());
+                    if !batch.bar_accepted {
+                        if self.nd_origins.reject(&origin, evidence) {
+                            self.interesting.remove(&origin);
+                        }
                         shrunk_origins.insert(origin);
                         continue;
-                    };
-                    probe_anchor = confirm.evidence.lower_bound();
-                    let pool = pooled_timelines(choices.clone(), confirm.captured);
+                    }
+                    let witness = crate::control::hegel_internal_unwrap!(
+                        batch.witness,
+                        "nd_evidence_batch: bar accept without a witness for {origin}"
+                    );
+                    probe_anchor = batch.evidence.lower_bound();
+                    let pool = pooled_timelines(choices.clone(), batch.captured);
                     self.nd_origins
-                        .confirm(&origin, probe_anchor, None, pool, batch);
+                        .confirm(&origin, probe_anchor, None, pool, evidence)?;
                     self.record_nd_incumbent(&origin, &initial);
                     witness
                 };
@@ -1283,13 +1320,20 @@ pub(crate) struct Engine<'a> {
     /// trust, confirmation state (anchor/witness/pool), and the caveated
     /// unconfirmed report. See [`OriginLifecycle`].
     nd_origins: OriginLifecycle,
-    /// While set, every measurement execution is stamped nondeterministic
-    /// (`hegel_test_case_is_nondeterministic`), telling the client to
-    /// capture its output and diagnostic — the material for the failure
-    /// report. Set around confirmation batches, database-reuse replays,
-    /// and the final replay; shrink-gauntlet and boost replays stay
-    /// cheap and unstamped.
+    /// While set, every measurement execution is stamped for capture
+    /// (`hegel_test_case_should_capture`), telling the client to buffer
+    /// its output and diagnostic — the material for the failure report.
+    /// Set around confirmation batches, database-reuse replays, and the
+    /// final replay; shrink-gauntlet and boost replays stay cheap and
+    /// unstamped.
     capture_replays: bool,
+    /// While set, generation-phase executions under ND handling are
+    /// stamped too, so an origin the run discovers but never confirms
+    /// still reports its discovering case's draws and diagnostic instead
+    /// of a bare caveat. Not stamped: a gauntlet-discovered origin (its
+    /// probes are measurement runs), and the case that itself flips the
+    /// run (its stamp decision predates the flip).
+    capture_discoveries: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -1327,6 +1371,7 @@ impl<'a> Engine<'a> {
             concurrent: false,
             nd_origins: OriginLifecycle::default(),
             capture_replays: false,
+            capture_discoveries: false,
         })
     }
 
@@ -1506,13 +1551,14 @@ impl<'a> Engine<'a> {
             let batch = (evidence.fails(), evidence.runs());
             if self.nd_origins.needs_confirmation(&origin) {
                 if batch.0 > 0 {
-                    self.nd_origins.confirm(
+                    let confirmed = self.nd_origins.confirm(
                         &origin,
                         evidence.lower_bound(),
                         None,
                         timelines,
                         batch,
                     );
+                    confirmed?;
                 } else {
                     self.nd_origins.observe(&origin);
                     if self.nd_origins.reject(&origin, batch) {
@@ -1526,21 +1572,23 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    /// Experiment 005: the discovery-confirmation bar
-    /// ([`nd::discovery_bar`], decision 23) with capture-at-confirmation
-    /// and divergence-weighted misses (decision 22). Replays `choices`
-    /// until the bar decides. The triggering run is selection, not
-    /// evidence — only these fresh replays count.
-    async fn nd_confirm(
+    /// One evidence batch: replay `choices` with capture-at-confirmation
+    /// and divergence-weighted misses (decision 22) until the discovery
+    /// bar ([`nd::discovery_bar`], decision 23) decides. Two uses: the
+    /// bar's driver for admitting unconfirmed origins (experiment 005),
+    /// and an evidence-gathering batch for trusted origins, where the bar
+    /// arithmetic is only the stopping rule. The triggering run is
+    /// selection, not evidence — only these fresh replays count.
+    async fn nd_evidence_batch(
         &mut self,
         origin: &str,
         choices: &[ChoiceValue],
-    ) -> Result<NdConfirm, RunError> {
+    ) -> Result<NdBatch, RunError> {
         let mut evidence = nd::Evidence::default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
         self.capture_replays = true;
-        let accepted = loop {
+        let bar_accepted = loop {
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
             evidence.record(replay.failed, replay.weight);
             if replay.failed {
@@ -1558,8 +1606,8 @@ impl<'a> Engine<'a> {
             }
         };
         self.capture_replays = false;
-        Ok(NdConfirm {
-            accepted,
+        Ok(NdBatch {
+            bar_accepted,
             evidence,
             witness,
             captured,
@@ -1669,27 +1717,28 @@ impl<'a> Engine<'a> {
                 return Ok(());
             };
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-            let confirm = self.nd_confirm(&origin, &choices).await?;
+            let batch = self.nd_evidence_batch(&origin, &choices).await?;
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
                     "nd discovery confirm: origin={origin} fails={}/{} accepted={}",
-                    confirm.evidence.fails(),
-                    confirm.evidence.runs(),
-                    confirm.accepted
+                    batch.evidence.fails(),
+                    batch.evidence.runs(),
+                    batch.bar_accepted
                 ));
             }
-            let batch = (confirm.evidence.fails(), confirm.evidence.runs());
-            if confirm.accepted {
-                let pool = pooled_timelines(choices, confirm.captured);
-                self.nd_origins.confirm(
+            let evidence = (batch.evidence.fails(), batch.evidence.runs());
+            if batch.bar_accepted {
+                let pool = pooled_timelines(choices, batch.captured);
+                let confirmed = self.nd_origins.confirm(
                     &origin,
-                    confirm.evidence.lower_bound(),
-                    confirm.witness,
+                    batch.evidence.lower_bound(),
+                    batch.witness,
                     pool,
-                    batch,
+                    evidence,
                 );
+                confirmed?;
                 self.record_nd_incumbent(&origin, &nodes);
-            } else if self.nd_origins.reject(&origin, batch) {
+            } else if self.nd_origins.reject(&origin, evidence) {
                 self.interesting.remove(&origin);
             }
         }
@@ -1768,8 +1817,8 @@ impl<'a> Engine<'a> {
         mut ntc: NativeTestCase,
         measurement: bool,
     ) -> Result<(RunResult, Option<String>), RunError> {
-        if self.capture_replays {
-            ntc.set_nondeterministic();
+        if self.capture_replays || (self.nd_active && self.capture_discoveries && !measurement) {
+            ntc.set_should_capture();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_stateful_step_count(self.settings.stateful_step_count);
@@ -1818,7 +1867,12 @@ impl<'a> Engine<'a> {
                 &[],
             )
         };
-        if !measurement {
+        if measurement {
+            if self.nd_active {
+                self.statistics
+                    .record_measurement(run.status == Status::Interesting);
+            }
+        } else {
             self.calls += 1;
             self.total_test_time += elapsed;
             if run.nodes.is_empty() && run.status >= Status::Invalid {

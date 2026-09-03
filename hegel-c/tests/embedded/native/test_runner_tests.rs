@@ -596,7 +596,7 @@ fn reproduce_blob_replays_a_deterministic_blob_exactly_once() {
     let mut stamped = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
         calls += 1;
-        stamped += u32::from(ds.is_nondeterministic());
+        stamped += u32::from(ds.should_capture());
         match rbool(ds) {
             Ok(true) => boom("deterministic replay"),
             Ok(false) => TestCaseResult::Valid,
@@ -656,7 +656,10 @@ fn reproduce_blob_replays_an_nd_blob_until_a_replay_fails() {
     assert!(failure.reproduce_blob.is_none());
     assert_eq!(
         failure.caveat.as_deref(),
-        Some("nondeterministic failure: reproduced from the stored entry this run")
+        Some(
+            "nondeterministic failure, reproduced from stored timelines: \
+             failed 1 of 3 replays this run"
+        )
     );
 }
 
@@ -1686,7 +1689,8 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
             );
 
             ctx.nd_origins
-                .confirm(origin, 0.9, None, Vec::new(), (4, 4));
+                .confirm(origin, 0.9, None, Vec::new(), (4, 4))
+                .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
@@ -1853,13 +1857,15 @@ fn nd_boost_raises_the_anchor_or_declines() {
         },
         async |ctx| {
             let incumbent = vec![ChoiceValue::Boolean(true)];
-            ctx.nd_origins.confirm(
-                "Panic: bug",
-                0.1,
-                None,
-                vec![vec![ChoiceValue::Boolean(false)]],
-                (4, 9),
-            );
+            ctx.nd_origins
+                .confirm(
+                    "Panic: bug",
+                    0.1,
+                    None,
+                    vec![vec![ChoiceValue::Boolean(false)]],
+                    (4, 9),
+                )
+                .unwrap();
             let (witness, lcb) = ctx
                 .nd_boost("Panic: bug", &incumbent, 0.0)
                 .await
@@ -2764,6 +2770,209 @@ fn nd_failures_persist_v2_state_and_reproduce_across_runs() {
 }
 
 #[test]
+fn nd_trusted_promotion_repersists_the_stored_pool() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let extra = vec![
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(false),
+        ChoiceValue::Boolean(true),
+    ];
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![
+            vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+            extra.clone(),
+        ],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rbool(ds) {
+            Ok(true) => boom("bug"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let blob = result.failures[0].reproduce_blob.as_deref().unwrap();
+    let Some(crate::native::blob::DecodedBlob::Nd(reported)) =
+        crate::native::blob::decode_blob(blob)
+    else {
+        panic!("a promoted trusted origin emits replay state");
+    };
+    assert!(
+        reported.timelines.contains(&extra),
+        "promotion merges the stored pool instead of forgetting it"
+    );
+}
+
+#[test]
+fn measurement_replays_are_counted_in_the_run_statistics() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(
+                !ctx.statistics
+                    .render()
+                    .iter()
+                    .any(|l| l.contains("measurement"))
+            );
+            ctx.final_replay().await.unwrap();
+            assert!(
+                ctx.statistics
+                    .render()
+                    .iter()
+                    .any(|l| l.contains("nondeterministic handling: measurement replays")),
+                "the statistics block reports the measurement replays"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_trusted_zero_fail_shrink_batch_keeps_trusted_and_reports_honestly() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet)
+            .report_multiple_failures(false),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].reproduce_blob.is_some(),
+        "a trusted origin is still reported with replay state"
+    );
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.contains("reproduced from stored timelines earlier this run")
+            && caveat.contains("not reproduced at report time"),
+        "a zero-fail batch keeps the origin trusted and the caveat says so: {caveat:?}"
+    );
+}
+
+#[test]
+fn nd_trusted_weak_batch_promotes_and_shrinks_under_the_floor() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet)
+            .report_multiple_failures(false),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) < 2 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].reproduce_blob.is_some());
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.contains("confirmed") && !caveat.contains("stored timelines"),
+        "one failing replay in the batch promotes the trusted origin: {caveat:?}"
+    );
+    assert!(
+        caveat.contains("(failed 2 of "),
+        "promotion folds the trusted reuse evidence into the confirmed counts: {caveat:?}"
+    );
+}
+
+#[test]
+fn nd_confirmed_dry_caveat_does_not_fold_report_replays_into_confirmation_counts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut settings = Settings::new()
+        .database(None)
+        .phases([Phase::Generate, Phase::Shrink])
+        .verbosity(Verbosity::Quiet)
+        .report_multiple_failures(false);
+    settings.nd_force = true;
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if execs.fetch_add(1, Ordering::SeqCst) <= 4 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.contains("(failed 4 of 4 replays)")
+            && caveat.contains("not reproduced at report time"),
+        "the dry wording quotes confirmation counts alone: {caveat:?}"
+    );
+}
+
+#[test]
 fn stale_nd_entries_demote_to_secondary_then_delete() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
@@ -3084,7 +3293,8 @@ fn nd_state_for_caps_stored_timelines_at_pool_cap() {
                 .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
                 .collect();
             ctx.nd_origins
-                .confirm("Panic: bug", 0.5, None, pool, (4, 6));
+                .confirm("Panic: bug", 0.5, None, pool, (4, 6))
+                .unwrap();
             let incumbent = vec![ChoiceValue::Boolean(false)];
             let state = ctx.nd_state_for("Panic: bug", incumbent.clone());
             assert_eq!(state.timelines.len(), nd::POOL_CAP);
@@ -3168,7 +3378,8 @@ fn report_blobs_only_confirmed_origins() {
                 false,
             );
             ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+                .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
@@ -3210,7 +3421,8 @@ fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
             ctx.interesting
                 .insert("Panic: a".to_string(), vec![bool_node(true)]);
             ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+                .unwrap();
             ctx.final_replay().await.unwrap();
             assert!(
                 ctx.interesting.contains_key("Panic: b"),
@@ -3278,7 +3490,8 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
                 vec![bool_node(true), bool_node(true)],
             );
             ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+                .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
@@ -3340,13 +3553,15 @@ fn gauntlet_accept_without_adoption_moves_nothing() {
             boom("bug")
         },
         async |ctx| {
-            ctx.nd_origins.confirm(
-                "Panic: bug",
-                0.3,
-                Some(interesting_at("Panic: bug", vec![bool_node(true)])),
-                Vec::new(),
-                (4, 6),
-            );
+            ctx.nd_origins
+                .confirm(
+                    "Panic: bug",
+                    0.3,
+                    Some(interesting_at("Panic: bug", vec![bool_node(true)])),
+                    Vec::new(),
+                    (4, 6),
+                )
+                .unwrap();
             {
                 let mut probe = EngineShrinkProbe {
                     engine: &mut *ctx,
@@ -3397,7 +3612,8 @@ fn anchor_raises_only_on_adoption_and_once_per_timeline() {
         },
         async |ctx| {
             ctx.nd_origins
-                .confirm("Panic: bug", 0.3, None, Vec::new(), (4, 6));
+                .confirm("Panic: bug", 0.3, None, Vec::new(), (4, 6))
+                .unwrap();
             let raised_anchor;
             {
                 let mut probe = EngineShrinkProbe {
@@ -3494,7 +3710,8 @@ fn a_flip_during_the_shrink_verify_routes_the_origin_through_the_bar() {
     assert_eq!(result.failures.len(), 1);
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        caveat.contains("confirmed") && caveat.contains("failed 5 of 5"),
+        caveat.contains("confirmed")
+            && caveat.contains("failed 4 of 4 replays at confirmation and 1 of 1 at report time"),
         "the flipped verify must route the origin through the full bar \
          (4 fails) before the final replay's 1, not confirm on the final \
          replay alone: {caveat:?}"
@@ -3531,7 +3748,8 @@ fn a_flip_during_shrink_probes_requeues_the_origin_for_a_gauntleted_shrink() {
     assert_eq!(result.failures.len(), 1);
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        caveat.contains("confirmed") && caveat.contains("failed 5 of 5"),
+        caveat.contains("confirmed")
+            && caveat.contains("failed 4 of 4 replays at confirmation and 1 of 1 at report time"),
         "the requeued origin must face the full bar (4 fails) before the \
          final replay's 1, not confirm on the final replay alone: {caveat:?}"
     );
@@ -3688,7 +3906,7 @@ fn deterministic_final_replay_is_stamped() {
         .report_multiple_failures(false);
     let result = reuse_run(settings, "k", |ds| {
         execs.fetch_add(1, Ordering::SeqCst);
-        stamped.fetch_add(u32::from(ds.is_nondeterministic()), Ordering::SeqCst);
+        stamped.fetch_add(u32::from(ds.should_capture()), Ordering::SeqCst);
         if rbool(ds).is_err() {
             return TestCaseResult::Overrun;
         }
@@ -3716,7 +3934,7 @@ fn nd_blob_replay_cases_are_stamped() {
     let mut stamped = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
         calls += 1;
-        stamped += u32::from(ds.is_nondeterministic());
+        stamped += u32::from(ds.should_capture());
         match rbool(ds) {
             Ok(true) => boom("a"),
             Ok(false) => TestCaseResult::Valid,

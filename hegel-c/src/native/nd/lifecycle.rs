@@ -3,17 +3,20 @@
 //! Confirmation gates origin admission on every path (decisions 20, 21,
 //! 24): a raw interesting execution may fill a vacant origin, pending
 //! confirmation; an occupied origin changes only through validated accepts;
-//! only the discovery bar moves an origin to `Confirmed`, and only
-//! confirmed origins carry replay state. Origins reproduced from the
-//! database are `Trusted` on reproduction — the prior run persisted only
-//! confirmed origins, and re-running the bar would drop real p ~ 0.1 bugs
-//! ~55% of the time.
+//! an origin becomes `Confirmed` through the discovery bar or, for a
+//! trusted origin, a failing shrink-time evidence batch; confirmed and
+//! trusted origins carry replay state. Origins reproduced from the
+//! database are `Trusted` on reproduction, exempt from the bar's verdict —
+//! the prior run persisted only confirmed origins, and subjecting real
+//! p ~ 0.1 bugs to the bar again would drop them ~55% of the time.
 //!
 //! The lifecycle also accumulates each origin's physical replay evidence —
-//! fails and replays across confirmation batches and the final replay — and
-//! renders the failure's caveat from it (decision 3): the wording quotes
-//! only in-run measurements and weights the environment-modification
-//! hypothesis only when non-reproduction is surprising given the evidence.
+//! fails and replays across confirmation batches, reuse reproductions, and
+//! shrink-time batches, with the report-time final replay's counts kept
+//! apart — and renders the failure's caveat from it (decision 3): the
+//! wording quotes only in-run measurements and weights the
+//! environment-modification hypothesis only when non-reproduction is
+//! surprising given the evidence.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -26,8 +29,8 @@ use crate::native::test_runner::RunResult;
 /// One origin's confirmation state. The only transitions are the ones
 /// [`OriginLifecycle`]'s methods implement: `Unconfirmed → Confirmed` (bar
 /// accept), `Unconfirmed → Trusted` (database reproduction), `Trusted →
-/// Confirmed` (evidence-gathering bar accept). Rejection never demotes and
-/// never removes state.
+/// Confirmed` (promotion by a failing evidence batch). Rejection never
+/// demotes and never removes state.
 pub(crate) enum OriginState {
     /// Observed interesting; hasn't passed the discovery bar. `rejections`
     /// counts failed confirmation batches, `fails`/`replays` the cumulative
@@ -39,14 +42,23 @@ pub(crate) enum OriginState {
     },
     /// Reproduced from the database: exempt from eviction (decision 24).
     /// Carries the stored entry's timeline pool (empty for v1 entries) but
-    /// no anchor until a confirmation batch gathers evidence.
+    /// no anchor until an evidence batch promotes it.
     Trusted {
         /// Timelines decoded from the reproducing v2 entry, so an aligned
         /// reuse hit that skips shrink re-persists them instead of
         /// forgetting the pool.
         pool: Vec<Vec<ChoiceValue>>,
+        /// Physical replay evidence from the reproduction that earned
+        /// trust plus any zero-fail shrink batch, quoted by the caveat.
+        fails: u64,
+        replays: u64,
+        /// The report-time final replay's evidence, kept apart from the
+        /// reuse counts (the caveat quotes both).
+        report_fails: u64,
+        report_replays: u64,
     },
-    /// Past the discovery bar (or trusted with gathered evidence).
+    /// Past the discovery bar, or promoted from `Trusted` by a failing
+    /// evidence batch.
     Confirmed {
         /// Failure-rate anchor the gauntlet prices shrink candidates
         /// against; monotone, raised only by validated accepts
@@ -57,13 +69,14 @@ pub(crate) enum OriginState {
         /// Captured failing timelines, incumbent first, for replay
         /// fallback and persistence.
         pool: Vec<Vec<ChoiceValue>>,
-        /// Cumulative physical replay evidence — confirmation batches plus
-        /// the final replay — quoted by the caveat.
+        /// Physical replay evidence from confirmation batches, quoted by
+        /// the caveat.
         fails: u64,
         replays: u64,
-        /// Whether the report-time final replay failed to reproduce the
-        /// origin within its budget; switches the caveat's wording.
-        report_dry: bool,
+        /// The report-time final replay's evidence, kept apart from the
+        /// confirmation counts (the caveat quotes both).
+        report_fails: u64,
+        report_replays: u64,
     },
 }
 
@@ -93,24 +106,62 @@ impl OriginLifecycle {
     /// re-running the bar (decision 24). `pool` carries the reproducing
     /// entry's stored timelines (empty for v1 entries), truncated to
     /// [`super::POOL_CAP`] — a decoded entry can carry up to the looser
-    /// format bound. Never demotes `Confirmed`, and never replaces an
-    /// existing pool with an empty one.
-    pub(crate) fn trust(&mut self, origin: &str, mut pool: Vec<Vec<ChoiceValue>>) {
+    /// format bound. `evidence` is the reproducing replay batch's physical
+    /// (fails, replays), folded into the trusted counts. Never demotes
+    /// `Confirmed`, and never replaces an existing pool with an empty one.
+    pub(crate) fn trust(
+        &mut self,
+        origin: &str,
+        mut pool: Vec<Vec<ChoiceValue>>,
+        evidence: (u64, u64),
+    ) {
         pool.truncate(super::POOL_CAP);
         match self.origins.get_mut(origin) {
             Some(OriginState::Confirmed { .. }) => {}
-            Some(OriginState::Trusted { pool: existing }) => {
+            Some(OriginState::Trusted {
+                pool: existing,
+                fails,
+                replays,
+                ..
+            }) => {
                 if !pool.is_empty() {
                     *existing = pool;
                 }
+                *fails += evidence.0;
+                *replays += evidence.1;
             }
             Some(state @ OriginState::Unconfirmed { .. }) => {
-                *state = OriginState::Trusted { pool };
+                *state = OriginState::Trusted {
+                    pool,
+                    fails: evidence.0,
+                    replays: evidence.1,
+                    report_fails: 0,
+                    report_replays: 0,
+                };
             }
             None => {
-                self.origins
-                    .insert(origin.to_string(), OriginState::Trusted { pool });
+                self.origins.insert(
+                    origin.to_string(),
+                    OriginState::Trusted {
+                        pool,
+                        fails: evidence.0,
+                        replays: evidence.1,
+                        report_fails: 0,
+                        report_replays: 0,
+                    },
+                );
             }
+        }
+    }
+
+    /// A shrink-time evidence batch on a trusted origin produced no
+    /// failure: fold its physical (fails, replays) into the trusted counts
+    /// — the origin stays `Trusted`, skips shrinking, and is still
+    /// reported and persisted. No-op in any other state.
+    pub(crate) fn record_trusted_batch(&mut self, origin: &str, evidence: (u64, u64)) {
+        if let Some(OriginState::Trusted { fails, replays, .. }) = self.origins.get_mut(origin) {
+            *fails += evidence.0;
+            *replays += evidence.1;
         }
     }
 
@@ -123,11 +174,14 @@ impl OriginLifecycle {
         )
     }
 
-    /// The discovery bar accepted `origin`: store its replay state.
-    /// `evidence` is the accepting batch's physical (fails, replays),
-    /// folded into the origin's cumulative counts. The pool is truncated
-    /// to [`super::POOL_CAP`] — the lifecycle is the single writer of
-    /// stored pools, so the invariant is enforced here.
+    /// The discovery bar accepted `origin`, or a failing evidence batch
+    /// promoted it from `Trusted`: store its replay state. `evidence` is
+    /// the batch's physical (fails, replays), folded into the origin's
+    /// cumulative counts. The pool is truncated to [`super::POOL_CAP`] —
+    /// the lifecycle is the single writer of stored pools, so the
+    /// invariant is enforced here. Confirming a confirmed origin is a
+    /// violated invariant: every caller sits behind a
+    /// `needs_confirmation`/`take_witness` check.
     pub(crate) fn confirm(
         &mut self,
         origin: &str,
@@ -135,13 +189,25 @@ impl OriginLifecycle {
         witness: Option<RunResult>,
         mut pool: Vec<Vec<ChoiceValue>>,
         evidence: (u64, u64),
-    ) {
+    ) -> Result<(), crate::control::InternalError> {
         pool.truncate(super::POOL_CAP);
-        let (prior_fails, prior_replays) = match self.origins.get(origin) {
-            Some(OriginState::Unconfirmed { fails, replays, .. })
-            | Some(OriginState::Confirmed { fails, replays, .. }) => (*fails, *replays),
-            _ => (0, 0),
-        };
+        let (prior_fails, prior_replays, report_fails, report_replays) =
+            match self.origins.get(origin) {
+                Some(OriginState::Unconfirmed { fails, replays, .. }) => (*fails, *replays, 0, 0),
+                Some(OriginState::Trusted {
+                    fails,
+                    replays,
+                    report_fails,
+                    report_replays,
+                    ..
+                }) => (*fails, *replays, *report_fails, *report_replays),
+                Some(OriginState::Confirmed { .. }) => {
+                    crate::control::hegel_internal_error!(
+                        "OriginLifecycle::confirm: {origin} is already confirmed"
+                    );
+                }
+                None => (0, 0, 0, 0),
+            };
         self.origins.insert(
             origin.to_string(),
             OriginState::Confirmed {
@@ -150,9 +216,11 @@ impl OriginLifecycle {
                 pool,
                 fails: prior_fails + evidence.0,
                 replays: prior_replays + evidence.1,
-                report_dry: false,
+                report_fails,
+                report_replays,
             },
         );
+        Ok(())
     }
 
     /// A validated accept measured `origin`'s failure rate at `anchor`
@@ -167,21 +235,27 @@ impl OriginLifecycle {
         }
     }
 
-    /// Fold the report-time final replay's physical (fails, replays) into
-    /// `origin`'s evidence; a replay that never reproduced marks the
-    /// origin dry at report time, switching its caveat wording. No-op
-    /// unless confirmed — only confirmed origins reach the final replay.
+    /// Record the report-time final replay's physical (fails, replays) in
+    /// `origin`'s report counts, kept apart from the confirmation or reuse
+    /// evidence — the caveat quotes both, and a zero-fail record switches
+    /// its wording to dry-at-report-time. No-op unless trusted or
+    /// confirmed — no other state reaches the final replay.
     pub(crate) fn record_final_replay(&mut self, origin: &str, evidence: (u64, u64)) {
-        if let Some(OriginState::Confirmed {
-            fails,
-            replays,
-            report_dry,
-            ..
-        }) = self.origins.get_mut(origin)
-        {
-            *fails += evidence.0;
-            *replays += evidence.1;
-            *report_dry = evidence.0 == 0;
+        match self.origins.get_mut(origin) {
+            Some(OriginState::Confirmed {
+                report_fails,
+                report_replays,
+                ..
+            })
+            | Some(OriginState::Trusted {
+                report_fails,
+                report_replays,
+                ..
+            }) => {
+                *report_fails += evidence.0;
+                *report_replays += evidence.1;
+            }
+            _ => {}
         }
     }
 
@@ -232,7 +306,9 @@ impl OriginLifecycle {
     /// trusted from a v2 entry.
     pub(crate) fn pool(&self, origin: &str) -> &[Vec<ChoiceValue>] {
         match self.origins.get(origin) {
-            Some(OriginState::Confirmed { pool, .. }) | Some(OriginState::Trusted { pool }) => pool,
+            Some(OriginState::Confirmed { pool, .. }) | Some(OriginState::Trusted { pool, .. }) => {
+                pool
+            }
             _ => &[],
         }
     }
@@ -246,15 +322,22 @@ impl OriginLifecycle {
             OriginState::Confirmed {
                 fails,
                 replays,
-                report_dry,
+                report_fails,
+                report_replays,
                 ..
             } => {
-                if *report_dry {
+                if *report_replays > 0 && *report_fails == 0 {
                     format!(
                         "nondeterministic failure, confirmed earlier this run \
                          (failed {fails} of {replays} replays) but not reproduced \
                          at report time — a rare failure, or something in the \
                          environment changed after discovery"
+                    )
+                } else if *report_replays > 0 {
+                    format!(
+                        "nondeterministic failure, confirmed: failed {fails} of \
+                         {replays} replays at confirmation and {report_fails} of \
+                         {report_replays} at report time"
                     )
                 } else {
                     format!(
@@ -263,8 +346,33 @@ impl OriginLifecycle {
                     )
                 }
             }
-            OriginState::Trusted { .. } => {
-                "nondeterministic failure: reproduced from the stored entry this run".to_string()
+            OriginState::Trusted {
+                fails,
+                replays,
+                report_fails,
+                report_replays,
+                ..
+            } => {
+                if *report_replays > 0 && *report_fails == 0 {
+                    format!(
+                        "nondeterministic failure, reproduced from stored \
+                         timelines earlier this run (failed {fails} of {replays} \
+                         replays) but not reproduced at report time — a rare \
+                         failure, or something in the environment changed after \
+                         discovery"
+                    )
+                } else if *report_replays > 0 {
+                    format!(
+                        "nondeterministic failure, reproduced from stored \
+                         timelines: failed {fails} of {replays} replays at reuse \
+                         and {report_fails} of {report_replays} at report time"
+                    )
+                } else {
+                    format!(
+                        "nondeterministic failure, reproduced from stored \
+                         timelines: failed {fails} of {replays} replays this run"
+                    )
+                }
             }
             OriginState::Unconfirmed { fails, replays, .. } => {
                 if *fails > 0 {

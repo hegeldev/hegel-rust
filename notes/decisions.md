@@ -308,3 +308,76 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     but harmless, cpp vendors the header and gets a compile-time migration signal).
     evaluation.md now points there, and the `hegel_run_status_t` rustdoc reserves value 3
     against reuse. (Critique D12.)
+
+44. *(Reserved for the phase-10 persistence entry, landed by cherry-pick.)*
+
+45. *(Reserved for the phase-10 watermark entry, landed by cherry-pick.)*
+
+46. **Decision 19 clarified: the anchor estimates the incumbent's reproduction rate under
+    the engine's own pinned-replay procedure.** It rises only at validated events — bar
+    accept, adopted gauntlet first-accept (once per realized timeline, the `raised` set),
+    boost holdout pass — and post-accept re-measurement of the standing incumbent never
+    feeds it. That is what experiments 001 and 006 measured, and it puts candidate and
+    incumbent on one estimand. Rejected: decision 19's literal reading (only
+    fresh-generation evidence raises the anchor), which forecloses every shipped anchor
+    source and would need a new experiment series. (Gate G5.)
+
+47. **A trusted origin runs an evidence batch at shrink time, and any failure promotes
+    it.** The batch is `nd_evidence_batch` (`nd_confirm` renamed: one function, two uses)
+    with the discovery bar as its stopping rule only — trusted origins are exempt from the
+    bar's verdict, the honest rewording of decision 24's "the bar is not re-run", which was
+    never true. A failing batch promotes with the batch's LCB as anchor, priced by the
+    existing gauntlet arithmetic. A zero-fail batch folds its evidence into the trusted
+    counts (`record_trusted_batch`), skips shrinking, and the origin is still reported and
+    persisted. `Trusted` now carries evidence (fails, replays, and report-time counts),
+    seeded by `trust()` from the reproducing batch on the database, blob, and deterministic
+    replay paths. `confirm()` folds trusted evidence at promotion and errors on a Confirmed
+    prior (the arm was dead: every caller sits behind a `needs_confirmation` or
+    `take_witness` check). Caveats quote report-time counts apart from confirmation or
+    reuse counts, with trusted-live and trusted-dry wordings. (Gate G12; critique L1,
+    L3-L6.)
+
+48. **Promotion merges the stored v2 pool into the promotion pool, fresh-first.** Fresh
+    captures first, then the stored timelines, deduplicated and capped at `POOL_CAP`
+    counting the incumbent (`pooled_timelines`, absorbing decision 42's truncation).
+    Rejected: documenting the drop as intended — the trusted pool is the previous run's
+    validated replay state, and the promotion path was forgetting exactly what had just
+    reproduced the failure. (Gate G13; critique L2.)
+
+49. **Generation-phase executions are stamped for capture once ND handling is active.**
+    A new `capture_discoveries` flag is set around the generation loop; the stamp condition
+    becomes `capture_replays || (nd_active && capture_discoveries && !measurement)`.
+    Decision 3's report for a never-reproduced failure now carries the discovering case's
+    draw lines and diagnostic instead of a bare caveat, at capture cost bounded by the
+    generation budget in runs already paying multi-replay confirmation. Documented gaps: an
+    origin first observed by a gauntlet probe (measurement runs stay unstamped outside
+    `capture_replays`), and the case that itself flips the run (its stamp decision predates
+    the flip). Shrink, gauntlet, and boost probes stay unstamped, so decision 10's cost
+    profile is untouched. (Gate G11; critique R2.)
+
+50. **`hegel_test_case_is_nondeterministic` is renamed `hegel_test_case_should_capture`,
+    with no shim.** The stamp means "capture this case" — it fires on deterministic final
+    replays, blob replays, and now generation cases — and the old name said something
+    false. This release already forces every binding to rewrite its capture logic, so the
+    rename turns a silently changed contract into a compile-time signal, the reasoning
+    decision 27 applied to status 3. The `DataSource` trait method and the frontend wrapper
+    follow the new name. Rejected: a doc-deprecated alias export; re-documenting only.
+    (Gate G16; critique D6.)
+
+51. **`show_statistics` reports what ND handling cost.** `record_run`'s measurement path
+    counts replays and their failures while `nd_active` (the deterministic final replay is
+    not counted), rendered as one line after the statistics block: "nondeterministic
+    handling: measurement replays N, failing M". The only sub-Debug surface revealing the
+    flip and its cost. Within decision 1's letter: `show_statistics` is requested
+    diagnostics, not the unsolicited notice quiet strictness forbids. (Gate G17.)
+
+52. **`REPRODUCE_SPLICES` is 10, amending decision 25.** Experiment 006B measured the
+    65-100% rescue rate at a cap of 10 splice candidates costing 1.6-6.3 replays per
+    rescue. Decision 25's "(~6 replays/miss)" parenthetical recorded the cost per rescue,
+    and the constant was mistranscribed from it. (Gate G18; critique M2.)
+
+53. **`FINAL_REPLAY_FRESH = 4` is chosen, not derived.** A bounded last chance to capture
+    fresh failing output after the stored state's ~29-replay budget is spent; no estimable
+    fresh-hit rate exists to derive it from. Rejected: deriving it (nothing to derive
+    from); pricing it in a dedicated experiment (not worth an experiment slot for a
+    4-replay tail). (Gate G19; critique M3.)

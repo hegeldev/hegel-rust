@@ -55,7 +55,8 @@ fn rejecting_an_unobserved_origin_records_it() {
 fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
     let mut lc = OriginLifecycle::default();
     lc.observe("a");
-    lc.confirm("a", 0.4, Some(witness("a")), vec![Vec::new()], (4, 9));
+    lc.confirm("a", 0.4, Some(witness("a")), vec![Vec::new()], (4, 9))
+        .unwrap();
     assert!(!lc.needs_confirmation("a"));
     assert_eq!(lc.pool("a").len(), 1);
     let (run, anchor) = lc.take_witness("a").unwrap();
@@ -70,7 +71,7 @@ fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
 fn trusted_origins_survive_rejection_without_a_caveat() {
     let mut lc = OriginLifecycle::default();
     lc.observe("a");
-    lc.trust("a", Vec::new());
+    lc.trust("a", Vec::new(), (1, 2));
     assert!(!lc.needs_confirmation("a"));
     assert!(!lc.reject("a", (0, 10)));
     assert_eq!(lc.unconfirmed().count(), 0);
@@ -80,30 +81,74 @@ fn trusted_origins_survive_rejection_without_a_caveat() {
 #[test]
 fn trust_carries_a_stored_pool_and_never_replaces_it_with_an_empty_one() {
     let mut lc = OriginLifecycle::default();
-    lc.trust("a", vec![vec![ChoiceValue::Boolean(true)]]);
+    lc.trust("a", vec![vec![ChoiceValue::Boolean(true)]], (1, 1));
     assert_eq!(lc.pool("a").len(), 1);
-    lc.trust("a", Vec::new());
+    lc.trust("a", Vec::new(), (1, 1));
     assert_eq!(lc.pool("a").len(), 1);
-    lc.trust("a", vec![Vec::new(), vec![ChoiceValue::Boolean(false)]]);
+    lc.trust(
+        "a",
+        vec![Vec::new(), vec![ChoiceValue::Boolean(false)]],
+        (1, 1),
+    );
     assert_eq!(lc.pool("a").len(), 2);
 }
 
 #[test]
-fn trust_is_idempotent_and_covers_unobserved_origins() {
+fn trust_seeds_and_folds_reuse_evidence() {
     let mut lc = OriginLifecycle::default();
-    lc.trust("a", Vec::new());
-    lc.trust("a", Vec::new());
+    lc.trust("a", Vec::new(), (1, 4));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, reproduced from stored timelines: failed \
+         1 of 4 replays this run"
+    );
+    lc.trust("a", Vec::new(), (2, 3));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, reproduced from stored timelines: failed \
+         3 of 7 replays this run"
+    );
     assert!(!lc.needs_confirmation("a"));
 }
 
 #[test]
 fn trust_never_demotes_a_confirmed_origin() {
     let mut lc = OriginLifecycle::default();
-    lc.confirm("a", 0.7, Some(witness("a")), Vec::new(), (4, 4));
-    lc.trust("a", vec![Vec::new()]);
+    lc.confirm("a", 0.7, Some(witness("a")), Vec::new(), (4, 4))
+        .unwrap();
+    lc.trust("a", vec![Vec::new()], (1, 1));
     let (_, anchor) = lc.take_witness("a").unwrap();
     assert_eq!(anchor, 0.7);
     assert!(lc.pool("a").is_empty());
+}
+
+#[test]
+fn confirm_on_a_confirmed_origin_is_an_internal_error() {
+    let mut lc = OriginLifecycle::default();
+    lc.confirm("a", 0.4, None, Vec::new(), (4, 9)).unwrap();
+    assert!(lc.confirm("a", 0.5, None, Vec::new(), (4, 4)).is_err());
+}
+
+#[test]
+fn promotion_folds_trusted_evidence_into_the_confirmed_counts() {
+    let mut lc = OriginLifecycle::default();
+    lc.trust("a", Vec::new(), (1, 5));
+    lc.record_trusted_batch("a", (0, 20));
+    lc.confirm("a", 0.3, None, Vec::new(), (2, 8)).unwrap();
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, confirmed: failed 3 of 33 replays this run"
+    );
+}
+
+#[test]
+fn record_trusted_batch_folds_evidence_only_while_trusted() {
+    let mut lc = OriginLifecycle::default();
+    lc.record_trusted_batch("a", (0, 20));
+    assert!(lc.caveat("a").is_none());
+    lc.observe("a");
+    lc.record_trusted_batch("a", (0, 20));
+    assert!(lc.needs_confirmation("a"));
 }
 
 #[test]
@@ -113,7 +158,7 @@ fn unconfirmed_report_is_sorted_and_skips_confirmed_origins() {
     assert!(lc.reject("a", (0, 10)));
     assert!(lc.reject("a", (0, 10)));
     lc.observe("b");
-    lc.confirm("d", 0.5, None, Vec::new(), (4, 6));
+    lc.confirm("d", 0.5, None, Vec::new(), (4, 6)).unwrap();
     assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec!["a", "b", "c"]);
 }
 
@@ -124,10 +169,11 @@ fn raise_anchor_is_monotone_and_confirmed_only() {
     lc.observe("a");
     lc.raise_anchor("a", 0.9);
     assert!(lc.needs_confirmation("a"));
-    lc.trust("b", Vec::new());
+    lc.trust("b", Vec::new(), (1, 1));
     lc.raise_anchor("b", 0.9);
     assert!(lc.take_witness("b").is_none());
-    lc.confirm("c", 0.3, Some(witness("c")), Vec::new(), (4, 12));
+    lc.confirm("c", 0.3, Some(witness("c")), Vec::new(), (4, 12))
+        .unwrap();
     lc.raise_anchor("c", 0.2);
     lc.raise_anchor("c", 0.6);
     let (_, anchor) = lc.take_witness("c").unwrap();
@@ -151,15 +197,16 @@ fn caveats_quote_the_accumulated_replay_evidence() {
         "unconfirmed failure: failed 1 of 50 replays this run, below the \
          confirmation bar — likely rare"
     );
-    lc.confirm("a", 0.3, None, Vec::new(), (4, 12));
+    lc.confirm("a", 0.3, None, Vec::new(), (4, 12)).unwrap();
     assert_eq!(
         lc.caveat("a").unwrap(),
         "nondeterministic failure, confirmed: failed 5 of 62 replays this run"
     );
-    lc.trust("b", Vec::new());
+    lc.trust("b", Vec::new(), (1, 6));
     assert_eq!(
         lc.caveat("b").unwrap(),
-        "nondeterministic failure: reproduced from the stored entry this run"
+        "nondeterministic failure, reproduced from stored timelines: failed \
+         1 of 6 replays this run"
     );
 }
 
@@ -168,18 +215,55 @@ fn a_dry_final_replay_switches_the_confirmed_caveat_wording() {
     let mut lc = OriginLifecycle::default();
     lc.record_final_replay("a", (0, 29));
     assert!(lc.caveat("a").is_none());
-    lc.confirm("a", 0.4, None, Vec::new(), (4, 9));
-    lc.record_final_replay("a", (1, 3));
-    assert_eq!(
-        lc.caveat("a").unwrap(),
-        "nondeterministic failure, confirmed: failed 5 of 12 replays this run"
-    );
+    lc.confirm("a", 0.4, None, Vec::new(), (4, 9)).unwrap();
     lc.record_final_replay("a", (0, 29));
     assert_eq!(
         lc.caveat("a").unwrap(),
-        "nondeterministic failure, confirmed earlier this run (failed 5 of 41 \
+        "nondeterministic failure, confirmed earlier this run (failed 4 of 9 \
          replays) but not reproduced at report time — a rare failure, or \
          something in the environment changed after discovery"
+    );
+}
+
+#[test]
+fn caveats_keep_report_time_counts_apart_from_confirmation_counts() {
+    let mut lc = OriginLifecycle::default();
+    lc.confirm("a", 0.4, None, Vec::new(), (4, 9)).unwrap();
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, confirmed: failed 4 of 9 replays this run"
+    );
+    lc.record_final_replay("a", (1, 3));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, confirmed: failed 4 of 9 replays at \
+         confirmation and 1 of 3 at report time"
+    );
+}
+
+#[test]
+fn record_final_replay_records_report_counts_on_trusted_and_confirmed() {
+    let mut lc = OriginLifecycle::default();
+    lc.trust("a", Vec::new(), (1, 5));
+    lc.record_final_replay("a", (2, 4));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, reproduced from stored timelines: failed \
+         1 of 5 replays at reuse and 2 of 4 at report time"
+    );
+}
+
+#[test]
+fn a_dry_final_replay_switches_the_trusted_caveat_wording() {
+    let mut lc = OriginLifecycle::default();
+    lc.trust("a", Vec::new(), (1, 5));
+    lc.record_final_replay("a", (0, 20));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "nondeterministic failure, reproduced from stored timelines earlier \
+         this run (failed 1 of 5 replays) but not reproduced at report time \
+         — a rare failure, or something in the environment changed after \
+         discovery"
     );
 }
 
@@ -189,7 +273,7 @@ fn trust_truncates_an_oversized_pool_to_pool_cap() {
     let pool: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
         .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
         .collect();
-    lc.trust("a", pool);
+    lc.trust("a", pool, (1, 1));
     assert_eq!(lc.pool("a").len(), crate::native::nd::POOL_CAP);
 }
 
@@ -199,7 +283,7 @@ fn confirm_truncates_an_oversized_pool_to_pool_cap() {
     let pool: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
         .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
         .collect();
-    lc.confirm("a", 0.4, None, pool, (4, 9));
+    lc.confirm("a", 0.4, None, pool, (4, 9)).unwrap();
     assert_eq!(lc.pool("a").len(), crate::native::nd::POOL_CAP);
 }
 

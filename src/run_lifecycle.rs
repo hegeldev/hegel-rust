@@ -260,10 +260,11 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// case's).
 ///
 /// The capture decision is the engine's, read once at case start
-/// ([`CTestCase::is_nondeterministic`]): the engine stamps every replay of
-/// an already-discovered failure — confirmation batches, database-reuse
-/// replays, and the report-time final replay — so the executions a failure
-/// report can be built from carry their diagnostics, while ordinary
+/// ([`CTestCase::should_capture`]): the engine stamps the executions a
+/// failure report can be built from — confirmation batches, database-reuse
+/// replays, the report-time final replay, and generation cases under
+/// nondeterministic handling, whose failing origins may be reported
+/// unconfirmed — so those carry their diagnostics, while ordinary
 /// exploration cases skip backtrace capture. A stamped replay executes the
 /// whole body, so its capture holds the case's full trace — for a
 /// concurrent-machine case, draws and notes made before
@@ -287,7 +288,7 @@ pub(crate) fn run_test_case(
 ) {
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let quiet = verbosity == Verbosity::Quiet;
-    let stamped = !is_final && c_tc.is_nondeterministic();
+    let stamped = !is_final && c_tc.should_capture();
     let should_emit = ((is_final || stamped) && !quiet) || verbose;
     CAPTURE_BACKTRACE.with(|c| c.set(should_emit));
     // Drop any capture left over from a previous test case on this thread

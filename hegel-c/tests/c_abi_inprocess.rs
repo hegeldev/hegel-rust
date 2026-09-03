@@ -32,7 +32,7 @@ use hegel_c::{
     hegel_state_machine_next_group, hegel_state_machine_next_rule,
     hegel_state_machine_rule_rejected, hegel_state_machine_should_check_invariant, hegel_status_t,
     hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_test_case_is_nondeterministic, hegel_version,
+    hegel_test_case_from_blob, hegel_test_case_should_capture, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -261,9 +261,9 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert!(clone_out.is_null());
-        let mut is_nondeterministic = false;
+        let mut should_capture = false;
         assert_eq!(
-            hegel_test_case_is_nondeterministic(ctx, ptr::null(), &mut is_nondeterministic),
+            hegel_test_case_should_capture(ctx, ptr::null(), &mut should_capture),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -552,13 +552,9 @@ fn run_start_blob_replays_and_reports_the_failure() {
             if tc.is_null() {
                 break;
             }
-            let mut is_nondeterministic = false;
-            ok(hegel_test_case_is_nondeterministic(
-                ctx,
-                tc,
-                &mut is_nondeterministic,
-            ));
-            assert!(is_nondeterministic, "a blob replay is stamped for capture");
+            let mut should_capture = false;
+            ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+            assert!(should_capture, "a blob replay is stamped for capture");
             let mut value = 0i64;
             let mut status = hegel_status_t::HEGEL_STATUS_INTERESTING as u32;
             if hegel_generate_integer(ctx, tc, 0, 100, &mut value) != HEGEL_OK {
@@ -638,15 +634,11 @@ fn explicit_backend_run_and_lifecycle_misuse() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        let mut is_nondeterministic = true;
-        ok(hegel_test_case_is_nondeterministic(
-            ctx,
-            tc,
-            &mut is_nondeterministic,
-        ));
-        assert!(!is_nondeterministic);
+        let mut should_capture = true;
+        ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+        assert!(!should_capture);
         assert_eq!(
-            hegel_test_case_is_nondeterministic(ctx, tc, ptr::null_mut()),
+            hegel_test_case_should_capture(ctx, tc, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
 
@@ -1321,13 +1313,9 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
-        let mut is_nondeterministic = false;
-        ok(hegel_test_case_is_nondeterministic(
-            ctx,
-            tc,
-            &mut is_nondeterministic,
-        ));
-        assert!(!is_nondeterministic);
+        let mut should_capture = false;
+        ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+        assert!(!should_capture);
         let mut value = 0i64;
         assert_eq!(
             hegel_generate_integer(ctx, tc, 0, 100, &mut value),
@@ -1369,7 +1357,7 @@ fn single_test_case_failure_has_origin_but_no_blob() {
 /// always succeed, the always-failing bug is confirmed by replay and
 /// shrunk, and the run reports `HEGEL_RUN_STATUS_FAILED` with a reproduce
 /// blob and a confirmation caveat. The engine stamps the replay
-/// executions it makes for the report (`hegel_test_case_is_nondeterministic`).
+/// executions it makes for the report (`hegel_test_case_should_capture`).
 #[test]
 fn concurrent_run_failure_has_blob_and_caveat() {
     let ctx = hegel_context_new();
@@ -1387,13 +1375,9 @@ fn concurrent_run_failure_has_blob_and_caveat() {
             if tc.is_null() {
                 break;
             }
-            let mut is_nondeterministic = false;
-            ok(hegel_test_case_is_nondeterministic(
-                ctx,
-                tc,
-                &mut is_nondeterministic,
-            ));
-            stamped += usize::from(is_nondeterministic);
+            let mut should_capture = false;
+            ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+            stamped += usize::from(should_capture);
             let rules = [rule.as_ptr()];
             let rule_groups: [i64; 1] = [0];
             let mut machine: *mut HegelStateMachine = ptr::null_mut();
@@ -2208,13 +2192,9 @@ fn clones_share_a_run_owned_family() {
         let mut c1a: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, c1, &mut c1a), HEGEL_OK);
         for tc in [root, c1, c1a] {
-            let mut is_nondeterministic = true;
-            ok(hegel_test_case_is_nondeterministic(
-                ctx,
-                tc,
-                &mut is_nondeterministic,
-            ));
-            assert!(!is_nondeterministic);
+            let mut should_capture = true;
+            ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+            assert!(!should_capture);
         }
         assert_eq!(
             hegel_generate_integer(ctx, c1a, 0, 100, &mut value),
@@ -2310,26 +2290,22 @@ fn standalone_handles_are_freed_independently() {
             HEGEL_OK
         );
         assert!(!root.is_null());
-        let mut is_nondeterministic = false;
-        ok(hegel_test_case_is_nondeterministic(
+        let mut should_capture = false;
+        ok(hegel_test_case_should_capture(
             ctx,
             root,
-            &mut is_nondeterministic,
+            &mut should_capture,
         ));
-        assert!(!is_nondeterministic);
+        assert!(!should_capture);
 
         let mut c1: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c1), HEGEL_OK);
         let mut c2: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(hegel_test_case_clone(ctx, root, &mut c2), HEGEL_OK);
         for tc in [c1, c2] {
-            is_nondeterministic = false;
-            ok(hegel_test_case_is_nondeterministic(
-                ctx,
-                tc,
-                &mut is_nondeterministic,
-            ));
-            assert!(!is_nondeterministic);
+            should_capture = false;
+            ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
+            assert!(!should_capture);
         }
 
         // A non-consuming span op proves a handle is live and reaches its

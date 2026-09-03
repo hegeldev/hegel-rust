@@ -299,9 +299,10 @@ pub trait DataSource: Send + Sync {
     /// observation is non-finite.
     fn event_observation(&self, label: &str, value: Option<f64>) -> Result<(), DataSourceError>;
 
-    /// Whether this test case belongs to a run already known to be
-    /// nondeterministic.
-    fn is_nondeterministic(&self) -> bool;
+    /// Whether the engine stamped this test case for capture: the client
+    /// should buffer its output and, if it fails, its rendered
+    /// diagnostic — the material for the failure report.
+    fn should_capture(&self) -> bool;
 
     /// Signal that the test case is complete and report its outcome.
     ///

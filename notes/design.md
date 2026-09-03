@@ -97,15 +97,22 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 
 Per-origin state machine: `Unconfirmed -> Confirmed` (discovery bar),
 `Unconfirmed -> Trusted` (database reproduction, decision 24 — the prior run only persisted
-confirmed origins, so the bar is not re-run), monotone anchor raises on validated accepts
-(decision 19). Confirmation gates origin *admission*: `nd_discovery_sweep` runs the bar over
-every unconfirmed interesting origin after each generation step, dropping origins that fail it
-(decision 24); raw interesting runs never displace an occupied origin (decision 20). Confirmed
+confirmed origins, so trusted origins are exempt from the bar's verdict), `Trusted ->
+Confirmed` (promotion by a failing shrink-time evidence batch, decision 47), monotone anchor
+raises on validated accepts (decision 19). Confirmation gates origin *admission*:
+`nd_discovery_sweep` runs the bar over every unconfirmed interesting origin after each
+generation step, dropping origins that fail it (decision 24); raw interesting runs never
+displace an occupied origin (decision 20). A trusted origin reaching the shrink loop runs
+one evidence batch (`nd_evidence_batch`, the bar arithmetic as stopping rule only): any
+failure promotes it with the batch's LCB as anchor and its pool merged fresh-first with the
+stored one (decision 48); zero failures fold into the trusted counts and skip shrinking,
+still reported and persisted. `Trusted` carries the reproducing batch's evidence, seeded by
+`trust()` on the database, blob, and deterministic replay paths. Confirmed and trusted
 origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
 every one, and the lifecycle's writers truncate incoming pools) harvested from
-capture-at-confirmation (decision 10). The
-lifecycle also words each failure's **caveat** from the run's own evidence — confirmed,
-trusted, confirmed-but-dry-at-report-time, or unconfirmed.
+capture-at-confirmation (decision 10). The lifecycle also words each failure's **caveat**
+from the run's own evidence — confirmed, trusted, dry-at-report-time variants of both, or
+unconfirmed — quoting report-time replay counts apart from the confirmation or reuse counts.
 
 ### Representation and persistence
 
@@ -129,7 +136,7 @@ fires solely on constraint drift (decision 32, measured in 007).
 
 One primitive serves confirmation, database reuse, the final replay, and blob replay
 (decision 25): each stored timeline first-fit under a weighted per-timeline budget, then
-positional splices of random timeline pairs (6), then fresh generations where the caller
+positional splices of random timeline pairs (10, decision 52), then fresh generations where the caller
 allows them. Splices cut whole timelines at top-level positions, so a clone stream — one
 `ChoiceValue::Clone` element — crosses over intact. Executions run through `measure()`, which
 detects nondeterminism and admits origins like any run but moves none of the runner's
@@ -142,8 +149,10 @@ Charge accepts, not rejects (decision 7): a candidate whose first run passes is 
 incumbent. Rejected candidates retry via pass repetition with evidence accumulating across
 retries. Stopping is confirmed-dry (decision 18): after a dry sweep, one confirmation sweep
 drives every proposal's cumulative evidence to a bound decision. The anchor is monotone and
-never fed by replay-sourced evidence (decision 19). There is no checkpoint/rollback
-(decision 17). All acceptance paths gate on the same validated-accept event, which is a
+never fed by replay-sourced evidence (decision 19); it estimates the incumbent's
+reproduction rate under the engine's own pinned-replay procedure, raised only at validated
+events, so candidate and incumbent sit on one estimand (decision 46). There is no
+checkpoint/rollback (decision 17). All acceptance paths gate on the same validated-accept event, which is a
 gauntlet accept *and* the shrinker's adoption (`candidate_adopted`): an accepted candidate
 the shrinker discards — a punned realization, a sort-key-larger mutation probe — raises no
 anchor and persists nothing (decision 36). A nondeterministic flip during the shrink verify
@@ -170,11 +179,17 @@ avoid. Kind-set tolerance is the noted follow-up if generation cost ever shows u
 
 The engine owns the final replay (`final_replay`): every failure it is about to report
 re-executes first — deterministic runs once (a miss flips the run to ND handling, or aborts
-under `error`), ND runs through the replay primitive plus up to 4 fresh generations. Replays
-of already-discovered failures — confirmation batches, database-reuse replays, the final
-replay, blob replays — are **stamped** (`hegel_test_case_is_nondeterministic`), telling the
-client to capture output, diagnostic, and backtrace; ordinary exploration and shrink probes
-stay cheap and unstamped.
+under `error`), ND runs through the replay primitive plus up to 4 fresh generations
+(`FINAL_REPLAY_FRESH`, chosen not derived, decision 53). Executions whose failures can
+become the report — confirmation batches, database-reuse replays, the final replay, blob
+replays, and generation cases once ND handling is active (decision 49, so an unconfirmed
+one-shot failure still reports its discovering case's draws and diagnostic) — are
+**stamped** (`hegel_test_case_should_capture`, renamed from
+`hegel_test_case_is_nondeterministic` because the stamp means capture, decision 50), telling
+the client to capture output, diagnostic, and backtrace; shrink, gauntlet, and boost probes
+stay cheap and unstamped. Under `show_statistics` the statistics block adds one line with
+the measurement replay count and its failures — the only sub-Debug surface revealing the
+flip and its cost (decision 51).
 
 ND failures report as plain `FAILED` (gate G1/decision 27; `FAILED_NONDETERMINISTIC` is
 retired) with a per-failure caveat accessor (`hegel_failure_caveat`) quoting the run's own
@@ -220,8 +235,9 @@ generation. Without the split every quantitative runner behavior silently change
 ### ABI summary
 
 Added: `hegel_settings_set_nondeterminism_strictness`, `hegel_failure_caveat`,
-`hegel_run_start_blob`; blob prefixes 2/3. Changed: run status 3 retired; the stamp contract
-(`hegel_test_case_is_nondeterministic`) now covers every replay of a discovered failure;
+`hegel_run_start_blob`; blob prefixes 2/3. Changed: run status 3 retired;
+`hegel_test_case_is_nondeterministic` renamed to `hegel_test_case_should_capture` with no
+shim (decision 50), now covering every execution a failure report can be built from;
 concurrent machine creation no longer rejects. Both crates' changelogs carry the break.
 
 ## Closed decisions

@@ -216,7 +216,7 @@ pub enum hegel_run_status_t {
     /// (`hegel_failure_caveat`) and, when confirmed, a reproduce blob. A
     /// blobless failure is reported from what the caller captured while
     /// running the stamped test cases (see
-    /// `hegel_test_case_is_nondeterministic`).
+    /// `hegel_test_case_should_capture`).
     HEGEL_RUN_STATUS_ERROR = 2,
 }
 
@@ -1638,29 +1638,27 @@ pub unsafe extern "C" fn hegel_test_case_free(
 /// caller should buffer the case's output and, if it fails, its rendered
 /// diagnostic, keyed by the failure's origin — a stamped failing
 /// execution is the material for that origin's failure report. The
-/// engine stamps the replays it makes under nondeterministic handling
-/// whose failures can become the report: confirmation batches,
-/// database-reuse replays, and the report-time final replay. Read the
-/// stamp once at case start.
+/// engine stamps the executions whose failures can become the report:
+/// under nondeterministic handling, confirmation batches, database-reuse
+/// replays, the report-time final replay, and generation-phase cases
+/// (whose failing origins may be reported unconfirmed). Read the stamp
+/// once at case start.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_test_case_is_nondeterministic(
+pub unsafe extern "C" fn hegel_test_case_should_capture(
     ctx: *mut HegelContext,
     tc: *const HegelTestCase,
-    out_is_nondeterministic: *mut bool,
+    out_should_capture: *mut bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_is_nondeterministic", tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_should_capture", tc) } {
         Ok(pair) => pair,
         Err(rc) => return rc,
     };
-    if out_is_nondeterministic.is_null() {
-        set_last_error(
-            ctx,
-            "hegel_test_case_is_nondeterministic: out parameter is null",
-        );
+    if out_should_capture.is_null() {
+        set_last_error(ctx, "hegel_test_case_should_capture: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_is_nondeterministic = tc.stream.is_nondeterministic() };
+    unsafe { *out_should_capture = tc.stream.should_capture() };
     HEGEL_OK
 }
 

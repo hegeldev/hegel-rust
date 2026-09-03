@@ -29,8 +29,8 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 21 | Discovery confirmation is a prerequisite | Implemented: `nd_discovery_sweep` after each generation step; unconfirmed origins are dropped and generation keeps hunting |
 | 22 | Pool cap 5-10, first-fit, small continuation budget, divergence weights evidence | Implemented: `POOL_CAP = 10`, `continuation_budget(len) = len + max(4, len/8)`, `verbatim_weight` on misses |
 | 23 | Discovery bar: 10 gate / 40 cap / accept on 4th failure | Implemented: `GATE_RUNS`, `CONFIRM_CAP`, `CONFIRM_MIN_FAILS` in `nd/mod.rs`, exercised by `nd_confirm` |
-| 24 | Confirmation gates admission; DB reproduction is trusted | Implemented: `needs_confirmation` sweep + `OriginLifecycle::trust` (no re-run of the bar on reuse) |
-| 25 | Replay order: first-fit, splices, fresh; boost off outside rescue | Implemented: `nd_reproduce` (splices = 6, fresh only where the caller allows), `nd_boost` behind the 0.5 reliability floor |
+| 24 | Confirmation gates admission; DB reproduction is trusted | Implemented: `needs_confirmation` sweep + `OriginLifecycle::trust`. Reworded by decision 47: trusted origins are exempt from the bar's *verdict*, not spared replay — the shrink-time evidence batch is real and intended, and a failing one promotes |
+| 25 | Replay order: first-fit, splices, fresh; boost off outside rescue | Implemented: `nd_reproduce` (splices = 10 — decision 52 corrected a transcription of 006B's cap — fresh only where the caller allows), `nd_boost` behind the 0.5 reliability floor |
 | 26 | This branch goes to production grade | This phase; the full gate run and this audit are its exit |
 | 27 | G1: FAILED + caveat accessor, status 3 retired | Implemented: `hegel_failure_caveat`, status 3 deleted from `hegel-c/src/lib.rs`; changelogs call out the break. Binding survey done, recorded in production-plan.md phase 6: ts/ocaml never adopted status 3, go's handling is dead but harmless, cpp vendors the header. The enum rustdoc reserves value 3 against reuse |
 | 28 | G2: boost as reliability-floor heuristic | Implemented: `BOOST_RELIABILITY_FLOOR = 0.5`, holdout-gated, no public setting |

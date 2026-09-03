@@ -1544,7 +1544,7 @@ pub struct NativeTestCase {
     frozen: bool,
     /// Whether this test case belongs to a run already known to be
     /// nondeterministic. Copied into every cloned stream.
-    is_nondeterministic: bool,
+    should_capture: bool,
     /// State shared with every other stream of this test case's family.
     pub(crate) family: Arc<FamilyCore>,
     /// This stream's position in the clone tree: empty for the root, the
@@ -1648,7 +1648,7 @@ impl NativeTestCase {
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
-        is_nondeterministic: bool,
+        should_capture: bool,
         family: Arc<FamilyCore>,
         clone_id: Vec<usize>,
     ) -> Self {
@@ -1659,7 +1659,7 @@ impl NativeTestCase {
             max_size,
             nodes: Vec::new(),
             frozen: false,
-            is_nondeterministic,
+            should_capture,
             family,
             clone_id,
             clone_counter: 0,
@@ -1757,13 +1757,13 @@ impl NativeTestCase {
     }
 
     /// Mark this test case as belonging to a nondeterministic run.
-    pub(crate) fn set_nondeterministic(&mut self) {
-        self.is_nondeterministic = true;
+    pub(crate) fn set_should_capture(&mut self) {
+        self.should_capture = true;
     }
 
     /// Whether this test case belongs to a nondeterministic run.
-    pub(crate) fn is_nondeterministic(&self) -> bool {
-        self.is_nondeterministic
+    pub(crate) fn should_capture(&self) -> bool {
+        self.should_capture
     }
 
     /// Create an independent cloned stream of this test case.
@@ -1815,7 +1815,7 @@ impl NativeTestCase {
             child_template,
             child_max_size,
             None,
-            self.is_nondeterministic,
+            self.should_capture,
             Arc::clone(&self.family),
             child_id,
         );

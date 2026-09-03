@@ -434,8 +434,8 @@ impl DataSource for NativeDataSource {
         Ok(())
     }
 
-    fn is_nondeterministic(&self) -> bool {
-        self.inner.lock().is_nondeterministic()
+    fn should_capture(&self) -> bool {
+        self.inner.lock().should_capture()
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {
