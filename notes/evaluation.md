@@ -12,7 +12,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 4 | Per-origin identity | Unchanged: the interesting map and the frontend capture map key on the origin string |
 | 5 | Timeline pool, not a merged trie | Implemented: `blob.rs::NdReproState.timelines` (incumbent first), pool cap 10 (`nd/mod.rs::POOL_CAP`), harvested at confirmation |
 | 6 | Data tree never serves under ND | Implemented: `nd_active` gates `cached_test_function` serving, recording, novel prefixes, targeting. Restoring the tree was not attempted (gate G3, decision 29) |
-| 7 | Charge accepts, not rejects | Implemented: single-run rejects with ledger retention, gauntleted accepts, pass repetition with cumulative evidence (`test_runner.rs` shrink probe + `shrinker/`) |
+| 7 | Charge accepts, not rejects | Implemented: single-run rejects with ledger retention, gauntleted accepts, pass repetition with cumulative evidence (`test_runner.rs` shrink probe + `shrinker/`). Recalibrated by decision 54: an accept also needs four failures, and its ledger tops up to 20 runs before the anchor moves |
 | 8 | Persist representation, never estimates | Implemented: v2 entries/blobs are `NdReproState` only — no rates, no counters (`blob.rs`) |
 | 9 | Detection uses within-run evidence only | Implemented: a stored entry that misses is demoted/deleted (`test_runner.rs` reuse loop), never a flip source; flips come from `record_run` mismatches and declared concurrency |
 | 10 | Capture at confirmation | Implemented as the stamp contract: `capture_replays` around confirmation batches, DB-reuse replays, the final replay, and blob replays; `hegel_test_case_is_nondeterministic` tells the client to capture. The sacrificed first case and `NondetStash` are gone |
@@ -24,7 +24,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 16 | p >= 0.1 target drives budgets | Implemented: `nd/mod.rs::TARGET_FAILURE_RATE`/`replay_budget`; the discovery bar and reuse budgets derive from it |
 | 17 | No checkpoint/rollback in the shrink loop | Implemented by absence; capture-at-confirmation handles the pinning hazard at source |
 | 18 | Confirmed-dry stopping | Implemented: the shrink probe's sweep modes (`SweepMode`, `set_sweep_mode`) run one confirmation sweep after a dry sweep |
-| 19 | Monotone anchor; replay evidence never raises it | Implemented: `nd/lifecycle.rs` anchor raises only on gauntlet first-accepts and boost holdouts; `measure()` provenance keeps replay evidence out |
+| 19 | Monotone anchor; replay evidence never raises it | Implemented: `nd/lifecycle.rs` anchor raises only on gauntlet first-accepts and boost holdouts; `measure()` provenance keeps replay evidence out. Estimand clarified by decision 46 (the wording's literal reading forecloses every shipped anchor source); raises now read 20-run seeded batches and topped-up ledgers (decision 54) |
 | 20 | Raw interesting never displaces an occupied origin | Implemented: `update_interesting` fills vacant origins only; displacement goes through validated accepts |
 | 21 | Discovery confirmation is a prerequisite | Implemented: `nd_discovery_sweep` after each generation step; unconfirmed origins are dropped and generation keeps hunting |
 | 22 | Pool cap 5-10, first-fit, small continuation budget, divergence weights evidence | Implemented: `POOL_CAP = 10`, `continuation_budget(len) = len + max(4, len/8)`, `verbatim_weight` on misses |

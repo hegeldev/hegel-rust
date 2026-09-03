@@ -269,7 +269,7 @@ concurrent machine creation no longer rejects. Both crates' changelogs carry the
 
 | Question | Outcome |
 | --- | --- |
-| Per-position divergence anchors; anchoring inside clone streams | Closed, none anywhere (decisions 14/31): fall-off positions are unpredictable (004), and positional splicing of stored timelines rescues the pool's residue (006B, 007 at ceiling) |
+| Per-position divergence anchors; anchoring inside clone streams | Closed, none anywhere (decisions 14/31): fall-off positions are unpredictable (004), and positional splicing of stored timelines rescues the pool's residue (006B, 007 at ceiling; 009a off-ceiling — reuse/blob >= 98% at p <= 0.3 and the escalation signal did not fire, decisions 57/58) |
 | Merged trie encoding | Rejected (decision 5, hardened by 004: prefix sharing anticorrelates with pool need) |
 | Checkpoint/rollback in the shrink loop | Dropped (decision 17) |
 | `replay_aligned` under ND | Essentially never holds; re-shrinking accepted (005B measured the price) |
