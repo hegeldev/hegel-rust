@@ -85,7 +85,9 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
   flat-length-weighted fraction tracked before first divergence (decisions 22, 45): each
   element counts its flattened length, and a diverged clone pair earns credit for the
   tracked prefix inside it (recursively) before ending the walk. Diverged misses therefore
-  don't count full weight toward demotion or confirmation misses.
+  don't count full weight toward demotion or confirmation misses. Measured on racy bodies
+  (009a): W50 0.28-0.44 with no mass at zero, where the pre-45 scalar-prefix weighting put
+  78-97% of misses at exactly zero (decision 57).
 - Discovery bar (decision 23, experiment 005A): gate 10 replays, reject on zero failures;
   otherwise extend to 40, accepting early on the 4th failure (`GATE_RUNS`, `CONFIRM_CAP`,
   `CONFIRM_MIN_FAILS`).

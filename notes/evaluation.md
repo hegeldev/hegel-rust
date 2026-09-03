@@ -19,7 +19,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 11 | DB hygiene: demote then delete | Implemented: reuse loop `move_value` to secondary on primary miss, delete on secondary miss; budgets from `nd/mod.rs::reuse_replay_budget` |
 | 12 | Workload priorities | Served: experiment 007 measured both workloads at ceiling; concurrent stateful is fully unified (phase 7) |
 | 13 | Scope: ignore parallel-tests branch, Antithesis | Respected; the Antithesis integration path is untouched |
-| 14 | Per-position anchoring deferred, decided by data | Closed by decision 31: whole-timeline + splices reproduce at ceiling; nothing built |
+| 14 | Per-position anchoring deferred, decided by data | Closed by decision 31: whole-timeline + splices reproduce at ceiling; nothing built. Re-confirmed off-ceiling by 009a: reuse/blob >= 98% at p <= 0.3 and the escalation signal did not fire (decisions 57/58) |
 | 15 | Branch process | Superseded by decision 26 (branch to production grade); this audit is part of that |
 | 16 | p >= 0.1 target drives budgets | Implemented: `nd/mod.rs::TARGET_FAILURE_RATE`/`replay_budget`; the discovery bar and reuse budgets derive from it |
 | 17 | No checkpoint/rollback in the shrink loop | Implemented by absence; capture-at-confirmation handles the pinning hazard at source |
@@ -36,7 +36,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 28 | G2: boost as reliability-floor heuristic | Implemented: `BOOST_RELIABILITY_FLOOR`, holdout-gated, no public setting. Recalibrated by decision 56: 0.30 in 20-run-batch LCB units (the literal 0.5 over-triggers against honest anchors), holdout raised to `ANCHOR_SEED_RUNS` |
 | 29 | G3: data tree disabled under ND | Implemented (see 6); kind-set tolerance not needed on measured workloads |
 | 30 | G4: strictness surface | Implemented (see 1); `error` reproduces the old abort diagnostics verbatim (`flaky_diagnostic`, pinned by tests) |
-| 31 | Decision 14 closed | Recorded with 007 data; no anchoring code exists |
+| 31 | Decision 14 closed | Recorded with 007 data; no anchoring code exists. 009a's off-ceiling rates keep it closed (decision 58) |
 | 32 | Clone serialization values-only | Implemented by keeping tag 5 as-is; measured in 007 |
 | 33 | ND blobs replay until failure | Implemented: `reproduce_blob` / `hegel_run_start_blob` / frontend `drive_blob_replay` |
 

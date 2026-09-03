@@ -129,7 +129,10 @@ not pay it, and a rerun that finds persisted ND state skips the seam (though a
 caveat-only run persists nothing and re-races it); (b)
 on a late flip, re-enter generation with the remaining budget to re-hunt and confirm; (c)
 guard displacement pre-flip (costs deterministic-run behavior). Undecided — needs DRM;
-carried into the phase-13 audit as an open item.
+carried into the phase-13 audit as an open item. Same seam, opposite direction (009a):
+at p = 0.9, 11.5% of clone episodes never flip at all and emit v1 exact-choice blobs
+that reproduce at 13% where v2 blobs hit 100% — blob quality currently depends on
+whether the run noticed its own nondeterminism (decision 58's audit note).
 
 ## Experiments
 

@@ -452,3 +452,32 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     boost-raised anchor is estimated on the same batch size as a seeded one. Boost
     entry now logs one Debug line, making skip-versus-decline observable. (Gate G7;
     finding S3; experiment 008.)
+
+57. **G9 closed: the shipped watermark stands, and no physical gate is added.** 009a
+    measured the flat-length clone-descending watermark on genuinely racy clone and
+    machine bodies at p in {0.1, 0.3, 0.9}: W50 sits at 0.28-0.44 in every cell with
+    zero mass at weight 0, against 0.03-0.13 means and 78-97% zero-share for the
+    pre-decision-45 weighting — the old estimator was running 008's w = 0 breakage
+    column in practice, and the fix lands the distribution strictly between 008's
+    w = 0.2 and w = 1.0 columns, both of which preserve every 008 headline. The
+    phase-12 constants therefore freeze as landed, resolving decision 54's preliminary
+    marker. The escalation signal did not fire (median confirmed anchor at true
+    p = 0.1: 0.106 clone, 0.130 machine, against the 0.2 line), so decision-14
+    territory stays closed. Two letters are accepted as misses rather than acted on:
+    the machine body's W50 cells at 0.278/0.294 sit under the gate's 0.3 no-change
+    line but nowhere near the 0.1 PHYS_GATE clause, and its fluke rejection cost
+    (26-27 physical, target 20) is 10/mean-weight — a body property, with the
+    CONFIRM_CAP arm bounding the worst case at 37. Rejected: PHYS_GATE (guards a
+    regime the measurement says is empty); tightening bar constants for the machine
+    body (a cost letter, not a correctness one). (Gate G9; experiment 009a.)
+
+58. **G10 closed: off-ceiling persistence holds decision 31's design points.** DB reuse
+    and blob replay reproduce at 98-100% in every p in {0.1, 0.3} cell (thresholds were
+    90%/60%), so whole-timeline pools plus splices stand off the ceiling 007 measured
+    and no per-position anchoring is revisited. The one dip — clone blob replay 90% at
+    p = 0.9 — is not a pool failure: 11.5% of those episodes never flipped into ND
+    handling (at p = 0.9 the verify replay almost always reproduces), emitted v1
+    exact-choice blobs, and those reproduce at 13% where every v2 blob reproduced.
+    Recorded under gate G20's seam family for the phase-13 decision-3 audit: a
+    failure's blob quality currently depends on whether the run noticed its own
+    nondeterminism. (Gate G10; experiment 009a.)
