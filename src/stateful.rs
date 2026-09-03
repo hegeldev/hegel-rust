@@ -919,9 +919,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// Concurrency bugs are nondeterministic — thread scheduling is outside
 /// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
 /// switches the whole run into nondeterministic handling: failures are
-/// confirmed by repeated replay before they are reported or shrunk, and
-/// each report carries a caveat quoting that replay evidence alongside its
-/// reproduce blob.
+/// confirmed by repeated replay before they are shrunk or persisted; each
+/// report carries a caveat quoting that replay evidence, plus a reproduce
+/// blob when confirmed. An unconfirmed failure still fails the run,
+/// caveated.
 ///
 /// # Abandoned rules and lock poisoning
 ///

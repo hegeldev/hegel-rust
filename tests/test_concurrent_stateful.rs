@@ -198,9 +198,9 @@ fn a_run_with_max_concurrency_one_stays_deterministic() {
 
 /// A blob recorded while a test was deterministic cannot replay once the
 /// test runs a concurrent machine: the replay comes up short and is
-/// reported as a stale reproducer rather than shrunk or re-explored.
+/// reported as not reproducing rather than shrunk or re-explored.
 #[test]
-fn a_stale_blob_on_a_concurrent_test_reports_that_it_no_longer_reproduces() {
+fn a_stale_blob_on_a_concurrent_test_reports_that_it_did_not_reproduce() {
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
             let x: i64 = tc.draw(gs::integers());
@@ -225,7 +225,7 @@ fn a_stale_blob_on_a_concurrent_test_reports_that_it_no_longer_reproduces() {
             .run();
     });
     let payload = result.expect_err("the stale blob cannot replay a concurrent test");
-    assert_matches_regex(&panic_message(&payload), "no longer reproduces");
+    assert_matches_regex(&panic_message(&payload), "did not reproduce");
 }
 
 struct Exhaust;

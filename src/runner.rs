@@ -124,7 +124,9 @@ pub enum Verbosity {
 #[non_exhaustive]
 pub enum NondeterminismStrictness {
     /// Switch to nondeterministic handling silently: failures are confirmed
-    /// by repeated replay before they are reported or shrunk. The default.
+    /// by repeated replay before they are shrunk or persisted, and every
+    /// report carries a caveat quoting the run's replay evidence. An
+    /// unconfirmed failure still fails the run. The default.
     Quiet,
     /// Switch as under quiet, printing a one-line notice once per run.
     Warn,
@@ -483,14 +485,16 @@ where
         self
     }
 
-    /// Replay a single failing example from a base64 failure blob instead of
+    /// Replay a failing example from a base64 failure blob instead of
     /// generating fresh test cases.
     ///
-    /// A failure blob encodes the choice sequence of a counterexample.
-    /// Enable [`print_blob`](Settings::print_blob) to have a native failure
-    /// print one. When set, [`run`](Self::run) decodes it and runs exactly
-    /// that one example — bypassing generation and shrinking — so you can
-    /// reproduce a CI failure locally and deterministically.
+    /// A failure blob encodes a counterexample: the choice sequence of a
+    /// deterministic failure, or the stored failing timelines of a
+    /// nondeterministic one. Enable [`print_blob`](Settings::print_blob) to
+    /// have a native failure print one. When set, [`run`](Self::run) replays
+    /// the blob — a deterministic blob exactly once, a nondeterministic blob
+    /// until a replay fails, under a bounded replay budget — bypassing
+    /// generation and shrinking, so you can reproduce a CI failure locally.
     ///
     /// First-wins: if a blob is already set, further calls are ignored.
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated

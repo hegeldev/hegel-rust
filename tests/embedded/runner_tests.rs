@@ -368,8 +368,22 @@ mod reproduce {
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .reproduce_failure(blob),
         );
+        assert!(msg.contains("did not reproduce"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_stale_blob_message_names_both_hypotheses() {
+        let blob = discover_reproduce_blob();
+        let msg = run_panic_message(
+            Hegel::new(|tc: TestCase| {
+                tc.draw(gs::integers::<i32>());
+            })
+            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+            .reproduce_failure(blob),
+        );
+        assert!(msg.contains("may have been fixed"), "got: {msg}");
         assert!(
-            msg.contains("no longer reproduces") || msg.to_lowercase().contains("stale"),
+            msg.contains("not have recurred within the replay budget"),
             "got: {msg}"
         );
     }

@@ -76,7 +76,7 @@ static ND_FIXTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_print_blob_fixture(tc: TestCase) {
     if ND_FIXTURE_CALLS.fetch_add(1, Ordering::SeqCst) == 1 {
-        let _ = tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
+        tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
         return;
     }
     let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(1000));
@@ -93,7 +93,7 @@ static ND_REPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_replay_fixture(tc: TestCase) {
     if ND_REPLAY_CALLS.fetch_add(1, Ordering::SeqCst) == 1 {
-        let _ = tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
+        tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
         return;
     }
     let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(1000));

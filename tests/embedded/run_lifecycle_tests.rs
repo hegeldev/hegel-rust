@@ -134,6 +134,49 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
     );
 }
 
+#[test]
+fn capture_rank_orders_diagnostic_lines_bare() {
+    let diagnostic = Some("thread panicked".to_string());
+    let lines = vec!["let x = 1;".to_string()];
+    assert_eq!(capture_rank(&diagnostic, &lines), 2);
+    assert_eq!(capture_rank(&diagnostic, &[]), 2);
+    assert_eq!(capture_rank(&None, &lines), 1);
+    assert_eq!(capture_rank(&None, &[]), 0);
+}
+
+fn report(diagnostic: Option<&str>, lines: &[&str], payload: &'static str) -> CapturedReport {
+    CapturedReport {
+        lines: lines.iter().map(|l| l.to_string()).collect(),
+        diagnostic: diagnostic.map(str::to_string),
+        payload: Box::new(payload),
+    }
+}
+
+#[test]
+fn a_bare_capture_never_replaces_a_ranked_one() {
+    let mut captured = HashMap::new();
+    let origin = "Panic at a.rs:1:1".to_string();
+    store_capture(
+        &mut captured,
+        origin.clone(),
+        report(Some("ranked diagnostic"), &["let x = 1;"], "ranked"),
+    );
+    store_capture(&mut captured, origin.clone(), report(None, &[], "bare"));
+    let kept = &captured[&origin];
+    assert_eq!(kept.diagnostic.as_deref(), Some("ranked diagnostic"));
+    assert_eq!(kept.lines, ["let x = 1;"]);
+    assert_eq!(kept.payload.downcast_ref::<&str>(), Some(&"ranked"));
+
+    store_capture(
+        &mut captured,
+        origin.clone(),
+        report(Some("newer diagnostic"), &[], "newer"),
+    );
+    let kept = &captured[&origin];
+    assert_eq!(kept.diagnostic.as_deref(), Some("newer diagnostic"));
+    assert_eq!(kept.payload.downcast_ref::<&str>(), Some(&"newer"));
+}
+
 fn test_settings() -> Settings {
     Settings::new()
         .database(None)

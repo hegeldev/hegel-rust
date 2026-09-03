@@ -450,14 +450,17 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
     ))
 }
 
-/// One origin's failure report material, captured from the most recent
-/// test case that classified interesting frontend-side under that origin.
-/// The engine runs every reported failure one last time before concluding
-/// (its final replay, with the case stamped for capture — see
-/// [`CTestCase::is_nondeterministic`]), so the freshest capture per origin
-/// is normally that failing final-replay execution; for a failure the
-/// final replay could not reproduce, it is the newest earlier capture
-/// (a confirmation replay, or the discovering case). Printing is deferred
+/// One origin's failure report material. Captures are ranked
+/// ([`capture_rank`]): a rendered diagnostic over draw/note lines over a
+/// bare capture, and a new interesting case replaces the stored capture
+/// only at rank >= stored ([`store_capture`]). An unstamped shrink or
+/// measurement probe thus cannot clobber a stamped capture, while at
+/// equal rank the newer wins: final replay over confirmation over
+/// discovery. The panic payload travels with its capture, so the re-raised
+/// panic always matches the printed diagnostic. When the final replay is
+/// dry, the printed lines are the freshest stamped *failing* execution
+/// (usually confirmation-time, pre-shrink values) while the blob and
+/// choice sequence carry the shrunk incumbent. Printing is deferred
 /// to the run verdict (verbose runs stream the lines live too), because a
 /// frontend-interesting report can lose silently to an engine-side family
 /// conclusion, and because a captured bug may not be reported at all —
@@ -475,6 +478,36 @@ struct CapturedReport {
     payload: Box<dyn std::any::Any + Send>,
 }
 
+fn capture_rank(diagnostic: &Option<String>, lines: &[String]) -> u8 {
+    match (diagnostic.is_some(), !lines.is_empty()) {
+        (true, _) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+
+/// Store `report` as `origin`'s capture unless a higher-ranked capture
+/// already stands (see [`CapturedReport`]).
+fn store_capture(
+    captured: &mut HashMap<String, CapturedReport>,
+    origin: String,
+    report: CapturedReport,
+) {
+    match captured.entry(origin) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(report);
+        }
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            let stored = entry.get();
+            if capture_rank(&report.diagnostic, &report.lines)
+                >= capture_rank(&stored.diagnostic, &stored.lines)
+            {
+                entry.insert(report);
+            }
+        }
+    }
+}
+
 /// Drive a libhegel run to completion against the user's test function.
 ///
 /// Installs the cross-backend panic hook, starts the engine through the C ABI
@@ -484,7 +517,8 @@ struct CapturedReport {
 /// replay of every failure it is about to report — so every pumped case is
 /// non-final, and the report material is captured as the cases run: each
 /// interesting case's buffered output, diagnostic, and panic payload is
-/// kept per origin, the freshest capture winning (see [`CapturedReport`]).
+/// kept per origin, the highest-ranked capture winning, newest at equal
+/// rank (see [`CapturedReport`]).
 ///
 /// Once the loop drains, a failed verdict prints each distinct failure as
 /// one grouped block — the captured lines and diagnostic, the caveat when
@@ -535,7 +569,7 @@ pub(crate) fn drive<F>(
 /// [`drive_blob_replay`]: pull every test case off `run`, capture report
 /// material per origin, then act on the run's verdict. A passing run
 /// returns — unless `stale_message` is set (a blob replay), where a pass
-/// means the blob no longer reproduces and panics with that message.
+/// means the blob did not reproduce and panics with that message.
 ///
 /// `#[inline(always)]`: without it the test body's call stops being
 /// inlined and panic backtraces lose the user closure's source location
@@ -575,7 +609,8 @@ fn drive_run<F: FnMut(TestCase)>(
             run_test_case(c_tc, test_fn, false, mode, verbosity, output, case_sink);
         if let TestCaseResult::Interesting(failure) = &tc_result {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
-            captured.insert(
+            store_capture(
+                &mut captured,
                 failure.origin.clone(),
                 CapturedReport {
                     lines: records,
@@ -693,10 +728,11 @@ fn drive_single_case(
 /// The engine owns the replay: a deterministic blob replays its choices
 /// once; a nondeterministic blob replays its stored timelines until one
 /// fails, like database reuse. Decoding failures (corrupt or incompatible
-/// blobs) panic with the engine's diagnostic. A blob that decodes but no
-/// longer fails is a stale reproducer, reported as such. A reproduced
-/// failure re-raises the test's own panic; a replayed example has no fresh
-/// blob to print.
+/// blobs) panic with the engine's diagnostic. A blob that decodes but does
+/// not reproduce panics naming both hypotheses: the failure is fixed, or a
+/// nondeterministic one did not recur within the replay budget. A
+/// reproduced failure re-raises the test's own panic; a replayed example
+/// has no fresh blob to print.
 pub(crate) fn drive_blob_replay<F>(
     test_fn: F,
     settings: &Settings,
@@ -719,8 +755,11 @@ pub(crate) fn drive_blob_replay<F>(
         test_location,
         &output,
         Some(
-            "reproduce_failure: the supplied failure blob no longer reproduces a \
-             failure. The failure may have been fixed, or the blob is stale.",
+            "reproduce_failure: the supplied failure blob did not reproduce a \
+             failure. The failure may have been fixed — or, for a nondeterministic \
+             blob, it may not have recurred within the replay budget (a bug failing \
+             10% of the time escapes it about 5% of the time). Re-run to retry, or \
+             delete the attribute once the failure is fixed.",
         ),
     );
 }
