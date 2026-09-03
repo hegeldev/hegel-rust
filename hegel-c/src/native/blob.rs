@@ -33,7 +33,9 @@
 //! [`decode_blob`] reverses every step and returns `None` on *any*
 //! malformation (bad base64, unknown prefix byte, corrupt zlib stream, or a
 //! payload the inner decoder rejects). Callers treat `None` as "this blob
-//! can't be replayed" and panic.
+//! can't be replayed" and panic. Compressed payloads decode under the
+//! [`MAX_DECOMPRESSED_LEN`] bound, and a stream that inflates past it counts
+//! as malformed.
 //!
 //! The nondeterministic state bytes double as the version-2 **database
 //! entry** format (decision 8: ND-ness is carried by the representation).
@@ -61,15 +63,28 @@ const PREFIX_ND_ZLIB: u8 = 3;
 const ND_STATE_MAGIC: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 /// Version byte following [`ND_STATE_MAGIC`].
 const ND_STATE_VERSION: u8 = 2;
-/// Sanity cap on the timeline count a decoded state may claim.
+/// Sanity cap on the timeline count a decoded state may claim. It is
+/// deliberately looser than the write-side pool cap
+/// ([`POOL_CAP`](crate::native::nd::POOL_CAP), 10) so that raising the pool
+/// cap later does not invalidate stored corpora: entries written with more
+/// timelines than the current cap remain decodable.
 const ND_STATE_MAX_TIMELINES: u32 = 64;
 
 /// zlib compression level used by [`encode_failure`]. 6 is the zlib default.
 const ZLIB_LEVEL: u8 = 6;
 
+/// Upper bound on the decompressed size of a zlib payload, so a hostile blob
+/// cannot force an arbitrarily large allocation. The largest choice-only
+/// state the decoder would otherwise accept is [`ND_STATE_MAX_TIMELINES`]
+/// (64) timelines × [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192)
+/// choices × [`serialize_choices`]' ~17-byte per-choice sizing = 8.5 MiB.
+/// 16 MiB leaves comparable headroom for content-carrying choices (bytes and
+/// strings also serialize their payloads).
+const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
+
 /// Encode a choice sequence into a failure blob (see the module docs for the
 /// format). The returned string is safe to embed in source as a string
-/// literal and to round-trip through [`decode_failure`].
+/// literal and to round-trip through [`decode_blob`].
 pub fn encode_failure(choices: &[ChoiceValue]) -> String {
     let raw = serialize_choices(choices);
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
@@ -194,12 +209,16 @@ pub(crate) fn decode_blob(blob: &str) -> Option<DecodedBlob> {
     match prefix {
         PREFIX_RAW => Some(DecodedBlob::Choices(deserialize_choices(rest)?)),
         PREFIX_ZLIB => {
-            let raw = miniz_oxide::inflate::decompress_to_vec_zlib(rest).ok()?;
+            let raw =
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, MAX_DECOMPRESSED_LEN)
+                    .ok()?;
             Some(DecodedBlob::Choices(deserialize_choices(&raw)?))
         }
         PREFIX_ND_RAW => Some(DecodedBlob::Nd(decode_nd_state(rest)?)),
         PREFIX_ND_ZLIB => {
-            let raw = miniz_oxide::inflate::decompress_to_vec_zlib(rest).ok()?;
+            let raw =
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, MAX_DECOMPRESSED_LEN)
+                    .ok()?;
             Some(DecodedBlob::Nd(decode_nd_state(&raw)?))
         }
         _ => None,

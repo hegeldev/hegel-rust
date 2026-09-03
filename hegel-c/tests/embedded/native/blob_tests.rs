@@ -212,6 +212,40 @@ fn nd_blob_decode_rejects_corrupt_payloads() {
 }
 
 #[test]
+fn decode_blob_rejects_zlib_bomb_v1() {
+    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])];
+    assert!(serialize_choices(&choices).len() > MAX_DECOMPRESSED_LEN);
+    let blob = encode_failure(&choices);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ZLIB);
+    assert!(decode_blob(&blob).is_none());
+}
+
+#[test]
+fn decode_blob_rejects_zlib_bomb_nd() {
+    let state = NdReproState {
+        timelines: vec![vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]],
+        entropy: 1,
+        extension: 0,
+    };
+    assert!(encode_nd_state(&state).len() > MAX_DECOMPRESSED_LEN);
+    let blob = encode_nd_failure(&state);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ND_ZLIB);
+    assert!(decode_blob(&blob).is_none());
+}
+
+#[test]
+fn zlib_decode_limit_admits_large_legitimate_blobs() {
+    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN - 9])];
+    assert_eq!(serialize_choices(&choices).len(), MAX_DECOMPRESSED_LEN);
+    let blob = encode_failure(&choices);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ZLIB);
+    assert_eq!(decode_failure(&blob).unwrap(), choices);
+}
+
+#[test]
 fn v1_blobs_still_decode_as_plain_choice_sequences() {
     let blob = encode_failure(&sample_choices());
     assert!(matches!(
