@@ -1,9 +1,9 @@
 //! Embedded tests for `src/native/nd/mod.rs`.
 //!
-//! The discovery-bar test recomputes the exact DP from experiment 005A over
-//! the production decision function and asserts the operating points
-//! recorded in decision 23; the gauntlet and budget tests pin the fixture
-//! values from experiments 001 and 003.
+//! The discovery-bar and gauntlet tests recompute the exact DPs from
+//! experiments 005A and 008 over the production decision functions and
+//! assert the recorded operating points (decisions 23 and 54); the budget
+//! tests pin the fixture values from experiments 001 and 003.
 
 use super::*;
 
@@ -165,18 +165,18 @@ fn bar_matches_the_decision_23_operating_points() {
 }
 
 #[test]
-fn gauntlet_accepts_consistent_failure_and_reports_the_bound() {
+fn gauntlet_accepts_consistent_failure_at_the_evidence_bound() {
     let mut e = Evidence::default();
-    let accepted_bound = loop {
+    loop {
         e.record(true, 1.0);
-        match gauntlet(&e, 0.9) {
-            GauntletVerdict::Accept { lower_bound } => break lower_bound,
+        match gauntlet(&e, 0.79) {
+            GauntletVerdict::Accept => break,
             GauntletVerdict::Continue => {}
             GauntletVerdict::Reject => panic!("certain failure must not be rejected"),
         }
-    };
-    assert_eq!(e.runs(), 10);
-    assert!((accepted_bound - 0.7225).abs() < 1e-3);
+    }
+    assert_eq!(e.runs(), 7);
+    assert!((e.lower_bound() - 0.6455).abs() < 1e-3);
 }
 
 #[test]
@@ -187,19 +187,127 @@ fn gauntlet_rejects_when_the_upper_bound_proves_the_rate_low() {
         match gauntlet(&e, 0.9) {
             GauntletVerdict::Reject => break e.runs(),
             GauntletVerdict::Continue => {}
-            GauntletVerdict::Accept { .. } => panic!("a rate this low must not be accepted"),
+            GauntletVerdict::Accept => panic!("a rate this low must not be accepted"),
         }
     };
     assert!(rejected_at < GAUNTLET_CAP);
 }
 
 #[test]
-fn gauntlet_floor_accepts_a_single_failure_at_zero_anchor() {
-    let e = evidence(1, 0);
-    match gauntlet(&e, 0.0) {
-        GauntletVerdict::Accept { lower_bound } => assert!(lower_bound >= GAUNTLET_FLOOR),
-        _ => panic!("floor threshold must accept an immediate failure"),
+fn gauntlet_never_accepts_below_minimum_evidence() {
+    for fails in 1..GAUNTLET_MIN_FAILS {
+        assert!(
+            matches!(
+                gauntlet(&evidence(fails, 0), 0.0),
+                GauntletVerdict::Continue
+            ),
+            "{fails} straight failures are still short of the evidence minimum"
+        );
     }
+    assert!(matches!(
+        gauntlet(&evidence(GAUNTLET_MIN_FAILS, 0), 0.0),
+        GauntletVerdict::Accept
+    ));
+}
+
+#[test]
+fn gauntlet_floor_matches_its_derivation() {
+    let boundary = evidence(GAUNTLET_MIN_FAILS, GAUNTLET_CAP - GAUNTLET_MIN_FAILS);
+    assert!((boundary.lower_bound() - 0.0531).abs() < 5e-4);
+    assert!(GAUNTLET_FLOOR < boundary.lower_bound());
+    assert!(matches!(gauntlet(&boundary, 0.0), GauntletVerdict::Accept));
+}
+
+#[test]
+fn gauntlet_gamma_is_unity_above_the_retention_high_water() {
+    let e = evidence(18, 2);
+    assert!(e.lower_bound() > 0.69);
+    assert!(matches!(gauntlet(&e, 0.79), GauntletVerdict::Accept));
+    assert!(matches!(
+        gauntlet(&e, RETENTION_HIGH_WATER),
+        GauntletVerdict::Continue
+    ));
+    assert!(matches!(gauntlet(&e, 0.83), GauntletVerdict::Continue));
+}
+
+/// Exact DP over [`gauntlet`] with i.i.d. failure probability `q` for one
+/// fresh-ledger candidate whose recruiting run failed and is counted
+/// (decision 54): (P(accept | fail), E[physical runs | fail]).
+fn gauntlet_operating_point(q: f64, anchor: f64) -> (f64, f64) {
+    let cap = GAUNTLET_CAP as usize;
+    let mut mass = [[0.0f64; 31]; 31];
+    mass[1][1] = 1.0;
+    let mut p_accept = 0.0;
+    let mut runs_total = 0.0;
+    for runs in 1..=cap {
+        for fails in 1..=runs {
+            let m = mass[fails][runs];
+            if m == 0.0 {
+                continue;
+            }
+            match gauntlet(&evidence(fails as u64, (runs - fails) as u64), anchor) {
+                GauntletVerdict::Accept => {
+                    p_accept += m;
+                    runs_total += m * runs as f64;
+                }
+                GauntletVerdict::Reject => {
+                    runs_total += m * runs as f64;
+                }
+                GauntletVerdict::Continue => {
+                    assert!(runs < cap, "the gauntlet must decide at the cap");
+                    mass[fails + 1][runs + 1] += m * q;
+                    mass[fails][runs + 1] += m * (1.0 - q);
+                }
+            }
+        }
+    }
+    (p_accept, runs_total)
+}
+
+#[test]
+fn gauntlet_matches_the_008_operating_points() {
+    let rows = [
+        (0.05, 0.02, 0.0198, 29.9),
+        (0.05, 0.10, 0.5650, 24.2),
+        (0.05, 0.90, 1.0000, 4.3),
+        (0.30, 0.02, 0.00016, 22.5),
+        (0.30, 0.10, 0.0182, 27.8),
+        (0.30, 0.90, 1.0000, 4.3),
+        (0.839, 0.02, 0.0, 3.1),
+        (0.839, 0.10, 0.0, 3.4),
+        (0.839, 0.90, 0.1216, 28.3),
+    ];
+    for (anchor, q, p_accept, runs) in rows {
+        let (p, r) = gauntlet_operating_point(q, anchor);
+        assert!(
+            (p - p_accept).abs() < 5e-4,
+            "anchor {anchor} q {q}: P(accept | fail) {p}, expected {p_accept}"
+        );
+        assert!(
+            (r - runs).abs() < 0.05,
+            "anchor {anchor} q {q}: E[runs | fail] {r}, expected {runs}"
+        );
+    }
+}
+
+#[test]
+fn constants_match_their_documented_values() {
+    assert_eq!(GATE_RUNS, 10);
+    assert_eq!(CONFIRM_CAP, 40);
+    assert_eq!(CONFIRM_MIN_FAILS, 4);
+    assert_eq!(GAUNTLET_CAP, 30);
+    assert_eq!(GAUNTLET_MIN_FAILS, 4);
+    assert_eq!(GAUNTLET_GAMMA, 0.8);
+    assert_eq!(GAUNTLET_FLOOR, 0.05);
+    assert_eq!(RETENTION_HIGH_WATER, 0.8);
+    assert_eq!(ANCHOR_SEED_RUNS, 20);
+    assert_eq!(BOOST_HOLDOUT, ANCHOR_SEED_RUNS);
+    assert_eq!(BOOST_RELIABILITY_FLOOR, 0.30);
+    assert_eq!(POOL_CAP, 10);
+    assert_eq!(BOOST_POOL, 16);
+    assert_eq!(REPRODUCE_SPLICES, 10);
+    assert_eq!(FINAL_REPLAY_FRESH, 4);
+    assert_eq!(TARGET_FAILURE_RATE, 0.1);
 }
 
 #[test]
@@ -452,10 +560,10 @@ fn gauntlet_proof_reject_spends_more_replays_under_fractional_weights() {
         let mut e = evidence(1, 0);
         loop {
             e.record(false, weight);
-            match gauntlet(&e, 0.9) {
+            match gauntlet(&e, 0.7) {
                 GauntletVerdict::Reject => break e.runs(),
                 GauntletVerdict::Continue => {}
-                GauntletVerdict::Accept { .. } => panic!("a rate this low must not be accepted"),
+                GauntletVerdict::Accept => panic!("a rate this low must not be accepted"),
             }
         }
     };

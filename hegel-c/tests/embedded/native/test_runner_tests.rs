@@ -1993,6 +1993,255 @@ fn nd_gauntlet_run_holds_a_flaky_failure_end_to_end() {
 }
 
 #[test]
+fn anchor_seed_extension_reaches_the_reference_batch() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let failing = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if failing {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let batch = ctx
+                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+                .await
+                .unwrap();
+            assert!(batch.bar_accepted);
+            assert_eq!(
+                batch.evidence.runs(),
+                nd::ANCHOR_SEED_RUNS,
+                "a bar accept extends to the reference batch before seeding the anchor"
+            );
+            assert!(batch.evidence.lower_bound() > nd::RETENTION_HIGH_WATER);
+            assert!(batch.witness.is_some());
+            let rejected = ctx
+                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(false)])
+                .await
+                .unwrap();
+            assert!(!rejected.bar_accepted);
+            assert_eq!(
+                rejected.evidence.runs(),
+                nd::GATE_RUNS,
+                "a rejected batch stops at the bar"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_gauntlet_accept_tops_the_ledger_up_to_the_reference_batch() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let output = ctx.settings.output.clone();
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: bug".to_string(),
+                verbosity: Verbosity::Quiet,
+                output,
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.0,
+                sweep: SweepMode::Fast,
+                pending_accept: None,
+            };
+            let nodes = vec![bool_node(true)];
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(matched);
+            let accept = probe.pending_accept.as_ref().unwrap();
+            let evidence = probe.ledger.get(&accept.key).unwrap();
+            assert_eq!(
+                evidence.runs(),
+                nd::ANCHOR_SEED_RUNS,
+                "an accept tops the ledger up before it can raise the anchor"
+            );
+            assert!(
+                accept.lower_bound > nd::RETENTION_HIGH_WATER,
+                "an always-failing candidate seeds a high-water anchor, got {}",
+                accept.lower_bound
+            );
+        },
+    );
+}
+
+/// A per-execution die (splitmix64's finalizer over the execution index):
+/// failure schedules that don't correlate with replay or shrink ordering.
+fn scramble(i: usize) -> u64 {
+    let mut x = i as u64 ^ 0x9E37_79B9_7F4A_7C15;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+#[test]
+fn boost_skips_a_reliable_incumbent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let execs = AtomicUsize::new(0);
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(10)
+        .seed(Some(0xB005))
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if scramble(execs.fetch_add(1, Ordering::SeqCst)) % 10 < 7 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        !lines.lock().unwrap().iter().any(|l| l.contains("nd boost")),
+        "a 70%-reliable incumbent sits above the boost floor"
+    );
+}
+
+#[test]
+fn boost_runs_below_the_floor() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let execs = AtomicUsize::new(0);
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(20)
+        .seed(Some(0xB006))
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    settings.nd_force = true;
+    reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if scramble(execs.fetch_add(1, Ordering::SeqCst)) % 5 == 0 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("nd boost: origin=Panic: bug racing")),
+        "a 20%-reliable incumbent sits below the boost floor"
+    );
+}
+
+#[test]
+fn shrink_does_not_drift_on_a_rising_landscape() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .test_cases(20)
+        .seed(Some(0x2))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        let n = match rint(ds, 0, 20) {
+            Ok(v) => v,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if (scramble(execs.fetch_add(1, Ordering::SeqCst)) % 1000) < (100 + 40 * n) as u64 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let entries = db.fetch(b"k");
+    assert_eq!(entries.len(), 1);
+    let state = crate::native::blob::decode_nd_state(&entries[0]).unwrap();
+    let ChoiceValue::Integer(n_final) = &state.timelines[0][0] else {
+        panic!("the incumbent must start with the drawn size");
+    };
+    let n_final = n_final.to_i64().unwrap();
+    assert!(
+        n_final >= 10,
+        "shrinking to n = {n_final} (p = {}) trades failure probability away",
+        (100 + 40 * n_final) as f64 / 1000.0
+    );
+}
+
+#[test]
+fn deterministic_core_is_retained() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]),
+    );
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .test_cases(10)
+        .seed(Some(0xDE7))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        let core = match rbool(ds) {
+            Ok(v) => v,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if core || scramble(execs.fetch_add(1, Ordering::SeqCst)) % 10 < 7 {
+            boom("bug")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let state = db
+        .fetch(b"k")
+        .iter()
+        .find_map(|e| crate::native::blob::decode_nd_state(e))
+        .unwrap();
+    assert_eq!(
+        state.timelines[0],
+        vec![ChoiceValue::Boolean(true)],
+        "a 70%-reliable candidate must not displace a deterministic incumbent"
+    );
+}
+
+#[test]
 fn nd_reports_each_origin_with_its_own_caveat_and_blob() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
@@ -3060,7 +3309,7 @@ fn nd_confirmed_dry_caveat_does_not_fold_report_replays_into_confirmation_counts
     assert_eq!(result.failures.len(), 1);
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        caveat.contains("(failed 4 of 4 replays)")
+        caveat.contains("(failed 4 of 20 replays)")
             && caveat.contains("not reproduced at report time"),
         "the dry wording quotes confirmation counts alone: {caveat:?}"
     );
@@ -3805,10 +4054,10 @@ fn a_flip_during_the_shrink_verify_routes_the_origin_through_the_bar() {
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
         caveat.contains("confirmed")
-            && caveat.contains("failed 4 of 4 replays at confirmation and 1 of 1 at report time"),
-        "the flipped verify must route the origin through the full bar \
-         (4 fails) before the final replay's 1, not confirm on the final \
-         replay alone: {caveat:?}"
+            && caveat.contains("failed 20 of 20 replays at confirmation and 1 of 1 at report time"),
+        "the flipped verify must route the origin through the full \
+         anchor-seeding batch before the final replay's 1, not confirm on \
+         the final replay alone: {caveat:?}"
     );
     let db = DirectoryTestCaseDatabase::new(&path);
     let primary = db.fetch(b"k");
@@ -3843,9 +4092,9 @@ fn a_flip_during_shrink_probes_requeues_the_origin_for_a_gauntleted_shrink() {
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
         caveat.contains("confirmed")
-            && caveat.contains("failed 4 of 4 replays at confirmation and 1 of 1 at report time"),
-        "the requeued origin must face the full bar (4 fails) before the \
-         final replay's 1, not confirm on the final replay alone: {caveat:?}"
+            && caveat.contains("failed 20 of 20 replays at confirmation and 1 of 1 at report time"),
+        "the requeued origin must face the full anchor-seeding batch before \
+         the final replay's 1, not confirm on the final replay alone: {caveat:?}"
     );
 }
 

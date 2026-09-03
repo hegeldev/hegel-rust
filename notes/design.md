@@ -86,9 +86,17 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 - Discovery bar (decision 23, experiment 005A): gate 10 replays, reject on zero failures;
   otherwise extend to 40, accepting early on the 4th failure (`GATE_RUNS`, `CONFIRM_CAP`,
   `CONFIRM_MIN_FAILS`).
-- Gauntlet (experiments 001/003): accept when the ledger LCB clears
-  `max(0.8 * anchor, 0.05)`, reject when the UCB proves it never will, cap 30 physical runs
-  (`GAUNTLET_GAMMA`, `GAUNTLET_FLOOR`, `GAUNTLET_CAP`).
+- Gauntlet (experiments 001/003, recalibrated by 008/decision 54): accept on at least
+  `GAUNTLET_MIN_FAILS = 4` failures with ledger LCB clearing `max(gamma * anchor, 0.05)`,
+  where gamma is 0.8 below `RETENTION_HIGH_WATER = 0.8` and 1.0 at or above it (decision
+  55); reject when the UCB proves the threshold unreachable or at 30 physical runs; short
+  of the failure minimum the verdict is Continue, never Reject (`GAUNTLET_GAMMA`,
+  `GAUNTLET_FLOOR` — derived: the min-fails acceptance boundary at the cap —
+  `GAUNTLET_CAP`).
+- Anchor seeding (decision 54): every anchor-seeding batch reaches `ANCHOR_SEED_RUNS = 20`
+  physical runs — the discovery bar's batch extends past its accept, and a gauntlet
+  accept's ledger is topped up — so anchors estimate the reproduction rate rather than the
+  stopping rule.
 - Replay budgets from the p >= 0.1 target: `replay_budget(rate, tolerance)` with 5% miss
   tolerance gives ~29 replays, early exit on failure, so live bugs cost ~1/p
   (`TARGET_FAILURE_RATE`, `reuse_replay_budget`).
@@ -108,7 +116,8 @@ displace an occupied origin (decision 20). A trusted origin reaching the shrink 
 one evidence batch (`nd_evidence_batch`, the bar arithmetic as stopping rule only): any
 failure promotes it with the batch's LCB as anchor and its pool merged fresh-first with the
 stored one (decision 48); zero failures fold into the trusted counts and skip shrinking,
-still reported and persisted. `Trusted` carries the reproducing batch's evidence, seeded by
+still reported and persisted. The promoting batch extends to `ANCHOR_SEED_RUNS` on accept
+like every anchor-seeding batch (decision 54). `Trusted` carries the reproducing batch's evidence, seeded by
 `trust()` on the database, blob, and deterministic replay paths. Confirmed and trusted
 origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
 every one, and the lifecycle's writers truncate incoming pools) harvested from
@@ -157,7 +166,11 @@ retries. Stopping is confirmed-dry (decision 18): after a dry sweep, one confirm
 drives every proposal's cumulative evidence to a bound decision. The anchor is monotone and
 never fed by replay-sourced evidence (decision 19); it estimates the incumbent's
 reproduction rate under the engine's own pinned-replay procedure, raised only at validated
-events, so candidate and incumbent sit on one estimand (decision 46). There is no
+events, so candidate and incumbent sit on one estimand (decision 46). An accept requires
+`GAUNTLET_MIN_FAILS` failures, and the accepted ledger is topped up to `ANCHOR_SEED_RUNS`
+before its bound can move the anchor (decision 54); at anchors of `RETENTION_HIGH_WATER`
+and above the gauntlet runs at gamma 1.0, refusing to trade a zero-miss incumbent's
+reliability down (decision 55). There is no
 checkpoint/rollback (decision 17). All acceptance paths gate on the same validated-accept event, which is a
 gauntlet accept *and* the shrinker's adoption (`candidate_adopted`): an accepted candidate
 the shrinker discards — a punned realization, a sort-key-larger mutation probe — raises no
@@ -166,11 +179,12 @@ or the shrink probes routes the origin through the discovery bar and one gauntle
 from the verified pre-shrink incumbent, discarding untrusted single-run progress
 (decision 38).
 
-Boost (`nd_boost`, gate G2/decision 28): when a confirmed incumbent's anchor sits below the
-reliability floor (`BOOST_RELIABILITY_FLOOR`), successive halving over the incumbent, its
-pool, and prefix-mutant fills (up to `BOOST_POOL` candidates), scored by raw in-race failure
-rate, the winner re-measured on a `BOOST_HOLDOUT` holdout before seeding the anchor. Above
-the floor it never runs; there is no public setting.
+Boost (`nd_boost`, gate G2/decisions 28 and 56): when a confirmed incumbent's anchor sits
+below the reliability floor (`BOOST_RELIABILITY_FLOOR`, 0.30 in 20-run-batch LCB units),
+successive halving over the incumbent, its pool, and prefix-mutant fills (up to
+`BOOST_POOL` candidates), scored by raw in-race failure rate, the winner re-measured on a
+`BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
+it never runs; each race logs one Debug line; there is no public setting.
 
 ### Data tree under ND handling
 

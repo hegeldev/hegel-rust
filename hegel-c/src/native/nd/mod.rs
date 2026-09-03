@@ -4,7 +4,7 @@
 //! budgets. Everything here is pure arithmetic — no engine state, no
 //! executions — so each rule is tested directly against the exact-DP and
 //! simulation results that derived it (`notes/experiments/`, decisions
-//! 7, 11, 16, 17, 19, 22, 23 in `notes/decisions.md`).
+//! 7, 11, 16, 17, 19, 22, 23, 54-56 in `notes/decisions.md`).
 
 /// Replay evidence for one proposition ("this timeline reproduces this
 /// origin"). Failures always count in full; a non-failure counts `weight`,
@@ -104,25 +104,70 @@ pub(crate) fn discovery_bar(evidence: &Evidence) -> BarVerdict {
 
 pub(crate) const GAUNTLET_CAP: u64 = 30;
 pub(crate) const GAUNTLET_GAMMA: f64 = 0.8;
+
+/// Floor of the accept threshold, derived in experiment 008: 0.05 <
+/// LCB(4/30) = 0.0531, the [`GAUNTLET_MIN_FAILS`] acceptance boundary at
+/// [`GAUNTLET_CAP`], so the floor costs no power — and it is the largest
+/// such value, at 0.02 false accepts per entered gauntlet against a
+/// q = 0.02 fluke.
 pub(crate) const GAUNTLET_FLOOR: f64 = 0.05;
 
+/// Failures a gauntlet accept requires. A single failure on a fresh ledger
+/// bounds the rate above 0.2065 (Wilson at 1/1), so without a minimum every
+/// threshold below that accepts on the recruiting run and the whole
+/// low-anchor regime degenerates to single-run accepts (experiment 008,
+/// H1: 33% bug loss at the decision-16 target). Falling short is never
+/// grounds to reject — the verdict stays Continue and evidence accumulates.
+pub(crate) const GAUNTLET_MIN_FAILS: u64 = 4;
+
+/// Anchors at or above this run the gauntlet at gamma 1.0 instead of
+/// [`GAUNTLET_GAMMA`]. With [`ANCHOR_SEED_RUNS`]-sized seeding only
+/// zero-miss evidence reaches it (LCB(20/20) = 0.839; 19/20 gives 0.764),
+/// so it marks incumbents indistinguishable from deterministic and refuses
+/// to trade their reliability down: experiment 008's D2 displacement drops
+/// from 33% to zero, for +26% replay cost on near-deterministic landscapes
+/// (decision 55's G6 trade).
+pub(crate) const RETENTION_HIGH_WATER: f64 = 0.8;
+
+/// Physical runs an anchor-seeding batch extends to past its accept: the
+/// discovery bar's batch keeps replaying, and a gauntlet accept tops the
+/// candidate's ledger up, before either seeds the anchor. Stopping at the
+/// accept itself biases the anchor toward the stopping rule (a
+/// four-straight-fail bar batch seeds 0.51 whatever the true rate); 20 is
+/// the largest size whose all-fail LCB (0.839) a candidate can still match
+/// within [`GAUNTLET_CAP`] — 40-run seeding stalls shrinking outright
+/// (experiment 008).
+pub(crate) const ANCHOR_SEED_RUNS: u64 = 20;
+
 pub(crate) enum GauntletVerdict {
-    Accept { lower_bound: f64 },
+    Accept,
     Reject,
     Continue,
 }
 
-/// The shrink-candidate gauntlet (decisions 7 and 17): accept when the
-/// evidence's lower bound clears `max(GAUNTLET_GAMMA * anchor,
-/// GAUNTLET_FLOOR)`, reject when the upper bound proves it never will or
-/// the physical cap is spent, otherwise keep rerunning. The returned lower
-/// bound lets the caller raise its monotone anchor — never lower it, and
-/// never from replay-sourced evidence (decision 19).
+/// The shrink-candidate gauntlet (decisions 7, 17, 54): accept when the
+/// evidence carries [`GAUNTLET_MIN_FAILS`] failures and its lower bound
+/// clears `max(gamma * anchor, GAUNTLET_FLOOR)`, with gamma
+/// [`GAUNTLET_GAMMA`] below [`RETENTION_HIGH_WATER`] and 1.0 at or above
+/// it; reject when the upper bound proves the threshold unreachable or the
+/// physical cap is spent, otherwise keep rerunning — short of the failure
+/// minimum the verdict is Continue, never Reject. Operating points: the
+/// exact-DP rows in experiment 008, pinned by
+/// `gauntlet_matches_the_008_operating_points`; worst-case false accept is
+/// 4.0e-4 per proposal against a q = 0.02 fluke, under the 1e-3 target,
+/// which also absorbs the check-per-run stopping bias (z stays 1.96). The
+/// caller raises its monotone anchor from the accepted candidate's
+/// topped-up ledger — never lowering it, and never from replay-sourced
+/// evidence (decision 19).
 pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
-    let threshold = (GAUNTLET_GAMMA * anchor).max(GAUNTLET_FLOOR);
-    let lower = evidence.lower_bound();
-    if lower >= threshold {
-        return GauntletVerdict::Accept { lower_bound: lower };
+    let gamma = if anchor >= RETENTION_HIGH_WATER {
+        1.0
+    } else {
+        GAUNTLET_GAMMA
+    };
+    let threshold = (gamma * anchor).max(GAUNTLET_FLOOR);
+    if evidence.fails >= GAUNTLET_MIN_FAILS && evidence.lower_bound() >= threshold {
+        return GauntletVerdict::Accept;
     }
     if evidence.upper_bound() < threshold || evidence.physical >= GAUNTLET_CAP {
         return GauntletVerdict::Reject;
@@ -140,13 +185,20 @@ pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
 /// looser.
 pub(crate) const POOL_CAP: usize = 10;
 pub(crate) const BOOST_POOL: usize = 16;
-pub(crate) const BOOST_HOLDOUT: u64 = 10;
+
+/// Holdout replays scoring a boost winner — [`ANCHOR_SEED_RUNS`], so a
+/// boost-raised anchor is estimated on the same batch size as a seeded one.
+pub(crate) const BOOST_HOLDOUT: u64 = ANCHOR_SEED_RUNS;
 
 /// Boost runs only for origins whose confirmation anchor sits below this
 /// floor (gate G2): replay of a sub-floor origin is unreliable enough
 /// that hunting a steadier timeline is worth the measurement runs, while
-/// above it the halving race buys nothing a user would notice.
-pub(crate) const BOOST_RELIABILITY_FLOOR: f64 = 0.5;
+/// above it the halving race buys nothing a user would notice. In
+/// [`ANCHOR_SEED_RUNS`]-batch LCB units the boundary image of decision
+/// 28's "true rate below 0.5" class is LCB(10/20) ~= 0.30 (experiment
+/// 008: recall 0.991, precision 1.000 on the G7 population; the literal
+/// 0.5 triggers on 59% of true-0.7 incumbents, 0.30 on 5%).
+pub(crate) const BOOST_RELIABILITY_FLOOR: f64 = 0.30;
 
 /// Candidates surviving one successive-halving boost round.
 pub(crate) fn boost_keep(candidates: usize) -> usize {

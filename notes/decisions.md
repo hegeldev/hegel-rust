@@ -404,3 +404,51 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     fresh-hit rate exists to derive it from. Rejected: deriving it (nothing to derive
     from); pricing it in a dedicated experiment (not worth an experiment slot for a
     4-replay tail). (Gate G19; critique M3.)
+
+54. **The gauntlet requires four failures, and anchors seed from 20-run batches.**
+    Experiment 008 confirmed finding S1: a fresh ledger's single failure has Wilson LCB
+    0.2065, so every threshold below that — the whole bar-seeded anchor regime up to
+    p ~ 0.5 — accepted candidates on their recruiting run, losing 33% of target-regime
+    bugs to p = 0.02 noise, 001's P0 arithmetic. The composed fix: `GAUNTLET_MIN_FAILS
+    = 4` (short of it the verdict is Continue, never Reject; m = 3 has no floor passing
+    both floor criteria), `ANCHOR_SEED_RUNS = 20` at both seeding sites — the discovery
+    bar's batch extends past its accept, and a gauntlet accept tops the candidate's
+    ledger up before the anchor can move (trusted promotions ride the same batch, C2) —
+    and `GAUNTLET_FLOOR = 0.05` now derived: 0.05 < LCB(4/30) = 0.0531, the min-fails
+    acceptance boundary at the cap, so the floor costs zero power (S4). Neither piece
+    works alone: extension without min-fails is *worse* than shipped (51% vs 67% L4b
+    retention — honest anchors keep the whole shrink in the degenerate zone), and 40-run
+    seeding stalls shrinking outright (LCB(40/40) = 0.912 exceeds the cap-reachable
+    0.887). The recruiting run stays counted: exclusion's 7x fresh-ledger DP advantage
+    does not survive ledger retention, and m = 4 dominates it on every composed measure.
+    z stays 1.96 — the realized worst-case false accept (4.0e-4 per proposal, exact DP)
+    sits under the ~1e-3 design target with the check-per-run stopping bias included, and
+    the DP rows are now the recorded operating points, pinned by
+    `gauntlet_matches_the_008_operating_points` (S5). Cost 1.00x on 003's landscapes —
+    accepts against informative anchors already carry four fails; 3x in the target
+    regime, where the reference loses the bug half the time. PRELIMINARY until 009a
+    prices the miss-weighting column: safe under {shipped watermark, floored 0.2}, and
+    w ~ 0 re-opens a noise channel min-fails cannot close (the G9/G10 escalation path).
+    (Findings S1, S2, S4, S5, C2; experiment 008.)
+
+55. **Retention gamma is 1.0 at anchors of 0.8 and above.** `RETENTION_HIGH_WATER = 0.8`
+    is a zero-miss detector, not a tuning dial: with 20-run seeding the only reachable
+    anchor at or above it is LCB(20/20) = 0.839 (19/20 gives 0.764), so gamma = 1 fires
+    exactly for incumbents indistinguishable from deterministic, converting the S6
+    displacement (a 0.7-rate candidate displacing a deterministic incumbent 33% of the
+    time under flat 0.8) to zero. The G6 cost letter is missed by 6 points — L1 replay
+    cost rises 26%, concentrated in trials whose incumbent evidence is itself zero-miss
+    at 20, where final p rises 0.58 to 0.82 — accepted as decision 2's intended behavior
+    rather than overhead. hw = 0.7 adds cost without adding retention; "off" was
+    rejected as accepting the 33% displacement. (Gate G6; finding S6; experiment 008.)
+
+56. **The boost floor is 0.30 in 20-run-batch LCB units, and its holdout matches the
+    seed size.** Decision 28's literal 0.5 was written for the old estimator; against
+    honest 20-run anchors it over-triggers — 59% of true-0.7 incumbents, whose boost
+    race buys nothing. The trigger intent ("true rate below 0.5") maps through the
+    estimator to its boundary image LCB(10/20) ~= 0.30: recall 0.991 and precision
+    1.000 on the G7 population, 5% trigger rate at true 0.7, and values above 0.30 only
+    erode boundary robustness. `BOOST_HOLDOUT` rises to `ANCHOR_SEED_RUNS` so a
+    boost-raised anchor is estimated on the same batch size as a seeded one. Boost
+    entry now logs one Debug line, making skip-versus-decline observable. (Gate G7;
+    finding S3; experiment 008.)

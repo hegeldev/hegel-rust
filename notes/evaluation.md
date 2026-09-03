@@ -7,7 +7,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | # | Decision | Status |
 | --- | --- | --- |
 | 1 | Strictness defaults to quiet | Implemented: `settings.rs` (`NondeterminismStrictness`, default `Quiet`), `hegel_settings_set_nondeterminism_strictness`, honored in `test_runner.rs::nd_flip`/`test_function_tagged`. Pinned by `tests/test_flaky_replay.rs` (both strictness behaviors) |
-| 2 | Shrinking must not lower failure probability | Implemented as the gauntlet: `nd/mod.rs::gauntlet` (LCB must clear `0.8 * anchor`, floor 0.05), enforced in `test_runner.rs`'s shrink probe. γ = 0.8 is the accepted tolerance from the old deferred-decision table, not strict never-lower — the strict rule paralyzes shrinking at small samples. Boost raises p when the anchor is unreliable (decision 28) |
+| 2 | Shrinking must not lower failure probability | Implemented as the gauntlet: `nd/mod.rs::gauntlet` (4-failure minimum, LCB must clear `gamma * anchor` with floor 0.05, anchors seeded from 20-run batches — decisions 54/55 after experiment 008 showed the shipped rule degenerated to single-run accepts below anchor 0.258). γ = 0.8 is the accepted tolerance from the old deferred-decision table, rising to 1.0 for zero-miss incumbents at the 0.8 high water — not strict never-lower, which paralyzes shrinking at small samples. Boost raises p when the anchor is unreliable (decisions 28/56) |
 | 3 | Unreproduced failures still fail the run | Implemented: `nd/lifecycle.rs::caveat` unconfirmed wordings; the frontend re-raises the captured payload (`src/run_lifecycle.rs::drive_run`). Pinned by the quiet-strictness vanishing-failure test and the unconfirmed concurrent tests |
 | 4 | Per-origin identity | Unchanged: the interesting map and the frontend capture map key on the origin string |
 | 5 | Timeline pool, not a merged trie | Implemented: `blob.rs::NdReproState.timelines` (incumbent first), pool cap 10 (`nd/mod.rs::POOL_CAP`), harvested at confirmation |
@@ -33,7 +33,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 25 | Replay order: first-fit, splices, fresh; boost off outside rescue | Implemented: `nd_reproduce` (splices = 10 — decision 52 corrected a transcription of 006B's cap — fresh only where the caller allows), `nd_boost` behind the 0.5 reliability floor |
 | 26 | This branch goes to production grade | This phase; the full gate run and this audit are its exit |
 | 27 | G1: FAILED + caveat accessor, status 3 retired | Implemented: `hegel_failure_caveat`, status 3 deleted from `hegel-c/src/lib.rs`; changelogs call out the break. Binding survey done, recorded in production-plan.md phase 6: ts/ocaml never adopted status 3, go's handling is dead but harmless, cpp vendors the header. The enum rustdoc reserves value 3 against reuse |
-| 28 | G2: boost as reliability-floor heuristic | Implemented: `BOOST_RELIABILITY_FLOOR = 0.5`, holdout-gated, no public setting |
+| 28 | G2: boost as reliability-floor heuristic | Implemented: `BOOST_RELIABILITY_FLOOR`, holdout-gated, no public setting. Recalibrated by decision 56: 0.30 in 20-run-batch LCB units (the literal 0.5 over-triggers against honest anchors), holdout raised to `ANCHOR_SEED_RUNS` |
 | 29 | G3: data tree disabled under ND | Implemented (see 6); kind-set tolerance not needed on measured workloads |
 | 30 | G4: strictness surface | Implemented (see 1); `error` reproduces the old abort diagnostics verbatim (`flaky_diagnostic`, pinned by tests) |
 | 31 | Decision 14 closed | Recorded with 007 data; no anchoring code exists |

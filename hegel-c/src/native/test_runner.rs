@@ -1604,7 +1604,10 @@ impl<'a> Engine<'a> {
     /// bar's driver for admitting unconfirmed origins (experiment 005),
     /// and an evidence-gathering batch for trusted origins, where the bar
     /// arithmetic is only the stopping rule. The triggering run is
-    /// selection, not evidence — only these fresh replays count.
+    /// selection, not evidence — only these fresh replays count. An accept
+    /// extends to [`nd::ANCHOR_SEED_RUNS`] physical runs (decision 54), so
+    /// the anchor a caller seeds from the batch is not biased by the bar's
+    /// stopping rule; a reject stops at the bar.
     async fn nd_evidence_batch(
         &mut self,
         origin: &str,
@@ -1631,6 +1634,16 @@ impl<'a> Engine<'a> {
                 nd::BarVerdict::Continue => {}
             }
         };
+        while bar_accepted && evidence.runs() < nd::ANCHOR_SEED_RUNS {
+            let replay = self.nd_replay_once(choices, Some(origin)).await?;
+            evidence.record(replay.failed, replay.weight);
+            if replay.failed
+                && captured.len() < nd::POOL_CAP
+                && !captured.contains(&replay.realized)
+            {
+                captured.push(replay.realized);
+            }
+        }
         self.capture_replays = false;
         Ok(NdBatch {
             bar_accepted,
@@ -1653,6 +1666,11 @@ impl<'a> Engine<'a> {
         incumbent: &[ChoiceValue],
         anchor: f64,
     ) -> Result<Option<(RunResult, f64)>, RunError> {
+        if self.settings.verbosity == Verbosity::Debug {
+            self.settings.output.line(&format!(
+                "nd boost: origin={origin} racing from anchor {anchor:.3}"
+            ));
+        }
         let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
         for timeline in self.nd_origins.pool(origin) {
             if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
@@ -2157,21 +2175,28 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             if !matched && self.sweep == SweepMode::Fast {
                 return Ok((false, run.nodes, Spans::from(run.spans)));
             }
+            let mut accepted = false;
             loop {
                 let evidence = *self.ledger.get(&key).unwrap();
-                match nd::gauntlet(&evidence, self.anchor) {
-                    nd::GauntletVerdict::Accept { lower_bound } => {
-                        self.pending_accept = Some(PendingAccept {
-                            key,
-                            lower_bound,
-                            nodes: run.nodes.clone(),
-                        });
-                        return Ok((true, run.nodes, Spans::from(run.spans)));
+                if !accepted {
+                    match nd::gauntlet(&evidence, self.anchor) {
+                        nd::GauntletVerdict::Accept => accepted = true,
+                        nd::GauntletVerdict::Reject => {
+                            return Ok((false, run.nodes, Spans::from(run.spans)));
+                        }
+                        nd::GauntletVerdict::Continue => {}
                     }
-                    nd::GauntletVerdict::Reject => {
-                        return Ok((false, run.nodes, Spans::from(run.spans)));
-                    }
-                    nd::GauntletVerdict::Continue => {}
+                }
+                // An accept stands. The ledger is topped up to
+                // ANCHOR_SEED_RUNS first so the anchor moves on a bound
+                // the stopping rule didn't bias (decision 54).
+                if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
+                    self.pending_accept = Some(PendingAccept {
+                        key,
+                        lower_bound: evidence.lower_bound(),
+                        nodes: run.nodes.clone(),
+                    });
+                    return Ok((true, run.nodes, Spans::from(run.spans)));
                 }
                 let rerun = self
                     .engine
