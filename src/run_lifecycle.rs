@@ -509,7 +509,6 @@ pub(crate) fn drive<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
     let mut test_fn = test_fn;
     let verbosity = settings.verbosity;
     let quiet = verbosity == Verbosity::Quiet;
@@ -640,7 +639,6 @@ pub(crate) fn drive_blob_replay<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
     let c_settings = SettingsHandle::build(settings, database_key);
@@ -671,18 +669,8 @@ pub(crate) fn drive_blob_replay<F>(
     }
 }
 
-/// Fail fast — before any test case runs — when running under Antithesis
-/// without the `antithesis` feature compiled in.
-fn require_antithesis_feature() {
-    crate::antithesis::require_antithesis_feature(
-        crate::antithesis::is_running_in_antithesis(),
-        cfg!(feature = "antithesis"),
-    );
-}
-
 /// Report the run's verdict to Antithesis (when running under it).
 fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
-    #[cfg(feature = "antithesis")]
     // nocov start
     if crate::antithesis::is_running_in_antithesis() {
         if let Some(loc) = test_location {
@@ -690,7 +678,6 @@ fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocat
         }
     }
     // nocov end
-    let _ = (test_failed, test_location);
 }
 
 #[cfg(test)]
