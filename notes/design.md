@@ -79,8 +79,10 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 
 - `Evidence`: divergence-weighted Wilson bounds. A replay that diverged from its stored
   timeline before completing weighs its non-failure by the **verbatim watermark** — the
-  fraction tracked before first divergence (decision 22) — so diverged misses don't count full
-  weight toward demotion or confirmation misses.
+  flat-length-weighted fraction tracked before first divergence (decisions 22, 45): each
+  element counts its flattened length, and a diverged clone pair earns credit for the
+  tracked prefix inside it (recursively) before ending the walk. Diverged misses therefore
+  don't count full weight toward demotion or confirmation misses.
 - Discovery bar (decision 23, experiment 005A): gate 10 replays, reject on zero failures;
   otherwise extend to 40, accepting early on the 4th failure (`GATE_RUNS`, `CONFIRM_CAP`,
   `CONFIRM_MIN_FAILS`).

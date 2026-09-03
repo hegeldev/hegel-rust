@@ -181,25 +181,97 @@ pub(crate) fn reuse_replay_budget() -> u64 {
     replay_budget(TARGET_FAILURE_RATE, REUSE_MISS_TOLERANCE)
 }
 
-/// The verbatim watermark (decision 22): the fraction of `stored` a replay
-/// tracked before first diverging, which is the weight of that replay's
-/// non-failure as evidence about `stored` — a diverged run says little
-/// about the timeline it abandoned. Linear, no floor; the physical caps
+/// The verbatim watermark (decisions 22, 45): the flat-length-weighted
+/// fraction of `stored` a replay tracked before first diverging, which is
+/// the weight of that replay's non-failure as evidence about `stored` — a
+/// diverged run says little about the timeline it abandoned. Each element
+/// counts its flattened length, and a diverged clone pair still earns
+/// credit for the tracked prefix inside it, so a long clone stream is not
+/// written off by one late fall-off. Linear, no floor; the physical caps
 /// bound the cost of heavily-diverged probing. An empty timeline is
 /// trivially fully tracked.
 pub(crate) fn verbatim_weight(
     stored: &[crate::native::core::ChoiceValue],
     realized: &[crate::native::core::ChoiceValue],
 ) -> f64 {
-    if stored.is_empty() {
-        return 1.0;
+    use crate::native::core::ChoiceValueRef;
+    let weight = if stored.is_empty() {
+        1.0
+    } else {
+        let credit = tracked_credit(
+            stored.iter().map(ChoiceValueRef::from),
+            realized.iter().map(ChoiceValueRef::from),
+        );
+        credit as f64 / crate::native::core::flattened_values_len(stored) as f64
+    };
+    #[cfg(feature = "__bench")]
+    watermark_dump::record(stored, realized, weight);
+    weight
+}
+
+/// Flat weight of the stored prefix that `realized` tracked: a matched
+/// element earns its flattened length, and the first mismatch ends the
+/// walk — earning `1 + tracked_credit(children)` when both sides are clone
+/// streams and nothing otherwise.
+fn tracked_credit<'s, 'r>(
+    stored: impl Iterator<Item = crate::native::core::ChoiceValueRef<'s>>,
+    realized: impl Iterator<Item = crate::native::core::ChoiceValueRef<'r>>,
+) -> usize {
+    use crate::native::core::ChoiceValueRef;
+    let mut credit = 0;
+    for (s, r) in stored.zip(realized) {
+        if s == r {
+            credit += match s {
+                ChoiceValueRef::Clone(c) => 1 + c.flat_len(),
+                _ => 1,
+            };
+            continue;
+        }
+        if let (ChoiceValueRef::Clone(cs), ChoiceValueRef::Clone(cr)) = (s, r) {
+            credit += 1 + tracked_credit(cs.values(), cr.values());
+        }
+        break;
     }
-    let matched = stored
-        .iter()
-        .zip(realized)
-        .take_while(|(s, r)| *s == *r)
-        .count();
-    matched as f64 / stored.len() as f64
+    credit
+}
+
+/// Dump hook for experiment 009a: when armed, every [`verbatim_weight`]
+/// call records its inputs and result for the harness to drain.
+#[cfg(feature = "__bench")]
+pub mod watermark_dump {
+    use alloc::vec::Vec;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::native::core::ChoiceValue;
+    use crate::sys::sync::Mutex;
+
+    pub struct WatermarkSample {
+        pub stored: Vec<ChoiceValue>,
+        pub realized: Vec<ChoiceValue>,
+        pub weight: f64,
+    }
+
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static SAMPLES: Mutex<Vec<WatermarkSample>> = Mutex::new(Vec::new());
+
+    pub fn arm() {
+        ARMED.store(true, Ordering::Relaxed);
+    }
+
+    pub fn drain() -> Vec<WatermarkSample> {
+        core::mem::take(&mut *SAMPLES.lock())
+    }
+
+    pub(super) fn record(stored: &[ChoiceValue], realized: &[ChoiceValue], weight: f64) {
+        if !ARMED.load(Ordering::Relaxed) {
+            return;
+        }
+        SAMPLES.lock().push(WatermarkSample {
+            stored: stored.to_vec(),
+            realized: realized.to_vec(),
+            weight,
+        });
+    }
 }
 
 /// Positional splices tried after the whole pool misses (decision 25).

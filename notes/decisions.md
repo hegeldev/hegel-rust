@@ -324,7 +324,17 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     supersession rule; the status quo plus the cap alone; no cap. (G14, G15; critique
     P2a/P2b.)
 
-45. *(Reserved for the phase-10 watermark entry, landed by cherry-pick.)*
+45. **The verbatim watermark is flat-length-weighted with recursive clone descent.**
+    `verbatim_weight` credits a tracked element its flattened length, over
+    `flattened_values_len(stored)`. The first mismatch ends the walk, but a diverged clone
+    pair (elongation included) first earns `1 + credit(children)` by the same rule, through
+    `CloneValues` equality/indexing, so values-only and realized records weigh
+    interchangeably. Identical on clone-free timelines (the 004 calibration and 005A
+    operating points stand), while a diverged clone stream now earns its tracked prefix
+    instead of nothing. 009a re-checks the operating points on clone streams. Rejected:
+    physical fallback (inverts decision 22 where divergence is common); an epsilon floor
+    (unprincipled, keeps the degeneracy muted); per-stream ledgers (reopens decision 14/31
+    machinery a weighting fix doesn't need). (Critique W1; gate G8.)
 
 46. **Decision 19 clarified: the anchor estimates the incumbent's reproduction rate under
     the engine's own pinned-replay procedure.** It rises only at validated events — bar

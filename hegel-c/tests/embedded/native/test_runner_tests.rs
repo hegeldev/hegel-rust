@@ -2520,6 +2520,100 @@ fn a_diverged_replay_miss_carries_the_verbatim_watermark_weight() {
 }
 
 #[test]
+fn a_diverged_clone_replay_records_a_fractional_miss_weight() {
+    use crate::native::core::CloneRecord;
+    use alloc::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let diverge = AtomicBool::new(false);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let child = match ds.clone_stream() {
+                Ok(c) => c,
+                Err(_) => return TestCaseResult::Overrun,
+            };
+            if rbool(&*child).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let second = if diverge.load(Ordering::SeqCst) {
+                rint(&*child, 0, 100).map(|_| ())
+            } else {
+                rbool(&*child).map(|_| ())
+            };
+            match second {
+                Ok(()) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx| {
+            let stored = vec![
+                ChoiceValue::Boolean(true),
+                ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
+                    ChoiceValue::Boolean(true),
+                    ChoiceValue::Boolean(true),
+                ]))),
+            ];
+            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(!replay.failed);
+            assert_eq!(replay.weight, 1.0, "an aligned clone miss weighs in full");
+            diverge.store(true, Ordering::SeqCst);
+            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
+            assert!(!replay.failed);
+            assert_eq!(
+                replay.weight, 0.75,
+                "a divergence at the second clone child leaves three of four flat choices tracked"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_reproduce_terminates_by_weighted_budget_on_diverged_clone_replays() {
+    use crate::native::core::CloneRecord;
+    use alloc::sync::Arc;
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            let child = match ds.clone_stream() {
+                Ok(c) => c,
+                Err(_) => return TestCaseResult::Overrun,
+            };
+            if rbool(&*child).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            match rint(&*child, 0, 100) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx| {
+            let stored = vec![vec![
+                ChoiceValue::Boolean(true),
+                ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
+                    ChoiceValue::Boolean(true),
+                    ChoiceValue::Boolean(true),
+                ]))),
+            ]];
+            let (run, evidence) = ctx.nd_reproduce(None, &stored, 3.0, 0, 0).await.unwrap();
+            assert!(run.is_none());
+            assert_eq!(
+                evidence.runs(),
+                4,
+                "four 0.75-weight misses spend the 3.0 weighted budget before the physical cap of 6"
+            );
+        },
+    );
+}
+
+#[test]
 fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
     with_engine(
         nd_settings().seed(Some(3)),

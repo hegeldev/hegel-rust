@@ -47,7 +47,9 @@ pub mod __bench {
 
     pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::core::{ChoiceValue, CloneRecord};
     pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::nd::watermark_dump;
     pub use crate::native::rng::EngineRng;
 
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
