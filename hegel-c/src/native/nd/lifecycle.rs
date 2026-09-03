@@ -91,9 +91,12 @@ impl OriginLifecycle {
 
     /// The database reproduced `origin` this run: trusted without
     /// re-running the bar (decision 24). `pool` carries the reproducing
-    /// entry's stored timelines (empty for v1 entries). Never demotes
-    /// `Confirmed`, and never replaces an existing pool with an empty one.
-    pub(crate) fn trust(&mut self, origin: &str, pool: Vec<Vec<ChoiceValue>>) {
+    /// entry's stored timelines (empty for v1 entries), truncated to
+    /// [`super::POOL_CAP`] — a decoded entry can carry up to the looser
+    /// format bound. Never demotes `Confirmed`, and never replaces an
+    /// existing pool with an empty one.
+    pub(crate) fn trust(&mut self, origin: &str, mut pool: Vec<Vec<ChoiceValue>>) {
+        pool.truncate(super::POOL_CAP);
         match self.origins.get_mut(origin) {
             Some(OriginState::Confirmed { .. }) => {}
             Some(OriginState::Trusted { pool: existing }) => {
@@ -122,15 +125,18 @@ impl OriginLifecycle {
 
     /// The discovery bar accepted `origin`: store its replay state.
     /// `evidence` is the accepting batch's physical (fails, replays),
-    /// folded into the origin's cumulative counts.
+    /// folded into the origin's cumulative counts. The pool is truncated
+    /// to [`super::POOL_CAP`] — the lifecycle is the single writer of
+    /// stored pools, so the invariant is enforced here.
     pub(crate) fn confirm(
         &mut self,
         origin: &str,
         anchor: f64,
         witness: Option<RunResult>,
-        pool: Vec<Vec<ChoiceValue>>,
+        mut pool: Vec<Vec<ChoiceValue>>,
         evidence: (u64, u64),
     ) {
+        pool.truncate(super::POOL_CAP);
         let (prior_fails, prior_replays) = match self.origins.get(origin) {
             Some(OriginState::Unconfirmed { fails, replays, .. })
             | Some(OriginState::Confirmed { fails, replays, .. }) => (*fails, *replays),
@@ -266,6 +272,10 @@ impl OriginLifecycle {
                         "unconfirmed failure: failed {fails} of {replays} replays \
                          this run, below the confirmation bar — likely rare"
                     )
+                } else if *replays == 0 {
+                    "unconfirmed failure: observed once, never replayed — a rare \
+                     failure, or the environment changed between executions"
+                        .to_string()
                 } else {
                     format!(
                         "unconfirmed failure: failed 0 of {replays} replays after \
@@ -277,18 +287,13 @@ impl OriginLifecycle {
         })
     }
 
-    /// Origins observed but never confirmed, with rejection counts, in
-    /// origin order — the caveated-failure report (decision 3), used only
-    /// when nothing confirmed (decision 24).
-    pub(crate) fn unconfirmed(&self) -> impl Iterator<Item = (&str, u64)> {
-        self.origins
-            .iter()
-            .filter_map(|(origin, state)| match state {
-                OriginState::Unconfirmed { rejections, .. } if *rejections > 0 => {
-                    Some((origin.as_str(), *rejections))
-                }
-                _ => None,
-            })
+    /// Origins observed but never confirmed — bar rejects and never-barred
+    /// sightings alike — in origin order: the caveated-failure report
+    /// (decision 3), used only when nothing confirmed (decision 24).
+    pub(crate) fn unconfirmed(&self) -> impl Iterator<Item = &str> {
+        self.origins.iter().filter_map(|(origin, state)| {
+            matches!(state, OriginState::Unconfirmed { .. }).then_some(origin.as_str())
+        })
     }
 }
 

@@ -968,8 +968,8 @@ impl CTestCase {
 impl Drop for CTestCase {
     fn drop(&mut self) {
         // SAFETY: every `CTestCase` is an independent libhegel handle this
-        // frontend created (from_blob, next_test_case, or clone_handle) and is
-        // freed exactly once here, dropping its reference to the test case.
+        // frontend created (next_test_case or clone_handle) and is freed
+        // exactly once here, dropping its reference to the test case.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
     }
 }

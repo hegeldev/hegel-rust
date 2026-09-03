@@ -405,7 +405,22 @@ impl Sim {
     }
 }
 
-fn run_passes(sim: &mut Sim) {
+pub trait Shrink {
+    fn current(&self) -> &Candidate;
+    fn consider(&mut self, cand: Candidate) -> bool;
+}
+
+impl Shrink for Sim {
+    fn current(&self) -> &Candidate {
+        Sim::current(self)
+    }
+
+    fn consider(&mut self, cand: Candidate) -> bool {
+        Sim::consider(self, cand)
+    }
+}
+
+pub fn run_passes<S: Shrink>(sim: &mut S) {
     for k in [8usize, 4, 2, 1] {
         delete_chunks(sim, k);
     }
@@ -413,7 +428,7 @@ fn run_passes(sim: &mut Sim) {
     minimize_atoms(sim);
 }
 
-fn delete_chunks(sim: &mut Sim, k: usize) {
+fn delete_chunks<S: Shrink>(sim: &mut S, k: usize) {
     let mut i = 0;
     loop {
         if i + k > sim.current().len() {
@@ -427,7 +442,7 @@ fn delete_chunks(sim: &mut Sim, k: usize) {
     }
 }
 
-fn zero_atoms(sim: &mut Sim) {
+fn zero_atoms<S: Shrink>(sim: &mut S) {
     let mut i = 0;
     while i < sim.current().len() {
         if sim.current()[i] != 0 {
@@ -439,13 +454,13 @@ fn zero_atoms(sim: &mut Sim) {
     }
 }
 
-fn try_value(sim: &mut Sim, i: usize, val: u64) -> bool {
+fn try_value<S: Shrink>(sim: &mut S, i: usize, val: u64) -> bool {
     let mut cand = sim.current().clone();
     cand[i] = val;
     sim.consider(cand)
 }
 
-fn minimize_atoms(sim: &mut Sim) {
+fn minimize_atoms<S: Shrink>(sim: &mut S) {
     let mut i = 0;
     while i < sim.current().len() {
         let v = sim.current()[i];

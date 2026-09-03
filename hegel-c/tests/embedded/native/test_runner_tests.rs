@@ -1743,7 +1743,7 @@ fn nd_discovery_sweep_evicts_an_unconfirmable_origin() {
             assert!(ctx.interesting.is_empty());
             assert_eq!(
                 ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
-                vec![("Panic: fluke", 1)]
+                vec!["Panic: fluke"]
             );
         },
     );
@@ -1914,6 +1914,7 @@ fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
                 raised: crate::native::HashSet::default(),
                 anchor: 0.99,
                 sweep: SweepMode::Fast,
+                pending_accept: None,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -2537,7 +2538,7 @@ fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
                 .nd_reproduce(Some("Panic: splice"), &stored, 2.0, 50, 0)
                 .await
                 .unwrap();
-            let run = run.expect("a splice of the two stored timelines must fail");
+            let run = run.unwrap();
             assert_eq!(run.origin.as_deref(), Some("Panic: splice"));
             assert!(
                 evidence.runs() > 4,
@@ -2583,7 +2584,7 @@ fn a_positional_splice_carries_whole_clone_records_across_intact() {
                 .nd_reproduce(Some("Panic: clone splice"), &stored, 2.0, 50, 0)
                 .await
                 .unwrap();
-            let run = run.expect("a splice pairs the armed flag with the large child");
+            let run = run.unwrap();
             assert_eq!(run.origin.as_deref(), Some("Panic: clone splice"));
             let ChoiceValue::Clone(record) = run.nodes[1].value() else {
                 panic!("the clone position survives the splice: {:?}", run.nodes);
@@ -2648,17 +2649,20 @@ fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_a
                 raised: crate::native::HashSet::default(),
                 anchor: 0.3,
                 sweep: SweepMode::Fast,
+                pending_accept: None,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(matched);
+            probe.candidate_adopted();
             let raised_anchor = probe.anchor;
             assert!(
                 raised_anchor > 0.3,
-                "the first accept of a candidate raises the monotone anchor"
+                "the first adopted accept of a candidate raises the monotone anchor"
             );
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(matched);
+            probe.candidate_adopted();
             assert_eq!(
                 probe.anchor, raised_anchor,
                 "re-accepting the same timeline draws on replay evidence and \
@@ -3027,6 +3031,7 @@ fn gauntlet_depth_charges_the_deadline_not_the_logical_counters() {
                 raised: crate::native::HashSet::default(),
                 anchor: 0.3,
                 sweep: SweepMode::Fast,
+                pending_accept: None,
             };
             let mut shrinker =
                 Shrinker::with_probe(Box::new(probe), vec![int_node(47)], Spans::new());
@@ -3050,4 +3055,676 @@ fn gauntlet_depth_charges_the_deadline_not_the_logical_counters() {
             );
         },
     );
+}
+
+#[test]
+fn pooled_timelines_caps_at_pool_cap_and_dedupes() {
+    let incumbent = vec![ChoiceValue::Boolean(false)];
+    let mut rest: Vec<Vec<ChoiceValue>> = (0..nd::POOL_CAP + 3)
+        .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
+        .collect();
+    rest.insert(0, incumbent.clone());
+    rest.insert(2, vec![ChoiceValue::Boolean(true)]);
+    let timelines = pooled_timelines(incumbent.clone(), rest);
+    assert_eq!(timelines.len(), nd::POOL_CAP);
+    assert_eq!(timelines[0], incumbent);
+    for (i, t) in timelines.iter().enumerate() {
+        assert!(!timelines[i + 1..].contains(t));
+    }
+}
+
+#[test]
+fn nd_state_for_caps_stored_timelines_at_pool_cap() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            let pool: Vec<Vec<ChoiceValue>> = (0..nd::POOL_CAP)
+                .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
+                .collect();
+            ctx.nd_origins
+                .confirm("Panic: bug", 0.5, None, pool, (4, 6));
+            let incumbent = vec![ChoiceValue::Boolean(false)];
+            let state = ctx.nd_state_for("Panic: bug", incumbent.clone());
+            assert_eq!(state.timelines.len(), nd::POOL_CAP);
+            assert_eq!(state.timelines[0], incumbent);
+        },
+    );
+}
+
+#[test]
+fn final_replay_evicts_a_dry_unconfirmed_origin() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(ctx.interesting.contains_key("Panic: bug"));
+            ctx.final_replay().await.unwrap();
+            assert!(
+                ctx.interesting.is_empty(),
+                "a dry unconfirmed origin leaves the interesting map"
+            );
+            assert_eq!(
+                ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
+                vec!["Panic: bug"]
+            );
+        },
+    );
+}
+
+#[test]
+fn a_reproducing_final_replay_confirms_an_unconfirmed_origin() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(ctx.nd_origins.needs_confirmation("Panic: bug"));
+            ctx.final_replay().await.unwrap();
+            assert!(
+                !ctx.nd_origins.needs_confirmation("Panic: bug"),
+                "a reproducing final replay confirms the origin"
+            );
+            assert!(ctx.interesting.contains_key("Panic: bug"));
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert!(report.failures[0].reproduce_blob.is_some());
+        },
+    );
+}
+
+#[test]
+fn report_blobs_only_confirmed_origins() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: a", vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.nd_origins
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+            ctx.record_run(
+                &interesting_at("Panic: b", vec![bool_node(false)]),
+                Duration::ZERO,
+                false,
+            );
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert_eq!(report.failures[0].origin, "Panic: a");
+            assert!(report.failures[0].reproduce_blob.is_some());
+            assert!(
+                report.failures[0]
+                    .caveat
+                    .as_deref()
+                    .unwrap()
+                    .contains("confirmed")
+            );
+        },
+    );
+}
+
+#[test]
+fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                boom("b")
+            } else {
+                boom("a")
+            }
+        },
+        async |ctx| {
+            ctx.interesting
+                .insert("Panic: a".to_string(), vec![bool_node(true)]);
+            ctx.nd_origins
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+            ctx.final_replay().await.unwrap();
+            assert!(
+                ctx.interesting.contains_key("Panic: b"),
+                "the report-time measurement run admits the new origin"
+            );
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert_eq!(report.failures[0].origin, "Panic: a");
+            assert!(report.failures[0].reproduce_blob.is_some());
+        },
+    );
+}
+
+#[test]
+fn unconfirmed_origins_report_caveat_only_when_nothing_confirmed() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: a", vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(ctx.nd_origins.reject("Panic: a", (0, 24)));
+            ctx.interesting.remove("Panic: a");
+            ctx.record_run(
+                &interesting_at("Panic: b", vec![bool_node(false)]),
+                Duration::ZERO,
+                false,
+            );
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 2);
+            for failure in &report.failures {
+                assert!(failure.reproduce_blob.is_none());
+            }
+            assert!(
+                report.failures[0]
+                    .caveat
+                    .as_deref()
+                    .unwrap()
+                    .contains("failed 0 of 24 replays")
+            );
+            assert!(
+                report.failures[1]
+                    .caveat
+                    .as_deref()
+                    .unwrap()
+                    .contains("observed once, never replayed")
+            );
+        },
+    );
+}
+
+#[test]
+fn report_multiple_false_truncates_after_the_confirmed_filter() {
+    with_engine(
+        nd_settings().report_multiple_failures(false),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.interesting.insert(
+                "Panic: a".to_string(),
+                vec![bool_node(true), bool_node(true)],
+            );
+            ctx.nd_origins
+                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6));
+            ctx.record_run(
+                &interesting_at("Panic: b", vec![bool_node(false)]),
+                Duration::ZERO,
+                false,
+            );
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert_eq!(
+                report.failures[0].origin, "Panic: a",
+                "an unconfirmed origin must not displace a confirmed one \
+                 under single-failure reporting"
+            );
+        },
+    );
+}
+
+#[test]
+fn nd_runs_record_no_targeting_observations() {
+    let observing_run = || {
+        let mut run = interesting_at("Panic: unused", vec![bool_node(true)]);
+        run.status = Status::Valid;
+        run.origin = None;
+        run.target_observations.insert("score".to_string(), 1.0);
+        run
+    };
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.record_run(&observing_run(), Duration::ZERO, false);
+            assert!(ctx.targeting.is_empty());
+        },
+    );
+    with_counting_ctx(
+        |_ds| TestCaseResult::Valid,
+        async |ctx, _execs| {
+            ctx.record_run(&observing_run(), Duration::ZERO, false);
+            assert!(!ctx.targeting.is_empty());
+        },
+    );
+}
+
+#[test]
+fn gauntlet_accept_without_adoption_moves_nothing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let mut settings = Settings::new()
+        .database(Some(path))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    with_engine(
+        settings,
+        Some("k"),
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.nd_origins.confirm(
+                "Panic: bug",
+                0.3,
+                Some(interesting_at("Panic: bug", vec![bool_node(true)])),
+                Vec::new(),
+                (4, 6),
+            );
+            {
+                let mut probe = EngineShrinkProbe {
+                    engine: &mut *ctx,
+                    target_origin: "Panic: bug".to_string(),
+                    verbosity: Verbosity::Quiet,
+                    output: Output::callback(|_| {}),
+                    gauntlet: true,
+                    ledger: HashMap::default(),
+                    anchor: 0.3,
+                    sweep: SweepMode::Fast,
+                    raised: crate::native::HashSet::default(),
+                    pending_accept: None,
+                };
+                let nodes = vec![bool_node(true)];
+                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+                assert!(matched, "the gauntlet accepts the always-failing candidate");
+                assert_eq!(
+                    probe.anchor, 0.3,
+                    "an unadopted accept must not move the probe anchor"
+                );
+            }
+            let (_, anchor) = ctx.nd_origins.take_witness("Panic: bug").unwrap();
+            assert_eq!(anchor, 0.3, "the stored anchor is untouched");
+            assert!(
+                ctx.db().unwrap().fetch(b"k").is_empty(),
+                "an unadopted accept must not persist an incumbent"
+            );
+        },
+    );
+}
+
+#[test]
+fn anchor_raises_only_on_adoption_and_once_per_timeline() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let mut settings = Settings::new()
+        .database(Some(path))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    with_engine(
+        settings,
+        Some("k"),
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            ctx.nd_origins
+                .confirm("Panic: bug", 0.3, None, Vec::new(), (4, 6));
+            let raised_anchor;
+            {
+                let mut probe = EngineShrinkProbe {
+                    engine: &mut *ctx,
+                    target_origin: "Panic: bug".to_string(),
+                    verbosity: Verbosity::Quiet,
+                    output: Output::callback(|_| {}),
+                    gauntlet: true,
+                    ledger: HashMap::default(),
+                    anchor: 0.3,
+                    sweep: SweepMode::Fast,
+                    raised: crate::native::HashSet::default(),
+                    pending_accept: None,
+                };
+                let nodes = vec![bool_node(true)];
+                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+                assert!(matched);
+                probe.candidate_adopted();
+                raised_anchor = probe.anchor;
+                assert!(raised_anchor > 0.3, "adoption raises the anchor");
+                probe.candidate_adopted();
+                assert_eq!(
+                    probe.anchor, raised_anchor,
+                    "adoption without a fresh accept is a no-op"
+                );
+            }
+            assert!(
+                !ctx.db().unwrap().fetch(b"k").is_empty(),
+                "adoption persists the incumbent"
+            );
+        },
+    );
+}
+
+#[test]
+fn reproduce_blob_never_runs_a_fresh_generation() {
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Integer(BigInt::from(0))]],
+        entropy: 0,
+        extension: 4,
+    };
+    let blob = crate::native::blob::encode_nd_failure(&state);
+    let draws = std::cell::RefCell::new(Vec::new());
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        match rint(ds, 0, 1_000_000) {
+            Ok(v) => {
+                draws.borrow_mut().push(v);
+                if v != 0 {
+                    boom("nonzero")
+                } else {
+                    TestCaseResult::Valid
+                }
+            }
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert!(
+        result.failures.is_empty(),
+        "a fresh generation would draw a nonzero value and fail"
+    );
+    let draws = draws.borrow();
+    assert!(!draws.is_empty());
+    assert!(draws.iter().all(|&v| v == 0));
+}
+
+/// Settings for the flip-routing and drain tests: single-failure reporting
+/// stops generation at the first bug, so execution indices are exact.
+fn one_bug_settings(path: &str) -> Settings {
+    Settings::new()
+        .database(Some(path.to_string()))
+        .phases([Phase::Generate, Phase::Shrink])
+        .verbosity(Verbosity::Quiet)
+        .report_multiple_failures(false)
+}
+
+#[test]
+fn a_flip_during_the_shrink_verify_routes_the_origin_through_the_bar() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(one_bug_settings(&path), "k", |ds| {
+        if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+        } else if rint(ds, 0, 100).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.contains("confirmed") && caveat.contains("failed 5 of 5"),
+        "the flipped verify must route the origin through the full bar \
+         (4 fails) before the final replay's 1, not confirm on the final \
+         replay alone: {caveat:?}"
+    );
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let primary = db.fetch(b"k");
+    assert!(!primary.is_empty());
+    for entry in &primary {
+        assert!(
+            crate::native::blob::decode_nd_state(entry).is_some(),
+            "only bar-validated v2 entries may reach the primary key"
+        );
+    }
+}
+
+#[test]
+fn a_flip_during_shrink_probes_requeues_the_origin_for_a_gauntleted_shrink() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(one_bug_settings(&path), "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if execs.fetch_add(1, Ordering::SeqCst) >= 2 {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let caveat = result.failures[0].caveat.as_deref().unwrap();
+    assert!(
+        caveat.contains("confirmed") && caveat.contains("failed 5 of 5"),
+        "the requeued origin must face the full bar (4 fails) before the \
+         final replay's 1, not confirm on the final replay alone: {caveat:?}"
+    );
+}
+
+#[test]
+fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let v2_bytes = crate::native::blob::encode_nd_state(&crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 7,
+        extension: 4,
+    });
+    let pre_shrink = serialize_choices(&vec![ChoiceValue::Boolean(false); 20]);
+    assert!(
+        shortlex(&v2_bytes, &pre_shrink) != core::cmp::Ordering::Greater,
+        "the seeded entry must sit under the drain's shortlex break"
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    {
+        let db = DirectoryTestCaseDatabase::new(&path);
+        db.save(&secondary_key, &v2_bytes);
+    }
+    let result = reuse_run(one_bug_settings(&path), "k", |ds| {
+        for _ in 0..20 {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let db = DirectoryTestCaseDatabase::new(&path);
+    assert!(
+        db.fetch(&secondary_key).contains(&v2_bytes),
+        "the drain must not delete a v2 entry it cannot replay"
+    );
+}
+
+#[test]
+fn nd_run_skips_the_pre_shrink_secondary_drain() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let v1_bytes = serialize_choices(&[ChoiceValue::Boolean(false)]);
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    {
+        let db = DirectoryTestCaseDatabase::new(&path);
+        db.save(&secondary_key, &v1_bytes);
+    }
+    let mut settings = one_bug_settings(&path);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let db = DirectoryTestCaseDatabase::new(&path);
+    assert!(
+        db.fetch(&secondary_key).contains(&v1_bytes),
+        "under nondeterministic handling no entry class is drained"
+    );
+}
+
+#[test]
+fn shrink_drain_deletes_undecodable_secondary_entries() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let garbage = vec![0xFF, 0xFF, 0xFF, 0xFF, 0x07];
+    assert!(crate::native::blob::decode_nd_state(&garbage).is_none());
+    assert!(deserialize_choices(&garbage).is_none());
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    {
+        let db = DirectoryTestCaseDatabase::new(&path);
+        db.save(&secondary_key, &garbage);
+    }
+    let result = reuse_run(one_bug_settings(&path), "k", |ds| {
+        for _ in 0..5 {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let db = DirectoryTestCaseDatabase::new(&path);
+    assert!(
+        !db.fetch(&secondary_key).contains(&garbage),
+        "an entry neither format can decode is deleted"
+    );
+}
+
+#[test]
+fn drain_stops_at_mid_drain_nd_flip() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let drained_first =
+        serialize_choices(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)]);
+    let survivor = serialize_choices(&[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]);
+    assert!(shortlex(&drained_first, &survivor) == core::cmp::Ordering::Less);
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    {
+        let db = DirectoryTestCaseDatabase::new(&path);
+        db.save(&secondary_key, &drained_first);
+        db.save(&secondary_key, &survivor);
+    }
+    let execs = AtomicUsize::new(0);
+    let result = reuse_run(one_bug_settings(&path), "k", |ds| {
+        if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+            for _ in 0..4 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            boom("a")
+        } else {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary = db.fetch(&secondary_key);
+    assert!(
+        !secondary.contains(&drained_first),
+        "the first entry got its replay and its delete"
+    );
+    assert!(
+        secondary.contains(&survivor),
+        "a mid-drain flip stops the single-replay deletes for the rest"
+    );
+}
+
+#[test]
+fn deterministic_final_replay_is_stamped() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let stamped = AtomicU32::new(0);
+    let execs = AtomicU32::new(0);
+    let settings = Settings::new()
+        .database(None)
+        .verbosity(Verbosity::Quiet)
+        .report_multiple_failures(false);
+    let result = reuse_run(settings, "k", |ds| {
+        execs.fetch_add(1, Ordering::SeqCst);
+        stamped.fetch_add(u32::from(ds.is_nondeterministic()), Ordering::SeqCst);
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("a")
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        stamped.load(Ordering::SeqCst),
+        1,
+        "exactly the final replay is stamped on a deterministic run"
+    );
+    assert!(execs.load(Ordering::SeqCst) > 1);
+}
+
+#[test]
+fn nd_blob_replay_cases_are_stamped() {
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 0,
+        extension: 4,
+    };
+    let blob = crate::native::blob::encode_nd_failure(&state);
+    let mut calls = 0u32;
+    let mut stamped = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        calls += 1;
+        stamped += u32::from(ds.is_nondeterministic());
+        match rbool(ds) {
+            Ok(true) => boom("a"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(calls >= 1);
+    assert_eq!(stamped, calls, "every ND blob replay execution is stamped");
 }

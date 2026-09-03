@@ -229,3 +229,82 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     documented as chosen, not derived (G19). Detailed entries land with their fixes per
     the plan. (DRM, wholesale: "resolve them all as recommended and if you run into any
     problems we can revise later".)
+
+35. **Report assembly enforces decision 24 at the seam, with no post-final-replay bar.**
+    `build_report` partitions on `needs_confirmation` (the predicate the persistence filter
+    already uses) before the sort and the single-failure truncation, so blobs and
+    replay-state caveats go to confirmed and trusted origins only and a leaked unconfirmed
+    origin can never displace a confirmed one. Unconfirmed origins (bar rejects and
+    never-replayed sightings alike: `unconfirmed()` drops its `rejections > 0` filter and
+    its count payload) report caveat-only when nothing confirmed, with a dedicated wording
+    for the never-replayed case. The final replay honors `reject()`'s evict signal.
+    Deliberate non-fix: origins first observed by a report-time measurement run are never
+    barred — confirming them can admit further origins without bound — so they report
+    caveat-only and recycle via rediscovery next run, the trade decision 23 already accepted.
+    (Restores decisions 3/24; critique R1.)
+
+36. **A gauntlet accept moves state only at adoption.** `ShrinkProbe` gains a defaulted
+    no-op `candidate_adopted()`, called from `Shrinker::accept_improvement` (the single
+    adoption point) and forwarded by `NestedCloneProbe`. The engine probe stashes an accept
+    (ledger key, lower bound, nodes) and only adoption consumes it: anchor raise (respecting
+    the once-per-timeline set) plus incumbent persistence. Never-adoptable candidates reach
+    the gauntlet via mutation probes with upward offsets, divergence-observing replays, and
+    sort-key-larger ND realizations; before this fix a legitimate accept among them lifted
+    the anchor and could price every real reduction out for the rest of the shrink, violating
+    the anchor's definition as a bound on the *incumbent's* rate. Makes "all acceptance paths
+    gate on the same validated-accept event" literally true: the event is gauntlet accept
+    *and* adoption. (Critique S7.)
+
+37. **Per-origin capture precedence is ranked.** Diagnostic beats draw lines beats bare;
+    newest at the best rank; the panic payload travels with its capture, so the re-raised
+    panic always matches the printed diagnostic. Under quiet everything is rank 0 and
+    replacement stays unconditional. A dry final replay prints the freshest stamped failing
+    execution — usually confirmation-time, pre-shrink values — while the blob carries the
+    shrunk incumbent. Capturing shrunk values would need stamped gauntlet accepts, which
+    decision 10 rules out. (Critique R3.)
+
+38. **A nondeterministic flip during the shrink verify or shrink probes routes the origin
+    through the bar.** A flipped verify that still fails at the origin is not taken as a
+    deterministic verify: it falls into the bar arm, so an untrusted origin faces the full
+    bar before boost, gauntlet, or persistence (decision 24's shrink-seam wording). A flip
+    during shrink probes requeues the origin once, from its verify-validated pre-shrink
+    nodes, discarding untrusted single-run progress (conservative under decision 2);
+    terminates because the second pass is gauntleted and `nd_active` never clears.
+    (Critique R4; decisions 20/24 at the phase boundary.)
+
+39. **Targeting is fully off under ND handling.** `record_run` records target observations
+    only while deterministic, and `Optimiser::budget_exhausted` treats `nd_active` as
+    exhaustion, stopping an in-flight climb at the flip. Observations recorded before a
+    mid-run flip stay in the map, unused. (Completes decision 29; critique R5.)
+
+40. **The pre-shrink secondary drain is v1-only and deterministic-only.** Under ND handling
+    the whole drain is skipped: a v1 single-replay delete contradicts decision 11's budget
+    derivation, and deleting v2 entries it cannot replay was the defect. Under deterministic
+    handling: v1 entries replay once then delete (Hypothesis semantics), v2 entries are
+    retained untouched, undecodable entries delete, and a mid-drain detection flip stops the
+    remaining deletes. Rejected: replaying v2 entries in the drain — under decisions 20/24 a
+    pre-shrink reproduction can change no outcome, so it is pure cost (~35 executions per
+    dry entry). Their hygiene lives in the reuse phase's budgeted strikes.
+    (Restores decision 11; critique P1.)
+
+41. **Blob and entry zlib payloads decode under a 16 MiB bound.**
+    `decompress_to_vec_zlib_with_limit` at both decode sites. The bound derives from
+    `ND_STATE_MAX_TIMELINES` x `BUFFER_SIZE` x the serializer's per-choice sizing (~8.5 MiB
+    for the largest choice-only state the decoder would accept), with headroom for
+    content-carrying choices. Rejected: no limit; a tighter limit needing format knowledge
+    at call sites. (Critique P3; the format's existing defensive posture, decision 8.)
+
+42. **POOL_CAP is a total: 10 stored timelines per origin, incumbent included.**
+    `pooled_timelines` builds every stored, persisted, or replayed pool (the off-by-one came
+    from writing one comparison five times by hand); `trust()` and `confirm()` truncate
+    incoming pools, since a decoded v2 entry can carry up to the format bound.
+    `ND_STATE_MAX_TIMELINES` stays 64 as a deliberately looser decode-side sanity bound, so
+    raising the pool cap later does not invalidate stored corpora; oversized entries written
+    by the buggy build remain decodable and are re-capped on trust. Inside decision 22's
+    measured plateau. (Critique M1.)
+
+43. **Decision 27 closed: run status 3 is reserved, never reused.** The bindings survey is
+    recorded in production-plan.md phase 6 (ts/ocaml never adopted it, go's handling is dead
+    but harmless, cpp vendors the header and gets a compile-time migration signal).
+    evaluation.md now points there, and the `hegel_run_status_t` rustdoc reserves value 3
+    against reuse. (Critique D12.)

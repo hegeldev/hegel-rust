@@ -1,6 +1,12 @@
-//! Experiment 001: shrink-statistics simulation. Spec and results:
-//! notes/experiments/001-shrink-sim/notes.md
+//! Experiment 001: shrink-statistics simulation (default run). Spec and
+//! results: notes/experiments/001-shrink-sim/notes.md
+//! Experiment 008 subcommands (e008-*): gauntlet calibration under the
+//! shipped rules. Spec and results:
+//! notes/experiments/008-gauntlet-calibration/notes.md
 
+mod cmds;
+mod dp;
+mod e008;
 mod model;
 mod sim;
 mod stats;
@@ -116,6 +122,26 @@ fn print_table(title: &str, rows: &[Row], show_eff: bool) {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(|s| s.as_str()) {
+        None => run_001(),
+        Some("e008-h1") => cmds::cmd_h1(),
+        Some("e008-seeding") => cmds::cmd_seeding(),
+        Some("e008-factorial") => cmds::cmd_factorial(),
+        Some("e008-m") => cmds::cmd_m(),
+        Some("e008-recruit") => cmds::cmd_recruit(),
+        Some("e008-floor") => cmds::cmd_floor(),
+        Some("e008-hw") => cmds::cmd_hw(),
+        Some("e008-dp") => cmds::cmd_dp(),
+        Some("e008-envelope") => cmds::cmd_envelope(),
+        Some(other) => {
+            eprintln!("unknown subcommand: {other}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn run_001() {
     let fd3 = Stopping::FixedDry(3);
     let policies = [
         Policy::Naive,

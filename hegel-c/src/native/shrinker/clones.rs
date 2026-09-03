@@ -41,6 +41,10 @@ impl ShrinkProbe for NestedCloneProbe<'_, '_> {
         self.test_fn.set_sweep_mode(mode)
     }
 
+    fn candidate_adopted(&mut self) {
+        self.test_fn.candidate_adopted();
+    }
+
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> super::ProbeFuture<'s> {
         Box::pin(async move {
             let i = self.i;

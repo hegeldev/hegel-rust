@@ -193,6 +193,11 @@ pub enum hegel_backend_t {
 }
 
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
+///
+/// Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
+/// 0.34 ABI break) is retired and must never be reused for a new meaning:
+/// bindings built against the old header may still compare against it
+/// (decision 27).
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -661,7 +666,9 @@ pub struct HegelRun {
 /// A failed run produced counterexamples to the property. An errored run
 /// produced no verdict on the property at all, so it has no failures to
 /// inspect. A run errors on a failed health check, a nondeterminism
-/// mismatch, or a violated internal invariant of libhegel.
+/// mismatch under `error` strictness (the other strictness levels handle
+/// the nondeterminism instead), or a violated internal invariant of
+/// libhegel.
 #[derive(Clone)]
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
@@ -2679,9 +2686,9 @@ unsafe fn state_machine_ref<'a>(
 /// switches the run into nondeterministic handling at the end of the first
 /// test case that makes such a creation — whatever the configured
 /// strictness, since the concurrency was asked for — and from then on
-/// failures are confirmed by repeated replay, shrunk, persisted, and
-/// reported with a caveat and a reproduce blob like any other
-/// nondeterministic failure. This applies even to test cases whose drawn
+/// failures face the same confirmation, shrinking, validated persistence,
+/// and caveated reporting as any other nondeterministic failure. This
+/// applies even to test cases whose drawn
 /// concurrency level is 1: the declared bound is what counts.
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
@@ -5288,15 +5295,20 @@ pub unsafe extern "C" fn hegel_failure_origin(
 }
 
 /// Parameters:
-/// `out_blob`: Receives a base64 reproduce blob encoding the minimal
-///   counterexample's choice sequence, or NULL if libhegel produced none
-///   for this failure. Valid until `hegel_failure_free`.
+/// `out_blob`: Receives a base64 reproduce blob — the minimal
+///   counterexample's choice sequence, or for a nondeterministic failure a
+///   self-identifying entry carrying its replay state (timeline pool) — or
+///   NULL if libhegel produced none for this failure. Valid until
+///   `hegel_failure_free`.
 ///
 /// Returns `HEGEL_OK`.
 ///
-/// A blob can be replayed later via `hegel_test_case_from_blob` to
-/// reproduce the test case exactly. It is only guaranteed to reproduce the
-/// failure in the version of Hegel in which it was generated.
+/// A choice-sequence blob can be replayed later via
+/// `hegel_test_case_from_blob` to reproduce the test case exactly; a
+/// nondeterministic state blob is replayed until failure under a bounded
+/// budget via `hegel_run_start_blob`, which handles both kinds. A blob is
+/// only guaranteed to reproduce the failure in the version of Hegel in
+/// which it was generated.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     ctx: *mut HegelContext,

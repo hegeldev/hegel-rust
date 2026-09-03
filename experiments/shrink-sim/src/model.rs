@@ -27,6 +27,9 @@ pub enum Landscape {
     DeterministicCore,
     Constant,
     NoiseFloor,
+    NoiseFloorLo,
+    BoostCore,
+    BoostCoreHi,
     Mixture { pin: Pin },
 }
 
@@ -70,6 +73,31 @@ impl Landscape {
                     0.02
                 }
             }
+            Landscape::NoiseFloorLo => {
+                if has_bug(c) {
+                    0.1
+                } else {
+                    0.02
+                }
+            }
+            Landscape::BoostCore => {
+                if c.iter().any(|&a| a >= 95) {
+                    1.0
+                } else if c.iter().filter(|&&a| a >= 10).count() >= 3 {
+                    0.3
+                } else {
+                    0.0
+                }
+            }
+            Landscape::BoostCoreHi => {
+                if c.iter().any(|&a| a >= 95) {
+                    1.0
+                } else if c.iter().filter(|&&a| a >= 10).count() >= 3 {
+                    0.7
+                } else {
+                    0.0
+                }
+            }
             Landscape::Mixture { .. } => {
                 if has_bug(c) {
                     MIX_W * MIX_P_HI + (1.0 - MIX_W) * MIX_P_LO
@@ -101,8 +129,18 @@ impl Landscape {
             Landscape::DeterministicCore => "L2 deterministic-core",
             Landscape::Constant => "L3 constant p=0.5",
             Landscape::NoiseFloor => "L4 noise-floor",
+            Landscape::NoiseFloorLo => "L4b noise-floor-lo",
+            Landscape::BoostCore => "D1 deterministic-core (006)",
+            Landscape::BoostCoreHi => "D2 deterministic-core p=0.7",
             Landscape::Mixture { pin: Pin::Failing } => "L5 mixture pin-failing",
             Landscape::Mixture { pin: Pin::Random } => "L5 mixture pin-random",
+        }
+    }
+
+    pub fn carries_bug(self, c: &Candidate) -> bool {
+        match self {
+            Landscape::NoiseFloor | Landscape::NoiseFloorLo => has_bug(c),
+            _ => self.p(c) > 0.0,
         }
     }
 }

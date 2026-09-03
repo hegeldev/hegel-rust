@@ -91,6 +91,15 @@ pub trait ShrinkProbe {
     fn set_sweep_mode(&mut self, _mode: SweepMode) -> Option<SweepMode> {
         None
     }
+
+    /// The shrinker adopted the candidate from the immediately preceding
+    /// [`ShrinkProbe::run`] as its new target. Interesting runs the shrinker
+    /// discards (punned realizations, sort-key-larger candidates from
+    /// mutation probes) never trigger this, so side effects that must only
+    /// follow a validated accept — anchor raises, incumbent persistence —
+    /// belong here, not in `run`. A probe wrapping another must forward
+    /// this, or the default swallows the inner probe's accepts.
+    fn candidate_adopted(&mut self) {}
 }
 
 impl<F> ShrinkProbe for F
@@ -426,6 +435,7 @@ impl<'a> Shrinker<'a> {
     /// record the displaced sequence, bump `improvements`, fold the diff
     /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
     fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
+        self.test_fn.candidate_adopted();
         let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value()).collect();
         self.downgraded.push(old);
         self.improvements += 1;

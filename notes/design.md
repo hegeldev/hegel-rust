@@ -23,7 +23,8 @@ failure report.
 - Detect nondeterminism as well as accepting declarations (concurrent machines).
 - Restore shrinking, multi-failure reporting, database persistence, and reproduce blobs for
   nondeterministic tests.
-- Never lower the reported example's failure probability by shrinking; raise it when cheap.
+- Bound how much failure probability shrinking can trade away, and raise it when cheap. The
+  guard is statistical, not a strict never-lower; experiment 008 measures the envelope.
 - Keep a caveat for the environment-modification hypothesis, with wording that admits it is
   indistinguishable from a very rare failure.
 
@@ -67,6 +68,8 @@ formats in `blob.rs`.
   divergence on identical replayed choices, or a replay whose outcome flips (the final
   replay's miss under deterministic handling flips the run rather than aborting). A stored DB
   entry that stops reproducing is staleness, never evidence (decision 9).
+- **stored**: decoding a version-2 database entry or ND reproduce blob — state only a
+  nondeterministic run writes — flips the run before any replay of it.
 
 `nondeterminism_strictness = quiet | warn | error` (`hegel_settings_set_nondeterminism_strictness`),
 default quiet: quiet flips silently, warn prints one notice, error reproduces the old
@@ -98,7 +101,9 @@ confirmed origins, so the bar is not re-run), monotone anchor raises on validate
 (decision 19). Confirmation gates origin *admission*: `nd_discovery_sweep` runs the bar over
 every unconfirmed interesting origin after each generation step, dropping origins that fail it
 (decision 24); raw interesting runs never displace an occupied origin (decision 20). Confirmed
-origins carry a pool (cap 10) harvested from capture-at-confirmation (decision 10). The
+origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
+every one, and the lifecycle's writers truncate incoming pools) harvested from
+capture-at-confirmation (decision 10). The
 lifecycle also words each failure's **caveat** from the run's own evidence — confirmed,
 trusted, confirmed-but-dry-at-report-time, or unconfirmed.
 
@@ -110,7 +115,11 @@ prefixes 2/3 (self-identifying, decision 8; old readers reject unknown prefixes 
 confirmed origins persist, via the `Persister`, which buffers during shrinking and commits
 validated incumbents — Ctrl-C keeps the last validated example. No rates or counters are ever
 persisted (decision 8): every run stands alone. Hygiene is two strikes across two runs:
-primary miss demotes to the secondary corpus, secondary miss deletes (decision 11).
+primary miss demotes to the secondary corpus, secondary miss deletes (decision 11). The
+pre-shrink secondary drain is v1-only and runs only under deterministic handling, breaking on
+a mid-drain flip. A v2 entry is never drained: under decisions 20/24 a pre-shrink
+reproduction can change no outcome, so its hygiene lives in the reuse phase's budgeted
+strikes (decision 40).
 
 Clone streams serialize values-only (tag 5); realized kinds are dropped. Verbatim replay is
 unaffected — the only consumer of realized info is `resolve_choice`'s is-simplest pun, which
@@ -134,18 +143,25 @@ incumbent. Rejected candidates retry via pass repetition with evidence accumulat
 retries. Stopping is confirmed-dry (decision 18): after a dry sweep, one confirmation sweep
 drives every proposal's cumulative evidence to a bound decision. The anchor is monotone and
 never fed by replay-sourced evidence (decision 19). There is no checkpoint/rollback
-(decision 17). All acceptance paths — `consider()`, `update_interesting`, persistence — gate
-on the same validated-accept event.
+(decision 17). All acceptance paths gate on the same validated-accept event, which is a
+gauntlet accept *and* the shrinker's adoption (`candidate_adopted`): an accepted candidate
+the shrinker discards — a punned realization, a sort-key-larger mutation probe — raises no
+anchor and persists nothing (decision 36). A nondeterministic flip during the shrink verify
+or the shrink probes routes the origin through the discovery bar and one gauntleted re-pass
+from the verified pre-shrink incumbent, discarding untrusted single-run progress
+(decision 38).
 
 Boost (`nd_boost`, gate G2/decision 28): when a confirmed incumbent's anchor sits below the
-0.5 reliability floor, successive halving over 16 mutation-generated variants, scored by
-ledger LCB, winner re-measured on a 10-run holdout before seeding the anchor. Above the floor
-it never runs; there is no public setting.
+reliability floor (`BOOST_RELIABILITY_FLOOR`), successive halving over the incumbent, its
+pool, and prefix-mutant fills (up to `BOOST_POOL` candidates), scored by raw in-race failure
+rate, the winner re-measured on a `BOOST_HOLDOUT` holdout before seeding the anchor. Above
+the floor it never runs; there is no public setting.
 
 ### Data tree under ND handling
 
 Disabled (gate G3/decision 29): recording, tree-served replays, novel-prefix generation, and
-targeting are all off once `nd_active` is set — `cached_test_function` executes every replay,
+targeting (the optimiser, its observation recording, and any in-flight climb) are all off
+once `nd_active` is set — `cached_test_function` executes every replay,
 since serving the first recorded verdict is exactly the bias the multi-run machinery exists to
 avoid. Kind-set tolerance is the noted follow-up if generation cost ever shows up; experiment
 007 measured none on the target workloads.
@@ -162,11 +178,21 @@ stay cheap and unstamped.
 
 ND failures report as plain `FAILED` (gate G1/decision 27; `FAILED_NONDETERMINISTIC` is
 retired) with a per-failure caveat accessor (`hegel_failure_caveat`) quoting the run's own
-replay evidence, and a v2 reproduce blob when confirmed. An unconfirmed failure still fails
-the run (decision 3) with a caveat naming both hypotheses and no blob. The frontend
-(`src/run_lifecycle.rs::drive`) captures each interesting case's buffered output per origin as
-the run pumps, then prints each reported failure as one block — freshest capture, diagnostic,
-caveat, reproducer line — and re-raises the failing test's own panic.
+replay evidence, and a v2 reproduce blob when confirmed. Failures are assembled from
+confirmed and trusted origins only: `build_report` partitions on the same
+`needs_confirmation` predicate as the persistence filter, before the sort and the
+single-failure truncation. An origin unconfirmed at report time — a bar reject, or one
+first observed by a report-time measurement run — still fails the run (decision 3), reported
+caveat-only with no blob, and only when nothing confirmed (decision 24). The final replay
+evicts an origin its bar rejects; origins admitted during the final replay are never barred
+and recycle via rediscovery next run (decision 35). The frontend
+(`src/run_lifecycle.rs::drive`) captures each interesting case's buffered output per origin
+as the run pumps — replacement is rank-gated (diagnostic, then draw lines, then bare), newest
+at the best rank, the panic payload travelling with its capture (decision 37) — then prints
+each reported failure as one block (best capture, diagnostic, caveat, reproducer line) and
+re-raises the failing test's own panic. A dry final replay prints the freshest stamped
+failing execution, usually confirmation-time pre-shrink values, while the blob carries the
+shrunk incumbent. Stamping gauntlet accepts would break decision 10's cost profile.
 
 ### Reproduce blobs
 
@@ -220,4 +246,13 @@ concurrent machine creation no longer rejects. Both crates' changelogs carry the
   constraint for slow concurrent bodies; a budget setting is possible later.
 - **Caveat fatigue**: hence evidence-weighted wording and unconfirmed-only-when-nothing-
   confirmed reporting.
+- **Anti-conservative statistics**: per-run peeking, stop-on-fail, and asymmetric miss
+  weighting all bias the Wilson intervals toward acceptance relative to nominal coverage.
+  The exact-DP operating points are the specification and z is a tuning constant.
+  Experiment 008 measures the realized error.
+- **Shrink opacity below `Debug`**: a stalled shrink and a finished one print identically
+  except at `Debug` verbosity.
+- **Quiet-flip invisibility**: under quiet strictness nothing below `Debug` reveals that a
+  run flipped into ND handling or what the measurement runs cost; G17's statistics line
+  (phase 10) closes this.
 - **Bindings**: the ABI break needs a coordinated rollout; both RELEASE.md files call it out.

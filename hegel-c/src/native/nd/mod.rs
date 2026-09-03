@@ -130,6 +130,14 @@ pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
     GauntletVerdict::Continue
 }
 
+/// Total stored timelines per origin, incumbent included — the invariant
+/// every stored, persisted, or replayed pool obeys
+/// (`test_runner::pooled_timelines` builds them; the lifecycle's writers
+/// truncate incoming pools). Decision 22 measured K=5 as near-ceiling and
+/// K=10 as the plateau, so incumbent-plus-nine sits inside the measured
+/// range. The decode-side format bound
+/// ([`crate::native::blob::ND_STATE_MAX_TIMELINES`]) is deliberately
+/// looser.
 pub(crate) const POOL_CAP: usize = 10;
 pub(crate) const BOOST_POOL: usize = 16;
 pub(crate) const BOOST_HOLDOUT: u64 = 10;

@@ -112,6 +112,7 @@ pub(crate) struct Optimiser<'a, 'b> {
 impl Optimiser<'_, '_> {
     fn budget_exhausted(&self) -> bool {
         !self.engine.interesting.is_empty()
+            || self.engine.nd_active
             || self.engine.valid_test_cases >= self.max_valid
             || self.engine.calls >= self.max_calls
     }

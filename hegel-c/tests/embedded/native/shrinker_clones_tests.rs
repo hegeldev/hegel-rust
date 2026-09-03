@@ -307,3 +307,42 @@ fn nested_clone_shrink_reaches_the_minimum_through_confirmation_sweeps() {
         "the nested shrink's improvements must survive the outer fast reject"
     );
 }
+
+use super::NestedCloneProbe;
+
+struct AdoptionRecorder {
+    adopted: Arc<core::sync::atomic::AtomicUsize>,
+}
+
+impl crate::native::shrinker::ShrinkProbe for AdoptionRecorder {
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
+        Box::pin(core::future::ready(Ok(match req {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        })))
+    }
+
+    fn candidate_adopted(&mut self) {
+        self.adopted
+            .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn nested_clone_probe_forwards_candidate_adopted() {
+    let adopted = Arc::new(core::sync::atomic::AtomicUsize::new(0));
+    let mut inner: Box<dyn crate::native::shrinker::ShrinkProbe + Send> =
+        Box::new(AdoptionRecorder {
+            adopted: adopted.clone(),
+        });
+    let template = vec![clone_node(vec![int_node(3)])];
+    let outer_values: Vec<ChoiceValue> = template.iter().map(|n| n.value()).collect();
+    let mut probe = NestedCloneProbe {
+        test_fn: &mut inner,
+        template: &template,
+        outer_values: &outer_values,
+        i: 0,
+    };
+    crate::native::shrinker::ShrinkProbe::candidate_adopted(&mut probe);
+    assert_eq!(adopted.load(core::sync::atomic::Ordering::SeqCst), 1);
+}

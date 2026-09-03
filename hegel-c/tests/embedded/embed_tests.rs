@@ -495,7 +495,6 @@ fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budge
         ds.generate_boolean(0.5, None).unwrap(),
         "the incumbent timeline replays verbatim"
     );
-    ds.generate_boolean(0.5, None)
-        .expect("a draw past the stored timeline draws fresh within the extension budget");
+    ds.generate_boolean(0.5, None).unwrap();
     ds.mark_complete(&TestCaseResult::Valid);
 }

@@ -700,3 +700,49 @@ fn a_probe_that_declines_sweep_modes_gets_no_confirmation_sweep() {
         "a dry fast fixpoint with a declining probe ends the shrink outright"
     );
 }
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+struct AdoptionRecorder {
+    adopted: Arc<AtomicUsize>,
+}
+
+impl crate::native::shrinker::ShrinkProbe for AdoptionRecorder {
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
+        Box::pin(core::future::ready(Ok(match req {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (true, vec![int_node(0)], Spans::new()),
+        })))
+    }
+
+    fn candidate_adopted(&mut self) {
+        self.adopted.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn accept_improvement_notifies_the_probe() {
+    let adopted = Arc::new(AtomicUsize::new(0));
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(AdoptionRecorder {
+            adopted: adopted.clone(),
+        }),
+        vec![int_node(10), int_node(10)],
+        Spans::new(),
+    );
+
+    let accepted = drive_no_yield(shrinker.consider(&[int_node(5), int_node(10)])).unwrap();
+    assert!(accepted);
+    assert_eq!(adopted.load(Ordering::SeqCst), 1);
+
+    let rejected = drive_no_yield(shrinker.consider(&[int_node(9), int_node(10)])).unwrap();
+    assert!(!rejected, "a sort-key-larger candidate is not adopted");
+    assert_eq!(
+        adopted.load(Ordering::SeqCst),
+        1,
+        "an unadopted run must not notify the probe"
+    );
+
+    drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 2)).unwrap();
+    assert_eq!(adopted.load(Ordering::SeqCst), 2);
+}

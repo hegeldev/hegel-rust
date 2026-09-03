@@ -50,6 +50,23 @@ pub fn wilson_lcb(fails: u64, runs: u64, z: f64) -> f64 {
     wilson(fails, runs, z, false)
 }
 
+pub fn wilson_weighted(fails: f64, total: f64, z: f64, upper: bool) -> f64 {
+    if total <= 0.0 {
+        return if upper { 1.0 } else { 0.0 };
+    }
+    let p = fails / total;
+    let z2 = z * z;
+    let denom = 1.0 + z2 / total;
+    let center = p + z2 / (2.0 * total);
+    let margin = z * ((p * (1.0 - p) + z2 / (4.0 * total)) / total).sqrt();
+    let bound = if upper {
+        (center + margin) / denom
+    } else {
+        (center - margin) / denom
+    };
+    bound.clamp(0.0, 1.0)
+}
+
 pub fn wilson_ucb(fails: u64, runs: u64, z: f64) -> f64 {
     wilson(fails, runs, z, true)
 }

@@ -1,4 +1,4 @@
-//! Embedded tests for `src/native/nd.rs`.
+//! Embedded tests for `src/native/nd/mod.rs`.
 //!
 //! The discovery-bar test recomputes the exact DP from experiment 005A over
 //! the production decision function and asserts the operating points
@@ -267,4 +267,31 @@ fn verbatim_weight_is_the_tracked_fraction_of_the_stored_timeline() {
     let mut longer = stored.clone();
     longer.push(CV::Boolean(true));
     assert_eq!(verbatim_weight(&stored, &longer), 1.0);
+}
+
+#[test]
+fn failures_count_in_full_at_zero_weight() {
+    let mut zero_weight = Evidence::default();
+    let mut full_weight = Evidence::default();
+    zero_weight.record(true, 0.0);
+    full_weight.record(true, 1.0);
+    for e in [&mut zero_weight, &mut full_weight] {
+        e.record(false, 1.0);
+        e.record(false, 0.5);
+    }
+    assert_eq!(zero_weight.fails(), full_weight.fails());
+    assert_eq!(zero_weight.runs(), full_weight.runs());
+    assert_eq!(zero_weight.lower_bound(), full_weight.lower_bound());
+    assert_eq!(zero_weight.upper_bound(), full_weight.upper_bound());
+}
+
+#[test]
+fn bar_physical_cap_rejects_diverged_zero_fail_evidence() {
+    let mut e = Evidence::default();
+    for _ in 0..36 {
+        e.record(false, 0.2);
+        assert!(matches!(discovery_bar(&e), BarVerdict::Continue));
+    }
+    e.record(false, 0.2);
+    assert!(matches!(discovery_bar(&e), BarVerdict::Reject));
 }

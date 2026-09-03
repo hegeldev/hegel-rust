@@ -36,14 +36,19 @@ fn observe_never_resets_rejection_counts() {
     assert!(lc.reject("a", (1, 10)));
     lc.observe("a");
     assert!(lc.reject("a", (2, 30)));
-    assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec![("a", 2)]);
+    assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec!["a"]);
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "unconfirmed failure: failed 3 of 40 replays this run, below the \
+         confirmation bar — likely rare"
+    );
 }
 
 #[test]
 fn rejecting_an_unobserved_origin_records_it() {
     let mut lc = OriginLifecycle::default();
     assert!(lc.reject("a", (0, 10)));
-    assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec![("a", 1)]);
+    assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec!["a"]);
 }
 
 #[test]
@@ -109,10 +114,7 @@ fn unconfirmed_report_is_sorted_and_skips_confirmed_origins() {
     assert!(lc.reject("a", (0, 10)));
     lc.observe("b");
     lc.confirm("d", 0.5, None, Vec::new(), (4, 6));
-    assert_eq!(
-        lc.unconfirmed().collect::<Vec<_>>(),
-        vec![("a", 2), ("c", 1)]
-    );
+    assert_eq!(lc.unconfirmed().collect::<Vec<_>>(), vec!["a", "b", "c"]);
 }
 
 #[test]
@@ -178,5 +180,43 @@ fn a_dry_final_replay_switches_the_confirmed_caveat_wording() {
         "nondeterministic failure, confirmed earlier this run (failed 5 of 41 \
          replays) but not reproduced at report time — a rare failure, or \
          something in the environment changed after discovery"
+    );
+}
+
+#[test]
+fn trust_truncates_an_oversized_pool_to_pool_cap() {
+    let mut lc = OriginLifecycle::default();
+    let pool: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
+        .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
+        .collect();
+    lc.trust("a", pool);
+    assert_eq!(lc.pool("a").len(), crate::native::nd::POOL_CAP);
+}
+
+#[test]
+fn confirm_truncates_an_oversized_pool_to_pool_cap() {
+    let mut lc = OriginLifecycle::default();
+    let pool: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
+        .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
+        .collect();
+    lc.confirm("a", 0.4, None, pool, (4, 9));
+    assert_eq!(lc.pool("a").len(), crate::native::nd::POOL_CAP);
+}
+
+#[test]
+fn a_never_replayed_origin_gets_the_observed_once_caveat() {
+    let mut lc = OriginLifecycle::default();
+    lc.observe("a");
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "unconfirmed failure: observed once, never replayed — a rare \
+         failure, or the environment changed between executions"
+    );
+    lc.reject("a", (0, 24));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "unconfirmed failure: failed 0 of 24 replays after the observed \
+         failure — a rare failure, or the environment changed between \
+         executions"
     );
 }

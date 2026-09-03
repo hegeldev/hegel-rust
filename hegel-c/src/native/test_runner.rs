@@ -607,35 +607,51 @@ impl<'a> Engine<'a> {
                     total
                 ));
             }
-            if let (Some(_), Some(key)) = (self.db(), database_key) {
-                let key_bytes = key.as_bytes().to_vec();
-                let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
-                let mut entries = self
-                    .db()
-                    .map(|db| db.fetch(&secondary_key))
-                    .unwrap_or_default();
-                entries.sort_by(|a, b| shortlex(a, b));
-                let primary_max: Option<Vec<u8>> = self
-                    .interesting
-                    .values()
-                    .map(|nodes| {
-                        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                        serialize_choices(&choices)
-                    })
-                    .max_by(|a, b| shortlex(a, b));
-                for raw in entries {
-                    if primary_max
-                        .as_ref()
-                        .is_some_and(|m| shortlex(&raw, m) == core::cmp::Ordering::Greater)
-                    {
-                        break;
-                    }
-                    if let Some(stored_choices) = deserialize_choices(&raw) {
-                        let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                        self.test_function(ntc).await?;
-                    }
-                    if let Some(db) = self.db() {
-                        db.delete(&secondary_key, &raw);
+            if !self.nd_handling() {
+                if let (Some(_), Some(key)) = (self.db(), database_key) {
+                    let key_bytes = key.as_bytes().to_vec();
+                    let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
+                    let mut entries = self
+                        .db()
+                        .map(|db| db.fetch(&secondary_key))
+                        .unwrap_or_default();
+                    entries.sort_by(|a, b| shortlex(a, b));
+                    let primary_max: Option<Vec<u8>> = self
+                        .interesting
+                        .values()
+                        .map(|nodes| {
+                            let choices: Vec<ChoiceValue> =
+                                nodes.iter().map(|n| n.value()).collect();
+                            serialize_choices(&choices)
+                        })
+                        .max_by(|a, b| shortlex(a, b));
+                    for raw in entries {
+                        if primary_max
+                            .as_ref()
+                            .is_some_and(|m| shortlex(&raw, m) == core::cmp::Ordering::Greater)
+                        {
+                            break;
+                        }
+                        if let Some(stored_choices) = deserialize_choices(&raw) {
+                            let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                            self.test_function(ntc).await?;
+                            if let Some(db) = self.db() {
+                                db.delete(&secondary_key, &raw);
+                            }
+                            // A flip makes single-replay deletes unsound for
+                            // the remaining entries (decision 11's budget
+                            // derivation).
+                            if self.nd_handling() {
+                                break;
+                            }
+                        } else if crate::native::blob::decode_nd_state(&raw).is_some() {
+                            // A v2 entry's hygiene lives in the reuse phase's
+                            // budgeted strikes: a pre-shrink reproduction
+                            // could change no outcome (decisions 20/24).
+                            continue;
+                        } else if let Some(db) = self.db() {
+                            db.delete(&secondary_key, &raw);
+                        }
                     }
                 }
             }
@@ -671,7 +687,7 @@ impl<'a> Engine<'a> {
                     if verify.status == Status::Interesting
                         && verify.origin.as_deref() == Some(origin.as_str())
                     {
-                        Some(verify)
+                        (!self.nd_handling()).then_some(verify)
                     } else if self.settings.nondeterminism_strictness
                         == NondeterminismStrictness::Error
                     {
@@ -699,12 +715,7 @@ impl<'a> Engine<'a> {
                         continue;
                     };
                     probe_anchor = confirm.evidence.lower_bound();
-                    let mut pool = Vec::from([choices.clone()]);
-                    for timeline in confirm.captured {
-                        if pool.len() < nd::POOL_CAP && !pool.contains(&timeline) {
-                            pool.push(timeline);
-                        }
-                    }
+                    let pool = pooled_timelines(choices.clone(), confirm.captured);
                     self.nd_origins
                         .confirm(&origin, probe_anchor, None, pool, batch);
                     self.record_nd_incumbent(&origin, &initial);
@@ -724,18 +735,19 @@ impl<'a> Engine<'a> {
                 }
 
                 let initial_spans = Spans::from(verify.spans.clone());
+                let gauntleted = self.nd_handling();
                 let shrunk = {
-                    let gauntlet = self.nd_handling();
                     let probe = EngineShrinkProbe {
                         engine: &mut *self,
                         target_origin: origin.clone(),
                         verbosity,
                         output: output.clone(),
-                        gauntlet,
+                        gauntlet: gauntleted,
                         ledger: HashMap::default(),
                         anchor: probe_anchor,
                         sweep: SweepMode::Fast,
                         raised: crate::native::HashSet::default(),
+                        pending_accept: None,
                     };
                     let mut shrinker =
                         Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
@@ -749,8 +761,12 @@ impl<'a> Engine<'a> {
                     shrink_timed_out |= shrinker.timed_out;
                     shrinker.current_nodes
                 };
-                self.interesting.insert(origin.clone(), shrunk);
-                shrunk_origins.insert(origin);
+                if !gauntleted && self.nd_handling() {
+                    self.interesting.insert(origin, initial);
+                } else {
+                    self.interesting.insert(origin.clone(), shrunk);
+                    shrunk_origins.insert(origin);
+                }
             }
 
             if shrink_timed_out && verbosity != Verbosity::Quiet {
@@ -816,24 +832,40 @@ impl<'a> Engine<'a> {
             ));
         }
 
-        let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
-            core::mem::take(&mut self.interesting).into_iter().collect();
-        origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
-
-        if !settings.report_multiple_failures {
-            if let Some(last) = origins_sorted.pop() {
-                origins_sorted.clear();
-                origins_sorted.push(last);
-            }
-        }
-
         if settings.show_statistics {
             for line in self.statistics.render() {
                 output.line(&line);
             }
         }
 
+        Ok(self.build_report())
+    }
+
+    /// Assemble the run's failure report, enforcing decision 24 at the
+    /// seam: blobs and replay-state caveats only for origins past
+    /// confirmation — the same [`OriginLifecycle::needs_confirmation`]
+    /// predicate the persistence filter uses — with the partition applied
+    /// before the sort and the single-failure truncation, so a leaked
+    /// unconfirmed origin can never displace a confirmed one. Unconfirmed
+    /// origins (bar rejects and never-replayed report-time admissions
+    /// alike) report caveat-only, and only when nothing confirmed or
+    /// trusted survived (decision 3).
+    fn build_report(&mut self) -> TestRunResult {
         let nd_blobs = self.nd_handling();
+        let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
+            core::mem::take(&mut self.interesting)
+                .into_iter()
+                .filter(|(origin, _)| !nd_blobs || !self.nd_origins.needs_confirmation(origin))
+                .collect();
+        origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
+
+        if !self.settings.report_multiple_failures {
+            if let Some(last) = origins_sorted.pop() {
+                origins_sorted.clear();
+                origins_sorted.push(last);
+            }
+        }
+
         let mut failures: Vec<Failure> = Vec::with_capacity(origins_sorted.len());
         for (origin, nodes) in origins_sorted {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
@@ -852,12 +884,9 @@ impl<'a> Engine<'a> {
                 caveat,
             });
         }
-        if failures.is_empty() && self.nd_handling() {
-            let unconfirmed: Vec<String> = self
-                .nd_origins
-                .unconfirmed()
-                .map(|(origin, _)| origin.to_string())
-                .collect();
+        if failures.is_empty() && nd_blobs {
+            let unconfirmed: Vec<String> =
+                self.nd_origins.unconfirmed().map(str::to_string).collect();
             for origin in unconfirmed {
                 failures.push(Failure {
                     caveat: self.nd_origins.caveat(&origin),
@@ -866,7 +895,7 @@ impl<'a> Engine<'a> {
                 });
             }
         }
-        Ok(TestRunResult { failures })
+        TestRunResult { failures }
     }
 }
 
@@ -984,21 +1013,21 @@ pub(crate) fn flaky_diagnostic() -> String {
         .to_string()
 }
 
-/// Warning emitted when shrinking exhausts its wall-clock budget
-/// ([`MAX_SHRINKING_SECONDS`]) and stops early. Unlike a health-check
-/// failure this is not a failure: the smallest counterexample found so far is
-/// still reported. Returned as a string (rather than printed inline) so it can
-/// be asserted directly in tests. Mirrors Hypothesis's slow-shrink notice.
 /// Notice emitted once per run under
 /// [`NondeterminismStrictness::Warn`], when detection first switches the
 /// run into nondeterministic handling.
 pub(crate) fn nondeterminism_notice() -> &'static str {
     "Nondeterministic test behavior detected: failures are now confirmed by \
-     repeated replay before being reported or shrunk. Set \
-     nondeterminism_strictness to quiet to silence this notice, or to error \
-     to abort instead."
+     repeated replay before being shrunk or persisted, and unconfirmed \
+     failures are reported with a caveat. Set nondeterminism_strictness to \
+     quiet to silence this notice, or to error to abort instead."
 }
 
+/// Warning emitted when shrinking exhausts its wall-clock budget and stops
+/// early. Unlike a health-check failure this is not a failure: the smallest
+/// counterexample found so far is still reported. Returned as a string
+/// (rather than printed inline) so it can be asserted directly in tests.
+/// Mirrors Hypothesis's slow-shrink notice.
 pub(crate) fn slow_shrink_warning() -> String {
     format!(
         "WARNING: Shrinking has been running for more than {MAX_SHRINKING_SECONDS} seconds \
@@ -1090,6 +1119,23 @@ fn update_interesting(
             }
         }
     }
+}
+
+/// The stored-timeline set for one origin: the incumbent first, then
+/// deduplicated pool entries, capped at [`nd::POOL_CAP`] timelines in
+/// total, incumbent included. Every pool the engine stores, persists, or
+/// replays is built here, so the cap comparison is written once.
+fn pooled_timelines(
+    incumbent: Vec<ChoiceValue>,
+    rest: impl IntoIterator<Item = Vec<ChoiceValue>>,
+) -> Vec<Vec<ChoiceValue>> {
+    let mut timelines = Vec::from([incumbent]);
+    for timeline in rest {
+        if timelines.len() < nd::POOL_CAP && !timelines.contains(&timeline) {
+            timelines.push(timeline);
+        }
+    }
+    timelines
 }
 
 /// Incremental database-save bookkeeping. Every time a new interesting
@@ -1414,8 +1460,10 @@ impl<'a> Engine<'a> {
     /// incumbent, pool, splices, then [`nd::FINAL_REPLAY_FRESH`] fresh
     /// generations, up to the standard reuse budget — and the evidence
     /// lands in the lifecycle: a reproducing replay confirms a
-    /// yet-unconfirmed origin, a dry one switches the caveat's wording
-    /// instead of unreporting the failure (decision 3).
+    /// yet-unconfirmed origin; a dry confirmed origin switches its
+    /// caveat's wording instead of unreporting the failure (decision 3); a
+    /// dry unconfirmed origin is evicted like a bar reject and reaches the
+    /// report only through the caveat-only fallback (decision 24).
     async fn final_replay(&mut self) -> Result<(), RunError> {
         if self.interesting.is_empty() {
             return Ok(());
@@ -1443,12 +1491,7 @@ impl<'a> Engine<'a> {
                 }
                 self.nd_flip();
             }
-            let mut timelines: Vec<Vec<ChoiceValue>> = Vec::from([choices]);
-            for timeline in self.nd_origins.pool(&origin) {
-                if timelines.len() <= nd::POOL_CAP && !timelines.contains(timeline) {
-                    timelines.push(timeline.clone());
-                }
-            }
+            let timelines = pooled_timelines(choices, self.nd_origins.pool(&origin).to_vec());
             self.capture_replays = true;
             let (_, evidence) = self
                 .nd_reproduce(
@@ -1472,7 +1515,9 @@ impl<'a> Engine<'a> {
                     );
                 } else {
                     self.nd_origins.observe(&origin);
-                    self.nd_origins.reject(&origin, batch);
+                    if self.nd_origins.reject(&origin, batch) {
+                        self.interesting.remove(&origin);
+                    }
                 }
             } else {
                 self.nd_origins.record_final_replay(&origin, batch);
@@ -1635,12 +1680,7 @@ impl<'a> Engine<'a> {
             }
             let batch = (confirm.evidence.fails(), confirm.evidence.runs());
             if confirm.accepted {
-                let mut pool = Vec::from([choices]);
-                for timeline in confirm.captured {
-                    if pool.len() < nd::POOL_CAP && !pool.contains(&timeline) {
-                        pool.push(timeline);
-                    }
-                }
+                let pool = pooled_timelines(choices, confirm.captured);
                 self.nd_origins.confirm(
                     &origin,
                     confirm.evidence.lower_bound(),
@@ -1669,12 +1709,7 @@ impl<'a> Engine<'a> {
         incumbent: Vec<ChoiceValue>,
     ) -> crate::native::blob::NdReproState {
         let len = crate::native::core::flattened_values_len(&incumbent);
-        let mut timelines = Vec::from([incumbent]);
-        for timeline in self.nd_origins.pool(origin) {
-            if timelines.len() <= nd::POOL_CAP && !timelines.contains(timeline) {
-                timelines.push(timeline.clone());
-            }
-        }
+        let timelines = pooled_timelines(incumbent, self.nd_origins.pool(origin).to_vec());
         let mut content = Vec::new();
         for timeline in &timelines {
             content.extend_from_slice(&serialize_choices(timeline));
@@ -1757,8 +1792,9 @@ impl<'a> Engine<'a> {
 
     /// Record one executed test case: the choice tree (losslessly — nodes,
     /// span events, and the full conclusion), counters, test time, triviality,
-    /// the targeting observations, the per-origin interesting map (with its
-    /// incremental database save), and the bug-window markers.
+    /// the targeting observations (deterministic runs only — targeting is
+    /// fully off under `nd_active`, decision 29), the per-origin interesting
+    /// map (with its incremental database save), and the bug-window markers.
     ///
     /// Every execution feeds the tree, so a later replay of the same path is
     /// served by [`data_tree::simulate_full`] without re-running the body.
@@ -1788,7 +1824,8 @@ impl<'a> Engine<'a> {
             if run.nodes.is_empty() && run.status >= Status::Invalid {
                 self.test_is_trivial = true;
             }
-            if run.status >= Status::Valid && !run.target_observations.is_empty() {
+            if run.status >= Status::Valid && !self.nd_active && !run.target_observations.is_empty()
+            {
                 let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
                 self.targeting.record(&choices, &run.target_observations);
             }
@@ -1958,6 +1995,21 @@ struct EngineShrinkProbe<'e, 'a> {
     /// and replay-sourced evidence must not keep raising the anchor or the
     /// incumbent prices fresh candidates out (decision 19).
     raised: crate::native::HashSet<Vec<u8>>,
+    /// The most recent gauntlet accept, held until the shrinker either
+    /// adopts it ([`ShrinkProbe::candidate_adopted`], the point where the
+    /// anchor raise and incumbent persistence happen) or runs the next
+    /// candidate. A gauntlet accept the shrinker discards — a punned
+    /// realization, or a sort-key-larger mutation probe — must move
+    /// nothing: the anchor bounds the *incumbent's* rate, and a
+    /// never-adopted candidate never becomes the incumbent.
+    pending_accept: Option<PendingAccept>,
+}
+
+/// See [`EngineShrinkProbe::pending_accept`].
+struct PendingAccept {
+    key: Vec<u8>,
+    lower_bound: f64,
+    nodes: Vec<ChoiceNode>,
 }
 
 impl EngineShrinkProbe<'_, '_> {
@@ -1981,8 +2033,24 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
         self.gauntlet.then_some(previous)
     }
 
+    fn candidate_adopted(&mut self) {
+        let Some(accept) = self.pending_accept.take() else {
+            return;
+        };
+        let first_accept = self.raised.insert(accept.key);
+        if first_accept && accept.lower_bound > self.anchor {
+            self.anchor = accept.lower_bound;
+            self.engine
+                .nd_origins
+                .raise_anchor(&self.target_origin, accept.lower_bound);
+        }
+        self.engine
+            .record_nd_incumbent(&self.target_origin, &accept.nodes);
+    }
+
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
         Box::pin(async move {
+            self.pending_accept = None;
             if self.verbosity == Verbosity::Verbose {
                 self.output.line("Running test case");
             }
@@ -2013,15 +2081,11 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 let evidence = *self.ledger.get(&key).unwrap();
                 match nd::gauntlet(&evidence, self.anchor) {
                     nd::GauntletVerdict::Accept { lower_bound } => {
-                        let first_accept = self.raised.insert(key.clone());
-                        if first_accept && lower_bound > self.anchor {
-                            self.anchor = lower_bound;
-                            self.engine
-                                .nd_origins
-                                .raise_anchor(&self.target_origin, lower_bound);
-                        }
-                        self.engine
-                            .record_nd_incumbent(&self.target_origin, &run.nodes);
+                        self.pending_accept = Some(PendingAccept {
+                            key,
+                            lower_bound,
+                            nodes: run.nodes.clone(),
+                        });
                         return Ok((true, run.nodes, Spans::from(run.spans)));
                     }
                     nd::GauntletVerdict::Reject => {

@@ -315,9 +315,11 @@ pub trait DataSource: Send + Sync {
 
 /// A single interesting test case surfaced by a run.
 ///
-/// A failure carries the origin the engine grouped on and the reproduce blob
-/// the client replays; the rendered diagnostic (panic location, message,
-/// backtrace) is produced when the client replays that blob.
+/// A failure carries the origin the engine grouped on, the reproduce blob
+/// for replaying the failure in a later run, and — under nondeterministic
+/// handling — the caveat stating its confirmation standing. The rendered
+/// diagnostic (panic location, message, backtrace) comes from the stamped
+/// report-time replay the client captured, not from replaying the blob.
 #[derive(Debug, Clone)]
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from

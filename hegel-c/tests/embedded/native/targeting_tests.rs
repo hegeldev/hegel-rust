@@ -393,3 +393,27 @@ fn run_trial_records_interesting_result_into_ctx() {
         TestCaseResult::Valid
     });
 }
+
+#[test]
+fn the_optimiser_stops_when_the_run_flips_nondeterministic() {
+    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+    let exchange = crate::exchange::CaseExchange::new();
+    let fut = async {
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
+        engine.targeting.record(
+            &[ChoiceValue::Integer(BigInt::from(2))],
+            &HashMap::from_iter([("".to_string(), 2.0)]),
+        );
+        engine.nd_active = true;
+        let mut optimiser = Optimiser {
+            engine: &mut engine,
+            max_valid: 10_000,
+            max_calls: 100_000,
+        };
+        optimiser.optimise_targets().await.unwrap();
+        assert_eq!(engine.calls, 0);
+    };
+    crate::exchange::drive(&exchange, fut, |_ds| {
+        panic!("no trial may execute once the run is nondeterministic");
+    });
+}

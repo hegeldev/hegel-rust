@@ -32,7 +32,7 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 | 24 | Confirmation gates admission; DB reproduction is trusted | Implemented: `needs_confirmation` sweep + `OriginLifecycle::trust` (no re-run of the bar on reuse) |
 | 25 | Replay order: first-fit, splices, fresh; boost off outside rescue | Implemented: `nd_reproduce` (splices = 6, fresh only where the caller allows), `nd_boost` behind the 0.5 reliability floor |
 | 26 | This branch goes to production grade | This phase; the full gate run and this audit are its exit |
-| 27 | G1: FAILED + caveat accessor, status 3 retired | Implemented: `hegel_failure_caveat`, status 3 deleted from `hegel-c/src/lib.rs`; changelogs call out the break. Binding survey (hegel-go/-ocaml/-typescript/-cpp) remains to do at release time, before the header ships |
+| 27 | G1: FAILED + caveat accessor, status 3 retired | Implemented: `hegel_failure_caveat`, status 3 deleted from `hegel-c/src/lib.rs`; changelogs call out the break. Binding survey done, recorded in production-plan.md phase 6: ts/ocaml never adopted status 3, go's handling is dead but harmless, cpp vendors the header. The enum rustdoc reserves value 3 against reuse |
 | 28 | G2: boost as reliability-floor heuristic | Implemented: `BOOST_RELIABILITY_FLOOR = 0.5`, holdout-gated, no public setting |
 | 29 | G3: data tree disabled under ND | Implemented (see 6); kind-set tolerance not needed on measured workloads |
 | 30 | G4: strictness surface | Implemented (see 1); `error` reproduces the old abort diagnostics verbatim (`flaky_diagnostic`, pinned by tests) |
@@ -42,8 +42,9 @@ File paths are engine-side (`hegel-c/src/native/`) unless noted.
 
 Residual items, deliberately not done on this branch:
 
-- The binding survey for the retired status 3 (decision 27) belongs to the release that ships
-  the header, not to this branch.
+- The binding survey for the retired status 3 (decision 27) is done — recorded in
+  production-plan.md phase 6; what remains for the release that ships the header is
+  hegel-cpp's compile-time migration on its next header sync.
 - Kind-set tolerance for the data tree (decision 29's follow-up) waits for a workload where
   no-tree generation cost shows up; 007 found none.
 - `replay_aligned` under ND stays as accepted re-shrinking (005B priced it); revisit if slow
