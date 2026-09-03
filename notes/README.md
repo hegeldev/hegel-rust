@@ -10,7 +10,10 @@ from each throwaway are knowledge, worked use cases, and tests — they live her
 - `research/map-*.md` — code maps of every determinism-dependent subsystem, with `path:line`
   refs (compiled 2026-09-02 at a0185a65).
 - `research/sketch-v0.md` — the first mechanism sketch, kept because the reviews reference it.
-- `research/critique-*.md` — adversarial reviews of sketch v0 that produced the current design.
+- `research/critique-*.md` — adversarial reviews: of sketch v0 (producing the current
+  design), and of the as-built implementation (`critique-asbuilt.md`, 2026-09-03).
+- `remediation-plan.md` — the fix plan for the as-built review's findings; continues
+  `production-plan.md`'s phases, gates, and experiment series.
 - `experiments/` — one directory per experiment; `000-plan.md` is the sequence and status.
 
 Experiment code lives in `/experiments` at the repo root (standalone crates, not workspace
