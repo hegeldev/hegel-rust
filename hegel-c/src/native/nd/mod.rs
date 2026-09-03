@@ -157,8 +157,8 @@ pub(crate) enum GauntletVerdict {
 /// 4.0e-4 per proposal against a q = 0.02 fluke, under the 1e-3 target,
 /// which also absorbs the check-per-run stopping bias (z stays 1.96). The
 /// caller raises its monotone anchor from the accepted candidate's
-/// topped-up ledger — never lowering it, and never from replay-sourced
-/// evidence (decision 19).
+/// topped-up ledger — never lowering it, and post-accept re-measurement
+/// of the standing incumbent never feeds it (decision 19).
 pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
     let gamma = if anchor >= RETENTION_HIGH_WATER {
         1.0

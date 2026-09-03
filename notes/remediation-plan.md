@@ -394,7 +394,7 @@ green. G9/G10 resolve here from 009a's tables.
 All constants from 008; every change inside `nd::gauntlet`, `nd_evidence_batch`, and the
 probe, spec'd by DP fixtures:
 
-- **Accept rule**: `GAUNTLET_MIN_FAILS` (provisional 3) — accept additionally requires
+- **Accept rule**: `GAUNTLET_MIN_FAILS` (provisional 3) — accept also requires
   the fail count; short-of-evidence verdicts are Continue, never Reject on that ground;
   UCB-proof and cap rejections unchanged. Recruiting run stays in the ledger unless 008's
   DP said otherwise. `GAUNTLET_FLOOR` re-derived and cited.
@@ -448,8 +448,20 @@ headline miss lives in production's lazy ND entry, raised as gate G20.
 - Full gate run per production-plan phase 8's list; /self-review over all prose added by
   phases 9-13.
 
+Sweep outcome: 21 of 22 findings confirmed under adversarial refutation and corrected in
+place. The largest: flip-source attribution (four of six `nd_flip` sites live outside
+`test_function_tagged`), persistence and reporting scoped to confirmed *or* trusted,
+decision 19's replay-evidence overclaim (also in the gauntlet rustdoc), and the
+`hegel_test_case_should_capture` contract doc — the deterministic final replay and blob
+replays are stamped too; header regenerated.
+
 Exit: every register finding traceable to a landed fix, a recorded deliberate non-fix, or
 a DRM-accepted risk entry.
+
+Exit verified 2026-09-03: an independent audit traced all 40 register findings to landed
+fixes with their pinning tests or decision entries (deliberate retentions — z = 1.96, the
+asymmetric miss weighting, FINAL_REPLAY_FRESH chosen not derived — are recorded in
+decisions 53/54). None untraceable.
 
 ## Decision entries to record
 
@@ -475,7 +487,7 @@ how it got there; retention shape (G6); boost floor in corrected units (G7, clar
   composed badly once. The mitigations are structural this time: 008 sweeps the composed
   pipeline (bar → anchor → gauntlet → boost, weighting included), 009b re-checks the
   watermark's operating points under the final rules, and the DP fixture tests make any
-  future constant change fail loudly until re-derived.
+  future constant change fail until re-derived.
 - **Shrink wall clock.** Min-fails accepts (~3× replays per accepted step) plus
   accept-time seeding extensions (~20 replays per accept) push against
   `MAX_SHRINKING_SECONDS`, already a known risk for slow concurrent bodies. 008 records

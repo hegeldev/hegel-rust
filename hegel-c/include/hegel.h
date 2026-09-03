@@ -1240,10 +1240,11 @@ hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc)
  diagnostic, keyed by the failure's origin — a stamped failing
  execution is the material for that origin's failure report. The
  engine stamps the executions whose failures can become the report:
- under nondeterministic handling, confirmation batches, database-reuse
- replays, the report-time final replay, and generation-phase cases
- (whose failing origins may be reported unconfirmed). Read the stamp
- once at case start.
+ the report-time final replay (on deterministic runs too), every
+ `hegel_run_start_blob` replay, and, under nondeterministic handling,
+ confirmation batches, database-reuse replays, and generation-phase
+ cases (whose failing origins may be reported unconfirmed). Read the
+ stamp once at case start.
  */
 hegel_result_t hegel_test_case_should_capture(hegel_context_t *ctx,
                                               const hegel_test_case_t *tc,

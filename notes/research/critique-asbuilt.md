@@ -212,11 +212,11 @@ documentation layer that has drifted from the code it claims to describe as-buil
 
 The review verified these as sound: the v2 blob format (version byte with
 v3 headroom, bounds-checked parsing, 64-timeline cap, linear allocations); decision 8
-field-by-field, with the content-hash entropy load-bearing for dedup; decision 32's
+field-by-field, with the content-hash entropy required for dedup; decision 32's
 "only consumer" claim exactly (`state.rs:2438-2442`); the bar's operating points
 re-derived by exact DP in the test suite; `error` strictness byte-identical to the old
 diagnostics; caveats quoting physical counts; unconfirmed-suppression implementing
 decisions 3+24 jointly; evidence keyed on realized timelines surviving pass boundaries;
-the accounting split everywhere probed except R5; and the monotone anchor genuinely
+the accounting split everywhere probed except R5; and the monotone anchor
 preventing multiplicative threshold decay — the reason S1/S2 are a recalibration, not a
 redesign.

@@ -493,7 +493,7 @@ where
     /// nondeterministic one. Enable [`print_blob`](Settings::print_blob) to
     /// have a native failure print one. When set, [`run`](Self::run) replays
     /// the blob — a deterministic blob exactly once, a nondeterministic blob
-    /// until a replay fails, under a bounded replay budget — bypassing
+    /// until a replay fails, under a replay budget — bypassing
     /// generation and shrinking, so you can reproduce a CI failure locally.
     ///
     /// First-wins: if a blob is already set, further calls are ignored.

@@ -200,14 +200,15 @@ fn filter_short_backtrace(backtrace_str: &str) -> String {
 
 /// Placeholder thread/location/backtrace tuple used when the panic hook
 /// captured nothing for a caught panic. This *is* reached in production:
-/// a genuine panic on a spawned thread lands its capture in that thread's
-/// `LAST_PANIC_INFO`, and the `join().unwrap()` that propagates it uses
-/// `resume_unwind`, which skips the hook on the joining thread — so the
-/// lifecycle finds nothing here. One consequence is that every such
-/// failure shares the origin `"Panic at <unknown>"`, merging distinct
-/// threaded bugs into one counterexample; fixing that needs cross-thread
-/// capture, which is deferred until there is structured concurrency
-/// support to hang it on.
+/// a panic payload ferried from another thread and re-raised on the test
+/// thread with `resume_unwind` skips the hook, so the lifecycle finds
+/// nothing here. (A plain `join().unwrap()` instead panics afresh
+/// through the hook, pinning the origin to the join site and degrading
+/// the message; a never-joined thread's panic produces no failure at
+/// all.) One consequence is that every ferried failure shares the origin
+/// `"Panic at <unknown>"`, merging distinct threaded bugs into one
+/// counterexample; fixing that needs cross-thread capture, which is
+/// deferred until there is structured concurrency support to hang it on.
 pub(crate) fn unknown_panic_info() -> (String, String, String, Backtrace) {
     (
         "<unknown>".to_string(),
@@ -455,9 +456,9 @@ fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<
 /// ([`capture_rank`]): a rendered diagnostic over draw/note lines over a
 /// bare capture, and a new interesting case replaces the stored capture
 /// only at rank >= stored ([`store_capture`]). An unstamped shrink or
-/// measurement probe thus cannot clobber a stamped capture, while at
-/// equal rank the newer wins: final replay over confirmation over
-/// discovery. The panic payload travels with its capture, so the re-raised
+/// measurement probe's bare capture thus cannot clobber a stamped
+/// diagnostic or draw lines, while at equal rank the newer wins: final
+/// replay over confirmation over discovery. The panic payload travels with its capture, so the re-raised
 /// panic always matches the printed diagnostic. When the final replay is
 /// dry, the printed lines are the freshest stamped *failing* execution
 /// (usually confirmation-time, pre-shrink values) while the blob and

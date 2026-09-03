@@ -86,7 +86,7 @@ Machine W50 is 0.278/0.294/0.333 — two cells sit just under the 0.3 line, so b
 gate's letter DRM sees these tables. Nothing approaches the < 0.1 PHYS_GATE clause, and
 share-0 is exactly zero everywhere, so a physical backstop would be re-deriving constants
 to guard a regime the measurement says is empty (the physical CONFIRM_CAP arm at 37
-already bounds the worst case). The recommendation is to close G9 as no-change.
+already bounds the worst case). Recommend closing G9 as no-change.
 
 **The old weighting was the w = 0 column in practice.** Its share-0 is 0.78-0.97 and its
 mean 0.03-0.13: on these bodies the pre-fix bar and gauntlet were running on the

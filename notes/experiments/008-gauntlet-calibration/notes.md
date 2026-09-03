@@ -211,8 +211,8 @@ precision criterion alone admits up to 0.50; the value matching the trigger inte
 boundary image — the median e20 anchor of a true-0.5 incumbent, 0.299 ~= LCB(10/20).
 **BOOST_RELIABILITY_FLOOR = 0.30** (e20-LCB units): recall 0.991, precision 1.000 on the
 spec population; boundary-adjacent sensitivity (population including 0.5/0.7) gives
-precision 0.878 at 0.25 and 0.756 at 0.30, so values above 0.30 buy nothing and erode
-robustness. Confirms G7's derived value. Decision 28's literal 0.5 over-triggers on
+precision 0.878 at 0.25 and 0.756 at 0.30, so values above 0.30 buy nothing and cost
+precision. Confirms G7's derived value. Decision 28's literal 0.5 over-triggers on
 near-boundary incumbents: a true-0.7 incumbent triggers 59% of the time at 0.5, 5% at
 0.30.
 

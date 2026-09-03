@@ -722,8 +722,7 @@ impl<'a> Engine<'a> {
                     // Trusted: already admitted (decision 24), so any
                     // failure in the batch promotes with the batch's LCB
                     // as anchor — the bar arithmetic is only the stopping
-                    // rule. Promotion merges the fresh captures with the
-                    // stored pool, fresh-first.
+                    // rule.
                     let batch = self.nd_evidence_batch(&origin, &choices).await?;
                     let evidence = (batch.evidence.fails(), batch.evidence.runs());
                     if let Some(witness) = batch.witness {
@@ -1349,9 +1348,10 @@ pub(crate) struct Engine<'a> {
     /// While set, every measurement execution is stamped for capture
     /// (`hegel_test_case_should_capture`), telling the client to buffer
     /// its output and diagnostic — the material for the failure report.
-    /// Set around confirmation batches, database-reuse replays, and the
-    /// final replay; shrink-gauntlet and boost replays stay cheap and
-    /// unstamped.
+    /// Set around confirmation batches, database-reuse replays, the
+    /// final replay, and ND blob replays (the deterministic choices-blob
+    /// path stamps its case directly); shrink-gauntlet and boost replays
+    /// stay cheap and unstamped.
     capture_replays: bool,
     /// While set, generation-phase executions under ND handling are
     /// stamped too, so an origin the run discovers but never confirms
@@ -2189,9 +2189,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         nd::GauntletVerdict::Continue => {}
                     }
                 }
-                // An accept stands. The ledger is topped up to
-                // ANCHOR_SEED_RUNS first so the anchor moves on a bound
-                // the stopping rule didn't bias (decision 54).
+                // The ledger is topped up to ANCHOR_SEED_RUNS before
+                // the accept returns, so the anchor moves on a bound the
+                // stopping rule didn't bias (decision 54).
                 if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
                     self.pending_accept = Some(PendingAccept {
                         key,

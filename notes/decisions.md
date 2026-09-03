@@ -214,8 +214,7 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
 
 34. **Remediation gates G5-G19 resolved as recommended.** The as-built review
     (`research/critique-asbuilt.md`) and its fix plan (`remediation-plan.md`) raised
-    fifteen gates; DRM accepted every recommendation without detailed review, to be
-    revisited if implementation hits problems. Outcomes: anchor estimand clarified —
+    fifteen gates; DRM accepted every recommendation without detailed review. Outcomes: anchor estimand clarified —
     pinned-replay reproduction rate, raised only at validated-accept events (G5);
     retention gamma schedule with parameters from 008 (G6); boost floor re-derived in
     corrected units (G7); the clone-descending watermark lands before 009 validates (G8);
