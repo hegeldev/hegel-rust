@@ -39,13 +39,13 @@ const MIDNIGHT: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
     hour: 0,
     minute: 0,
     second: 0,
-    microsecond: 0,
+    nanosecond: 0,
 };
-const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+const LAST_NANOSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
     hour: 23,
     minute: 59,
     second: 59,
-    microsecond: 999_999,
+    nanosecond: 999_999_999,
 };
 const FULL_MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
     date: FULL_MIN_DATE,
@@ -53,7 +53,7 @@ const FULL_MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
 };
 const FULL_MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
     date: FULL_MAX_DATE,
-    time: LAST_MICROSECOND,
+    time: LAST_NANOSECOND,
 };
 
 unsafe fn complete_valid(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
@@ -1312,14 +1312,14 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
             hour: 0,
             minute: 0,
             second: 0,
-            microsecond: 0,
+            nanosecond: 0,
         };
         assert_eq!(
             hegel_generate_time(
                 ctx,
                 ptr::null_mut(),
                 MIDNIGHT,
-                LAST_MICROSECOND,
+                LAST_NANOSECOND,
                 &mut null_time
             ),
             HEGEL_E_INVALID_HANDLE
@@ -1370,7 +1370,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
-                hegel_generate_time(ctx, tc, MIDNIGHT, LAST_MICROSECOND, ptr::null_mut()),
+                hegel_generate_time(ctx, tc, MIDNIGHT, LAST_NANOSECOND, ptr::null_mut()),
                 HEGEL_E_INVALID_ARG
             );
             assert_eq!(
@@ -1426,19 +1426,19 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                     hour: 0,
                     minute: 0,
                     second: 0,
-                    microsecond: 0,
+                    nanosecond: 0,
                 };
                 if check(hegel_generate_time(
                     ctx,
                     tc,
                     MIDNIGHT,
-                    LAST_MICROSECOND,
+                    LAST_NANOSECOND,
                     &mut time,
                 )) {
                     break 'draws true;
                 }
                 assert!(time.hour <= 23 && time.minute <= 59 && time.second <= 59);
-                assert!(time.microsecond <= 999_999);
+                assert!(time.nanosecond <= 999_999_999);
 
                 let mut dt = hegel_c::hegel_datetime_t {
                     date: hegel_c::hegel_date_t {
@@ -1450,7 +1450,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                         hour: 0,
                         minute: 0,
                         second: 0,
-                        microsecond: 0,
+                        nanosecond: 0,
                     },
                 };
                 if check(hegel_generate_datetime(
@@ -1534,10 +1534,10 @@ fn structured_draws_after_overrun_report_stop_test() {
             hour: 0,
             minute: 0,
             second: 0,
-            microsecond: 0,
+            nanosecond: 0,
         };
         assert_eq!(
-            hegel_generate_time(ctx, tc, MIDNIGHT, LAST_MICROSECOND, &mut time),
+            hegel_generate_time(ctx, tc, MIDNIGHT, LAST_NANOSECOND, &mut time),
             HEGEL_E_STOP_TEST
         );
         let mut dt = hegel_c::hegel_datetime_t {
@@ -1550,7 +1550,7 @@ fn structured_draws_after_overrun_report_stop_test() {
                 hour: 0,
                 minute: 0,
                 second: 0,
-                microsecond: 0,
+                nanosecond: 0,
             },
         };
         assert_eq!(
@@ -1715,13 +1715,13 @@ fn structured_draws_respect_explicit_bounds() {
                 hour: 9,
                 minute: 30,
                 second: 0,
-                microsecond: 0,
+                nanosecond: 0,
             };
             let max_time = hegel_c::hegel_time_t {
                 hour: 17,
                 minute: 0,
                 second: 0,
-                microsecond: 0,
+                nanosecond: 0,
             };
             ok(hegel_generate_time(ctx, tc, min_time, max_time, &mut time));
             assert!((9..=17).contains(&time.hour), "{}", time.hour);

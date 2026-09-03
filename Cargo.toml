@@ -6,7 +6,7 @@ too_many_arguments = "allow"
 
 [package]
 name = "hegeltest"
-version = "0.37.0"
+version = "0.38.1"
 edition = "2024"
 # if you bump this, also bump ci.yml, hegel-macros/Cargo.toml, and hegel-c/Cargo.toml
 rust-version = "1.86"
@@ -98,12 +98,12 @@ path = "tests/fixtures/threaded_rejects.rs"
 tempfile = "3.0"
 crc32fast = "1.4"
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.37.0", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.38.1", path = "hegel-macros" }
 # The native engine + C ABI ("libhegel"). hegeltest drives it through the
 # C ABI (the hegel_* extern "C" functions), exactly like other language
 # bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
 # is `hegeltest-c`.
-hegeltest-c = { version = "=0.35.0", path = "hegel-c", default-features = false }
+hegeltest-c = { version = "=0.36.0", path = "hegel-c", default-features = false }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }

@@ -2,12 +2,28 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, ImplItem, ItemImpl};
 
+use crate::common::{extract_ident_from_pat, rewrite_draws_in_block};
+
 fn is_rule(a: &Attribute) -> bool {
     a.path().is_ident("rule")
 }
 
 fn is_invariant(a: &Attribute) -> bool {
     a.path().is_ident("invariant")
+}
+
+/// Rewrite `tc.draw` / `tc.target` calls in a rule or invariant body, the
+/// way `#[hegel::test]` does for a test body. Each invocation runs on its
+/// own naming scope, so repeatability is judged within the body alone even
+/// though the body runs once per step.
+fn rewrite_method_draws(method: &mut syn::ImplItemFn) {
+    let tc_ident = match method.sig.inputs.iter().nth(1) {
+        Some(syn::FnArg::Typed(arg)) => extract_ident_from_pat(&arg.pat),
+        _ => None,
+    };
+    if let Some(tc_ident) = tc_ident {
+        rewrite_draws_in_block(&mut method.block, &tc_ident);
+    }
 }
 
 struct MethodInfo {
@@ -154,6 +170,10 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
                 }
             }
 
+            if rule_attr.is_some() || has_invariant {
+                rewrite_method_draws(method);
+            }
+
             if let Some(attr) = rule_attr {
                 let group = match rule_group(&attr) {
                     Ok(group) => group,
@@ -220,6 +240,10 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
                     )
                     .to_compile_error();
                 }
+            }
+
+            if has_rule || has_invariant {
+                rewrite_method_draws(method);
             }
 
             let info = || MethodInfo {
