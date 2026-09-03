@@ -309,7 +309,20 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     evaluation.md now points there, and the `hegel_run_status_t` rustdoc reserves value 3
     against reuse. (Critique D12.)
 
-44. *(Reserved for the phase-10 persistence entry, landed by cherry-pick.)*
+44. **Same-run supersession is save-then-delete, and the secondary corpus caps at 50 per
+    key.** `Persister::record_bytes` writes the new incumbent before deleting the bytes it
+    supersedes, so at every instant the primary key carries the most recent validated
+    incumbent and Ctrl-C mid-shrink loses nothing. A superseded same-run save is deleted,
+    never demoted: it never ended a run as anyone's best example, so it earned no cross-run
+    staleness strike. End-of-run reconciliation deletes same-run leftovers (a
+    `saved_this_run` set tells them apart) while still demoting the run-start primary entry
+    (decision 11's strike one, the freshest cross-run backup), leaving one secondary
+    deposit per origin per run. `SECONDARY_CORPUS_CAP = 50` per key (5x the reuse phase's
+    default secondary sampling ceiling) evicts the shortlex-largest entries at
+    reconciliation — a resource bound outside decision 11's two-strike hygiene, which still
+    decides which entries demote and which delete. Rejected: an ND-only fork of the
+    supersession rule; the status quo plus the cap alone; no cap. (G14, G15; critique
+    P2a/P2b.)
 
 45. *(Reserved for the phase-10 watermark entry, landed by cherry-pick.)*
 

@@ -119,12 +119,16 @@ unconfirmed — quoting report-time replay counts apart from the confirmation or
 `NdReproState` (blob.rs): stored timelines incumbent-first, an entropy seed, and the
 continuation-budget extension. Serialized as the version-2 database entry and behind blob
 prefixes 2/3 (self-identifying, decision 8; old readers reject unknown prefixes loudly). Only
-confirmed origins persist, via the `Persister`, which buffers during shrinking and commits
-validated incumbents — Ctrl-C keeps the last validated example. No rates or counters are ever
-persisted (decision 8): every run stands alone. Hygiene is two strikes across two runs:
-primary miss demotes to the secondary corpus, secondary miss deletes (decision 11). The
-pre-shrink secondary drain is v1-only and runs only under deterministic handling, breaking on
-a mid-drain flip. A v2 entry is never drained: under decisions 20/24 a pre-shrink
+confirmed origins persist, via the `Persister`: each validated incumbent is saved before the
+bytes it supersedes are deleted, so the primary key always carries the most recent validated
+example — Ctrl-C keeps it (decision 44). A superseded same-run save is deleted, never demoted.
+End-of-run reconciliation demotes only the run-start primary entry, leaving one secondary
+deposit per origin per run. No rates or counters are ever persisted (decision 8): every run
+stands alone. Hygiene is two strikes across two runs: primary miss demotes to the secondary
+corpus, secondary miss deletes (decision 11), with `SECONDARY_CORPUS_CAP` (50 per key)
+evicting the shortlex-largest at reconciliation as a resource bound outside the two-strike
+scheme (decision 44). The pre-shrink secondary drain is v1-only and runs only under
+deterministic handling, breaking on a mid-drain flip. A v2 entry is never drained: under decisions 20/24 a pre-shrink
 reproduction can change no outcome, so its hygiene lives in the reuse phase's budgeted
 strikes (decision 40).
 

@@ -131,6 +131,11 @@ const HEALTH_CHECK_MAX_VALID: u64 = 10;
 /// Hypothesis's `max_overrun_draws`.
 const MAX_OVERRUN_DRAWS: u64 = 20;
 
+/// Cap on secondary-corpus entries per database key: end-of-run
+/// reconciliation evicts the shortlex-largest above it — a resource bound
+/// outside decision 11's two-strike hygiene (decision 44).
+const SECONDARY_CORPUS_CAP: usize = 50;
+
 /// Run the exploration half of a test run — database replay, generation, and
 /// shrinking — and return a [`TestRunResult`] with one [`Failure`] per
 /// distinct bug, each carrying the origin the engine grouped on and (unless
@@ -853,12 +858,24 @@ impl<'a> Engine<'a> {
             };
             let primary_now = db.fetch(key_bytes);
             for old in primary_now {
-                if !new_entries.contains(&old) {
+                if new_entries.contains(&old) {
+                    continue;
+                }
+                if self.persister.saved_this_run.contains(&old) {
+                    db.delete(key_bytes, &old);
+                } else {
                     db.move_value(key_bytes, &secondary_key, &old);
                 }
             }
             for new_bytes in &new_entries {
                 db.save(key_bytes, new_bytes);
+            }
+            let mut secondary_now = db.fetch(&secondary_key);
+            if secondary_now.len() > SECONDARY_CORPUS_CAP {
+                secondary_now.sort_by(|a, b| shortlex(a, b));
+                for evicted in &secondary_now[SECONDARY_CORPUS_CAP..] {
+                    db.delete(&secondary_key, evicted);
+                }
             }
         }
 
@@ -1176,22 +1193,28 @@ fn pooled_timelines(
 }
 
 /// Incremental database-save bookkeeping. Every time a new interesting
-/// result is found (or an existing one is shortlex-improved), the
-/// realised choice sequence is saved to the primary key and the
-/// displaced previous entry is moved to the secondary key.
+/// result is found (or an existing one is shortlex-improved), the realised
+/// choice sequence is saved to the primary key, then the bytes it
+/// supersedes are deleted. Saving before deleting keeps the primary key
+/// carrying the most recent validated incumbent at every instant, so a
+/// Ctrl-C / SIGTERM mid-shrink loses nothing (decision 44).
 ///
-/// Persisting incrementally — rather than only at the end of `run_main` — is
-/// what guarantees that a failure survives a Ctrl-C / SIGTERM mid-shrink:
-/// the moment the runner discovers the failure (and at every subsequent
-/// improvement), the bytes are on disk.
+/// A superseded same-run save is deleted, never demoted: it never ended a
+/// run as anyone's best example, so it earned no cross-run staleness
+/// strike. The run-start primary entry is left in place, and end-of-run
+/// reconciliation demotes it (decision 11's strike one), using
+/// `saved_this_run` to tell it from same-run leftovers.
 struct Persister<'a> {
     db: Option<Box<dyn TestCaseDatabase>>,
     database_key: Option<&'a str>,
     /// For each origin we've saved at least once, the choice-node sequence
     /// of the most recent save and the exact bytes written. Used to (a)
     /// decide whether a new result is shortlex-smaller and therefore worth
-    /// saving, and (b) know the bytes to downgrade when it is.
+    /// saving, and (b) know the bytes to delete when it is.
     last_saved: HashMap<String, (Vec<ChoiceNode>, Vec<u8>)>,
+    /// Every byte string saved this run, so end-of-run reconciliation can
+    /// delete superseded same-run leftovers instead of demoting them.
+    saved_this_run: crate::native::HashSet<Vec<u8>>,
 }
 
 impl<'a> Persister<'a> {
@@ -1200,13 +1223,14 @@ impl<'a> Persister<'a> {
             db,
             database_key,
             last_saved: HashMap::default(),
+            saved_this_run: crate::native::HashSet::default(),
         }
     }
 
     /// Record an interesting result for `origin`. If this is the first
     /// sighting, or shortlex-precedes the previous save, the new bytes are
     /// written to the primary key and any previously-saved bytes for this
-    /// origin are downgraded to the secondary key.
+    /// origin are then deleted.
     fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
         let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
         let new_bytes = serialize_choices(&new_choices);
@@ -1242,11 +1266,13 @@ impl<'a> Persister<'a> {
             return;
         }
 
-        if let Some((_, prev_bytes)) = self.last_saved.get(origin) {
-            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-            db.move_value(key_bytes, &secondary_key, prev_bytes);
-        }
         db.save(key_bytes, &new_bytes);
+        if let Some((_, prev_bytes)) = self.last_saved.get(origin) {
+            if *prev_bytes != new_bytes {
+                db.delete(key_bytes, prev_bytes);
+            }
+        }
+        self.saved_this_run.insert(new_bytes.clone());
         self.last_saved
             .insert(origin.to_string(), (nodes.to_vec(), new_bytes));
     }
