@@ -24,7 +24,10 @@ failure report.
 - Restore shrinking, multi-failure reporting, database persistence, and reproduce blobs for
   nondeterministic tests.
 - Bound how much failure probability shrinking can trade away, and raise it when cheap. The
-  guard is statistical, not a strict never-lower; experiment 008 measures the envelope.
+  guard is statistical, not a strict never-lower; experiment 008's measured envelope: on a
+  rising landscape the final failure probability holds a median 0.82 (p10 0.58) against a
+  0.10 floor, and target-regime (p = 0.1) bugs survive shrinking at 100% against 67%
+  shipped.
 - Keep a caveat for the environment-modification hypothesis, with wording that admits it is
   indistinguishable from a very rare failure.
 
