@@ -19,6 +19,10 @@ code that makes them true, then a closing as-built audit).
 Fifteen gates, resolvable in one sitting between phases 9 and 10 — nothing in phase 9
 waits on any of them. Recommendations are the workstream designs' strongest proposals.
 
+*Resolved 2026-09-03: all fifteen as recommended (decision 34), to be revisited if
+implementation hits problems. The per-gate detailed decision entries land with their
+fixes.*
+
 **G5. Anchor estimand — decision-19 clarification** (blocks the decision entry and
 design.md wording; not experiment 008). The anchor tracks the incumbent's reproduction
 rate under the engine's own pinned-replay procedure, raised only at validated events —

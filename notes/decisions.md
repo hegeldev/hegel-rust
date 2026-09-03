@@ -211,3 +211,21 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     failure 4/30. Completes decision 25's one-replay-primitive rule for the blob path;
     `hegel_test_case_from_blob` stays for embedders as a documented single attempt.
     (Experiment 007 result.)
+
+34. **Remediation gates G5-G19 resolved as recommended.** The as-built review
+    (`research/critique-asbuilt.md`) and its fix plan (`remediation-plan.md`) raised
+    fifteen gates; DRM accepted every recommendation without detailed review, to be
+    revisited if implementation hits problems. Outcomes: anchor estimand clarified —
+    pinned-replay reproduction rate, raised only at validated-accept events (G5);
+    retention gamma schedule with parameters from 008 (G6); boost floor re-derived in
+    corrected units (G7); the clone-descending watermark lands before 009 validates (G8);
+    G9/G10 stay data-decided by 009a; generation-phase executions stamped once the run is
+    nondeterministic (G11); trusted-shrink anchor is the batch LCB, and decision 24's
+    protection is reworded to verdict-exemption (G12); stored pools merge at promotion
+    (G13); same-run supersession deletes, demotion for the run-start primary only (G14);
+    secondary corpus capped at 50 per key (G15); `hegel_test_case_is_nondeterministic`
+    renamed `hegel_test_case_should_capture`, no shim (G16); ND measurement line under
+    `show_statistics` (G17); splices restored to 10 (G18); `FINAL_REPLAY_FRESH`
+    documented as chosen, not derived (G19). Detailed entries land with their fixes per
+    the plan. (DRM, wholesale: "resolve them all as recommended and if you run into any
+    problems we can revise later".)
