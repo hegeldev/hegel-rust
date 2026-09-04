@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.36.2 - 2026-09-04
+
+This patch adds a shrink pass that deletes whole spans. The existing
+deletion passes only try windows of up to eight choices, so a stateful step
+whose rule draws and sampled invariant checks together cost more than that
+could never be deleted, and shrunk rule sequences kept redundant steps
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)).
+
 ## 0.36.1 - 2026-09-04
 
 This patch inverts the per-round decision drawn by `hegel_state_machine_next_group`. We were using a stop signal where we should have been using a continue signal.
