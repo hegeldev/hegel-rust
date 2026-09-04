@@ -83,9 +83,26 @@ pub(crate) enum OriginState {
 #[derive(Default)]
 pub(crate) struct OriginLifecycle {
     origins: BTreeMap<String, OriginState>,
+    /// Per-origin starting evidence from the first-interesting check's
+    /// replays (seam plan step 2): the discovery bar begins partially
+    /// filled instead of from zero. Taken once, by the origin's first
+    /// evidence batch.
+    seeds: BTreeMap<String, super::Evidence>,
 }
 
 impl OriginLifecycle {
+    /// Seed `origin`'s next evidence batch with the first-interesting
+    /// check's replay observations. Unlike [`Self::reject`], this counts
+    /// no rejection — the check is detection, not a bar verdict.
+    pub(crate) fn seed_evidence(&mut self, origin: &str, evidence: super::Evidence) {
+        self.seeds.insert(origin.to_string(), evidence);
+    }
+
+    /// The seeded starting evidence for `origin`, taken at most once.
+    pub(crate) fn take_seed(&mut self, origin: &str) -> Option<super::Evidence> {
+        self.seeds.remove(origin)
+    }
+
     /// A raw interesting execution observed `origin`. Creates the
     /// `Unconfirmed` entry on first sighting and never changes existing
     /// state — a raw run is selection, not evidence.

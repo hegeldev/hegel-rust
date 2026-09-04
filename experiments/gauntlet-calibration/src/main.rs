@@ -517,6 +517,7 @@ fn site_name(site: seam_dump::FlipSite) -> &'static str {
     match site {
         seam_dump::FlipSite::Concurrency => "conc",
         seam_dump::FlipSite::CacheMismatch => "cache",
+        seam_dump::FlipSite::FirstCheck => "first-check",
         seam_dump::FlipSite::ShrinkVerify => "verify",
         seam_dump::FlipSite::FinalReplay => "final",
         seam_dump::FlipSite::StoredV2Reuse => "v2-reuse",
@@ -559,6 +560,9 @@ fn run_seam_trial(landscape: Landscape, seed: u64) -> SeamTrial {
                 let p = atoms_of(&values).map(|atoms| landscape.p(&atoms));
                 evicts.push((p, at_final_replay));
             }
+            // The restored-vs-best column lands with the 011 comparison
+            // (seam plan, phase 17).
+            seam_dump::SeamEvent::Backtrack { .. } => {}
         }
     }
     SeamTrial {

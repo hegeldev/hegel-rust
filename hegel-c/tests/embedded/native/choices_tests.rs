@@ -1056,11 +1056,9 @@ fn clone_record_flat_len_agrees_across_representations() {
 /// (`shrink_duplicates` groups node values by hash).
 #[test]
 fn clone_record_hash_agrees_across_representations() {
-    use core::hash::{BuildHasher, Hash, Hasher};
+    use core::hash::{BuildHasher, Hash};
     fn fx_hash<T: Hash>(value: &T) -> u64 {
-        let mut hasher = rustc_hash::FxBuildHasher.build_hasher();
-        value.hash(&mut hasher);
-        hasher.finish()
+        rustc_hash::FxBuildHasher.hash_one(value)
     }
     let children = vec![boolean_node(true), clone_node(vec![boolean_node(false)])];
     let from_values =

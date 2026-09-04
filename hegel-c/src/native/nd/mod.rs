@@ -348,6 +348,7 @@ pub mod seam_dump {
     pub enum FlipSite {
         Concurrency,
         CacheMismatch,
+        FirstCheck,
         ShrinkVerify,
         FinalReplay,
         StoredV2Reuse,
@@ -364,6 +365,12 @@ pub mod seam_dump {
             origin: String,
             values: Vec<ChoiceValue>,
             at_final_replay: bool,
+        },
+        Backtrack {
+            origin: String,
+            restored: Vec<ChoiceValue>,
+            history_best: Vec<ChoiceValue>,
+            history_bytes: usize,
         },
     }
 
