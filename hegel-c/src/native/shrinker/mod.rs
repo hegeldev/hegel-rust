@@ -603,6 +603,10 @@ impl<'a> Shrinker<'a> {
                 "delete_chunks",
                 Box::new(|sh| boxed_pass(sh.delete_chunks())),
             ),
+            ShrinkPass::new(
+                "delete_between_repeats",
+                Box::new(|sh| boxed_pass(sh.delete_between_repeats())),
+            ),
             ShrinkPass::new("zero_choices", Box::new(|sh| boxed_pass(sh.zero_choices()))),
             ShrinkPass::new(
                 "swap_integer_sign",
