@@ -392,6 +392,42 @@ fn test_sort_stale_indices_after_punning() {
     }));
 }
 
+fn digit_chunks(width: usize) -> impl Generator<Vec<Vec<i64>>> {
+    gs::vecs(hegel::compose!(move |tc| {
+        (0..width)
+            .map(|_| tc.draw(gs::integers::<i64>().min_value(0).max_value(9)))
+            .collect::<Vec<i64>>()
+    }))
+    .max_size(20)
+}
+
+fn assert_deletes_down_to_one_chunk(width: usize) {
+    let mut expected = vec![0i64; width];
+    expected[width - 1] = 7;
+    for seed in 1..=5 {
+        let result = Minimal::new(digit_chunks(width), move |x: &Vec<Vec<i64>>| {
+            x.iter().any(|chunk| chunk[width - 1] == 7)
+        })
+        .test_cases(300)
+        .seed(seed)
+        .run();
+        assert_eq!(result, vec![expected.clone()], "seed {seed}");
+    }
+}
+
+#[test]
+fn test_deletes_thin_collection_elements() {
+    assert_deletes_down_to_one_chunk(7);
+}
+
+/// Deleting an element takes one attempt that removes its continuation choice
+/// and every choice inside it, so elements wider than `delete_chunks`' window
+/// need span deletion.
+#[test]
+fn test_deletes_fat_collection_elements() {
+    assert_deletes_down_to_one_chunk(11);
+}
+
 /// The shrinker should reduce to two distinct empty inner lists.
 #[test]
 fn test_multiple_empty_lists_are_independent() {
