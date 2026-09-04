@@ -1052,6 +1052,26 @@ impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
     }
 }
 
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::VecDeque<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "VecDeque::from([", "])", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::LinkedList<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "LinkedList::from([", "])", self.iter());
+    }
+}
+
+/// Elements print in the heap's arbitrary iteration order, like the hash
+/// collections; the constructed heap is equal as a heap.
+impl<T: PrettyPrintable + Ord> PrettyPrintable for std::collections::BinaryHeap<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "BinaryHeap::from([", "])", self.iter());
+    }
+}
+
 impl<T: PrettyPrintable> PrettyPrintable for std::collections::HashSet<T> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_seq(printer, "HashSet::from([", "])", self.iter());
@@ -1096,6 +1116,161 @@ impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collection
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_map(printer, "BTreeMap::from([", self.iter());
     }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::Range<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start.pretty_print(printer);
+        printer.text("..");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeInclusive<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start().pretty_print(printer);
+        printer.text("..=");
+        self.end().pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeFrom<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start.pretty_print(printer);
+        printer.text("..");
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeTo<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeToInclusive<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..=");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl PrettyPrintable for std::ops::RangeFull {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..");
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::Bound<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::ops::Bound::Unbounded => printer.text("Bound::Unbounded"),
+            std::ops::Bound::Included(value) => {
+                printer.begin_group(16, "Bound::Included(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+            std::ops::Bound::Excluded(value) => {
+                printer.begin_group(16, "Bound::Excluded(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+macro_rules! pretty_non_zero {
+    ($($t:ty, $name:literal);+) => {$(
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.text(&format!(concat!($name, "::new({}).unwrap()"), self.get()));
+            }
+        }
+    )+};
+}
+
+pretty_non_zero!(
+    std::num::NonZeroI8, "NonZeroI8";
+    std::num::NonZeroI16, "NonZeroI16";
+    std::num::NonZeroI32, "NonZeroI32";
+    std::num::NonZeroI64, "NonZeroI64";
+    std::num::NonZeroI128, "NonZeroI128";
+    std::num::NonZeroIsize, "NonZeroIsize";
+    std::num::NonZeroU8, "NonZeroU8";
+    std::num::NonZeroU16, "NonZeroU16";
+    std::num::NonZeroU32, "NonZeroU32";
+    std::num::NonZeroU64, "NonZeroU64";
+    std::num::NonZeroU128, "NonZeroU128";
+    std::num::NonZeroUsize, "NonZeroUsize"
+);
+
+impl<T> PrettyPrintable for std::borrow::Cow<'_, T>
+where
+    T: ToOwned + PrettyPrintable + ?Sized,
+    T::Owned: PrettyPrintable,
+{
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::borrow::Cow::Borrowed(value) => {
+                printer.begin_group(14, "Cow::Borrowed(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+            std::borrow::Cow::Owned(value) => {
+                printer.begin_group(11, "Cow::Owned(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+/// Prints `Path::new("…")` for valid UTF-8. A non-UTF-8 path has no string
+/// literal, so it prints an `OsString` byte (Unix) or wide (Windows)
+/// constructor, and its `Debug` representation on platforms with neither
+/// accessor.
+impl PrettyPrintable for std::path::Path {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_path(self, "Path::new(", printer);
+    }
+}
+
+/// Prints `PathBuf::from("…")`; non-UTF-8 handling as for [`std::path::Path`].
+impl PrettyPrintable for std::path::PathBuf {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_path(self, "PathBuf::from(", printer);
+    }
+}
+
+fn pretty_path(path: &std::path::Path, open: &str, printer: &mut PrettyPrinter) {
+    printer.begin_group(open.chars().count(), open);
+    match path.to_str() {
+        Some(utf8) => printer.text(&format!("{utf8:?}")),
+        None => pretty_non_utf8_os_str(path.as_os_str(), printer),
+    }
+    printer.end_group(")");
+}
+
+#[cfg(unix)]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    use std::os::unix::ffi::OsStrExt;
+    printer.begin_group(19, "OsString::from_vec(");
+    os.as_bytes().to_vec().pretty_print(printer);
+    printer.end_group(")");
+}
+
+#[cfg(windows)]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = os.encode_wide().collect();
+    printer.begin_group(21, "OsString::from_wide(&");
+    wide.as_slice().pretty_print(printer);
+    printer.end_group(")");
+}
+
+#[cfg(not(any(unix, windows)))]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    print_debug_repr(&format!("{os:?}"), printer);
 }
 
 impl<T: PrettyPrintable> PrettyPrintable for Option<T> {
