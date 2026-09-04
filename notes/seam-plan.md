@@ -465,6 +465,16 @@ ratchet change.
 Exit: acceptance table green or escalated; every amended decision's new wording landed;
 gate run green.
 
+Landed 2026-09-04 (decision 67). The 011 comparison passed all letters except two,
+escalated with their decompositions (L1 execs 1.54x against 1.5x; D2 deterministic
+finals 68/100 with kept 37 / gained 13 / lost 0 / never 30). 012 passed every
+criterion (never-flip 0/200 in all cells, blob reproduction 200/200 both bodies at
+p = 0.9, control at exactly k = 4) and surfaced the shrink gauntlet's cost lottery
+above the retention high-water — ~1M measurement replays per constant-p = 0.9 episode,
+escalated as a follow-up (`experiments/012-detection-escape/notes.md`). Gates green:
+check, c-test, check-docs, miri, minimal-versions (nightly), package, zero warnings
+under default and all-features builds.
+
 ## Decision entries to record
 
 Numbers assigned in landing order. Phase 14: the v1 continuation/retry budgets with the

@@ -313,9 +313,11 @@ regime's case stamping, sacrificed first case, shrink/persistence/span-mutation 
 blobless static-caveat reporting are gone. Measured at ceiling: 20/20 discovery and DB reuse,
 60/60 blob replays on a genuinely racy machine. Off-ceiling (009a, re-verified on the
 composed engine by 009b): database reuse >= 99% and blob replay >= 95.5% on the racy
-machine across p = 0.1-0.9, at or above the 98% design point for p <= 0.3; the residual
-misses live in episodes that never flipped into ND handling — the G20 seam — not in the
-replay machinery.
+machine across p = 0.1-0.9, at or above the 98% design point for p <= 0.3. The residual
+misses lived in episodes that never flipped into ND handling — the G20 seam — and the
+first-interesting check closed them: experiment 012 (same bodies, post-seam engine)
+measured 0/200 never-flip episodes in every cell (was 23/200 at p = 0.9), blob
+reproduction 200/200 on both bodies at p = 0.9 (was 180 and 191), and reuse at 100%.
 
 ### Accounting
 

@@ -641,3 +641,24 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     never-confirmed origins; confirmed origins keep the pooled final-replay path.
     (Seam plan phase 16, gate G25; DRM's scan-not-newest and keep-everything
     directions.)
+
+67. **G20 closed: the seam plan's option (d) is the deterministic-to-ND seam's
+    resolution, subsuming the seam analysis's graded options and leaving two priced
+    residuals.** Of `research/g20-seam-analysis.md`'s options: (1)
+    displaced-incumbent history is decision 65's unbounded per-origin history plus
+    decision 66's bar-gated backtrack (unbounded and scanned, not a newest-first
+    ring, per DRM); (2) provisional pre-flip pool capture is the same history — the
+    backtrack pools its other reproducing entries; (3)'s intent — a paid replay
+    becomes evidence instead of a discarded boolean — lands at decision 64's first
+    check, whose miss seeds the discovery bar's batch (the shrink-entry verify
+    itself stays a boolean); (6) v1 blob continuation and retry landed in phase 14.
+    Options 4, 5, and 7 stay untaken (bounded-cost trades the measured loss no
+    longer justifies) and 8 stays out of scope. The two residuals: pre-flip
+    single-run trust inside a checked origin's shrink, priced by 011's L1 letters
+    (final-p p50 0.74, execs 1.54x against the 1.5x letter); and the never-flip
+    share that passes an honest check, priced by 012 at 0/200 episodes per cell
+    (baseline 23/200) with blob reproduction 200/200 at p = 0.9. 012 also measured
+    the shrink gauntlet's cost lottery above the retention high-water (~1M replays
+    per episode on constant p = 0.9 bodies; `012-detection-escape/notes.md`) —
+    escalated as a follow-up, not part of G20's loss accounting. (Seam plan phase
+    17.)
