@@ -349,7 +349,7 @@ def release() -> None:
         cwd=ROOT,
     )
 
-    # The GitHub release carries the libhegel shared libraries, so it is the
+    # The GitHub release carries the libhegel binaries, so it is the
     # hegel-c release: it is tagged with the hegel-c version and only cut when
     # hegel-c changed. A hegel-rust-only release just publishes to crates.io and
     # updates the changelog — no tag, no GitHub release.
