@@ -255,7 +255,11 @@ succeeds, the flip happens at the first executed case that declares concurrency,
 concurrent failures are confirmed, shrunk, persisted, and blob-reproducible. The prior
 regime's case stamping, sacrificed first case, shrink/persistence/span-mutation gates, and
 blobless static-caveat reporting are gone. Measured at ceiling: 20/20 discovery and DB reuse,
-60/60 blob replays on a genuinely racy machine.
+60/60 blob replays on a genuinely racy machine. Off-ceiling (009a, re-verified on the
+composed engine by 009b): database reuse >= 99% and blob replay >= 95.5% on the racy
+machine across p = 0.1-0.9, at or above the 98% design point for p <= 0.3; the residual
+misses live in episodes that never flipped into ND handling — the G20 seam — not in the
+replay machinery.
 
 ### Accounting
 
@@ -278,7 +282,7 @@ root crate's changelog covers only the user-facing behavior.
 
 | Question | Outcome |
 | --- | --- |
-| Per-position divergence anchors; anchoring inside clone streams | Closed, none anywhere (decisions 14/31): fall-off positions are unpredictable (004), and positional splicing of stored timelines rescues the pool's residue (006B, 007 at ceiling; 009a off-ceiling — reuse/blob >= 98% at p <= 0.3 and the escalation signal did not fire, decisions 57/58) |
+| Per-position divergence anchors; anchoring inside clone streams | Closed, none anywhere (decisions 14/31): fall-off positions are unpredictable (004), and positional splicing of stored timelines rescues the pool's residue (006B, 007 at ceiling; 009a off-ceiling — reuse/blob >= 98% at p <= 0.3 and the escalation signal did not fire, decisions 57/58; re-verified on the composed engine by 009b) |
 | Merged trie encoding | Rejected (decision 5, hardened by 004: prefix sharing anticorrelates with pool need) |
 | Checkpoint/rollback in the shrink loop | Dropped (decision 17) |
 | `replay_aligned` under ND | Holds only when the stored incumbent realizes identically (outcome-ND bodies), skipping shrink; structurally-ND bodies misalign and re-shrink every run (005B measured the price) |

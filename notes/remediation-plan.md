@@ -431,6 +431,17 @@ Spot-check outcome (in-engine, appended to the 008 notes): the recalibrated mech
 reproduce the simulated envelope wherever a confirmed origin entered shrinking; every
 headline miss lives in production's lazy ND entry, raised as gate G20.
 
+009b (composed-rules re-verification) closes the phase: on the shipped engine the
+escalation signal stays quiet (anchor medians 0.108/0.131 at p = 0.1 against the 0.2
+line), false accept sits at or under the DP's 4.0e-4 per proposal, and reuse/blob hold
+>= 98% at p <= 0.3, so decisions 57/58 stand. The two cost letters formally missed —
+fluke rejection 21-22 clone / 27-28 machine against the plan's <= 20, and low-anchor
+gauntlet fluke rejects riding the 30-run cap with no proof share — are the
+10/mean-weight and evidence-before-reject arithmetic decisions 57 and 54 accepted.
+Measured cost of the composed rules: 1.6-2.1x measurement replays at p <= 0.3, 4-6x at
+p = 0.9, concentrated in top-up work against near-deterministic evidence as 008
+predicted.
+
 ### Phase 13: closing audit
 
 - The docs inventory (D1-D13) re-run as a full design.md as-built sweep — every quoted
