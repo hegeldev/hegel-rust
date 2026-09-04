@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.39.4 - 2026-09-04
+
+This patch improves shrinking for collections whose elements each cost
+more than eight choices to generate. Previously such an element could
+only be deleted a few choices at a time, so shrunk counterexamples kept
+collection elements with no effect on the failure.
+
 ## 0.39.3 - 2026-09-04
 
 This patch improves the shrinking of stateful test failures: shrunk rule
