@@ -14,6 +14,6 @@ LL | struct Style {
  | ^^^^^^^^^^^^
  = note: `#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`
  = note: to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`
- = note: or make the field's type printable: `#[derive(PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type
+ = note: or make the field's type printable: `#[derive(hegel::PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type
  = help: the following other types implement trait `PrettyPrintable`:
  = note: required for `Style` to implement `hegel::pretty::PrettyPrintableField`

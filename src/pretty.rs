@@ -5,7 +5,7 @@
 //! every drawn value as a `let` binding:
 //!
 //! ```text
-//! let draw_1 = vec![Record {
+//! let records = vec![Record {
 //!          name: "000".to_string(),
 //!          tags: None,
 //!          scores: HashMap::from([("0".to_string(), 0)]) }];
@@ -56,15 +56,20 @@
 //!   [`just`](crate::generators::just),
 //!   [`sampled_from`](crate::generators::sampled_from),
 //!   [`boxed`](crate::Generator::boxed), and
-//!   [`#[hegel::composite]`](crate::composite) functions.
+//!   [`#[hegel::composite]`](crate::composite) functions. These print the
+//!   finished value, not the draws that built it: a composite's inner
+//!   draws never appear in the report, only its return value.
 //! - `#[derive(DefaultGenerator)]` generators print field by field as they
 //!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
 //!
 //! [`PrettyPrintable`] — the protocol a value uses to describe its own
-//! representation — is implemented for the primitives and standard
-//! containers the library produces. So a draw only fails to compile when a
-//! type the library does not know about enters the picture, and the fix
-//! depends on whose type it is.
+//! representation — is implemented for the primitives and the common
+//! standard-library types: strings, the sequence and map collections,
+//! `Option`/`Result`, tuples, smart pointers, ranges, paths, durations, IP
+//! addresses, and more ([`PrettyPrintable`]'s rustdoc lists every
+//! implementor). So a draw only fails to compile when a type the library
+//! does not know about enters the picture, and the fix depends on whose
+//! type it is.
 //!
 //! # Making your own type printable
 //!
@@ -72,9 +77,9 @@
 //! generator of it (through `map`, composites, boxing, containers of it, …)
 //! becomes printable:
 //!
-//! - `#[derive(PrettyPrintable)]` prints in Rust-expression syntax, field by
-//!   field. A field whose type cannot implement [`PrettyPrintable`] — a
-//!   foreign type, say — can opt into its `Debug` representation with
+//! - `#[derive(hegel::PrettyPrintable)]` prints in Rust-expression syntax,
+//!   field by field. A field whose type cannot implement [`PrettyPrintable`]
+//!   — a foreign type, say — can opt into its `Debug` representation with
 //!   `#[pretty(debug)]`. See [the derive's
 //!   documentation](derive@crate::PrettyPrintable).
 //! - [`pretty_print_as_debug!`](crate::pretty_print_as_debug) implements
@@ -91,33 +96,62 @@
 //! for those, make the *generator* printable at the point you build it:
 //!
 //! - [`print_as_debug`](crate::Generator::print_as_debug) — print drawn
-//!   values by their `Debug` representation. The usual choice, but read the
-//!   output once before settling: for a type whose `Debug` is opaque (a
-//!   tagged pointer, a bit-packed struct), a report you cannot decode is
-//!   little better than none, and `print_with` is the fix.
+//!   values by their `Debug` representation. The usual choice, but check
+//!   the output once: a type whose `Debug` is opaque (a tagged pointer, a
+//!   bit-packed struct) produces a report you cannot decode, and
+//!   `print_with` is the fix.
 //! - [`print_with`](crate::Generator::print_with) — print a custom
-//!   representation from a closure.
+//!   representation from a closure taking the value and the printer:
+//!   `.print_with(|value, printer| printer.text(&format!("make({value:?})")))`.
 //! - [`print_as_value`](crate::Generator::print_as_value) — print values by
 //!   their [`PrettyPrintable`] impl, for generators (hand-written ones, say)
 //!   that don't track printability themselves.
 //! - [`TestCase::draw_silent`](crate::TestCase::draw_silent) — draw without
-//!   reporting the value, when the value genuinely isn't worth reporting.
+//!   reporting the value, when it isn't worth reporting.
 //!
 //! Annotate only the draws the compiler rejects: `.print_as_debug()` on an
 //! already-printable draw only degrades the report from Rust-expression
 //! syntax to `Debug` syntax.
 //!
-//! # Boxing
+//! # Helpers and type erasure
 //!
-//! [`Generator::boxed`](crate::Generator::boxed) erases a generator's type;
-//! the result prints drawn values by their [`PrettyPrintable`] impl, so for
-//! printable value types boxing preserves printability. What it cannot
-//! preserve is a printing strategy carried by the erased generator (a
-//! `print_with` closure, a composite that prints as it draws), because the
-//! erased type is exactly what remembered it. Box with
-//! [`boxed_printable`](crate::PrintableGenerator::boxed_printable) to keep
-//! the generator's own printing, or when the value type is not
-//! [`PrettyPrintable`].
+//! Printability lives in the generator's concrete type, so anything that
+//! erases the type can erase printability with it — and the compile error
+//! then appears at the draw sites, far from the erasing line. There are two
+//! forms to watch for:
+//!
+//! - A helper declared `-> impl Generator<T>` is only ever a silent
+//!   generator to its callers, no matter what it returns — a printing
+//!   adapter added inside the helper changes nothing. Declare
+//!   generator-returning helpers `-> impl PrintableGenerator<T>`.
+//! - [`Generator::boxed`](crate::Generator::boxed) keeps only value
+//!   printing: the boxed generator prints drawn values by their
+//!   [`PrettyPrintable`] impl, so boxing preserves printability for
+//!   printable value types but drops a printing strategy carried by the
+//!   erased generator (a `print_with` closure, say). To keep the
+//!   generator's own printing through the erasure, make the generator
+//!   printable *first* and box with
+//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable) —
+//!   `.print_as_debug().boxed_printable()` is the usual recipe for a
+//!   non-printable value type. `boxed_printable` exists only on generators
+//!   that are already printable; calling it on a plain generator is an
+//!   error.
+//!
+//! The adapter methods come from the [`Generator`](crate::Generator) trait
+//! and `boxed_printable` from [`PrintableGenerator`](crate::PrintableGenerator),
+//! so both need to be in scope. `use hegel::prelude::*;` imports both (see
+//! [`prelude`](crate::prelude)).
+//!
+//! # Draw names
+//!
+//! The `let records = …` name above is the binding's own name:
+//! `#[hegel::test]` (and `#[state_machine]` rule bodies) rewrite
+//! `let x = tc.draw(..)` so the report names the draw `x`. The rewrite only
+//! sees draws written directly in that body — a draw inside a helper
+//! function falls back to the anonymous `draw_1`, `draw_2`, …. Name such
+//! draws explicitly with
+//! [`TestCase::draw_named`](crate::TestCase::draw_named), which reports
+//! `let name_1 = …;`, numbered per call.
 //!
 //! # The layout engine
 //!
@@ -802,9 +836,10 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no printed representation",
     label = "`{Self}` does not implement `PrettyPrintable`",
-    note = "for your own type, add `#[derive(PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
-    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(..)` prints a custom representation",
-    note = "or draw without reporting the value via `tc.draw_silent(..)`"
+    note = "for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
+    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`",
+    note = "the `hegel::pretty` module docs walk through the whole printing system"
 )]
 pub trait PrettyPrintable {
     /// Print this value's representation to `printer`.
@@ -823,7 +858,7 @@ pub trait PrettyPrintable {
     label = "`{Self}` does not implement `PrettyPrintable`",
     note = "`#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`",
     note = "to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`",
-    note = "or make the field's type printable: `#[derive(PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type"
+    note = "or make the field's type printable: `#[derive(hegel::PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type"
 )]
 pub trait PrettyPrintableField {
     #[doc(hidden)]
