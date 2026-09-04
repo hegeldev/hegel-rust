@@ -15,7 +15,12 @@ below, and later API changes are expected to have broken some of them.
   `cargo build --release`, then `python3 drive.py [trials]`.
 - `gauntlet-calibration`: built against `c68a89eb` (experiment 008's
   phase-12 in-engine spot check); drives the engine through the public
-  C ABI via its path dependency — `cargo run --release -- spot`.
+  C ABI via its path dependency — `cargo run --release -- spot`. Amended
+  2026-09-04 for experiment 011 (the seam plan's acceptance run): a new
+  `seam` subcommand adds the flip-site/incumbent/evict decomposition
+  columns via the engine's `__bench` seam dump, plus the D0 control cell;
+  `spot` and `one` are unchanged and reproduce the 008 output at the
+  engine commit they were measured on.
 - `watermark`: experiments 009a and 009b; runs against the branch via its
   path dependency. `cargo run --release` is 009a (the dump-hook extension
   and the `bind_deletion` fix land with it); its episodes replay the

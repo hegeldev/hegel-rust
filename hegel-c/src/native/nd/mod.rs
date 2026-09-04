@@ -331,6 +331,61 @@ pub mod watermark_dump {
     }
 }
 
+/// Dump hook for experiment 011: when armed, every nondeterminism flip
+/// records its detection site, the run's call count, and the interesting
+/// map at flip time, and every reject-eviction records the evicted
+/// incumbent, for the harness to drain.
+#[cfg(feature = "__bench")]
+pub mod seam_dump {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::native::core::ChoiceValue;
+    use crate::sys::sync::Mutex;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum FlipSite {
+        Concurrency,
+        TreeMismatch,
+        ShrinkVerify,
+        FinalReplay,
+        StoredV2Reuse,
+        StoredV2Blob,
+    }
+
+    pub enum SeamEvent {
+        Flip {
+            site: FlipSite,
+            calls: u64,
+            incumbents: Vec<(String, Vec<ChoiceValue>)>,
+        },
+        Evict {
+            origin: String,
+            values: Vec<ChoiceValue>,
+            at_final_replay: bool,
+        },
+    }
+
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static EVENTS: Mutex<Vec<SeamEvent>> = Mutex::new(Vec::new());
+
+    pub fn arm() {
+        ARMED.store(true, Ordering::Relaxed);
+    }
+
+    pub fn drain() -> Vec<SeamEvent> {
+        core::mem::take(&mut *EVENTS.lock())
+    }
+
+    pub(crate) fn record(event: SeamEvent) {
+        if !ARMED.load(Ordering::Relaxed) {
+            return;
+        }
+        EVENTS.lock().push(event);
+    }
+}
+
 /// Positional splices tried after the whole pool misses (decision 25).
 /// Experiment 006 measured the 65-100% rescue rate at a cap of 10 splice
 /// candidates, costing 1.6-6.3 replays per rescue; the shipped 6 was a

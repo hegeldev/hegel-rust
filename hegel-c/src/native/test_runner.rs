@@ -221,6 +221,8 @@ pub(crate) async fn reproduce_blob(
         Some(crate::native::blob::DecodedBlob::Nd(state)) => {
             let mut engine = Engine::new(settings, None, exchange)?;
             if settings.nondeterminism_strictness != NondeterminismStrictness::Error {
+                #[cfg(feature = "__bench")]
+                engine.seam_flip(nd::seam_dump::FlipSite::StoredV2Blob);
                 engine.nd_flip();
             }
             engine.capture_replays = true;
@@ -345,6 +347,8 @@ impl<'a> Engine<'a> {
                         if self.settings.nondeterminism_strictness
                             != NondeterminismStrictness::Error
                         {
+                            #[cfg(feature = "__bench")]
+                            self.seam_flip(nd::seam_dump::FlipSite::StoredV2Reuse);
                             self.nd_flip();
                         }
                         stored = state.timelines;
@@ -709,6 +713,8 @@ impl<'a> Engine<'a> {
                     {
                         return Err(RunError::Flaky(flaky_diagnostic()));
                     } else {
+                        #[cfg(feature = "__bench")]
+                        self.seam_flip(nd::seam_dump::FlipSite::ShrinkVerify);
                         self.nd_flip();
                         None
                     }
@@ -746,6 +752,12 @@ impl<'a> Engine<'a> {
                     let evidence = (batch.evidence.fails(), batch.evidence.runs());
                     if !batch.bar_accepted {
                         if self.nd_origins.reject(&origin, evidence) {
+                            #[cfg(feature = "__bench")]
+                            nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                                origin: origin.clone(),
+                                values: choices.clone(),
+                                at_final_replay: false,
+                            });
                             self.interesting.remove(&origin);
                         }
                         shrunk_origins.insert(origin);
@@ -1409,6 +1421,28 @@ impl<'a> Engine<'a> {
         self.nd_active
     }
 
+    /// Record a flip event for [`nd::seam_dump`] (experiment 011): the
+    /// detection site, the call count, and the interesting map at flip
+    /// time. Call before `nd_flip` at each detection site; a no-op when
+    /// the run is already flipped or the dump is unarmed.
+    #[cfg(feature = "__bench")]
+    fn seam_flip(&self, site: nd::seam_dump::FlipSite) {
+        if self.nd_active {
+            return;
+        }
+        nd::seam_dump::record(nd::seam_dump::SeamEvent::Flip {
+            site,
+            calls: self.calls,
+            incumbents: self
+                .interesting
+                .iter()
+                .map(|(origin, nodes)| {
+                    (origin.clone(), nodes.iter().map(|n| n.value()).collect())
+                })
+                .collect(),
+        });
+    }
+
     /// Switch the run into nondeterministic handling, per
     /// [`crate::settings::NondeterminismStrictness`]. Idempotent; callers
     /// abort instead of flipping under `Error`.
@@ -1562,6 +1596,8 @@ impl<'a> Engine<'a> {
                 if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                     return Err(RunError::Flaky(flaky_diagnostic()));
                 }
+                #[cfg(feature = "__bench")]
+                self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
                 self.nd_flip();
             }
             let timelines = pooled_timelines(choices, self.nd_origins.pool(&origin).to_vec());
@@ -1590,6 +1626,12 @@ impl<'a> Engine<'a> {
                 } else {
                     self.nd_origins.observe(&origin);
                     if self.nd_origins.reject(&origin, batch) {
+                        #[cfg(feature = "__bench")]
+                        nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                            origin: origin.clone(),
+                            values: nodes.iter().map(|n| n.value()).collect(),
+                            at_final_replay: true,
+                        });
                         self.interesting.remove(&origin);
                     }
                 }
@@ -1873,12 +1915,16 @@ impl<'a> Engine<'a> {
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.concurrent && family.concurrent_machine() {
             self.concurrent = true;
+            #[cfg(feature = "__bench")]
+            self.seam_flip(nd::seam_dump::FlipSite::Concurrency);
             self.nd_flip();
         }
         let mut mismatch = self.record_run(&run, elapsed, measurement);
         if mismatch.is_some()
             && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
         {
+            #[cfg(feature = "__bench")]
+            self.seam_flip(nd::seam_dump::FlipSite::TreeMismatch);
             self.nd_flip();
             mismatch = None;
         }

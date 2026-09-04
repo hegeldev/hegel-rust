@@ -49,8 +49,15 @@ pub mod __bench {
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::core::{ChoiceValue, CloneRecord};
     pub use crate::native::intervalsets::IntervalSet;
-    pub use crate::native::nd::watermark_dump;
+    pub use crate::native::nd::{seam_dump, watermark_dump};
     pub use crate::native::rng::EngineRng;
+
+    pub fn blob_is_nd(blob: &str) -> Option<bool> {
+        Some(matches!(
+            crate::native::blob::decode_blob(blob)?,
+            crate::native::blob::DecodedBlob::Nd(_)
+        ))
+    }
 
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
         crate::native::core::state::biased_integer_sample(

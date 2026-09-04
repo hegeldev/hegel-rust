@@ -2,12 +2,21 @@
 //! re-run on the fixed engine through the public C ABI, under the shipped
 //! nondeterministic-handling rules. Spec and results:
 //! notes/experiments/008-gauntlet-calibration/notes.md
+//!
+//! Amended 2026-09-04 for experiment 011 (the seam plan's acceptance run):
+//! the `seam` subcommand re-runs the cells sequentially with the engine's
+//! `__bench` seam dump armed, adding the flip-site/flip-time columns, the
+//! incumbent-at-flip and evicted-incumbent decompositions, the D0
+//! deterministic-control cell, and blob-kind counts. The 008 `spot` and
+//! `one` subcommands and their output are unchanged. Spec and results:
+//! notes/experiments/011-seam-spot-check/notes.md
 
 use std::cell::RefCell;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 
+use hegel_c::__bench::{seam_dump, ChoiceValue};
 use hegel_c::{
     hegel_result_t, hegel_run_status_t, hegel_status_t, HegelContext, HegelFailure, HegelRun,
     HegelRunResult, HegelSettings, HegelTestCase,
@@ -42,6 +51,7 @@ enum Landscape {
     NoiseFloor,
     NoiseFloorLo,
     DetCore,
+    DetOnly,
 }
 
 const ALL: [Landscape; 5] = [
@@ -68,6 +78,7 @@ impl Landscape {
                 Self::bug_atoms(atoms) >= 1
             }
             Landscape::DetCore => Self::has_core(atoms) || Self::bug_atoms(atoms) >= 3,
+            Landscape::DetOnly => Self::has_core(atoms),
         }
     }
 
@@ -111,6 +122,13 @@ impl Landscape {
                     0.0
                 }
             }
+            Landscape::DetOnly => {
+                if has_bug {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
@@ -121,6 +139,7 @@ impl Landscape {
             Landscape::NoiseFloor => "L4 noise-floor",
             Landscape::NoiseFloorLo => "L4b noise-floor-lo",
             Landscape::DetCore => "D2 det-core 0.7",
+            Landscape::DetOnly => "D0 det-control",
         }
     }
 
@@ -131,7 +150,8 @@ impl Landscape {
             "l4" => Landscape::NoiseFloor,
             "l4b" => Landscape::NoiseFloorLo,
             "d2" => Landscape::DetCore,
-            other => panic!("unknown cell {other} (expected l1, l3, l4, l4b, or d2)"),
+            "d0" => Landscape::DetOnly,
+            other => panic!("unknown cell {other} (expected l1, l3, l4, l4b, d2, or d0)"),
         }
     }
 }
@@ -254,11 +274,12 @@ unsafe fn replay_final(ctx: &Ctx, settings: *mut HegelSettings, blob: &CStr) -> 
     }
 }
 
+#[derive(Clone)]
 enum Outcome {
     Aborted(String),
     NoBug,
     CaveatOnly { execs: u64 },
-    Shrunk { atoms: Vec<i64>, execs: u64, nd: bool },
+    Shrunk { atoms: Vec<i64>, execs: u64, nd: bool, blob: String },
 }
 
 fn run_trial(landscape: Landscape, seed: u64) -> Outcome {
@@ -342,8 +363,14 @@ fn run_trial(landscape: Landscape, seed: u64) -> Outcome {
                 let outcome = if blob.is_null() {
                     Outcome::CaveatOnly { execs }
                 } else {
-                    match replay_final(&ctx, settings, CStr::from_ptr(blob)) {
-                        Some(atoms) => Outcome::Shrunk { atoms, execs, nd },
+                    let blob = CStr::from_ptr(blob);
+                    match replay_final(&ctx, settings, blob) {
+                        Some(atoms) => Outcome::Shrunk {
+                            atoms,
+                            execs,
+                            nd,
+                            blob: blob.to_string_lossy().into_owned(),
+                        },
                         None => Outcome::Aborted("final blob replay overran".to_string()),
                     }
                 };
@@ -405,7 +432,9 @@ fn print_row(landscape: Landscape, outcomes: &[Outcome]) {
     let shrunk: Vec<(&Vec<i64>, u64, bool)> = outcomes
         .iter()
         .filter_map(|o| match o {
-            Outcome::Shrunk { atoms, execs, nd } => Some((atoms, *execs, *nd)),
+            Outcome::Shrunk {
+                atoms, execs, nd, ..
+            } => Some((atoms, *execs, *nd)),
             _ => None,
         })
         .collect();
@@ -462,12 +491,214 @@ fn spot(cells: &[Landscape]) {
     }
 }
 
+const ALL_SEAM: [Landscape; 6] = [
+    Landscape::Rising,
+    Landscape::Constant,
+    Landscape::NoiseFloor,
+    Landscape::NoiseFloorLo,
+    Landscape::DetCore,
+    Landscape::DetOnly,
+];
+
+fn atoms_of(values: &[ChoiceValue]) -> Option<Vec<i64>> {
+    let ints: Option<Vec<i64>> = values
+        .iter()
+        .map(|v| match v {
+            ChoiceValue::Integer(b) => i64::try_from(b).ok(),
+            _ => None,
+        })
+        .collect();
+    let ints = ints?;
+    let (first, rest) = ints.split_first()?;
+    (*first as usize == rest.len()).then(|| rest.to_vec())
+}
+
+fn site_name(site: seam_dump::FlipSite) -> &'static str {
+    match site {
+        seam_dump::FlipSite::Concurrency => "conc",
+        seam_dump::FlipSite::TreeMismatch => "tree",
+        seam_dump::FlipSite::ShrinkVerify => "verify",
+        seam_dump::FlipSite::FinalReplay => "final",
+        seam_dump::FlipSite::StoredV2Reuse => "v2-reuse",
+        seam_dump::FlipSite::StoredV2Blob => "v2-blob",
+    }
+}
+
+struct SeamTrial {
+    outcome: Outcome,
+    flip: Option<(seam_dump::FlipSite, u64, Option<f64>)>,
+    evicts: Vec<(Option<f64>, bool)>,
+}
+
+fn run_seam_trial(landscape: Landscape, seed: u64) -> SeamTrial {
+    seam_dump::drain();
+    let outcome = run_trial(landscape, seed);
+    let mut flip = None;
+    let mut evicts = Vec::new();
+    for event in seam_dump::drain() {
+        match event {
+            seam_dump::SeamEvent::Flip {
+                site,
+                calls,
+                incumbents,
+            } => {
+                if flip.is_none() {
+                    let incumbent_p = incumbents
+                        .iter()
+                        .find(|(origin, _)| origin == "bug")
+                        .and_then(|(_, values)| atoms_of(values))
+                        .map(|atoms| landscape.p(&atoms));
+                    flip = Some((site, calls, incumbent_p));
+                }
+            }
+            seam_dump::SeamEvent::Evict {
+                values,
+                at_final_replay,
+                ..
+            } => {
+                let p = atoms_of(&values).map(|atoms| landscape.p(&atoms));
+                evicts.push((p, at_final_replay));
+            }
+        }
+    }
+    SeamTrial {
+        outcome,
+        flip,
+        evicts,
+    }
+}
+
+fn fmt_percentiles(values: &mut Vec<f64>) -> String {
+    if values.is_empty() {
+        return "—".to_string();
+    }
+    values.sort_by(f64::total_cmp);
+    format!(
+        "{:.2}/{:.2}/{:.2}",
+        percentile(values, 0.1),
+        percentile(values, 0.5),
+        percentile(values, 0.9)
+    )
+}
+
+fn print_seam_rows(landscape: Landscape, trials: &[SeamTrial]) {
+    let name = landscape.name();
+    let flipped: Vec<&(seam_dump::FlipSite, u64, Option<f64>)> =
+        trials.iter().filter_map(|t| t.flip.as_ref()).collect();
+    let mut site_counts: Vec<(&'static str, usize)> = Vec::new();
+    for (site, _, _) in &flipped {
+        let label = site_name(*site);
+        match site_counts.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, n)) => *n += 1,
+            None => site_counts.push((label, 1)),
+        }
+    }
+    let sites: Vec<String> = site_counts
+        .iter()
+        .map(|(l, n)| format!("{l} {n}"))
+        .collect();
+    let mut flip_calls: Vec<f64> = flipped.iter().map(|(_, c, _)| *c as f64).collect();
+    let mut flip_ps: Vec<f64> = flipped.iter().filter_map(|(_, _, p)| *p).collect();
+    let det_finishes = trials
+        .iter()
+        .filter(|t| t.flip.is_none() && matches!(t.outcome, Outcome::Shrunk { .. }))
+        .count();
+    println!(
+        "seam {name}: flips {}/{} (sites: {}) | flip calls p10/p50/p90 {} | incumbent-p at flip p10/p50/p90 {} | det finishes {det_finishes}",
+        flipped.len(),
+        trials.len(),
+        if sites.is_empty() { "—".to_string() } else { sites.join(", ") },
+        fmt_percentiles(&mut flip_calls),
+        fmt_percentiles(&mut flip_ps),
+    );
+    let classify = |at_final: bool| {
+        let mut fluke = 0usize;
+        let mut target = 0usize;
+        let mut unmapped = 0usize;
+        for trial in trials {
+            for (p, f) in &trial.evicts {
+                if *f != at_final {
+                    continue;
+                }
+                match p {
+                    Some(p) if *p >= 0.1 => target += 1,
+                    Some(_) => fluke += 1,
+                    None => unmapped += 1,
+                }
+            }
+        }
+        (fluke, target, unmapped)
+    };
+    let (sf, st, su) = classify(false);
+    let (ff, ft, fu) = classify(true);
+    println!(
+        "seam {name} evicts: shrink {} (fluke {sf}, target {st}, unmapped {su}), final {} (fluke {ff}, target {ft}, unmapped {fu})",
+        sf + st + su,
+        ff + ft + fu,
+    );
+    let mut caveat_fluke = 0usize;
+    let mut caveat_power = 0usize;
+    let mut caveat_no_evict = 0usize;
+    for trial in trials {
+        if !matches!(trial.outcome, Outcome::CaveatOnly { .. }) {
+            continue;
+        }
+        match trial.evicts.last() {
+            Some((Some(p), _)) if *p >= 0.1 => caveat_power += 1,
+            Some(_) => caveat_fluke += 1,
+            None => caveat_no_evict += 1,
+        }
+    }
+    println!(
+        "seam {name} caveat-only {}: fluke-reject {caveat_fluke}, power-miss {caveat_power}, no-evict {caveat_no_evict}",
+        caveat_fluke + caveat_power + caveat_no_evict,
+    );
+    let mut v1 = 0usize;
+    let mut v2 = 0usize;
+    for trial in trials {
+        if let Outcome::Shrunk { blob, .. } = &trial.outcome {
+            match hegel_c::__bench::blob_is_nd(blob) {
+                Some(true) => v2 += 1,
+                Some(false) => v1 += 1,
+                None => {}
+            }
+        }
+    }
+    println!("seam {name} blobs: v1 {v1}, v2 {v2}");
+}
+
+fn seam(cells: &[Landscape]) {
+    seam_dump::arm();
+    println!(
+        "# gauntlet-calibration seam spot check, experiment 011 ({SEEDS} seeds per cell, sequential, {TEST_CASES} test-case budget)\n"
+    );
+    println!(
+        "| cell | shrunk | aborted | no-bug | caveat-only | bug kept | len med | final p p10/p50/p90 | execs med (p90) | nd | det finals |"
+    );
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    let mut per_cell: Vec<(Landscape, Vec<SeamTrial>)> = Vec::new();
+    for &landscape in cells {
+        let trials: Vec<SeamTrial> = (0..SEEDS)
+            .map(|seed| run_seam_trial(landscape, seed))
+            .collect();
+        let outcomes: Vec<Outcome> = trials.iter().map(|t| t.outcome.clone()).collect();
+        print_row(landscape, &outcomes);
+        per_cell.push((landscape, trials));
+    }
+    println!();
+    for (landscape, trials) in &per_cell {
+        print_seam_rows(*landscape, trials);
+    }
+}
+
 fn one(landscape: Landscape, seed: u64) {
     match run_trial(landscape, seed) {
         Outcome::Aborted(msg) => println!("aborted: {msg}"),
         Outcome::NoBug => println!("no bug found"),
         Outcome::CaveatOnly { execs } => println!("caveat-only report in {execs} execs"),
-        Outcome::Shrunk { atoms, execs, nd } => println!(
+        Outcome::Shrunk {
+            atoms, execs, nd, ..
+        } => println!(
             "shrunk to {atoms:?} (p={}, nd={nd}) in {execs} execs",
             landscape.p(&atoms)
         ),
@@ -481,9 +712,15 @@ fn main() {
             Some(cell) => spot(&[Landscape::from_cli(cell)]),
             None => spot(&ALL),
         },
+        Some("seam") => match args.get(2) {
+            Some(cell) => seam(&[Landscape::from_cli(cell)]),
+            None => seam(&ALL_SEAM),
+        },
         Some("one") => one(Landscape::from_cli(&args[2]), args[3].parse().unwrap()),
         _ => {
-            eprintln!("usage: gauntlet-calibration spot [l1|l3|l4|l4b|d2] | one <cell> <seed>");
+            eprintln!(
+                "usage: gauntlet-calibration spot [l1|l3|l4|l4b|d2] | seam [l1|l3|l4|l4b|d2|d0] | one <cell> <seed>"
+            );
             std::process::exit(2);
         }
     }
