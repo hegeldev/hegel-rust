@@ -566,6 +566,7 @@ impl<'a> Shrinker<'a> {
                 "remove_discarded",
                 Box::new(|sh| boxed_pass(async move { sh.remove_discarded().await.map(|_| ()) })),
             ),
+            ShrinkPass::new("delete_spans", Box::new(|sh| boxed_pass(sh.delete_spans()))),
             ShrinkPass::new(
                 "try_trivial_spans",
                 Box::new(|sh| boxed_pass(sh.try_trivial_spans())),
