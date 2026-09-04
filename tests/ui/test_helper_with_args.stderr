@@ -1,0 +1,5 @@
+error: #[hegel::test_helper] takes no arguments
+ --> tests/ui/test_helper_with_args.rs:3:22
+  |
+3 | #[hegel::test_helper(name = "x")]
+  |                      ^^^^^^^^^^

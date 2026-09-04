@@ -100,6 +100,63 @@ impl PrettyPrintable for Zoned {
         printer.text(&format!("{:?}.parse::<Zoned>().unwrap()", self.to_string()));
     }
 }
+
+/// Prints the constructor for the time zone's representation: `TimeZone::UTC`,
+/// `TimeZone::unknown()`, `TimeZone::get("…").unwrap()` for an IANA zone, or
+/// `TimeZone::fixed(…)`. A zone with none of those representations (an
+/// unnamed TZif or POSIX zone) prints its `Debug` output.
+impl PrettyPrintable for jiff::tz::TimeZone {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        if self.is_unknown() {
+            printer.text("TimeZone::unknown()");
+        } else if let Some(name) = self.iana_name() {
+            if name == "UTC" {
+                printer.text("TimeZone::UTC");
+            } else {
+                printer.text(&format!("TimeZone::get({name:?}).unwrap()"));
+            }
+        } else if let Ok(offset) = self.to_fixed_offset() {
+            printer.begin_group(16, "TimeZone::fixed(");
+            offset.pretty_print(printer);
+            printer.end_group(")");
+        } else {
+            crate::pretty::print_debug_repr(&format!("{self:?}"), printer);
+        }
+    }
+}
+
+impl PrettyPrintable for jiff::tz::AmbiguousOffset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        use jiff::tz::AmbiguousOffset;
+        match self {
+            AmbiguousOffset::Unambiguous { offset } => {
+                printer.begin_group(4, "AmbiguousOffset::Unambiguous {");
+                printer.breakable(" ");
+                printer.text("offset: ");
+                offset.pretty_print(printer);
+                printer.end_group(" }");
+            }
+            AmbiguousOffset::Gap { before, after } => {
+                pretty_before_after("AmbiguousOffset::Gap {", before, after, printer);
+            }
+            AmbiguousOffset::Fold { before, after } => {
+                pretty_before_after("AmbiguousOffset::Fold {", before, after, printer);
+            }
+        }
+    }
+}
+
+fn pretty_before_after(open: &str, before: &Offset, after: &Offset, printer: &mut PrettyPrinter) {
+    printer.begin_group(4, open);
+    printer.breakable(" ");
+    printer.text("before: ");
+    before.pretty_print(printer);
+    printer.text(",");
+    printer.breakable(" ");
+    printer.text("after: ");
+    after.pretty_print(printer);
+    printer.end_group(" }");
+}
 use crate::test_case::invalid_argument;
 
 /// Convert a [`Date`] to the engine's date struct. Every jiff `Date` fits:
