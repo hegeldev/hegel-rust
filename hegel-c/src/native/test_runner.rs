@@ -1668,6 +1668,7 @@ impl<'a> Engine<'a> {
         let mut evidence = nd::Evidence::default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
+        let capture_entry = self.capture_replays;
         self.capture_replays = true;
         let bar_accepted = loop {
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
@@ -1696,7 +1697,7 @@ impl<'a> Engine<'a> {
                 captured.push(replay.realized);
             }
         }
-        self.capture_replays = false;
+        self.capture_replays = capture_entry;
         Ok(NdBatch {
             bar_accepted,
             evidence,

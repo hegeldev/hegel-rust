@@ -2056,6 +2056,34 @@ fn nd_gauntlet_run_holds_a_flaky_failure_end_to_end() {
 }
 
 #[test]
+fn nd_evidence_batch_restores_the_capture_flag() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| match rbool(ds) {
+            Ok(true) => boom("bug"),
+            Ok(false) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            ctx.capture_replays = true;
+            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+                .await
+                .unwrap();
+            assert!(
+                ctx.capture_replays,
+                "a batch inside a capture window restores the flag"
+            );
+            ctx.capture_replays = false;
+            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+                .await
+                .unwrap();
+            assert!(!ctx.capture_replays);
+        },
+    );
+}
+
+#[test]
 fn anchor_seed_extension_reaches_the_reference_batch() {
     with_engine(
         nd_settings(),
