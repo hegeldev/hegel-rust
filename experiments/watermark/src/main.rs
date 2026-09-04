@@ -1,5 +1,10 @@
 //! Experiment 009a: off-ceiling watermark measurement on racy bodies.
 //! Spec and results: notes/experiments/009a-watermark/notes.md
+//!
+//! The `composed` subcommand is experiment 009b: the same episode protocol
+//! re-collected against the composed-rules engine, with the bar/gauntlet
+//! replay mirroring the post-phase-12 arithmetic.
+//! Spec and results: notes/experiments/009b-composed-rules/notes.md
 
 use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -569,6 +574,290 @@ fn gauntlet_numbers(anchor: f64, weights: &[f64], seed: u64) -> GauntletNumbers 
     }
 }
 
+// The composed arithmetic below mirrors hegel-c/src/native/nd/mod.rs after
+// phase 12 (decisions 54-56).
+
+const GAUNTLET_MIN_FAILS: u64 = 4;
+const RETENTION_HIGH_WATER: f64 = 0.8;
+const ANCHOR_SEED_RUNS: u64 = 20;
+const FLUKE_RATE: f64 = 0.02;
+
+/// One composed-bar episode: the 009a bar plus decision 54's extension — an
+/// accepted batch keeps replaying to [`ANCHOR_SEED_RUNS`] physical runs, and
+/// the anchor is the extended batch's LCB. Rejects stop at the bar.
+fn composed_bar_stream(p: f64, weights: &[f64], rng: &mut Rng) -> (bool, u64, f64) {
+    let mut e = Evidence::default();
+    let accepted = loop {
+        let failed = rng.f64() < p;
+        let w = if failed {
+            1.0
+        } else {
+            weights[rng.below(weights.len())]
+        };
+        e.record(failed, w);
+        match discovery_bar(&e) {
+            BarVerdict::Accept => break true,
+            BarVerdict::Reject => break false,
+            BarVerdict::Continue => {}
+        }
+    };
+    while accepted && e.physical < ANCHOR_SEED_RUNS {
+        let failed = rng.f64() < p;
+        let w = if failed {
+            1.0
+        } else {
+            weights[rng.below(weights.len())]
+        };
+        e.record(failed, w);
+    }
+    (accepted, e.physical, e.lower_bound())
+}
+
+fn composed_threshold(anchor: f64) -> f64 {
+    let gamma = if anchor >= RETENTION_HIGH_WATER {
+        1.0
+    } else {
+        GAUNTLET_GAMMA
+    };
+    (gamma * anchor).max(GAUNTLET_FLOOR)
+}
+
+/// One composed-gauntlet episode for a candidate recruited on a failure
+/// (ledgered at weight 1.0) whose reruns fail at rate `q`: verdict before
+/// each rerun as the probe does, accept requires [`GAUNTLET_MIN_FAILS`], and
+/// an accept tops the ledger up to [`ANCHOR_SEED_RUNS`] before returning.
+fn composed_gauntlet_stream(
+    q: f64,
+    weights: &[f64],
+    anchor: f64,
+    rng: &mut Rng,
+) -> (GauntletOutcome, u64) {
+    let threshold = composed_threshold(anchor);
+    let mut e = Evidence::default();
+    e.record(true, 1.0);
+    let mut accepted = false;
+    loop {
+        if !accepted {
+            if e.fails >= GAUNTLET_MIN_FAILS && e.lower_bound() >= threshold {
+                accepted = true;
+            } else if e.upper_bound() < threshold {
+                return (GauntletOutcome::ProofReject, e.physical);
+            } else if e.physical >= GAUNTLET_CAP {
+                return (GauntletOutcome::CapReject, e.physical);
+            }
+        }
+        if accepted && e.physical >= ANCHOR_SEED_RUNS {
+            return (GauntletOutcome::Accept, e.physical);
+        }
+        let failed = rng.f64() < q;
+        let w = if failed {
+            1.0
+        } else {
+            weights[rng.below(weights.len())]
+        };
+        e.record(failed, w);
+    }
+}
+
+fn composed_bar_numbers(p: f64, weights: &[f64], seed: u64) -> BarNumbers {
+    let mut rng = Rng::new(seed);
+    let mut fluke_costs = Vec::new();
+    for _ in 0..SIM_STREAMS {
+        let (_, cost, _) = composed_bar_stream(0.0, weights, &mut rng);
+        fluke_costs.push(cost as f64);
+    }
+    let mut anchors = Vec::new();
+    let mut accepts = 0usize;
+    for _ in 0..SIM_STREAMS {
+        let (accepted, _, lcb) = composed_bar_stream(p, weights, &mut rng);
+        if accepted {
+            accepts += 1;
+            anchors.push(lcb);
+        }
+    }
+    BarNumbers {
+        fluke_cost_med: median(&fluke_costs),
+        fluke_cost_mean: mean(&fluke_costs),
+        anchor_med: if anchors.is_empty() {
+            f64::NAN
+        } else {
+            median(&anchors)
+        },
+        accept_share: accepts as f64 / SIM_STREAMS as f64,
+    }
+}
+
+struct ComposedGauntletNumbers {
+    reject_cost_med: f64,
+    proof_share: f64,
+    accept_share: f64,
+    false_accept: f64,
+}
+
+/// Fluke pricing at rate 0 (reject cost, proof share, accept share) plus the
+/// false-accept share at rate [`FLUKE_RATE`], conditional on the recruiting
+/// failure — 008's DP row prices the same conditional event.
+fn composed_gauntlet_numbers(anchor: f64, weights: &[f64], seed: u64) -> ComposedGauntletNumbers {
+    let mut rng = Rng::new(seed);
+    let mut reject_costs = Vec::new();
+    let mut accepts = 0usize;
+    let mut proofs = 0usize;
+    for _ in 0..SIM_STREAMS {
+        let (outcome, cost) = composed_gauntlet_stream(0.0, weights, anchor, &mut rng);
+        match outcome {
+            GauntletOutcome::Accept => accepts += 1,
+            GauntletOutcome::ProofReject => {
+                proofs += 1;
+                reject_costs.push(cost as f64);
+            }
+            GauntletOutcome::CapReject => reject_costs.push(cost as f64),
+        }
+    }
+    let mut false_accepts = 0usize;
+    for _ in 0..SIM_STREAMS {
+        if matches!(
+            composed_gauntlet_stream(FLUKE_RATE, weights, anchor, &mut rng).0,
+            GauntletOutcome::Accept
+        ) {
+            false_accepts += 1;
+        }
+    }
+    ComposedGauntletNumbers {
+        reject_cost_med: if reject_costs.is_empty() {
+            f64::NAN
+        } else {
+            median(&reject_costs)
+        },
+        proof_share: if reject_costs.is_empty() {
+            f64::NAN
+        } else {
+            proofs as f64 / reject_costs.len() as f64
+        },
+        accept_share: accepts as f64 / SIM_STREAMS as f64,
+        false_accept: false_accepts as f64 / SIM_STREAMS as f64,
+    }
+}
+
+fn run_composed() {
+    let mut cells = Vec::new();
+    for &body in &BODIES {
+        for pi in 0..PS.len() {
+            cells.push(run_cell(body, pi));
+        }
+    }
+
+    println!("# 009b: composed-rules re-verification\n");
+    println!(
+        "Episode protocol, bodies, and seeds as 009a ({EPISODES} episodes per cell), \
+         collected against the composed-rules engine; offline sims replay the composed \
+         bar/gauntlet arithmetic (min-fails {GAUNTLET_MIN_FAILS}, floor {GAUNTLET_FLOOR}, \
+         gamma 1.0 at anchors >= {RETENTION_HIGH_WATER}, {ANCHOR_SEED_RUNS}-run anchor \
+         seeding at both sites) over resampled measured weights, {SIM_STREAMS} streams \
+         per number.\n"
+    );
+
+    println!("## Episode accounting\n");
+    println!("| body | p | reported | with blob | miss samples | fail samples |");
+    println!("| --- | --- | --- | --- | --- | --- |");
+    for c in &cells {
+        println!(
+            "| {} | {} | {}/{} | {} | {} | {} |",
+            c.body.name(),
+            c.p,
+            c.reported,
+            EPISODES,
+            c.with_blob,
+            c.miss_seen,
+            c.fail_samples
+        );
+    }
+
+    println!("\n## Miss-weight distribution (discovery-run measurement replays)\n");
+    println!("| body | p | W50 | mean | p10 | p90 | share 0 | share 1 |");
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- |");
+    for c in &cells {
+        if c.miss_new.is_empty() {
+            println!("| {} | {} | (no miss samples) |", c.body.name(), c.p);
+            continue;
+        }
+        println!(
+            "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} |",
+            c.body.name(),
+            c.p,
+            median(&c.miss_new),
+            mean(&c.miss_new),
+            pctl(&c.miss_new, 0.1),
+            pctl(&c.miss_new, 0.9),
+            share(&c.miss_new, |w| w == 0.0),
+            share(&c.miss_new, |w| w == 1.0),
+        );
+    }
+
+    println!("\n## Discovery bar with the extended anchor batch\n");
+    println!("| body | p | fluke reject med/mean | anchor med (accept) |");
+    println!("| --- | --- | --- | --- |");
+    let mut anchors = Vec::new();
+    for (ci, c) in cells.iter().enumerate() {
+        if c.miss_new.is_empty() {
+            println!("| {} | {} | (no miss samples) |", c.body.name(), c.p);
+            anchors.push(f64::NAN);
+            continue;
+        }
+        let bar = composed_bar_numbers(c.p, &c.miss_new, seed(ci, 0, 0, 110));
+        println!(
+            "| {} | {} | {:.0} / {:.1} | {:.3} ({:.2}) |",
+            c.body.name(),
+            c.p,
+            bar.fluke_cost_med,
+            bar.fluke_cost_mean,
+            bar.anchor_med,
+            bar.accept_share,
+        );
+        anchors.push(bar.anchor_med);
+    }
+
+    println!("\n## Shrink gauntlet, fluke candidate at the cell's median confirmed anchor\n");
+    println!(
+        "| body | p | anchor | threshold | reject med | proof share | accept share | false accept (q={FLUKE_RATE}) | per proposal |"
+    );
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    for (ci, c) in cells.iter().enumerate() {
+        if c.miss_new.is_empty() || anchors[ci].is_nan() {
+            println!("| {} | {} | (no anchor) |", c.body.name(), c.p);
+            continue;
+        }
+        let anchor = anchors[ci];
+        let g = composed_gauntlet_numbers(anchor, &c.miss_new, seed(ci, 0, 0, 111));
+        println!(
+            "| {} | {} | {:.3} | {:.3} | {} | {} | {:.2} | {:.4} | {:.1e} |",
+            c.body.name(),
+            c.p,
+            anchor,
+            composed_threshold(anchor),
+            fmt_or_dash(g.reject_cost_med, 0),
+            fmt_or_dash(g.proof_share, 2),
+            g.accept_share,
+            g.false_accept,
+            g.false_accept * FLUKE_RATE,
+        );
+    }
+
+    println!("\n## Reproduction of persisted state (composed engine)\n");
+    println!("| body | p | DB reuse | blob replay |");
+    println!("| --- | --- | --- | --- |");
+    for c in &cells {
+        println!(
+            "| {} | {} | {}/{} | {}/{} |",
+            c.body.name(),
+            c.p,
+            c.reuse_hits,
+            c.reuse_tries,
+            c.blob_hits,
+            c.blob_tries
+        );
+    }
+}
+
 fn fmt_or_dash(value: f64, decimals: usize) -> String {
     if value.is_nan() {
         "-".to_string()
@@ -579,6 +868,11 @@ fn fmt_or_dash(value: f64, decimals: usize) -> String {
 
 fn main() {
     watermark_dump::arm();
+
+    if std::env::args().nth(1).as_deref() == Some("composed") {
+        run_composed();
+        return;
+    }
 
     let mut cells = Vec::new();
     for &body in &BODIES {

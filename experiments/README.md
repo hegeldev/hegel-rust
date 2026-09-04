@@ -16,8 +16,11 @@ below, and later API changes are expected to have broken some of them.
 - `gauntlet-calibration`: built against `c68a89eb` (experiment 008's
   phase-12 in-engine spot check); drives the engine through the public
   C ABI via its path dependency — `cargo run --release -- spot`.
-- `watermark`: experiment 009a, built at its own commit (the dump-hook
-  extension and the `bind_deletion` fix land with it); runs against the
-  branch via its path dependency — `cargo run --release` reproduces the
-  notes' tables on stdout, byte-identical across reruns (~35 min
-  single-threaded).
+- `watermark`: experiments 009a and 009b; runs against the branch via its
+  path dependency. `cargo run --release` is 009a (the dump-hook extension
+  and the `bind_deletion` fix land with it); its episodes replay the
+  engine, so it reproduces the 009a tables only on the phase-11 tree it
+  was measured on (~35 min single-threaded). `cargo run --release --
+  composed` is 009b, added at its own commit: the same episodes against
+  the composed-rules engine plus the composed bar/gauntlet replay,
+  byte-identical across reruns at that commit (~2 h single-threaded).
