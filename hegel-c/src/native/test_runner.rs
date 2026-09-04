@@ -701,133 +701,16 @@ impl<'a> Engine<'a> {
                 pending.sort();
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
-
-                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
-                let mut probe_anchor = 0.0f64;
-                let deterministic_verify = if self.nd_handling() {
-                    None
-                } else {
-                    let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-                    let (verify, mismatch) = self.test_function(verify_ntc).await?;
-                    if let Some(msg) = mismatch {
-                        return Err(RunError::NonDeterministic(msg));
-                    }
-                    if verify.status == Status::Interesting
-                        && verify.origin.as_deref() == Some(origin.as_str())
-                    {
-                        (!self.nd_handling()).then_some(verify)
-                    } else if self.settings.nondeterminism_strictness
-                        == NondeterminismStrictness::Error
-                    {
-                        return Err(RunError::Flaky(flaky_diagnostic()));
-                    } else {
-                        #[cfg(feature = "__bench")]
-                        self.seam_flip(nd::seam_dump::FlipSite::ShrinkVerify);
-                        self.nd_flip();
-                        None
-                    }
-                };
-                let verify = if let Some(verify) = deterministic_verify {
-                    verify
-                } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
-                    probe_anchor = anchor;
-                    witness
-                } else if !self.nd_origins.needs_confirmation(&origin) {
-                    // Trusted: already admitted (decision 24), so any
-                    // failure in the batch promotes with the batch's LCB
-                    // as anchor — the bar arithmetic is only the stopping
-                    // rule.
-                    let batch = self.nd_evidence_batch(&origin, &choices).await?;
-                    let evidence = (batch.evidence.fails(), batch.evidence.runs());
-                    if let Some(witness) = batch.witness {
-                        probe_anchor = batch.evidence.lower_bound();
-                        let stored = self.nd_origins.pool(&origin).to_vec();
-                        let pool = pooled_timelines(
-                            choices.clone(),
-                            batch.captured.into_iter().chain(stored),
-                        );
-                        self.nd_origins
-                            .confirm(&origin, probe_anchor, None, pool, evidence)?;
-                        self.record_nd_incumbent(&origin, &initial);
-                        witness
-                    } else {
-                        self.nd_origins.record_trusted_batch(&origin, evidence);
-                        shrunk_origins.insert(origin);
-                        continue;
-                    }
-                } else {
-                    let batch = self.nd_evidence_batch(&origin, &choices).await?;
-                    let evidence = (batch.evidence.fails(), batch.evidence.runs());
-                    if !batch.bar_accepted {
-                        if self.nd_origins.reject(&origin, evidence) {
-                            #[cfg(feature = "__bench")]
-                            nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                                origin: origin.clone(),
-                                values: choices.clone(),
-                                at_final_replay: false,
-                            });
-                            self.interesting.remove(&origin);
-                        }
-                        shrunk_origins.insert(origin);
-                        continue;
-                    }
-                    let witness = crate::control::hegel_internal_unwrap!(
-                        batch.witness,
-                        "nd_evidence_batch: bar accept without a witness for {origin}"
-                    );
-                    probe_anchor = batch.evidence.lower_bound();
-                    let pool = pooled_timelines(choices.clone(), batch.captured);
-                    self.nd_origins
-                        .confirm(&origin, probe_anchor, None, pool, evidence)?;
-                    self.record_nd_incumbent(&origin, &initial);
-                    witness
-                };
-
-                let mut verify = verify;
-                if self.nd_handling() && probe_anchor < nd::BOOST_RELIABILITY_FLOOR {
-                    let incumbent: Vec<ChoiceValue> =
-                        verify.nodes.iter().map(|n| n.value()).collect();
-                    if let Some((witness, lcb)) =
-                        self.nd_boost(&origin, &incumbent, probe_anchor).await?
-                    {
-                        verify = witness;
-                        probe_anchor = lcb;
-                    }
-                }
-
-                let initial_spans = Spans::from(verify.spans.clone());
-                let gauntleted = self.nd_handling();
-                let shrunk = {
-                    let probe = EngineShrinkProbe {
-                        engine: &mut *self,
-                        target_origin: origin.clone(),
+                shrink_timed_out |= self
+                    .shrink_origin(
+                        origin,
+                        initial,
                         verbosity,
-                        output: output.clone(),
-                        gauntlet: gauntleted,
-                        ledger: HashMap::default(),
-                        anchor: probe_anchor,
-                        sweep: SweepMode::Fast,
-                        raised: crate::native::HashSet::default(),
-                        pending_accept: None,
-                    };
-                    let mut shrinker =
-                        Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
-                    shrinker.deadline = shrink_deadline;
-                    absorb_stop(shrinker.initial_coarse_reduction().await)?;
-                    if verbosity == Verbosity::Debug {
-                        let output = output.clone();
-                        shrinker.set_debug(move |msg| output.line(msg));
-                    }
-                    shrinker.shrink().await?;
-                    shrink_timed_out |= shrinker.timed_out;
-                    shrinker.current_nodes
-                };
-                if !gauntleted && self.nd_handling() {
-                    self.interesting.insert(origin, initial);
-                } else {
-                    self.interesting.insert(origin.clone(), shrunk);
-                    shrunk_origins.insert(origin);
-                }
+                        &output,
+                        shrink_deadline,
+                        &mut shrunk_origins,
+                    )
+                    .await?;
             }
 
             if shrink_timed_out && verbosity != Verbosity::Quiet {
@@ -1579,6 +1462,141 @@ impl<'a> Engine<'a> {
     /// caveat's wording instead of unreporting the failure (decision 3); a
     /// dry unconfirmed origin is evicted like a bar reject and reaches the
     /// report only through the caveat-only fallback (decision 24).
+    /// One origin's shrink pass: the pre-shrink verify, admission (stashed
+    /// witness, trusted batch, or the discovery bar), optional boost, and
+    /// the shrinker run, with decision 38's requeue semantics. Returns
+    /// whether the shrinker hit the deadline. A method rather than shrink-
+    /// loop code so report-time backtracking can re-enter a per-origin
+    /// shrink (seam plan).
+    async fn shrink_origin(
+        &mut self,
+        origin: String,
+        initial: Vec<ChoiceNode>,
+        verbosity: Verbosity,
+        output: &Output,
+        shrink_deadline: Option<crate::sys::Instant>,
+        shrunk_origins: &mut crate::native::HashSet<String>,
+    ) -> Result<bool, RunError> {
+        let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
+        let mut probe_anchor = 0.0f64;
+        let deterministic_verify = if self.nd_handling() {
+            None
+        } else {
+            let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
+            let (verify, mismatch) = self.test_function(verify_ntc).await?;
+            if let Some(msg) = mismatch {
+                return Err(RunError::NonDeterministic(msg));
+            }
+            if verify.status == Status::Interesting
+                && verify.origin.as_deref() == Some(origin.as_str())
+            {
+                (!self.nd_handling()).then_some(verify)
+            } else if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
+                return Err(RunError::Flaky(flaky_diagnostic()));
+            } else {
+                #[cfg(feature = "__bench")]
+                self.seam_flip(nd::seam_dump::FlipSite::ShrinkVerify);
+                self.nd_flip();
+                None
+            }
+        };
+        let verify = if let Some(verify) = deterministic_verify {
+            verify
+        } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
+            probe_anchor = anchor;
+            witness
+        } else if !self.nd_origins.needs_confirmation(&origin) {
+            // Trusted: already admitted (decision 24), so any
+            // failure in the batch promotes with the batch's LCB
+            // as anchor — the bar arithmetic is only the stopping
+            // rule.
+            let batch = self.nd_evidence_batch(&origin, &choices).await?;
+            let evidence = (batch.evidence.fails(), batch.evidence.runs());
+            if let Some(witness) = batch.witness {
+                probe_anchor = batch.evidence.lower_bound();
+                let stored = self.nd_origins.pool(&origin).to_vec();
+                let pool =
+                    pooled_timelines(choices.clone(), batch.captured.into_iter().chain(stored));
+                self.nd_origins
+                    .confirm(&origin, probe_anchor, None, pool, evidence)?;
+                self.record_nd_incumbent(&origin, &initial);
+                witness
+            } else {
+                self.nd_origins.record_trusted_batch(&origin, evidence);
+                shrunk_origins.insert(origin);
+                return Ok(false);
+            }
+        } else {
+            let batch = self.nd_evidence_batch(&origin, &choices).await?;
+            let evidence = (batch.evidence.fails(), batch.evidence.runs());
+            if !batch.bar_accepted {
+                if self.nd_origins.reject(&origin, evidence) {
+                    #[cfg(feature = "__bench")]
+                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                        origin: origin.clone(),
+                        values: choices.clone(),
+                        at_final_replay: false,
+                    });
+                    self.interesting.remove(&origin);
+                }
+                shrunk_origins.insert(origin);
+                return Ok(false);
+            }
+            let witness = crate::control::hegel_internal_unwrap!(
+                batch.witness,
+                "nd_evidence_batch: bar accept without a witness for {origin}"
+            );
+            probe_anchor = batch.evidence.lower_bound();
+            let pool = pooled_timelines(choices.clone(), batch.captured);
+            self.nd_origins
+                .confirm(&origin, probe_anchor, None, pool, evidence)?;
+            self.record_nd_incumbent(&origin, &initial);
+            witness
+        };
+
+        let mut verify = verify;
+        if self.nd_handling() && probe_anchor < nd::BOOST_RELIABILITY_FLOOR {
+            let incumbent: Vec<ChoiceValue> = verify.nodes.iter().map(|n| n.value()).collect();
+            if let Some((witness, lcb)) = self.nd_boost(&origin, &incumbent, probe_anchor).await? {
+                verify = witness;
+                probe_anchor = lcb;
+            }
+        }
+
+        let initial_spans = Spans::from(verify.spans.clone());
+        let gauntleted = self.nd_handling();
+        let (shrunk, timed_out) = {
+            let probe = EngineShrinkProbe {
+                engine: &mut *self,
+                target_origin: origin.clone(),
+                verbosity,
+                output: output.clone(),
+                gauntlet: gauntleted,
+                ledger: HashMap::default(),
+                anchor: probe_anchor,
+                sweep: SweepMode::Fast,
+                raised: crate::native::HashSet::default(),
+                pending_accept: None,
+            };
+            let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
+            shrinker.deadline = shrink_deadline;
+            absorb_stop(shrinker.initial_coarse_reduction().await)?;
+            if verbosity == Verbosity::Debug {
+                let output = output.clone();
+                shrinker.set_debug(move |msg| output.line(msg));
+            }
+            shrinker.shrink().await?;
+            (shrinker.current_nodes, shrinker.timed_out)
+        };
+        if !gauntleted && self.nd_handling() {
+            self.interesting.insert(origin, initial);
+        } else {
+            self.interesting.insert(origin.clone(), shrunk);
+            shrunk_origins.insert(origin);
+        }
+        Ok(timed_out)
+    }
+
     async fn final_replay(&mut self) -> Result<(), RunError> {
         if self.interesting.is_empty() {
             return Ok(());
