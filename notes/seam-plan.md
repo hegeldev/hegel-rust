@@ -352,6 +352,24 @@ The removal inventory, from the groundwork sweep:
 Exit: suite green with the reworked inventory; both cost guards green; `just c-header`
 clean.
 
+Landed 2026-09-04 (decisions 60–62), with three as-built deviations. (1) The
+reuse-comparison channel above is **not built**: between-run divergence is staleness, and
+flipping on it would punish every generator refactor against decision 9 — the
+replacement is an `error`-only within-run kind ledger (decision 62) that carries
+`test_flaky_global_state` and both reuse kind-flip pins unchanged; quiet/warn lose the
+generation-level flip channel (0/600 firings in the 011 baseline) until the phase-16
+check, and the three tests that leaned on it pin that interim. (2) The duplicate stop is
+scoped to `valid == 0` (decision 61): the unconditional G22 stop ended a 32-way `one_of`
+before reaching every alternative. (3) G21's kinds-on-hit comparison is subsumed by the
+ledger (any-shared-prefix under `error`, strictly earlier than exact-repeat hits) rather
+than stored per digest entry. Cost guards green (passing-body parity exact at 50; the
+shrink body 1510 against the 1661 bound). One priced regression recorded in decision 60:
+chain-only recursive depth spread, pinned at its new floor pending a recursive-pricing
+follow-up. A no-fail-fast frontend sweep then surfaced three more casualties — search
+budgets that leaned on novelty forcing, the ND reproduce-failure fixture (reshaped to a
+verdict flake), and a bytes shrink pin the shrinker never guaranteed — resolved in
+decision 63 with a probe-based increment pass flagged as the shrinker follow-up.
+
 ### Phase 16: the workflow
 
 Steps 2-4, in dependency order:

@@ -451,7 +451,7 @@ fn serialize_roundtrips_clone_values() {
 
 #[test]
 fn serialize_clone_drops_realized_info_but_preserves_equality() {
-    use crate::native::core::{ChoiceNode, CloneRecord, Span, SpanEvent};
+    use crate::native::core::{ChoiceNode, CloneRecord, Span};
     let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
         vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)],
         vec![Span {
@@ -462,7 +462,6 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
             parent: None,
             discarded: false,
         }],
-        vec![(0, SpanEvent::Open { label: 9 })],
     )));
     let bytes = serialize_choices(std::slice::from_ref(&realized));
     let round_tripped = deserialize_choices(&bytes).unwrap();

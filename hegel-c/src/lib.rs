@@ -174,7 +174,8 @@ pub enum hegel_status_t {
 #[allow(non_camel_case_types)]
 pub enum hegel_mode_t {
     /// libhegel drives a full generate / shrink / replay loop until the
-    /// test-case budget or the choice tree is exhausted. The default.
+    /// test-case budget is spent or generation stops producing novel
+    /// cases. The default.
     HEGEL_MODE_TEST_RUN = 0,
     /// libhegel produces exactly one test case and stops, with no shrinking.
     /// Useful for replaying a stored counterexample or running an

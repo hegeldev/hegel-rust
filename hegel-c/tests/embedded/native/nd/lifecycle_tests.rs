@@ -13,7 +13,6 @@ fn witness(origin: &str) -> RunResult {
         spans: Vec::new(),
         origin: Some(origin.to_string()),
         target_observations: HashMap::default(),
-        span_events: Vec::new(),
         events: Vec::new(),
     }
 }

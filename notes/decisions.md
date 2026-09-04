@@ -498,3 +498,78 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     of restoring it, which would have silently unclamped stamping for any batch run
     inside the final replay's capture window. (Seam plan, phase 14; experiments 009a
     and 012.)
+
+60. **The data tree is removed; the execution cache replaces its live roles.** Closes
+    decisions 6 and 29 (gate G3): "ND handling never serves cached conclusions" survives
+    verbatim, now hosted on the flat cache — the flip flushes it, and nothing is served
+    or recorded while `nd_active`. Shape per G21 option (a): every executed conclusion
+    keys on its serialized realized values (`serialize_choices` — floats by bits, clones
+    by child values; overruns enter nothing); a digest tier (128-bit FNV) holds every
+    verdict, a full serving tier (status, origin, nodes, spans) is kept outside the
+    generation window, byte-bounded at 8 MiB with oldest-first eviction, and
+    `cached_test_function` serves exact repeats from it. The detection trade G21 signed:
+    kind drift is now checked only under `error` strictness (decision 62) and only
+    within-run, in exchange for verdict flips — the same realized values concluding with
+    a different status or origin — which the tree could never see; a verdict flake flips
+    quiet/warn runs and aborts `error` runs with decision 30's flaky diagnostic
+    verbatim. Costs measured at the seam: the passing-body execution count is unchanged
+    (seed-pinned parity guard), the shrink-heavy count held 1510 against the 1661 guard
+    (1.1x tree-era; 010's 85% serve win realized), and one distribution regression is
+    recorded: chain-only recursive generators lose the tree's novelty forcing
+    (P(depth >= 10) 0.30 -> 0.14, P(depth >= 25) 0.08 -> 0.04 at the pinned seed), a
+    recursive-pricing follow-up pinned at its new floor in `test_distributions.rs`.
+    (Seam plan, phase 15; experiment 010.)
+
+61. **The duplicate stop is scoped to the all-invalid grind.** Generation ends after
+    `DUPLICATE_STOP` = 10 = `RANDOM_GENERATION_BATCH` consecutive generation-window
+    duplicates *only while no valid case exists*, and the exhausted-space FilterTooMuch
+    swaps its `is_exhausted` conjunct for that stop (other conjuncts unchanged), so a
+    tiny fully-filtered space reports instead of grinding out the invalid budget — and
+    keeps doing so under health-check suppression. The counter ignores measurement runs,
+    resets on novelty, and is suspended under ND handling. The valid-case scope is an
+    as-built revision of G22, which would have stopped any low-novelty window: at k of
+    S values seen a duplicate streak of N has probability (k/S)^N, near 1 late in coupon
+    collection, so the unconditional stop ended a 32-way `one_of` before reaching every
+    alternative (`test_one_of_every_arity_reaches_every_alternative` caught it). Valid
+    spaces are budget-bounded already; the tree's early exit on tiny passing spaces is
+    given up as worthless. (Seam plan, phase 15, revising G22; experiment 010.)
+
+62. **Generation kind drift is detected by a within-run ledger, `error` strictness
+    only; the planned reuse-comparison channel is rejected as a decision-9 violation.**
+    The plan routed realized-vs-stored divergence on stored-entry replays into the flip
+    plumbing; but between-run divergence is routinely staleness — every legitimate
+    generator refactor would flip (or abort) the next run against its old entries,
+    exactly what decision 9 forbids. What the tree actually enforced was within-run
+    consistency (it lived and died with one run), so its replacement does the same: a
+    ledger from rolling value-prefix hash to the choice kind drawn at the next position
+    (constraints included — a `min_value` shift is a kind change), compared across
+    executions within the run, aborting with the tree's diagnostic verbatim,
+    entry-capped, cleared at the flip. Reuse replays feed it like any execution, so
+    `test_flaky_global_state` and both reuse kind-flip pins survive on it unchanged,
+    while a stale stored entry is deleted as staleness under `error` strictness without
+    a word. Quiet/warn don't maintain the ledger: their generation-level flip channel
+    is gone until the phase-16 first-interesting check (011 measured the tree's version
+    firing 0 in 600 trials), and the three tests that relied on it now pin the interim
+    honestly. (Seam plan, phase 15, revising the reuse-channel item; decision 9.)
+
+63. **The removal's frontend fallout, resolved without engine changes.** A no-fail-fast
+    sweep (fail-fast had been masking whole binaries) surfaced three casualties. (a)
+    `test_lowering_together_{positive,negative}` search for the single pair satisfying
+    `a + gap == b` at `gap = ±20` in a 21x21 space; the tree's novelty forcing covered
+    that inside 500 attempts, the random stream does not — budget raised to 5000. (b)
+    The nondeterministic reproduce-failure fixture flipped tree-era through generation
+    kind drift, a channel quiet no longer has (decision 62); reshaped to a verdict
+    flake — the same fingerprint passing once then failing — the channel phase 15 gives
+    quiet. The displaced behaviour is permanent, not an interim: generation drift whose
+    failure reproduces from its choices reports plainly at quiet/warn (no caveat, v1
+    blob) even after phase 16, whose check replays the interesting choices and never
+    sees pre-discovery drift. (c) `test_bytes_increment_shortens_sequence` pinned a
+    shrink the shrinker cannot guarantee: reaching the 20-byte/empty-dict minimum from
+    a 19-byte/one-entry start needs an equal-length proposal with a larger sort key
+    (grow the bytes node, delete the entry), and `consider` rejects those before
+    executing — the increment pass survives that pre-check only when zeroing a suffix
+    drops `flattened_len` (clones). Both eras stall on roughly 1 in 20 random starts;
+    the old pin held because its seed generated a 2-choice interesting case outright.
+    Re-pinned to the two reachable minima; closing the hole needs a probe-based
+    increment variant (execute the bumped proposal, accept on the realized early exit),
+    flagged as a shrinker follow-up. (Seam plan, phase 15.)

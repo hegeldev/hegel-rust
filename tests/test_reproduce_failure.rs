@@ -69,34 +69,28 @@ fn repro_replay_stacked_fixture(tc: TestCase) {
 
 static ND_FIXTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-/// Stage 1 nondeterministic fixture: the second execution draws with a
-/// shifted range, flipping the run nondeterministic; the bug itself
-/// reproduces from its choices every time.
+/// Stage 1 nondeterministic fixture: every execution draws the same single
+/// choice, so the passing first execution and the failing second are a
+/// verdict flake on one fingerprint, flipping the run nondeterministic.
+/// From then on the failure reproduces from its choices every time.
 #[hegel::test(print_blob = true)]
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_print_blob_fixture(tc: TestCase) {
-    if ND_FIXTURE_CALLS.fetch_add(1, Ordering::SeqCst) == 1 {
-        tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
+    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
+    if ND_FIXTURE_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
         return;
     }
-    let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(1000));
     assert!(x < 10, "x was at least ten");
 }
 
-static ND_REPLAY_CALLS: AtomicUsize = AtomicUsize::new(0);
-
 /// Stage 2 nondeterministic fixture: replays the v2 blob passed via
-/// `HEGEL_TEST_ND_REPRO_BLOB`. Same body as stage 1; the range-shifting
-/// branch never fires in a single replay.
+/// `HEGEL_TEST_ND_REPRO_BLOB`. Same draw as stage 1 without the
+/// first-execution pass, so the single replay reaches the assertion.
 #[hegel::test]
 #[hegel::reproduce_failure(std::env::var("HEGEL_TEST_ND_REPRO_BLOB").unwrap())]
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_replay_fixture(tc: TestCase) {
-    if ND_REPLAY_CALLS.fetch_add(1, Ordering::SeqCst) == 1 {
-        tc.draw(gs::integers::<i32>().min_value(1).max_value(1000));
-        return;
-    }
-    let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(1000));
+    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
     assert!(x < 10, "x was at least ten");
 }
 

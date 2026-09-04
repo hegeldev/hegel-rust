@@ -347,7 +347,7 @@ pub mod seam_dump {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum FlipSite {
         Concurrency,
-        TreeMismatch,
+        CacheMismatch,
         ShrinkVerify,
         FinalReplay,
         StoredV2Reuse,

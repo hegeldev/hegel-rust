@@ -452,7 +452,8 @@ typedef enum {
 typedef enum {
     /*
      libhegel drives a full generate / shrink / replay loop until the
-     test-case budget or the choice tree is exhausted. The default.
+     test-case budget is spent or generation stops producing novel
+     cases. The default.
      */
     HEGEL_MODE_TEST_RUN = 0,
     /*

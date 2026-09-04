@@ -11,7 +11,7 @@ use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseRes
 use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
-    NativeTestCaseHandle, NativeVariables, RecursionState, Span, SpanEvent, Status,
+    NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
 };
 use crate::native::draws;
 
@@ -58,13 +58,6 @@ impl NativeDataSource {
     /// Convenience: extract spans from a handle after a test case.
     pub fn take_spans(handle: &NativeTestCaseHandle) -> Vec<Span> {
         handle.lock().spans.clone().into_vec()
-    }
-
-    /// Convenience: extract the live span-open/close events (with their draw
-    /// positions) recorded during the test case, so the engine can fold them
-    /// into the choice tree for faithful replay.
-    pub fn take_span_events(handle: &NativeTestCaseHandle) -> Vec<(usize, SpanEvent)> {
-        handle.lock().span_events.clone()
     }
 
     /// Read the `tc.target()` observations the test body recorded.

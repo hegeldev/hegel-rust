@@ -722,18 +722,23 @@ mod recursive {
 
     /// A grammar with only unary branches can never grow past one leaf, so
     /// the leaf budget says nothing about it. The adaptive pricing pushes
-    /// the branch probability up to its cap instead, spreading chain
-    /// lengths from bare leaves up to the depth limit.
+    /// the branch probability up to its cap instead, so chains still reach
+    /// well past typical depths. The rates here are recalibrated to the
+    /// pricing alone: the data tree's novelty forcing used to stretch
+    /// chains toward the depth limit (the floors with it were 0.30 for
+    /// 10+ and 0.08 for 25+), and restoring that spread is a
+    /// recursive-pricing follow-up, not a reason to keep the tree
+    /// (seam plan, phase 15).
     #[test]
-    fn chain_only_trees_spread_over_the_whole_depth_range() {
+    fn chain_only_trees_reach_deep_chains() {
         let vs = sample(4000, 0xE5, |tc| {
             tc.draw_silent(gs::recursive(gs::just(Expr::Value), |exprs| {
                 exprs.map(|e| Expr::Negate(Box::new(e)))
             }))
         });
         assert_min_rate(&vs, |e| e.depth() == 0, 0.005, "bare leaf");
-        assert_min_rate(&vs, |e| e.depth() >= 10, 0.3, "chain of 10+");
-        assert_min_rate(&vs, |e| e.depth() >= 25, 0.08, "chain of 25+");
+        assert_min_rate(&vs, |e| e.depth() >= 10, 0.1, "chain of 10+");
+        assert_min_rate(&vs, |e| e.depth() >= 25, 0.02, "chain of 25+");
     }
 
     /// Branch functions with more than two children per branch reprice

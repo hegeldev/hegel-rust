@@ -497,9 +497,6 @@ mod special_value_distribution {
             || a == -1
     }
 
-    // A second, independent integer is drawn each case so the data tree does
-    // not collapse repeated single-value leaves (which would mask the draw
-    // distribution behind tree-exhaustion rather than the sampler).
     #[test]
     fn full_width_hits_boundary_and_small_values() {
         static N: AtomicU64 = AtomicU64::new(0);

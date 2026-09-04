@@ -497,7 +497,6 @@ fn values_and_realized_records_weigh_interchangeably() {
         crate::native::core::CloneRecord::from_run(
             alloc::vec![bnode(true), bnode(false)],
             alloc::vec::Vec::new(),
-            alloc::vec::Vec::new(),
         ),
     ))];
     assert_eq!(verbatim_weight(&from_values, &from_run), 1.0);

@@ -24,7 +24,7 @@ use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker, SweepMode};
 /// carries the candidate's nodes so replay puns against the child kinds.
 fn splice_child(template: &[ChoiceNode], i: usize, child: &[ChoiceNode]) -> Vec<ChoiceNode> {
     let mut candidate = template.to_vec();
-    let stream = Arc::new(RealizedStream::new(child.to_vec(), Vec::new(), Vec::new()));
+    let stream = Arc::new(RealizedStream::new(child.to_vec(), Vec::new()));
     candidate[i] = ChoiceNode::clone_stream(stream, candidate[i].was_forced);
     candidate
 }

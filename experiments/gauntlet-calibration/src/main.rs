@@ -516,7 +516,7 @@ fn atoms_of(values: &[ChoiceValue]) -> Option<Vec<i64>> {
 fn site_name(site: seam_dump::FlipSite) -> &'static str {
     match site {
         seam_dump::FlipSite::Concurrency => "conc",
-        seam_dump::FlipSite::TreeMismatch => "tree",
+        seam_dump::FlipSite::CacheMismatch => "cache",
         seam_dump::FlipSite::ShrinkVerify => "verify",
         seam_dump::FlipSite::FinalReplay => "final",
         seam_dump::FlipSite::StoredV2Reuse => "v2-reuse",

@@ -46,7 +46,7 @@ fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
 }
 
 #[test]
-fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
+fn duplicate_stopped_filter_too_much_fires_on_tiny_filtered_domain() {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
     let result = std::panic::catch_unwind(|| {

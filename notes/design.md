@@ -66,11 +66,13 @@ formats in `blob.rs`.
 - **declared** (`test_function_tagged`): the first executed case that creates a state machine
   with `max_concurrency > 1` (`FamilyCore::concurrent_machine`). Declared concurrency enters ND
   handling even under `error` strictness — the user asked for threads.
-- **detected**, within-run evidence only: a choice-tree divergence on identical replayed
-  choices (`record_run`'s mismatch signal, in `test_function_tagged`), or a replay whose
-  outcome flips (the pre-shrink verify and final-replay status checks flip the run rather
-  than aborting under deterministic handling). A stored DB entry that stops reproducing is
-  staleness, never evidence (decision 9).
+- **detected**, within-run evidence only: an execution-cache verdict mismatch — the same
+  realized values concluding with a different status or origin (`record_run`'s mismatch
+  signal, in `test_function_tagged`) — or a replay whose outcome flips (the pre-shrink
+  verify and final-replay status checks flip the run rather than aborting under
+  deterministic handling). Under `error` strictness the kind ledger also aborts on
+  within-run generation kind drift. A stored DB entry that stops reproducing is staleness,
+  never evidence (decision 9).
 - **stored**: decoding a version-2 database entry (`run()`'s reuse loop) or ND reproduce blob
   (`reproduce_blob`) — state only a nondeterministic run writes — flips the run before any
   replay of it.
@@ -196,14 +198,37 @@ successive halving over the incumbent, its pool, and prefix-mutant fills (up to
 `BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
 it never runs; each race logs one Debug line at entry; there is no public setting.
 
-### Data tree under ND handling
+### The execution cache and kind ledger
 
-Disabled (gate G3/decision 29): recording, tree-served replays, novel-prefix generation, and
-targeting (the optimiser, its observation recording, and any in-flight climb) are all off
-once `nd_active` is set — `cached_test_function` executes every replay,
-since serving the first recorded verdict is exactly the bias the multi-run machinery exists to
-avoid. Kind-set tolerance is the noted follow-up if generation cost ever shows up; experiment
-007 measured none on the target workloads.
+The data tree is gone (seam plan phase 15, closing decisions 6 and 29; experiment 010
+measured what its four roles bought). Its replacements, both in `exec_cache.rs`:
+
+- **The execution cache** keys every executed conclusion on its serialized realized values
+  (`serialize_choices` semantics: floats by bit pattern, clones by child values; overruns
+  concluded nothing and enter nothing). The digest tier holds a 128-bit fingerprint per
+  conclusion: a generation-window repeat advances the consecutive-duplicate counter
+  (`DUPLICATE_STOP` of them ends generation while no case is valid — the exhausted-space
+  FilterTooMuch trigger; valid spaces are budget-bounded, since duplicate streaks are
+  routine mid-size-space behavior), and a repeat concluding with a different status or
+  origin is the verdict-flip nondeterminism evidence the tree could never see. The full
+  tier keeps complete serving entries (status, origin, nodes, spans) outside the
+  generation window, byte-bounded with oldest-first eviction, and
+  `cached_test_function` serves exact repeats from it — 010's 85% shrink-serve win.
+  Capabilities the tree had beyond exact repeats — trailing-unread proposals, predicted
+  overruns, pun prediction, novel-prefix generation, proven exhaustion — are gone by
+  measurement (serves ≈ exact repeats; recording alone cost 40-80% wall overhead).
+- **The kind ledger** is `error` strictness's generation-nondeterminism detector: a map
+  from rolling value-prefix hash to the choice kind (constraints included) drawn at the
+  next position, compared within-run across executions, producing the tree's diagnostic
+  verbatim. It is never fed between runs — a stored entry that stops reproducing is
+  staleness (decision 9) — and quiet/warn don't maintain it: their detection is the
+  verdict channel plus the replay checks.
+
+Under ND handling both are disabled (gate G3/decision 29): cache recording and serving,
+the duplicate stop, the ledger, and targeting (the optimiser, its observation recording,
+and any in-flight climb) are all off once `nd_active` is set — the flip flushes the cache,
+and `cached_test_function` executes every replay, since serving the first recorded verdict
+is exactly the bias the multi-run machinery exists to avoid.
 
 ### Reporting
 
