@@ -140,7 +140,12 @@ proceed deterministically but keep a history of every interesting case; at the e
 any later ND evidence) check the final shrunk case and, on a miss, backtrack up the
 history to the newest entry that clears the discovery bar and resume ND-mode shrinking
 from there. Replaces options (b)/(c): history preserves what displacement destroyed, and
-the backtrack gives the bar many attempts instead of one. Same seam, opposite direction (009a):
+the backtrack gives the bar many attempts instead of one. Experiment 010 (2026-09-04)
+measured the tree's value on production main: recording, novel prefix, and exhaustion buy
+nothing measurable on large-space workloads; serving is a 6.5x execution win on
+non-stateful shrinking (~all exact repeats, so a flat fingerprint cache recovers it) and
+net-negative on the stateful shrink; a duplicate-counter stop recovers the tiny-space
+exhaustion win. Ditching the tree is supported with those two replacements. Same seam, opposite direction (009a):
 at p = 0.9, 11.5% of clone episodes never flip at all and emit v1 exact-choice blobs
 that reproduce at 13% where v2 blobs hit 100% — blob quality currently depends on
 whether the run noticed its own nondeterminism (decision 58's audit note).

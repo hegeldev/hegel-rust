@@ -1,0 +1,155 @@
+=== tiny_bools test_cases=100 seeds=20 ===
+  tree     execs/run mean=4.0 min=4 max=4 | probe=1.0 generate=3.0 | serves/run=0.0 dups/run=0.0 exhausted=20/20 nodes/run=7.0 valid/run=4.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=24.0 mutate=75.0 | serves/run=0.0 dups/run=96.0 exhausted=0/20 nodes/run=1.0 valid/run=100.0 invalid/run=0.0 bugs=0/20
+
+=== tiny_bools test_cases=1000 seeds=20 ===
+  tree     execs/run mean=4.0 min=4 max=4 | probe=1.0 generate=3.0 | serves/run=0.0 dups/run=0.0 exhausted=20/20 nodes/run=7.0 valid/run=4.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=174.0 mutate=825.0 | serves/run=0.0 dups/run=996.0 exhausted=0/20 nodes/run=1.0 valid/run=1000.0 invalid/run=0.0 bugs=0/20
+
+=== vec_i64_pass test_cases=100 seeds=20 ===
+  tree     execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=29.1 mutate=69.9 | serves/run=16.1 dups/run=0.0 exhausted=0/20 nodes/run=1022.5 valid/run=100.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=28.2 mutate=70.8 | serves/run=0.0 dups/run=16.7 exhausted=0/20 nodes/run=1.0 valid/run=100.0 invalid/run=0.0 bugs=0/20
+
+=== vec_i64_pass test_cases=1000 seeds=20 ===
+  tree     execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=233.2 mutate=765.9 | serves/run=180.5 dups/run=0.0 exhausted=0/20 nodes/run=9556.0 valid/run=1000.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=230.3 mutate=768.7 | serves/run=0.0 dups/run=177.4 exhausted=0/20 nodes/run=1.0 valid/run=1000.0 invalid/run=0.0 bugs=0/20
+
+=== filtered_mod3 test_cases=100 seeds=20 ===
+  tree     execs/run mean=303.6 min=278 max=341 | probe=1.0 generate=302.6 | serves/run=0.0 dups/run=0.0 exhausted=0/20 nodes/run=304.6 valid/run=100.0 invalid/run=203.7 bugs=0/20
+  no-tree  execs/run mean=304.4 min=268 max=342 | probe=1.0 generate=303.4 | serves/run=0.0 dups/run=95.7 exhausted=0/20 nodes/run=1.0 valid/run=100.0 invalid/run=204.3 bugs=0/20
+
+=== filtered_mod3 test_cases=1000 seeds=20 ===
+  tree     execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=999.0 | serves/run=0.0 dups/run=0.0 exhausted=20/20 nodes/run=1001.0 valid/run=334.0 invalid/run=666.0 bugs=0/20
+  no-tree  execs/run mean=3076.8 min=2941 max=3227 | probe=1.0 generate=3075.8 | serves/run=0.0 dups/run=2252.5 exhausted=0/20 nodes/run=1.0 valid/run=1000.0 invalid/run=2076.8 bugs=0/20
+
+=== filter_all test_cases=100 seeds=20 ===
+  tree     execs/run mean=2.0 min=2 max=2 | probe=1.0 generate=1.0 | serves/run=0.0 dups/run=0.0 exhausted=20/20 nodes/run=3.0 valid/run=0.0 invalid/run=2.0 bugs=0/20
+  tree     verdicts: healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch
+  no-tree  execs/run mean=50.0 min=50 max=50 | probe=1.0 generate=49.0 | serves/run=0.0 dups/run=48.0 exhausted=0/20 nodes/run=1.0 valid/run=0.0 invalid/run=50.0 bugs=0/20
+  no-tree  verdicts: healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch,healthcheck:FilterTooMuch
+
+=== shrink_sum test_cases=100 seeds=20 ===
+  tree     execs/run mean=200.4 min=157 max=378 | probe=1.0 generate=2.1 shrink=197.3 | serves/run=1145.5 dups/run=39.2 exhausted=0/20 nodes/run=675.5 valid/run=98.6 invalid/run=0.0 bugs=20/20
+  no-tree  execs/run mean=1308.0 min=1256 max=1441 | probe=1.0 generate=2.6 shrink=1304.5 | serves/run=0.0 dups/run=1134.0 exhausted=0/20 nodes/run=1.0 valid/run=945.1 invalid/run=0.0 bugs=20/20
+  shrunk[tree] seed=0: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=1: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=2: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=3: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=4: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=5: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=6: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=7: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=8: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=9: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=10: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=11: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=12: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=13: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=14: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=15: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=16: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=17: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=18: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[tree] seed=19: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=0: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=1: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=2: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=3: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=4: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=5: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=6: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=7: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=8: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=9: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=10: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=11: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=12: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=13: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=14: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=15: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=16: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=17: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=18: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+  shrunk[no-tree] seed=19: len=5 sum=1000 v=[0, 0, 0, 0, 1000]
+
+=== stateful_pass test_cases=100 seeds=20 ===
+  tree     execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=30.4 mutate=68.5 | serves/run=41.2 dups/run=0.0 exhausted=0/20 nodes/run=19148.5 valid/run=100.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=24.0 mutate=75.0 | serves/run=0.0 dups/run=24.9 exhausted=0/20 nodes/run=1.0 valid/run=100.0 invalid/run=0.0 bugs=0/20
+
+=== stateful_fail test_cases=100 seeds=20 ===
+  tree     execs/run mean=7778.9 min=5178 max=12042 | probe=1.0 generate=1.1 shrink=7776.7 | serves/run=831.1 dups/run=1918.5 exhausted=0/20 nodes/run=77495.5 valid/run=68.4 invalid/run=0.0 bugs=20/20
+  no-tree  execs/run mean=7137.6 min=5633 max=9311 | probe=1.0 generate=1.5 shrink=7135.1 | serves/run=0.0 dups/run=2349.8 exhausted=0/20 nodes/run=1.0 valid/run=372.0 invalid/run=0.0 bugs=20/20
+  shrunk[tree] seed=0: total=301
+  shrunk[tree] seed=1: total=301
+  shrunk[tree] seed=2: total=301
+  shrunk[tree] seed=3: total=301
+  shrunk[tree] seed=4: total=301
+  shrunk[tree] seed=5: total=301
+  shrunk[tree] seed=6: total=301
+  shrunk[tree] seed=7: total=301
+  shrunk[tree] seed=8: total=301
+  shrunk[tree] seed=9: total=301
+  shrunk[tree] seed=10: total=301
+  shrunk[tree] seed=11: total=301
+  shrunk[tree] seed=12: total=301
+  shrunk[tree] seed=13: total=301
+  shrunk[tree] seed=14: total=301
+  shrunk[tree] seed=15: total=301
+  shrunk[tree] seed=16: total=301
+  shrunk[tree] seed=17: total=301
+  shrunk[tree] seed=18: total=301
+  shrunk[tree] seed=19: total=301
+  shrunk[no-tree] seed=0: total=301
+  shrunk[no-tree] seed=1: total=301
+  shrunk[no-tree] seed=2: total=301
+  shrunk[no-tree] seed=3: total=301
+  shrunk[no-tree] seed=4: total=301
+  shrunk[no-tree] seed=5: total=301
+  shrunk[no-tree] seed=6: total=301
+  shrunk[no-tree] seed=7: total=301
+  shrunk[no-tree] seed=8: total=301
+  shrunk[no-tree] seed=9: total=301
+  shrunk[no-tree] seed=10: total=301
+  shrunk[no-tree] seed=11: total=301
+  shrunk[no-tree] seed=12: total=301
+  shrunk[no-tree] seed=13: total=301
+  shrunk[no-tree] seed=14: total=301
+  shrunk[no-tree] seed=15: total=301
+  shrunk[no-tree] seed=16: total=301
+  shrunk[no-tree] seed=17: total=301
+  shrunk[no-tree] seed=18: total=301
+  shrunk[no-tree] seed=19: total=301
+
+=== regex_email test_cases=100 seeds=20 ===
+  tree     execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=99.0 | serves/run=0.0 dups/run=0.0 exhausted=0/20 nodes/run=1617.8 valid/run=100.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=100.0 min=100 max=100 | probe=1.0 generate=99.0 | serves/run=0.0 dups/run=0.0 exhausted=0/20 nodes/run=1.0 valid/run=100.0 invalid/run=0.0 bugs=0/20
+
+=== regex_email test_cases=1000 seeds=20 ===
+  tree     execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=999.0 | serves/run=0.0 dups/run=0.0 exhausted=0/20 nodes/run=15073.7 valid/run=1000.0 invalid/run=0.0 bugs=0/20
+  no-tree  execs/run mean=1000.0 min=1000 max=1000 | probe=1.0 generate=999.0 | serves/run=0.0 dups/run=0.4 exhausted=0/20 nodes/run=1.0 valid/run=1000.0 invalid/run=0.0 bugs=0/20
+
+=== wall-clock (non-reproducible) ===
+  tiny_bools tc=100            tree     mean=    0.056ms median=    0.052ms
+  tiny_bools tc=100            no-tree  mean=    0.175ms median=    0.173ms
+  tiny_bools tc=1000           tree     mean=    0.053ms median=    0.051ms
+  tiny_bools tc=1000           no-tree  mean=    1.256ms median=    1.254ms
+  vec_i64_pass tc=100          tree     mean=    0.504ms median=    0.492ms
+  vec_i64_pass tc=100          no-tree  mean=    0.305ms median=    0.302ms
+  vec_i64_pass tc=1000         tree     mean=    4.709ms median=    4.679ms
+  vec_i64_pass tc=1000         no-tree  mean=    2.568ms median=    2.590ms
+  filtered_mod3 tc=100         tree     mean=    2.201ms median=    2.129ms
+  filtered_mod3 tc=100         no-tree  mean=    2.028ms median=    1.989ms
+  filtered_mod3 tc=1000        tree     mean=   11.775ms median=   11.924ms
+  filtered_mod3 tc=1000        no-tree  mean=   21.321ms median=   21.317ms
+  filter_all tc=100            tree     mean=    0.079ms median=    0.077ms
+  filter_all tc=100            no-tree  mean=    0.538ms median=    0.546ms
+  shrink_sum tc=100            tree     mean=    3.078ms median=    2.868ms
+  shrink_sum tc=100            no-tree  mean=    6.737ms median=    6.680ms
+  stateful_pass tc=100         tree     mean=    7.019ms median=    6.847ms
+  stateful_pass tc=100         no-tree  mean=    3.772ms median=    3.729ms
+  stateful_fail tc=100         tree     mean=  150.069ms median=  147.274ms
+  stateful_fail tc=100         no-tree  mean=  110.242ms median=  103.342ms
+  regex_email tc=100           tree     mean=    0.661ms median=    0.648ms
+  regex_email tc=100           no-tree  mean=    0.470ms median=    0.455ms
+  regex_email tc=1000          tree     mean=    6.470ms median=    6.339ms
+  regex_email tc=1000          no-tree  mean=    4.255ms median=    4.080ms
