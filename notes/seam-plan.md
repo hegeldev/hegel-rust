@@ -52,27 +52,32 @@ DRM's four steps, with the accepted refinements:
    shrunk case once (:1549-1566) — this plan adds no k_f there; a miss — or any earlier
    ND evidence on a never-flipped run: cache mismatch, reuse-comparison miss, first-check
    miss on a later origin, shrink-verify miss (:694-715) — now backtracks instead of
-   taking one bar attempt with spent budgets: walk the origin's history newest to oldest,
-   one continuation-tolerant replay per entry (`nd_replay_once`, :1432 — post-flip the
-   bar itself accepts via continuation, and exact replays would skip the structurally
-   racy entries the walk exists to find); an entry whose replay fails gets the full bar
-   (`nd_evidence_batch` takes an arbitrary timeline, :1613); a bar-cleared entry is
-   restored as incumbent, seeds the anchor through the 20-run extension (decision 54),
-   pools the walk's other reproducing entries, and gauntleted shrinking resumes under the
-   remaining deadline. A bar reject walks on; an exhausted walk falls back to today's
-   caveat-only report. The criterion is "newest entry that clears the bar", not "last
-   deterministic entry" — an always-ND origin has no slip-in point, and the walk handles
-   both. On a gradient landscape the restored entry is the newest genuine one still in
-   history, not necessarily the pre-displacement sighting; experiment 011's
-   restored-vs-history-best column prices that gap rather than the plan asserting it
-   away. ND mode itself (bar, gauntlet, anchors, pools, v2 blobs, caveated reporting) is
-   unchanged, and backtracking is scoped to never-confirmed origins: a confirmed origin's
-   final-replay miss keeps today's `nd_reproduce` pool path (:1567-1578).
+   taking one bar attempt with spent budgets. The backtrack scans the history for the
+   reproduction boundary — the newest entry that still reproduces — with cheap
+   continuation-tolerant replays (`nd_replay_once`, :1432 — post-flip the bar itself
+   accepts via continuation, and exact replays would skip the structurally racy entries
+   the scan exists to find), geometrically rather than linearly (G25 has the algorithm);
+   the candidate it settles on gets the full bar (`nd_evidence_batch` takes an arbitrary
+   timeline, :1613); a bar-cleared entry is restored as incumbent, seeds the anchor
+   through the 20-run extension (decision 54), pools the scan's other reproducing
+   entries, and gauntleted shrinking resumes under the remaining deadline. A bar reject
+   resumes the scan on the older side; an exhausted scan falls back to today's
+   caveat-only report. The boundary framing needs no boundary to exist: on an always-ND
+   origin (no slip-in point) any reproducing probe is a candidate and the bar
+   adjudicates, and both scan errors self-correct — a too-new candidate anchors low or
+   gets rejected, a too-old one costs re-shrinking the gauntlet makes safe (decision 2)
+   — which is why the scan biases old under uncertainty. On a gradient landscape the
+   restored entry sits near the top of the reproducing region, not necessarily at the
+   pre-displacement sighting; experiment 011's restored-vs-history-best column prices
+   the residual gap. ND mode itself (bar, gauntlet, anchors, pools, v2 blobs, caveated
+   reporting) is unchanged, and backtracking is scoped to never-confirmed origins: a
+   confirmed origin's final-replay miss keeps today's `nd_reproduce` pool path
+   (:1567-1578).
 
 Against the three measured loss mechanisms (`research/g20-seam-analysis.md`): mechanism 1
 (n = 1 displace-and-persist) keeps its cheap pre-flip behavior, but history retains what
-displacement discarded; mechanism 2 (one late bar attempt) becomes many — each walked
-entry reaches the bar with roughly its true reproduction rate and each bar attempt holds
+displacement discarded; mechanism 2 (one late bar attempt) becomes many — each probed
+entry reaches the bar at roughly its true reproduction rate and each bar attempt holds
 45% target-regime power, so three attempts compose to ~83%; mechanism 3 (never-flip v1
 blobs) is attacked from both ends — the first check catches structurally racy bodies at
 discovery (escape ~(p·s)^k, and s is smallest on raw cases, before shrinking shortens the
@@ -139,19 +144,40 @@ sightings are old, the displacing lineage's shrink accepts are new. Options: (a)
 retention — every deduped raw generation-phase sighting (bounded by the generation
 budget; a handful in practice) plus a ring of the newest 32 shrink accepts; (b) one ring
 of 64 with keep-first plus middle decimation. Recommendation: (a) — it keeps exactly the
-two populations the walk needs (recent lineage for late slip-in, raw sightings for
-displacement recovery) and the bound argument is structural rather than tuned. ND-mode
-origins keep pools, not history.
+two populations the scan needs (recent lineage for late slip-in, raw sightings for
+displacement recovery) and the bound argument is structural rather than tuned. Removal
+is the ring evicting its oldest accept and nothing else: raw sightings are append-only,
+and an origin's history is dropped when it confirms (the pool takes over) or at run end.
+Dropping at confirmation also keeps the ring shortlex-sorted — accepts strictly shrink
+the incumbent and no post-restore accept is ever recorded — the sorted domain G25's scan
+searches. ND-mode origins keep pools, not history.
 
-**G25. Backtrack budgets and resume mechanics.** The walk pays one `nd_replay_once`
-replay per entry and a full bar per candidate whose replay failed. Recommendation: cap
-walk replays at `CONFIRM_CAP` (40) and bar attempts at 3 — a walked entry reaches the
-bar at roughly its true rate, each attempt holds 45% target-regime power, and three
-compose to ~83% — everything counted as measurement, with `capture_replays`
-save/restore around nested batches (phase 14 fixes the clobber). Resume: on mid-run
+**G25. Backtrack scan and budgets.** The scan hunts the reproduction boundary rather
+than walking linearly: newest-first, a linear walk burns its budget on the degraded tail
+before reaching anything worth restoring, and barring the first entry that happens to
+reproduce re-runs mechanism 1 in miniature — the bar is permissive by design (it targets
+p >= 0.1), so it admits a degraded-but-genuine entry and the anchor then ratifies the
+loss. Algorithm: probe the accept ring at geometric offsets from the newest (1, 2, 4,
+...) plus every raw sighting, one `nd_replay_once` replay each — a coarse reproduction
+profile in ~log2(32) + |raw| replays; binary-refine between the newest reproducing probe
+and its nearest newer non-reproducing one, budget permitting, else take the
+known-reproducing position (the old-biased error: a too-old restore re-shrinks under the
+gauntlet, priced by decision 2's machinery, while a too-new one anchors on degraded p);
+bar the candidate; a reject resumes the scan on the older side; no reproducing probe
+spends the remaining replay budget on a second pass before caveat-only. On the slip-in
+landscape this is binary search for the slip-in point — the old side reproduces at ~1,
+so the only noise is racy-side false positives at rate p, which the bar adjudicates;
+elsewhere the probes are Bernoulli samples and the same adjudication applies. The
+history is small (<= ~40 entries), so the gain is budget allocation, not asymptotics:
+cheap replays go to refinement, second passes, and bar attempts instead of the tail.
+Recommendation: cap scan replays at `CONFIRM_CAP` (40) and bar attempts at 3 — a probed
+entry reaches the bar at roughly its true rate, each attempt holds 45% target-regime
+power, and three compose to ~83% — everything counted as measurement, with
+`capture_replays` save/restore around nested batches (phase 14 fixes the clobber).
+Resume: on mid-run
 evidence the existing loop mechanics suffice (restore the incumbent, `confirm` with the
 batch witness, skip `shrunk_origins` — the R4 requeue pattern, :805-810); at
-final-replay time the walk calls the per-origin shrink method phase 14 extracts from
+final-replay time the scan calls the per-origin shrink method phase 14 extracts from
 `run()`. Termination re-uses R4's argument: the history is bounded, `nd_active` never
 clears, and the resumed shrink is gauntleted.
 
@@ -169,7 +195,8 @@ replays run stamped (`capture_replays` around the check batch) — a stamped fai
 replay of the same choices serves as the captured discovery, and an origin whose k
 replays all pass has no stamped failing case until verify or final replay, the recorded
 residual. Decision 51 (the statistics line): its "while `nd_active`" scope no longer
-covers all measurement — the line also counts pre-flip check and walk replays.
+covers all measurement — the line also counts pre-flip check replays (the scan runs
+post-flip and is already counted).
 
 ## Experiments
 
@@ -324,9 +351,9 @@ Steps 2-4, in dependency order:
 - **History first** (shape per G24) — the check and the backtrack both read it. Recording
   hooks `record_run`'s interesting arm (:1949-1953), not `update_interesting`'s
   mutations: after a fluke displaces the incumbent, later genuine sightings are
-  shortlex-larger and never insert or replace, yet they are exactly what the walk needs.
+  shortlex-larger and never insert or replace, yet they are exactly what the scan needs.
   The same commit scopes that arm's missing `measurement` guard (per G23): check and
-  walk replays must not displace or persist, while the reuse path's `nd_reproduce`
+  scan replays must not displace or persist, while the reuse path's `nd_reproduce`
   replays must keep doing both — under `error` strictness a v2 entry reproduces with
   `nd_active` still false, and that arm populating `interesting` is what makes
   `found_in_reuse` true. Pinned both ways.
@@ -337,9 +364,9 @@ Steps 2-4, in dependency order:
   entry point, and routes `error` to G26's diagnostics; all-reproduce marks the origin
   checked. Accounting through `measure()` plus the deterministic-check counter feeding
   decision 51's amended statistics line; check replays stamped per G26.
-- **Backtracking** (instrument and budgets per G25): the walk + bar + restore + resume,
-  mid-run first (existing loop mechanics), then the final-replay site calling the
-  phase-14 extraction. Two subtleties from the groundwork: `final_replay`'s deterministic
+- **Backtracking** (scan and budgets per G25): the boundary scan + bar + restore +
+  resume, mid-run first (existing loop mechanics), then the final-replay site calling
+  the phase-14 extraction. Two subtleties from the groundwork: `final_replay`'s deterministic
   branch `continue`s on an outcome match (:1560), so a mismatch-triggered flip mid-loop
   is invisible to its control flow — an explicit post-iteration `nd_handling()` check
   routes already-replayed origins into review; and the Persister needs a supersede
@@ -360,9 +387,10 @@ Steps 2-4, in dependency order:
   `a_displaced_incumbent_is_recoverable_after_a_late_flip` (the L1 loss as one test;
   its seed pins fluke displacement — the gradient case is 011's restored-vs-best
   column, not a unit pin),
-  `a_final_replay_miss_backtracks_to_the_newest_reproducing_history_entry`,
+  `a_final_replay_miss_backtracks_to_the_reproduction_boundary`,
+  `the_backtrack_scan_probes_geometrically`,
   `a_flip_during_final_replay_reviews_already_replayed_origins`,
-  `the_walk_continues_past_a_bar_rejected_entry`, `backtrack_pools_the_other_
+  `the_scan_continues_past_a_bar_rejected_candidate`, `backtrack_pools_the_other_
   reproducing_entries`, `a_backtracked_incumbent_anchors_from_its_bar_batch`,
   `an_exhausted_backtrack_reports_caveat_only`, `backtrack_replays_are_capped`,
   `backtrack_resumes_gauntleted_shrinking_under_remaining_budget`,
@@ -423,16 +451,17 @@ passes an honest check, priced by 012).
   truncates generation on a small-but-unexhausted space (bounded by G22's S·c^N
   argument), a missed stop costs budget, not correctness. The health-check tests pin
   exact counts on large spaces, and 011's no-bug column pins non-interference.
-- **History retention vs the gradient landscape.** The walk restores the newest
-  bar-clearing entry; on a gradient that is the least-degraded genuine entry still in
-  history, which can sit below the pre-displacement sighting. G24's split retention
-  keeps the raw sightings the recovery needs, and 011's restored-vs-best column measures
-  the residual gap instead of the plan claiming full recovery.
+- **History retention vs the gradient landscape.** The scan restores near the top of
+  the reproducing region, but on a smooth gradient single-replay probes still land
+  stochastically below the history's best entry. G24's split retention keeps the raw
+  sightings the recovery needs, the scan's old bias bounds the error's direction, and
+  011's restored-vs-best column measures the residual gap instead of the plan claiming
+  full recovery.
 - **Error-mode earlier detection.** Suites that passed under `error` because the old
   engine never re-executed their racy case will now abort at first discovery. Correct as
   a lint, but a behavior change the changelog and decision 30's amendment must own.
 - **Wall clock.** The check is +k per origin and backtracking is bounded, but D2-shaped
-  deterministic-looking landscapes that flip late pay check + walk + bar + reseeded
+  deterministic-looking landscapes that flip late pay check + scan + bar + reseeded
   gauntlet; 011's D2 letter (execs <= 8x, above 009b's priced 4-6x band) is the hard
   bound.
 - **Frozen-crate amendment.** 011 amends a frozen harness. The freeze exists to keep
