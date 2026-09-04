@@ -399,6 +399,13 @@ pub(crate) const REPRODUCE_SPLICES: u64 = 10;
 /// splice replays — no experiment prices it.
 pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 
+/// Replay attempts for a v1 exact-choice blob, each with the standard
+/// continuation budget (the reuse path's semantics). One exact
+/// no-continuation replay reproduced never-flipped runs' blobs at 13%
+/// against v2's 100% at p = 0.9 (009a); four continuation attempts bound
+/// the worst-case joint escape-then-miss at 1.2e-3 (seam plan).
+pub(crate) const V1_BLOB_REPLAYS: u64 = 4;
+
 pub(crate) mod lifecycle;
 
 #[cfg(test)]

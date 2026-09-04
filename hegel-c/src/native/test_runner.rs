@@ -206,16 +206,24 @@ pub(crate) async fn reproduce_blob(
                 .to_string(),
         )),
         Some(crate::native::blob::DecodedBlob::Choices(choices)) => {
-            let mut ntc = NativeTestCase::for_choices(&choices, None, None);
-            ntc.set_should_capture();
-            ntc.family()
-                .set_stateful_step_count(settings.stateful_step_count);
-            let (data_source, handle) = NativeDataSource::new(ntc);
-            exchange.offer(Box::new(data_source)).await;
-            let failures = match NativeDataSource::take_outcome(&handle)? {
-                TestCaseResult::Interesting(failure) => Vec::from([failure]),
-                _ => Vec::new(),
-            };
+            let mut rng = create_rng(settings, None)?;
+            let budget =
+                nd::continuation_budget(crate::native::core::flattened_values_len(&choices));
+            let mut failures = Vec::new();
+            for _ in 0..nd::V1_BLOB_REPLAYS {
+                let mut ntc = NativeTestCase::for_probe(&choices, rng.spawn(), budget)?;
+                ntc.set_should_capture();
+                ntc.family()
+                    .set_stateful_step_count(settings.stateful_step_count);
+                let (data_source, handle) = NativeDataSource::new(ntc);
+                exchange.offer(Box::new(data_source)).await;
+                if let TestCaseResult::Interesting(failure) =
+                    NativeDataSource::take_outcome(&handle)?
+                {
+                    failures.push(failure);
+                    break;
+                }
+            }
             Ok(TestRunResult { failures })
         }
         Some(crate::native::blob::DecodedBlob::Nd(state)) => {

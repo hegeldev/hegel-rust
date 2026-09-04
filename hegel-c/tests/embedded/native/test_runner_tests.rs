@@ -625,6 +625,69 @@ fn reproduce_blob_reports_a_stale_deterministic_blob_as_passed() {
     assert!(result.failures.is_empty());
 }
 
+#[test]
+fn a_v1_blob_replays_with_the_continuation_budget() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        let first = match rbool(ds) {
+            Ok(b) => b,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if first {
+            boom("continuation reached")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: continuation reached");
+}
+
+#[test]
+fn a_v1_blob_retries_up_to_its_budget() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let mut calls = 0u32;
+    let mut stamped = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        calls += 1;
+        stamped += u32::from(ds.should_capture());
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if calls == 3 {
+            boom("third replay")
+        } else {
+            TestCaseResult::Valid
+        }
+    })
+    .unwrap();
+    assert_eq!(calls, 3, "the replay loop retries past the early passes");
+    assert_eq!(stamped, 3, "every replay is stamped for capture");
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(result.failures[0].origin, "Panic: third replay");
+    assert!(result.failures[0].caveat.is_none());
+}
+
+#[test]
+fn a_truly_stale_v1_blob_still_reports_stale_within_budget() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let mut calls = 0u32;
+    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+        calls += 1;
+        match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert_eq!(calls, 4, "replays stop at the v1 budget");
+}
+
 /// A one-timeline ND blob whose single stored choice is a `true` boolean.
 fn nd_blob() -> String {
     crate::native::blob::encode_nd_failure(&crate::native::blob::NdReproState {
