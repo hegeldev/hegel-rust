@@ -480,3 +480,21 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     Recorded under gate G20's seam family for the phase-13 decision-3 audit: a
     failure's blob quality currently depends on whether the run noticed its own
     nondeterminism. (Gate G10; experiment 009a.)
+
+59. **v1 blobs replay with continuation and retries.** A v1 exact-choice blob got one
+    `for_choices` replay with no continuation budget — the fragility decision 58
+    recorded: never-flipped runs' blobs reproduced at 13% against v2's 100% at
+    p = 0.9, on the same episodes whose DB reuse held 99% because the reuse path
+    allows continuation. The Choices arm now runs up to `V1_BLOB_REPLAYS` = 4
+    `for_probe` attempts under the standard continuation budget, stopping at the
+    first failure, every attempt stamped. Four attempts bound the worst-case joint
+    escape-then-miss (a run that passes the seam plan's k = 4 first check, the
+    verify, and the final replay, then misses every blob attempt) at
+    max x^6(1-x)^4 = 1.2e-3; experiment 012 measures the realized rates. Two
+    neighbors deliberately keep exact semantics: the reuse path's single-miss-demote
+    (decision 11's hygiene) and the pre-shrink drain — a hit on either is the
+    origin's first sighting once the seam plan's step-2 check lands. Alongside, a
+    defect correction: `nd_evidence_batch` cleared `capture_replays` on exit instead
+    of restoring it, which would have silently unclamped stamping for any batch run
+    inside the final replay's capture window. (Seam plan, phase 14; experiments 009a
+    and 012.)

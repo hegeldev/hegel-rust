@@ -281,6 +281,12 @@ Everything valuable regardless of how G21-G26 resolve, in landing order:
 Exit: baseline table recorded; the fixes and the extraction green with the existing
 suite.
 
+Landed 2026-09-04 (ad3ff0c1..82f83966, decision 59): the dump, the baseline (its
+headline: L4b's 49% caveat-only is 43 power misses to 6 correct fluke rejections, and
+L1's incumbent sits at the 0.26 floor by flip time at every percentile — see the 011
+notes), the v1 continuation/retry fix with its three red-first pins, the capture-flag
+restore, and the extraction. Gates green.
+
 ### Phase 15: tree removal
 
 The removal inventory, from the groundwork sweep:
