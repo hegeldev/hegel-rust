@@ -1210,6 +1210,37 @@ fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
 }
 
 #[test]
+fn a_concurrent_machine_prints_no_nondeterminism_notice_in_antithesis() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::for_env(false, true)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let text = lines.lock().unwrap().join("\n");
+    assert!(
+        !text.contains("Concurrent state machine detected"),
+        "Antithesis is deterministic, so the notice does not apply:\n{text}"
+    );
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
