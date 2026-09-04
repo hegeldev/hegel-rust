@@ -864,6 +864,12 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
  similar variables) the defaults change: the database is disabled and
  derandomization is enabled. Override either with the explicit setters.
+
+ When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
+ the database is disabled and every health check is skipped. The database
+ can still be enabled with `hegel_settings_set_database`; the health
+ checks cannot be re-enabled, since Antithesis's thread pausing would trip
+ wall-clock checks such as `TooSlow` spuriously.
  */
 hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
 
