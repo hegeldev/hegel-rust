@@ -132,7 +132,15 @@ guard displacement pre-flip (costs deterministic-run behavior). Undecided — ne
 carried into the phase-13 audit as an open item. Mechanism analysis in
 `research/g20-seam-analysis.md` (2026-09-04): the driver is pre-flip single-run trust
 (displace-and-persist, one late bar attempt, v1 blob fragility), not the data tree, with
-graded-middle options costed. Same seam, opposite direction (009a):
+graded-middle options costed. (d) DRM's proposed workflow (2026-09-04, under evaluation):
+ditch the data tree (experiment 010 measures its value on real workloads, branched off
+main); on each origin's first interesting case spend a bounded budget checking it looks
+deterministic (structural alignment and outcome), entering ND mode on a miss; otherwise
+proceed deterministically but keep a history of every interesting case; at the end (or on
+any later ND evidence) check the final shrunk case and, on a miss, backtrack up the
+history to the newest entry that clears the discovery bar and resume ND-mode shrinking
+from there. Replaces options (b)/(c): history preserves what displacement destroyed, and
+the backtrack gives the bar many attempts instead of one. Same seam, opposite direction (009a):
 at p = 0.9, 11.5% of clone episodes never flip at all and emit v1 exact-choice blobs
 that reproduce at 13% where v2 blobs hit 100% — blob quality currently depends on
 whether the run noticed its own nondeterminism (decision 58's audit note).
