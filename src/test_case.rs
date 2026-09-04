@@ -493,6 +493,25 @@ impl TestCase {
         self.__draw_named(generator, "draw", true)
     }
 
+    /// Draw a value from a generator, reporting it under `name`.
+    ///
+    /// Like [`draw`](Self::draw), but the failing-example line prints as
+    /// `let name_N = value;`, numbered per call under that name. Use it in
+    /// helper functions: `#[hegel::test]` captures binding names only for
+    /// `draw` calls written directly in the test (or rule) body, so a draw
+    /// inside a helper otherwise reports as the anonymous `draw_N`.
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// fn draw_index(tc: &hegel::TestCase, len: usize) -> usize {
+    ///     tc.draw_named("index", gs::integers::<usize>().max_value(len - 1))
+    /// }
+    /// ```
+    pub fn draw_named<T>(&self, name: &str, generator: impl PrintableGenerator<T>) -> T {
+        self.__draw_named(generator, name, true)
+    }
+
     /// Draw a value from a generator with a specific name for output.
     ///
     /// When `repeatable` is true, a counter suffix is appended (e.g. `x_1`, `x_2`).

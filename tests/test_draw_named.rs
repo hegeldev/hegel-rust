@@ -634,3 +634,18 @@ mod composite_spans {
         ["let a = false;", "let b = false;"]
     );
 }
+
+fn helper_key(tc: &hegel::TestCase) -> bool {
+    tc.draw_named("key", gs::booleans())
+}
+
+draw_lines_case!(
+    test_draw_named_reports_helper_draws_under_their_name,
+    draw_named_in_helper_fixture,
+    tc,
+    {
+        let first = helper_key(&tc);
+        let second = helper_key(&tc);
+    },
+    ["let key_1 = false;", "let key_2 = false;"]
+);
