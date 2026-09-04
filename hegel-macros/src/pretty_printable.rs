@@ -15,7 +15,8 @@
 //! the generated impl requires the field's type to implement `Debug`.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, Index};
 
 pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -28,28 +29,35 @@ pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenS
             .push(syn::parse_quote!(::hegel::PrettyPrintable));
     }
     for ty in debug_field_types(&input.data)? {
+        let span = ty.span();
         generics
             .make_where_clause()
             .predicates
-            .push(syn::parse_quote!(#ty: ::core::fmt::Debug));
+            .push(syn::parse_quote_spanned!(span=> #ty: ::core::fmt::Debug));
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let body = match &input.data {
         Data::Struct(data) => {
+            // Accessors are spanned at their field's type so an unsatisfied
+            // `PrettyPrintable` bound points at the offending field.
             let accessors: Vec<TokenStream> = match &data.fields {
                 Fields::Named(fields) => fields
                     .named
                     .iter()
                     .map(|f| {
                         let ident = &f.ident;
-                        quote! { &self.#ident }
+                        quote_spanned! {f.ty.span()=> &self.#ident }
                     })
                     .collect(),
-                Fields::Unnamed(fields) => (0..fields.unnamed.len())
-                    .map(|i| {
-                        let index = Index::from(i);
-                        quote! { &self.#index }
+                Fields::Unnamed(fields) => fields
+                    .unnamed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| {
+                        let mut index = Index::from(i);
+                        index.span = f.ty.span();
+                        quote_spanned! {f.ty.span()=> &self.#index }
                     })
                     .collect(),
                 Fields::Unit => Vec::new(),
@@ -72,8 +80,11 @@ pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenS
                                 .iter()
                                 .map(|f| f.ident.clone().unwrap())
                                 .collect();
-                            let bindings: Vec<_> = (0..idents.len())
-                                .map(|i| format_ident!("__field{i}"))
+                            let bindings: Vec<_> = fields
+                                .named
+                                .iter()
+                                .enumerate()
+                                .map(|(i, f)| format_ident!("__field{i}", span = f.ty.span()))
                                 .collect();
                             let accessors: Vec<TokenStream> =
                                 bindings.iter().map(|i| quote! { #i }).collect();
@@ -83,8 +94,11 @@ pub(crate) fn derive_pretty_printable(input: &DeriveInput) -> syn::Result<TokenS
                             }
                         }
                         Fields::Unnamed(fields) => {
-                            let idents: Vec<_> = (0..fields.unnamed.len())
-                                .map(|i| format_ident!("__field{i}"))
+                            let idents: Vec<_> = fields
+                                .unnamed
+                                .iter()
+                                .enumerate()
+                                .map(|(i, f)| format_ident!("__field{i}", span = f.ty.span()))
                                 .collect();
                             let accessors: Vec<TokenStream> =
                                 idents.iter().map(|i| quote! { #i }).collect();
@@ -191,15 +205,20 @@ fn print_shape(
         .iter()
         .zip(accessors)
         .map(|(field, accessor)| {
+            // Spanned at the field's type so an unsatisfied bound points at
+            // the offending field, not at the derive attribute.
+            let span = field.ty.span();
             Ok(if field_prints_as_debug(field)? {
-                quote! {
+                quote_spanned! {span=>
                     ::hegel::pretty::print_debug_repr(
                         &::std::format!("{:?}", #accessor),
                         __printer,
                     );
                 }
             } else {
-                quote! { ::hegel::PrettyPrintable::pretty_print(#accessor, __printer); }
+                quote_spanned! {span=>
+                    ::hegel::pretty::PrettyPrintableField::pretty_print_field(#accessor, __printer);
+                }
             })
         })
         .collect::<syn::Result<Vec<TokenStream>>>()?;

@@ -64,6 +64,17 @@ impl crate::PrettyPrintable for Value {
     }
 }
 
+/// Prints `json!({…}).as_object().unwrap().clone()`: `json!` is the only
+/// stable constructor expression for an object with arbitrary keys, and it
+/// evaluates to a [`Value`], not a [`Map`](serde_json::Map).
+impl crate::PrettyPrintable for serde_json::Map<String, Value> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.begin_group(6, "json!(");
+        pretty_print_json(&Value::Object(self.clone()), printer);
+        printer.end_group(").as_object().unwrap().clone()");
+    }
+}
+
 #[cfg(feature = "serde_json_raw_value")]
 impl crate::PrettyPrintable for serde_json::value::RawValue {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {

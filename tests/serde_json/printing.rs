@@ -48,3 +48,23 @@ fn raw_values_print_as_from_string_expressions() {
         "RawValue::from_string(\"null\".to_string()).unwrap()"
     );
 }
+
+#[test]
+fn maps_print_as_object_expressions() {
+    use serde_json::{Map, Value, json};
+    let mut map = Map::new();
+    map.insert("k".to_string(), json!(1));
+    assert_eq!(
+        render(&map),
+        "json!({\"k\": 1}).as_object().unwrap().clone()"
+    );
+    let empty: Map<String, Value> = Map::new();
+    assert_eq!(render(&empty), "json!({}).as_object().unwrap().clone()");
+}
+
+#[test]
+fn map_default_generator_is_drawable() {
+    use hegel::generators as gs;
+    use serde_json::{Map, Value};
+    printed_draw_lines(gs::default::<Map<String, Value>>());
+}

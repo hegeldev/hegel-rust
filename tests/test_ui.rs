@@ -94,6 +94,44 @@ fn derive_bound_note_uses_type_parameter_wording() -> bool {
     panic!("unrecognized derive-bound note wording; add a golden for it:\n{stderr}");
 }
 
+/// rustc also changed how it renders the "the trait `X` is not implemented
+/// for `Y`" help when `Y` is a local type: the MSRV toolchain prints it as an
+/// inline `= help:` note where newer toolchains print a `help:` block with a
+/// source pointer at `Y`'s definition (and spell out trait paths more
+/// fully). Probed like [`e0283_note_uses_must_implement_wording`].
+fn trait_help_has_source_pointer() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let probe = dir.path().join("probe.rs");
+    std::fs::write(
+        &probe,
+        "#[diagnostic::on_unimplemented(message = \"probe\", label = \"probe\")]\n\
+         trait Marker {}\n\
+         struct Plain;\n\
+         fn need<T: Marker>() {}\n\
+         fn main() { need::<Plain>(); }\n",
+    )
+    .unwrap();
+    let output = Command::new(rustc_binary())
+        .args(["--edition", "2021", "--crate-name", "probe"])
+        .arg(&probe)
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "the trait-help probe unexpectedly compiled"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("= help: the trait `Marker` is not implemented") {
+        return false;
+    }
+    if stderr.contains("help: the trait `Marker` is not implemented") {
+        return true;
+    }
+    panic!("unrecognized trait-help wording; add a golden for it:\n{stderr}");
+}
+
 fn rustc_binary() -> std::ffi::OsString {
     std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into())
 }
@@ -361,9 +399,26 @@ fn e0283_diagnostic() {
 fn derived_generator_non_printable_field_diagnostic() {
     let actual = compile_failing_case("tests/ui-printability/derive_non_printable_field_draw.rs");
     let golden = if derive_bound_note_uses_type_parameter_wording() {
-        "tests/ui-printability/expected-current.stderr"
+        "tests/ui-printability/derive_non_printable_field_draw-current.stderr"
     } else {
-        "tests/ui-printability/expected-msrv.stderr"
+        "tests/ui-printability/derive_non_printable_field_draw-msrv.stderr"
+    };
+    check_against_golden(&actual, golden);
+}
+
+/// The error a user sees when a `#[derive(PrettyPrintable)]` field's type is
+/// not printable. Pinned because this diagnostic is the discovery path for
+/// `#[pretty(debug)]`: it must point at the offending field and give the
+/// derive-specific fixes, not draw-site advice. Checked by hand because it
+/// enumerates `PrettyPrintable` implementors, which vary with the feature
+/// set and toolchain.
+#[test]
+fn derive_non_printable_field_diagnostic() {
+    let actual = compile_failing_case("tests/ui-printability/derive_non_printable_field.rs");
+    let golden = if trait_help_has_source_pointer() {
+        "tests/ui-printability/derive_non_printable_field-current.stderr"
+    } else {
+        "tests/ui-printability/derive_non_printable_field-msrv.stderr"
     };
     check_against_golden(&actual, golden);
 }

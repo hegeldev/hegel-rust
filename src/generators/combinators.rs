@@ -55,8 +55,8 @@ where
 /// Generic over the alternative storage `A`: a [`OneOfCons`]/[`OneOfLast`]
 /// chain from `one_of!`, or a `Vec` of boxed generators from `one_of` —
 /// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s (the default)
-/// for a printable result, plain [`BoxedGenerator`](super::BoxedGenerator)s
-/// for one that can only be drawn silently.
+/// or plain [`BoxedGenerator`](super::BoxedGenerator)s, printable under the
+/// usual boxing rules (see [`Generator::boxed`](super::Generator::boxed)).
 pub struct OneOfGenerator<'a, T, A = Vec<BoxedPrintableGenerator<'a, T>>> {
     alternatives: A,
     _phantom: PhantomData<&'a fn() -> T>,
@@ -176,9 +176,10 @@ impl<T, G: PrintableGenerator<T>, R: PrintableAlternatives<T>> PrintableAlternat
 
 /// Choose from multiple generators of the same type.
 ///
-/// Accepts any iterable of boxed generators — `Vec<BoxedPrintableGenerator<T>>`
-/// for a printable result, or `Vec<BoxedGenerator<T>>` for a silent one. For a
-/// more convenient syntax, use the `one_of!` macro instead.
+/// Accepts any iterable of boxed generators: `Vec<BoxedGenerator<T>>`
+/// (printable whenever `T` is [`PrettyPrintable`]) or
+/// `Vec<BoxedPrintableGenerator<T>>` (each generator keeps its own
+/// printing). For a more convenient syntax, use the `one_of!` macro instead.
 pub fn one_of<'a, T, B, I>(generators: I) -> OneOfGenerator<'a, T, Vec<B>>
 where
     B: Generator<T>,

@@ -357,6 +357,34 @@ fn print_adapters_control_the_representation() {
 }
 
 #[test]
+fn boxed_generators_of_printable_values_print_by_value() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::integers::<i64>().min_value(0).max_value(9).boxed());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 0;"]);
+}
+
+#[test]
+fn boxing_replaces_the_erased_generators_custom_printing_with_value_printing() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::just(5i32).print_with(|_, p| p.text("custom")).boxed());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 5;"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(
+            gs::just(5i32)
+                .print_with(|_, p| p.text("custom"))
+                .boxed_printable(),
+        );
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = custom;"]);
+}
+
+#[test]
 fn notes_inside_composites_flush_after_the_draw() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(hegel::compose!(|tc| {

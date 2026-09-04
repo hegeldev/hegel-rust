@@ -200,3 +200,41 @@ fn snapshot_notes_inside_rules_follow_their_draws() {
     }
     ");
 }
+
+struct HelperMethodMachine {
+    total: i32,
+}
+
+#[hegel::state_machine]
+impl HelperMethodMachine {
+    #[hegel::test_helper]
+    fn draw_amount(&self, tc: &TestCase) -> i32 {
+        let negate = tc.draw(gs::booleans());
+        let amount = tc.draw(gs::integers::<i32>().min_value(1).max_value(10));
+        if negate { -amount } else { amount }
+    }
+
+    #[rule]
+    fn add(&mut self, tc: TestCase) {
+        self.total += self.draw_amount(&tc);
+    }
+
+    #[invariant]
+    fn small(&mut self, _tc: TestCase) {
+        assert!(self.total.unsigned_abs() < 3);
+    }
+}
+
+#[test]
+fn snapshot_test_helper_draws_are_named_inside_steps() {
+    let output = capture_stateful_output(|tc: TestCase| {
+        hegel::stateful::run(HelperMethodMachine { total: 0 }, tc);
+    });
+    insta::assert_snapshot!(output, @"
+    Initial invariant check.
+    Step 1: add {
+      let negate_1 = false;
+      let amount_1 = 3;
+    }
+    ");
+}

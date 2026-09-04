@@ -159,11 +159,13 @@ pub fn deferred<T>() -> DeferredGeneratorDefinition<T> {
 /// [`Generator`]s.
 ///
 /// Like [`deferred()`], but `set` accepts any [`Generator`] — no
-/// printability required — and the handles can only be drawn with
-/// [`draw_silent`](crate::TestCase::draw_silent) (or made printable with
-/// [`print_as_debug`](Generator::print_as_debug),
-/// [`print_as_value`](Generator::print_as_value), or
-/// [`print_with`](Generator::print_with)).
+/// printability required. The handles are [`BoxedGenerator`]s, so they
+/// follow the usual boxing rules (see [`Generator::boxed`]): drawable with
+/// [`draw`](crate::TestCase::draw) when `T` is
+/// [`PrettyPrintable`](crate::PrettyPrintable), and otherwise with
+/// [`draw_silent`](crate::TestCase::draw_silent) or via
+/// [`print_as_debug`](Generator::print_as_debug) or
+/// [`print_with`](Generator::print_with).
 pub fn deferred_silent<T>() -> DeferredGeneratorDefinition<T, BoxedGenerator<'static, T>> {
     DeferredGeneratorDefinition {
         inner: Arc::new(OnceLock::new()),

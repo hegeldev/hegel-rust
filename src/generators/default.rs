@@ -295,6 +295,14 @@ where
 /// from another crate, so [`default`] cannot support external types; draw
 /// from the generated generator directly instead.
 ///
+/// The generated generator is a
+/// [`PrintableGenerator`](crate::PrintableGenerator), printing values as
+/// `Name { field: value, … }` expressions, exactly when every field type
+/// implements [`PrettyPrintable`](crate::PrettyPrintable); otherwise it can
+/// only be drawn silently, or made printable with
+/// [`print_as_debug`](crate::Generator::print_as_debug) or
+/// [`print_with`](crate::Generator::print_with).
+///
 /// # Example
 ///
 /// ```no_run
@@ -310,7 +318,7 @@ where
 /// use production_crate::Person;
 ///
 /// use hegel::derive_generator;
-/// use hegel::generators::{self as gs, Generator};
+/// use hegel::generators as gs;
 ///
 /// derive_generator!(PersonGenerator for Person {
 ///     name: String,
@@ -322,8 +330,7 @@ where
 ///     let person: Person = tc.draw(
 ///         PersonGenerator::new()
 ///             .name(gs::from_regex("[A-Z][a-z]+"))
-///             .age(gs::integers::<u32>().min_value(0).max_value(120))
-///             .print_as_debug(),
+///             .age(gs::integers::<u32>().min_value(0).max_value(120)),
 ///     );
 /// }
 /// ```
@@ -375,6 +382,33 @@ macro_rules! derive_generator {
                 $struct_type {
                     $($field_name: $crate::generators::Generator::do_draw(&self.$field_name, __tc),)*
                 }
+            }
+        }
+
+        impl<'a> $crate::generators::PrintableGenerator<$struct_type> for $gen_name<'a>
+        where
+            $($field_type: $crate::PrettyPrintable,)*
+        {
+            fn do_draw_and_print(
+                &self,
+                __tc: &$crate::TestCase,
+                __printer: &mut $crate::PrettyPrinter,
+            ) -> $struct_type {
+                __printer.begin_group(4, concat!(stringify!($struct_type), " {"));
+                __printer.breakable(" ");
+                let mut __first = true;
+                $(
+                    if !__first {
+                        __printer.text(",");
+                        __printer.breakable(" ");
+                    }
+                    __first = false;
+                    __printer.text(concat!(stringify!($field_name), ": "));
+                    let $field_name = __tc.draw_and_print(&self.$field_name, __printer);
+                )*
+                let _ = __first;
+                __printer.end_group(" }");
+                $struct_type { $($field_name,)* }
             }
         }
     };

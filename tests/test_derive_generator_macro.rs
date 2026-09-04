@@ -80,3 +80,10 @@ fn test_derive_generator_foreign_type() {
         |range| (0..=10).contains(&range.start) && (20..=30).contains(&range.end),
     );
 }
+
+#[test]
+fn derived_generators_print_when_every_field_type_is_printable() {
+    let lines =
+        common::utils::printed_draw_lines(PointGenerator::new().x(gs::just(1)).y(gs::just(2)));
+    assert_eq!(lines, vec!["let draw_1 = Point { x: 1, y: 2 };"]);
+}
