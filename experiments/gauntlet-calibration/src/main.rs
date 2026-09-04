@@ -529,6 +529,7 @@ struct SeamTrial {
     outcome: Outcome,
     flip: Option<(seam_dump::FlipSite, u64, Option<f64>)>,
     evicts: Vec<(Option<f64>, bool)>,
+    backtracks: Vec<(Option<f64>, Option<f64>, usize)>,
 }
 
 fn run_seam_trial(landscape: Landscape, seed: u64) -> SeamTrial {
@@ -536,6 +537,7 @@ fn run_seam_trial(landscape: Landscape, seed: u64) -> SeamTrial {
     let outcome = run_trial(landscape, seed);
     let mut flip = None;
     let mut evicts = Vec::new();
+    let mut backtracks = Vec::new();
     for event in seam_dump::drain() {
         match event {
             seam_dump::SeamEvent::Flip {
@@ -560,15 +562,23 @@ fn run_seam_trial(landscape: Landscape, seed: u64) -> SeamTrial {
                 let p = atoms_of(&values).map(|atoms| landscape.p(&atoms));
                 evicts.push((p, at_final_replay));
             }
-            // The restored-vs-best column lands with the 011 comparison
-            // (seam plan, phase 17).
-            seam_dump::SeamEvent::Backtrack { .. } => {}
+            seam_dump::SeamEvent::Backtrack {
+                restored,
+                history_best,
+                history_bytes,
+                ..
+            } => {
+                let restored_p = atoms_of(&restored).map(|atoms| landscape.p(&atoms));
+                let best_p = atoms_of(&history_best).map(|atoms| landscape.p(&atoms));
+                backtracks.push((restored_p, best_p, history_bytes));
+            }
         }
     }
     SeamTrial {
         outcome,
         flip,
         evicts,
+        backtracks,
     }
 }
 
@@ -669,6 +679,49 @@ fn print_seam_rows(landscape: Landscape, trials: &[SeamTrial]) {
         }
     }
     println!("seam {name} blobs: v1 {v1}, v2 {v2}");
+    let all_backtracks: Vec<&(Option<f64>, Option<f64>, usize)> =
+        trials.iter().flat_map(|t| &t.backtracks).collect();
+    let mut restored_ps: Vec<f64> = all_backtracks.iter().filter_map(|(r, _, _)| *r).collect();
+    let mut best_ps: Vec<f64> = all_backtracks.iter().filter_map(|(_, b, _)| *b).collect();
+    let mut bytes: Vec<f64> = all_backtracks
+        .iter()
+        .map(|(_, _, b)| *b as f64)
+        .collect();
+    bytes.sort_by(f64::total_cmp);
+    println!(
+        "seam {name} backtracks {}: restored-p p10/p50/p90 {} | history-best-p p10/p50/p90 {} | history bytes p50 {}",
+        all_backtracks.len(),
+        fmt_percentiles(&mut restored_ps),
+        fmt_percentiles(&mut best_ps),
+        if bytes.is_empty() {
+            "—".to_string()
+        } else {
+            format!("{:.0}", percentile(&bytes, 0.5))
+        },
+    );
+    if landscape == Landscape::DetCore {
+        let mut kept = 0usize;
+        let mut gained = 0usize;
+        let mut lost = 0usize;
+        let mut never = 0usize;
+        for trial in trials {
+            let Some((_, _, Some(flip_p))) = trial.flip else {
+                continue;
+            };
+            let Outcome::Shrunk { atoms, .. } = &trial.outcome else {
+                continue;
+            };
+            match (flip_p == 1.0, Landscape::has_core(atoms)) {
+                (true, true) => kept += 1,
+                (false, true) => gained += 1,
+                (true, false) => lost += 1,
+                (false, false) => never += 1,
+            }
+        }
+        println!(
+            "seam {name} core at flip -> shrunk: kept {kept}, gained {gained}, lost {lost}, never {never}"
+        );
+    }
 }
 
 fn seam(cells: &[Landscape]) {

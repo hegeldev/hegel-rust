@@ -1881,9 +1881,10 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
-            let Some(nodes) = self.interesting.get(&origin).cloned() else {
-                continue;
-            };
+            let nodes = crate::control::hegel_internal_unwrap!(
+                self.interesting.get(&origin).cloned(),
+                "final_replay: {origin} left the interesting map without continuing"
+            );
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             let timelines = pooled_timelines(choices, self.nd_origins.pool(&origin).to_vec());
             self.capture_replays = true;
@@ -2141,13 +2142,14 @@ impl<'a> Engine<'a> {
                 entries[candidate].0.clone(),
                 batch.captured.into_iter().chain(others),
             );
-            self.nd_origins.confirm(
+            let confirmed = self.nd_origins.confirm(
                 origin,
                 anchor,
                 Some(witness),
                 pool,
                 (batch.evidence.fails(), batch.evidence.runs()),
-            )?;
+            );
+            confirmed?;
             #[cfg(feature = "__bench")]
             {
                 let history_bytes = self.history.get(origin).map_or(0, |h| {
@@ -2156,12 +2158,11 @@ impl<'a> Engine<'a> {
                         .map(|e| e.nodes.len() * core::mem::size_of::<ChoiceNode>())
                         .sum()
                 });
+                let best = accepts.last().copied().unwrap_or(candidate);
                 nd::seam_dump::record(nd::seam_dump::SeamEvent::Backtrack {
                     origin: origin.to_string(),
                     restored: entries[candidate].0.clone(),
-                    history_best: accepts
-                        .last()
-                        .map_or_else(|| entries[candidate].0.clone(), |&i| entries[i].0.clone()),
+                    history_best: entries[best].0.clone(),
                     history_bytes,
                 });
             }
@@ -2289,50 +2290,13 @@ impl<'a> Engine<'a> {
                 return Ok(());
             };
             self.first_checked.insert(origin.clone());
-            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-            let mut evidence = nd::Evidence::default();
             let capture_entry = self.capture_replays;
             self.capture_replays = true;
             self.check_window = true;
-            let mut miss = None;
-            for _ in 0..FIRST_CHECK_REPLAYS {
-                let ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
-                let outcome = self.measure(ntc).await;
-                let (run, mismatch) = match outcome {
-                    Ok(v) => v,
-                    Err(err) => {
-                        self.capture_replays = capture_entry;
-                        self.check_window = false;
-                        return Err(err);
-                    }
-                };
-                if let Some(err) = mismatch {
-                    self.capture_replays = capture_entry;
-                    self.check_window = false;
-                    return Err(err);
-                }
-                let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
-                let failed = run.status == Status::Interesting
-                    && run.origin.as_deref() == Some(origin.as_str());
-                evidence.record(
-                    failed,
-                    if failed {
-                        1.0
-                    } else {
-                        nd::verbatim_weight(&choices, &realized)
-                    },
-                );
-                if !failed || realized != choices {
-                    miss = Some(if realized == choices {
-                        RunError::Flaky(flaky_diagnostic())
-                    } else {
-                        RunError::NonDeterministic(first_check_diagnostic(&choices, &realized))
-                    });
-                    break;
-                }
-            }
+            let outcome = self.first_check_replays(&origin, &nodes).await;
             self.capture_replays = capture_entry;
             self.check_window = false;
+            let (miss, evidence) = outcome?;
             if let Some(err) = miss {
                 if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                     return Err(err);
@@ -2344,6 +2308,45 @@ impl<'a> Engine<'a> {
             }
         }
         Ok(())
+    }
+
+    /// [`Self::first_check_sweep`]'s replay loop: up to
+    /// [`FIRST_CHECK_REPLAYS`] exact replays of `nodes`, stopping at the
+    /// first miss. Returns the miss (typed for `error` strictness) and the
+    /// evidence gathered; the caller owns the capture flags.
+    async fn first_check_replays(
+        &mut self,
+        origin: &str,
+        nodes: &[ChoiceNode],
+    ) -> Result<(Option<RunError>, nd::Evidence), RunError> {
+        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+        let mut evidence = nd::Evidence::default();
+        for _ in 0..FIRST_CHECK_REPLAYS {
+            let ntc = NativeTestCase::for_choices(&choices, Some(nodes), None);
+            let (run, mismatch) = self.measure(ntc).await?;
+            if let Some(err) = mismatch {
+                return Err(err);
+            }
+            let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+            let failed = run.status == Status::Interesting && run.origin.as_deref() == Some(origin);
+            evidence.record(
+                failed,
+                if failed {
+                    1.0
+                } else {
+                    nd::verbatim_weight(&choices, &realized)
+                },
+            );
+            if !failed || realized != choices {
+                let miss = if realized == choices {
+                    RunError::Flaky(flaky_diagnostic())
+                } else {
+                    RunError::NonDeterministic(first_check_diagnostic(&choices, &realized))
+                };
+                return Ok((Some(miss), evidence));
+            }
+        }
+        Ok((None, evidence))
     }
 
     /// Experiment 005: confirm every interesting origin that hasn't passed

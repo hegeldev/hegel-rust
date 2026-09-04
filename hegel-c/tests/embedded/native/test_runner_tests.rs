@@ -2961,6 +2961,457 @@ fn a_flip_during_final_replay_reviews_already_replayed_origins() {
     );
 }
 
+#[test]
+fn a_single_entry_history_probes_its_founding_sighting() {
+    let bug = "bug";
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 90 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[90]);
+            ctx.nd_flip();
+            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected a restore");
+            };
+            assert_eq!(nodes, vec![int_node(90)]);
+        },
+    );
+}
+
+#[test]
+fn the_refinement_narrows_to_the_newest_reproducing_entry() {
+    let bug = "bug";
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 84 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[95, 90, 85, 80, 75, 70, 65, 60]);
+            ctx.nd_flip();
+            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected a restore");
+            };
+            assert_eq!(
+                nodes,
+                vec![int_node(85)],
+                "refinement lands on the boundary, not the geometric probe that found it"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_raw_sighting_can_be_the_restored_incumbent() {
+    let bug = "bug";
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 90 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[60, 90, 40]);
+            let history = ctx.history.get(&origin).unwrap();
+            assert!(!history.entries[1].accept, "90 does not displace 60");
+            ctx.nd_flip();
+            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected a restore");
+            };
+            assert_eq!(
+                nodes,
+                vec![int_node(90)],
+                "with no reproducing accept, a reproducing raw sighting is the candidate"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            seed_history(ctx, origin, &[90, 40]);
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            ctx.shrink_origin(
+                origin.to_string(),
+                vec![int_node(40)],
+                Verbosity::Quiet,
+                &output,
+                None,
+                &mut shrunk,
+            )
+            .await
+            .unwrap();
+            assert!(ctx.nd_active);
+            assert!(
+                shrunk.contains(origin),
+                "an exhausted backtrack ends the origin's shrink pass"
+            );
+            assert!(ctx.nd_origins.needs_confirmation(origin));
+        },
+    );
+}
+
+/// An origin first observed after the flip has no history (post-flip
+/// executions never enter it), so its shrink admission is the bar,
+/// unchanged from decision 24.
+#[test]
+fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
+    let bug = "bug";
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 50 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            ctx.nd_flip();
+            ctx.record_run(
+                &interesting_at(&origin, vec![int_node(90)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(!ctx.history.contains_key(&origin));
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            ctx.shrink_origin(
+                origin.clone(),
+                vec![int_node(90)],
+                Verbosity::Quiet,
+                &output,
+                None,
+                &mut shrunk,
+            )
+            .await
+            .unwrap();
+            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(shrunk.contains(&origin));
+            assert_eq!(ctx.interesting.get(&origin).unwrap(), &vec![int_node(50)]);
+        },
+    );
+}
+
+#[test]
+fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            if v {
+                boom("bug")
+            } else {
+                if let Err(result) = concurrent_machine(ds) {
+                    return result;
+                }
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            ctx.shrink_origin(
+                origin.to_string(),
+                vec![bool_node(true)],
+                Verbosity::Quiet,
+                &output,
+                None,
+                &mut shrunk,
+            )
+            .await
+            .unwrap();
+            assert!(ctx.nd_active, "the shrink probe's machine flips the run");
+            assert!(
+                !shrunk.contains(origin),
+                "a mid-shrink flip requeues instead of marking shrunk"
+            );
+            assert_eq!(
+                ctx.interesting.get(origin).unwrap(),
+                &vec![bool_node(true)],
+                "the requeue discards untrusted single-run progress"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_exact_final_replay_vanish_aborts_under_error_strictness() {
+    with_engine(
+        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.record_run(
+                &interesting_at("Panic: bug", vec![int_node(90)]),
+                Duration::ZERO,
+                false,
+            );
+            let output = ctx.settings.output.clone();
+            let err = ctx
+                .final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, RunError::Flaky(_)),
+                "an exact-repeat vanish aborts through the cache mismatch: {err:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_backtrack_without_history_is_exhausted() {
+    with_engine(
+        plain_settings(),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.nd_flip();
+            let Backtrack::Exhausted { evidence } = ctx.backtrack("Panic: bug").await.unwrap()
+            else {
+                panic!("expected exhaustion");
+            };
+            assert_eq!(evidence, (0, 0));
+        },
+    );
+}
+
+#[test]
+fn the_scan_budget_caps_the_first_pass() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            let mut values = vec![40i128];
+            values.extend(50..95);
+            seed_history(ctx, origin, &values);
+            ctx.nd_flip();
+            let Backtrack::Exhausted { evidence } = ctx.backtrack(origin).await.unwrap() else {
+                panic!("expected exhaustion");
+            };
+            assert_eq!(evidence, (0, BACKTRACK_SCAN_REPLAYS));
+            assert_eq!(
+                execs.load(Ordering::SeqCst) as u64,
+                BACKTRACK_SCAN_REPLAYS,
+                "the raw-sighting sweep stops at the scan cap"
+            );
+        },
+    );
+}
+
+#[test]
+fn tied_raw_candidates_restore_the_shortlex_least() {
+    let bug = "bug";
+    with_engine(
+        plain_settings(),
+        None,
+        |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 90 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[40, 95, 90]);
+            ctx.nd_flip();
+            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected a restore");
+            };
+            assert_eq!(nodes, vec![int_node(90)]);
+        },
+    );
+}
+
+/// A failure that needs a warm-up execution per value reproduces only on
+/// the second pass, which re-probes entries the first pass saw miss.
+#[test]
+fn a_second_pass_probe_can_find_the_candidate() {
+    let bug = "bug";
+    let counts = Rc::new(std::cell::RefCell::new(
+        std::collections::HashMap::<i64, u32>::new(),
+    ));
+    let body_counts = counts.clone();
+    with_engine(
+        plain_settings(),
+        None,
+        move |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            let mut counts = body_counts.borrow_mut();
+            let seen = counts.entry(v).or_insert(0);
+            *seen += 1;
+            if v >= 90 && *seen >= 2 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[90, 40]);
+            ctx.nd_flip();
+            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected a restore");
+            };
+            assert_eq!(nodes, vec![int_node(90)]);
+        },
+    );
+}
+
+#[test]
+fn an_exact_shrink_verify_vanish_aborts_under_error_strictness() {
+    with_engine(
+        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![int_node(90)]),
+                Duration::ZERO,
+                false,
+            );
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            let err = ctx
+                .shrink_origin(
+                    origin.to_string(),
+                    vec![int_node(90)],
+                    Verbosity::Quiet,
+                    &output,
+                    None,
+                    &mut shrunk,
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, RunError::Flaky(_)),
+                "an exact-repeat vanish aborts through the cache mismatch: {err:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_divergent_shrink_verify_vanish_aborts_under_error_strictness() {
+    with_engine(
+        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() || rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![int_node(90)]),
+                Duration::ZERO,
+                false,
+            );
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            let err = ctx
+                .shrink_origin(
+                    origin.to_string(),
+                    vec![int_node(90)],
+                    Verbosity::Quiet,
+                    &output,
+                    None,
+                    &mut shrunk,
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, RunError::Flaky(_)),
+                "a divergent vanish misses the cache and aborts on the outcome: {err:?}"
+            );
+        },
+    );
+}
+
 /// A kind change at a shared prefix aborts through the kind ledger with
 /// the tree's message; the check's own diagnostic covers the shape the
 /// ledger cannot see — a divergence in how many choices the body drew.

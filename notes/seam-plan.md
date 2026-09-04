@@ -429,6 +429,26 @@ Steps 2-4, in dependency order:
 Exit: the red-first set green; the two cost guards from phase 15 still green; decision
 entries recorded.
 
+Landed 2026-09-04 (decisions 64–66), with as-built notes. (1) An aligned-outcome check
+miss under `error` aborts as flaky rather than through G26's non-deterministic
+diagnostic: the plan expected the cache-mismatch channel to own that shape, but a
+zero-choice discovery (a strategy failing before its first draw) never enters the cache,
+so the check types the miss itself and matches the cache's verdict — the
+BaseException-in-strategy and stateful-flaky frontend pins hold verbatim. Kind-shaped
+drift under `error` still aborts through decision 62's ledger before the check's richer
+diagnostic can fire; the check's position-naming wording covers count divergence, the
+shape the ledger cannot see. (2) Decision 49's stamp pin moves to `FIRST_CHECK_REPLAYS +
+1` for a deterministic run's report path, and the requeue caveat reads 19-of-20: the
+check's overrunning replay seeds the confirmation batch as one miss. (3)
+`a_passing_run_replays_nothing` is the existing seed-pinned passing-count guard — the
+check only runs on interesting origins, so the pin needed no new test. (4) Step 3
+deviated from red-first: the backtrack mechanism landed before its tests, which were
+then sensitivity-checked by mutation (disabling binary refinement fails the geometric
+probe-count pin), and gained pins beyond the plan's list — bar-rejection resume,
+three-rejection exhaustion, the second scan pass, the first-pass cap, raw-candidate
+shortlex ties, and single-entry histories. Cost guards green; coverage green with no
+ratchet change.
+
 ### Phase 17: validation and the closing sweep
 
 - Experiment 011's comparison half against the acceptance table; experiment 012. Misses

@@ -68,11 +68,15 @@ formats in `blob.rs`.
   handling even under `error` strictness — the user asked for threads.
 - **detected**, within-run evidence only: an execution-cache verdict mismatch — the same
   realized values concluding with a different status or origin (`record_run`'s mismatch
-  signal, in `test_function_tagged`) — or a replay whose outcome flips (the pre-shrink
-  verify and final-replay status checks flip the run rather than aborting under
-  deterministic handling). Under `error` strictness the kind ledger also aborts on
-  within-run generation kind drift. A stored DB entry that stops reproducing is staleness,
-  never evidence (decision 9).
+  signal, in `test_function_tagged`) — or a replay whose outcome flips (the
+  first-interesting check, the pre-shrink verify, and the final-replay status checks flip
+  the run rather than aborting under deterministic handling). Every generation-discovered
+  origin gets the first-interesting check before anything consumes it: `FIRST_CHECK_REPLAYS`
+  = 4 exact replays of its discovering sighting, stopping at the first miss, whose evidence
+  seeds the origin's discovery bar (decision 64). Under `error` strictness the kind ledger
+  also aborts on within-run generation kind drift, and a check miss aborts — structural
+  divergence with a position-naming diagnostic, an aligned outcome change as flaky. A
+  stored DB entry that stops reproducing is staleness, never evidence (decision 9).
 - **stored**: decoding a version-2 database entry (`run()`'s reuse loop) or ND reproduce blob
   (`reproduce_blob`) — state only a nondeterministic run writes — flips the run before any
   replay of it.
@@ -105,6 +109,10 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
   physical runs — the discovery bar's batch extends past its accept, and a gauntlet
   accept's ledger is topped up — so anchors estimate the reproduction rate rather than the
   stopping rule.
+- First-interesting check: `FIRST_CHECK_REPLAYS = 4` exact replays per discovered origin,
+  stop on first miss (decision 64 — reproduction odds and the seeded bar make more
+  redundant). Backtrack: the scan is capped at `BACKTRACK_SCAN_REPLAYS` = `CONFIRM_CAP` =
+  40 replays and `BACKTRACK_BAR_ATTEMPTS = 3` discovery-bar batches (decision 66).
 - Replay budgets from the p >= 0.1 target: `replay_budget(rate, tolerance)` with 5% miss
   tolerance gives ~29 replays, early exit on failure, so live bugs cost ~1/p
   (`TARGET_FAILURE_RATE`, `reuse_replay_budget`).
@@ -129,9 +137,25 @@ like every anchor-seeding batch (decision 54). `Trusted` carries the reproducing
 evidence, seeded by `trust()` on the database, blob, and deterministic replay paths. Confirmed and trusted
 origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
 every one, and the lifecycle's writers truncate incoming pools) harvested from
-capture-at-confirmation (decision 10). The lifecycle also words each failure's **caveat**
-from the run's own evidence — confirmed, trusted, dry-at-report-time variants of both, or
-unconfirmed — quoting report-time replay counts apart from the confirmation or reuse counts.
+capture-at-confirmation (decision 10). A first-check miss deposits its evidence in a
+per-origin seed slot (`seed_evidence`/`take_seed`), consumed by the origin's next evidence
+batch so the bar starts partially filled (decision 64). The lifecycle also words each
+failure's **caveat** from the run's own evidence — confirmed, trusted, dry-at-report-time
+variants of both, or unconfirmed — quoting report-time replay counts apart from the
+confirmation or reuse counts.
+
+While the run is deterministic, `record_run` also appends every interesting execution to a
+per-origin **history** (`OriginHistory`: raw sightings and accepts, deduplicated by
+serialized nodes, unbounded, dropped on confirmation or run end). A never-confirmed origin
+that misses its shrink verify or final replay **backtracks** over that history to the
+reproduction boundary — geometric probes over the accept segment plus every raw sighting,
+binary refinement, then the full discovery bar on the candidate (up to
+`BACKTRACK_BAR_ATTEMPTS` batches, the scan capped at `BACKTRACK_SCAN_REPLAYS` replays); a
+cleared bar confirms the origin with the batch's witness and anchor, pools the scan's
+other reproducing entries, and force-persists the restored incumbent past the Persister's
+monotone `needs_save` (decision 66). Measurement runs never displace, persist, or enter
+history, except the reuse phase's `nd_reproduce` replays, whose displacement is what
+validates a v2 entry under `error` strictness (decision 65).
 
 ### Representation and persistence
 
@@ -187,8 +211,9 @@ acceptance paths gate on the same validated-accept event, which is a
 gauntlet accept *and* the shrinker's adoption (`candidate_adopted`): an accepted candidate
 the shrinker discards — a punned realization, a sort-key-larger mutation probe — raises no
 anchor and persists nothing (decision 36). A nondeterministic flip during the shrink verify
-or the shrink probes routes the origin through the discovery bar and one gauntleted re-pass
-from the verified pre-shrink incumbent, discarding untrusted single-run progress
+backtracks over the origin's history when it has one (decision 66) and otherwise routes the
+origin through the discovery bar; a flip during the shrink probes requeues one gauntleted
+re-pass from the verified pre-shrink incumbent, discarding untrusted single-run progress
 (decision 38).
 
 Boost (`nd_boost`, gate G2/decisions 28 and 56): when a confirmed incumbent's anchor sits
@@ -235,8 +260,13 @@ is exactly the bias the multi-run machinery exists to avoid.
 The engine owns the final replay (`final_replay`): every failure it is about to report
 re-executes first — deterministic runs once (a miss flips the run to ND handling, or aborts
 under `error`), ND runs through the replay primitive plus up to 4 fresh generations
-(`FINAL_REPLAY_FRESH`, chosen not derived, decision 53). Executions whose failures can
-become the report — confirmation batches, database-reuse replays, the final replay, blob
+(`FINAL_REPLAY_FRESH`, chosen not derived, decision 53). A deterministic miss on a
+never-confirmed origin with history backtracks, and a restored incumbent re-shrinks under
+the gauntlet on the shrink deadline's remaining budget before its pooled replay; origins
+exactly replayed before a later origin's flip re-enter the queue for the pooled review
+(decision 66). Executions whose failures can
+become the report — confirmation batches, database-reuse replays, the final replay,
+first-check replays, blob
 replays, and generation cases once ND handling is active (decision 49) — are **stamped**
 (`hegel_test_case_should_capture`, renamed from
 `hegel_test_case_is_nondeterministic` because the stamp means capture, decision 50), telling
@@ -245,7 +275,8 @@ stay cheap and unstamped. Stamping generation cases means an unconfirmed one-sho
 still reports its discovering case's draws and diagnostic; decision 49's documented gaps
 (gauntlet-discovered origins and the flip case itself) stay bare. Under `show_statistics`
 the statistics block adds one line with the measurement replay count and its failures —
-the only sub-Debug surface revealing the flip and its cost (decision 51).
+first-check replays included via the check-window flag — the only sub-Debug surface
+revealing the flip and its cost (decision 51, amended by 64).
 
 ND failures report as plain `FAILED` (gate G1/decision 27; `FAILED_NONDETERMINISTIC` is
 retired) with a per-failure caveat accessor (`hegel_failure_caveat`) quoting the run's own
@@ -339,10 +370,14 @@ root crate's changelog covers only the user-facing behavior.
   (phase 10) reveals both, but only under `show_statistics`.
 - **The deterministic-to-ND seam**: a run that flips only on late detection has already
   spent its deterministic window — pre-flip `update_interesting` displacement walks the
-  incumbent down the landscape before decision 20's guard engages, and a bar rejection at
-  shrink-verify leaves no budget to re-hunt. Measured in 008's in-engine spot check: L1
-  final-p median 0.34 against the 0.82 envelope, 49% of target-regime trials caveat-only;
-  the shrink mechanics hold wherever a confirmed origin entered shrinking. Open as gate
-  G20. A rerun of a run that persisted ND state enters ND from the stored flip and skips
-  the seam; a caveat-only run persists nothing and re-races it.
+  incumbent down the landscape before decision 20's guard engages. The seam plan (phases
+  14–16: the first-interesting check, origin history, backtracking, the seeded bar)
+  closed most of it: in 011's comparison the target-regime caveat-only rate fell 49% → 0,
+  fluke caveats 15% → 0, and the gradient cell's final-p median rose 0.34 → 0.74 against
+  the 0.82 envelope. Two residuals stay accepted: post-flip displacement freeze can
+  report a confirmed flaky example where free displacement would have found a smaller or
+  deterministic one the run never held (011's D2: 30/100), and a high-p origin can pass
+  an honest check and never flip (priced by 012). A rerun of a run that persisted ND
+  state enters ND from the stored flip and skips the seam; a caveat-only run persists
+  nothing and re-races it.
 - **Bindings**: the ABI break needs a coordinated rollout; hegel-c's RELEASE.md calls it out.

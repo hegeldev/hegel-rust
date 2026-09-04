@@ -573,3 +573,71 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     Re-pinned to the two reachable minima; closing the hole needs a probe-based
     increment variant (execute the bumped proposal, accept on the realized early exit),
     flagged as a shrinker follow-up. (Seam plan, phase 15.)
+
+64. **Every generation-discovered origin passes a first-interesting check before
+    anything consumes it, extending decision 21's principle to every run.** Before each
+    `nd_discovery_sweep` (same call sites, pre-flip only), the discovering sighting of
+    each unchecked origin replays `FIRST_CHECK_REPLAYS` = 4 times exactly, stopping at
+    the first miss; a reproduction concludes interesting at the same origin with the
+    same realized values. A miss flips the run (its own `FirstCheck` seam site) and
+    seeds the origin's discovery bar with the check's evidence through a new lifecycle
+    seed slot, consumed by the next `nd_evidence_batch`, so the observations are not
+    paid for twice. Under `error` strictness a structural miss aborts with a
+    position-naming diagnostic (kind-shaped drift on a shared prefix still aborts
+    through decision 62's ledger first, with the tree's wording) and an aligned outcome
+    change aborts as flaky — the verdict the cache-mismatch channel produces, kept
+    consistent because a zero-choice discovery (a strategy that fails before drawing)
+    never enters the cache and only the check sees it. As G26 recommended: check
+    replays are stamped (amending decision 49's stamp condition) and counted on
+    decision 51's statistics line via a check-window flag; reuse reproductions are
+    exempt (decision 20 already replayed them); `nd_force` starts flipped and skips
+    the check. Cost is +4 exact replays per deterministically-failing origin, pinned,
+    with the passing-run count untouched; in exchange quiet/warn regain a
+    generation-level detection channel — 011 measured the tree's version firing 0 in
+    600 trials, where this one replays the actual discovery. (Seam plan phase 16,
+    gates G23/G26.)
+
+65. **Every pre-flip interesting execution is kept per origin, and measurement runs
+    neither displace nor persist.** `record_run`'s interesting arm appends each
+    sighting to an unbounded per-origin history — raw sightings and accepts alike,
+    deduplicated by serialized nodes — dropped when the origin confirms or the run
+    ends. The hook is the arm, not `update_interesting`: after a fluke displaces the
+    incumbent, genuine sightings are shortlex-larger and never displace, yet they are
+    exactly what the backtrack scan needs. Bounding rejected (DRM): with the tree
+    gone, whole-history retention is strictly less memory than what it replaced, and
+    eviction risks the entries a late flip needs most. The same arm gains its missing
+    measurement guard, with one exemption: the reuse phase's `nd_reproduce` replays
+    (a `reuse_replays` flag) must keep displacing and persisting — under `error`
+    strictness a v2 entry reproduces with `nd_active` still false, and that arm
+    populating `interesting` is what makes `found_in_reuse` true. Pinned both ways.
+    (Seam plan phase 16, gates G23/G24.)
+
+66. **A never-confirmed origin that misses its shrink verify or final replay
+    backtracks over its history to the reproduction boundary.** The scan probes the
+    accept segment at geometric offsets from the newest (1, 2, 4, ...), plus the
+    oldest accept and every raw sighting, one continuation-tolerant replay each, then
+    binary-refines between the newest reproducing probe and the nearest newer
+    non-reproducing one — capped at `BACKTRACK_SCAN_REPLAYS` = `CONFIRM_CAP` = 40,
+    with a candidate-less first pass spending the remainder on a second sweep. The
+    candidate faces the full discovery bar, up to `BACKTRACK_BAR_ATTEMPTS` = 3
+    batches, a reject resuming the scan on the older side. A cleared bar confirms the
+    origin — witness and anchor from the batch, the scan's other reproducing entries
+    pooled — and the restored incumbent supersedes the barred save through a forced
+    Persister write: `needs_save` is monotone on sort key and would refuse the
+    shortlex-larger restore, and save-then-delete keeps decision 44's ordering.
+    Mid-run, a restore requeues the origin for a gauntleted pass — superseding
+    decision 38's requeue-from-pre-shrink-nodes when history exists (empty history
+    keeps 38's path), its termination argument intact: the restored origin is
+    confirmed, `nd_active` never clears, so the second pass is gauntleted and marks
+    shrunk. At the final replay a restore re-shrinks under the gauntlet on the shrink
+    deadline's remaining budget before the pooled review, and origins exactly
+    replayed before a later origin's flip re-enter the queue for that review.
+    Exhaustion keeps decision 35's reject/evict caveat-only fallback. Amends decision
+    17's title clause: this is detection-triggered, bar-gated recovery of recorded
+    state, not 17's rejected statistically-triggered rollback — it fires only on a
+    flip, and nothing is restored without clearing the same bar discovery pays. Scan
+    errors bias old, which decision 2 makes safe: a too-old restore re-shrinks under
+    the gauntlet, a too-new one anchors low or gets bar-rejected. Scoped to
+    never-confirmed origins; confirmed origins keep the pooled final-replay path.
+    (Seam plan phase 16, gate G25; DRM's scan-not-newest and keep-everything
+    directions.)
