@@ -19,20 +19,22 @@ impl PrettyPrintable for chrono::Month {
 /// constructor argument is recovered from the derived `Debug` output
 /// (`Days(5)`); a representation that stops matching that shape prints
 /// as-is.
+fn print_counted_constructor(repr: &str, name: &str, printer: &mut PrettyPrinter) {
+    match repr
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('('))
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(count) => printer.text(&format!("{name}::new({count})")),
+        None => crate::pretty::print_debug_repr(repr, printer),
+    }
+}
+
 macro_rules! pretty_wrapped_count {
     ($($t:ty, $name:literal);+) => {$(
         impl PrettyPrintable for $t {
             fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                let repr = format!("{self:?}");
-                match repr
-                    .strip_prefix(concat!($name, "("))
-                    .and_then(|rest| rest.strip_suffix(')'))
-                {
-                    Some(count) => {
-                        printer.text(&format!(concat!($name, "::new({})"), count))
-                    }
-                    None => crate::pretty::print_debug_repr(&repr, printer),
-                }
+                print_counted_constructor(&format!("{self:?}"), $name, printer);
             }
         }
     )+};
@@ -794,3 +796,7 @@ pub fn datetimes() -> DateTimeGenerator<FixedOffsetGenerator, FixedOffset> {
         _phantom: PhantomData,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/extras/chrono/generators_tests.rs"]
+mod tests;
