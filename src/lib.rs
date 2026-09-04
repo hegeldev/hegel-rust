@@ -262,6 +262,29 @@ pub use generators::PrintableGenerator;
 pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
+/// The imports nearly every hegel test wants in scope.
+///
+/// ```no_run
+/// use hegel::prelude::*;
+///
+/// #[hegel::test]
+/// fn doubling_preserves_parity(tc: TestCase) {
+///     let n = tc.draw(gs::integers::<i32>().max_value(1000));
+///     assert_eq!((n * 2) % 2, 0);
+/// }
+/// ```
+///
+/// Brings in the [`Generator`] and [`PrintableGenerator`] traits (so
+/// combinator and boxing methods resolve), the [`PrettyPrintable`] and
+/// [`DefaultGenerator`](generators::DefaultGenerator) traits and their
+/// derive macros, [`TestCase`], and the [`generators`] module under its
+/// conventional alias `gs`.
+pub mod prelude {
+    pub use crate::DefaultGenerator;
+    pub use crate::generators::{self as gs, DefaultGenerator, Generator, PrintableGenerator};
+    pub use crate::{PrettyPrintable, TestCase};
+}
+
 #[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
