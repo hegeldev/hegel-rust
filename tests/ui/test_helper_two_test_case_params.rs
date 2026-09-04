@@ -2,9 +2,8 @@
 // owns the draws.
 
 #[hegel::test_helper]
-fn helper(tc: &hegel::TestCase, other: &hegel::TestCase) -> bool {
-    let _ = other;
-    tc.draw(hegel::generators::booleans())
+fn helper(_tc: &hegel::TestCase, _other: &hegel::TestCase) -> bool {
+    true
 }
 
 fn main() {}
