@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.36.1 - 2026-09-04
+
+This patch inverts the per-round decision drawn by `hegel_state_machine_next_group`. We were using a stop signal where we should have been using a continue signal.
+
 ## 0.36.0 - 2026-09-02
 
 This release changes `hegel_time_t` from microsecond to nanosecond resolution. The `microsecond` field (in `[0, 999999]`) is now `nanosecond` (in `[0, 999999999]`). `hegel_generate_time` and `hegel_generate_datetime` now also draw whole nanoseconds.

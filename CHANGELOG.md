@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.2 - 2026-09-04
+
+This patch fixes shrinking and the `LargeInitialTestCase` health check for stateful tests.
+
 ## 0.39.1 - 2026-09-04
 
 This patch improves the ergonomics of draw-time printing:
