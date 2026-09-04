@@ -45,7 +45,7 @@ DRM's four steps, with the accepted refinements:
 3. **Deterministic-henceforth, with history.** Pre-flip rules stay cheap — raw shortlex
    displacement continues (G20 option (c) stays rejected) — but every pre-flip interesting
    execution (raw sightings and shrink accepts alike, all through `record_run`'s
-   interesting arm, :1949-1953) enters a bounded per-origin in-memory history, deduped by
+   interesting arm, :1949-1953) enters a per-origin in-memory history, deduped by
    serialized choices. Nothing about persistence timing changes: backtracking works from
    memory, so decision 44's save-then-delete and the Ctrl-C property stand as shipped.
 4. **Final check; backtrack on a miss.** The engine-owned final replay already replays the
@@ -136,30 +136,32 @@ point on `OriginLifecycle`; today only `reject()` folds, and it counts a rejecti
 must not displace or persist (:1949-1953 takes no `measurement` guard today; the guard
 must exempt the reuse path's replays — the Error+v2 interaction phase 16 pins).
 
-**G24. History shape and bound.** Entries are realized `Vec<ChoiceNode>` (what restore
-and `Persister::record` need), deduped by serialized choices, recorded in `record_run`'s
+**G24. History retention.** Entries are realized `Vec<ChoiceNode>` (what restore and
+`Persister::record` need), deduped by serialized choices, recorded in `record_run`'s
 interesting arm; spans are not stored (the restore's bar batch supplies a fresh witness).
-The bound must not evict what the L1 scenario backtracks to: the genuine pre-displacement
-sightings are old, the displacing lineage's shrink accepts are new. Options: (a) split
-retention — every deduped raw generation-phase sighting (bounded by the generation
-budget; a handful in practice) plus a ring of the newest 32 shrink accepts; (b) one ring
-of 64 with keep-first plus middle decimation. Recommendation: (a) — it keeps exactly the
-two populations the scan needs (recent lineage for late slip-in, raw sightings for
-displacement recovery) and the bound argument is structural rather than tuned. Removal
-is the ring evicting its oldest accept and nothing else: raw sightings are append-only,
-and an origin's history is dropped when it confirms (the pool takes over) or at run end.
-Dropping at confirmation also keeps the ring shortlex-sorted — accepts strictly shrink
-the incumbent and no post-restore accept is ever recorded — the sorted domain G25's scan
-searches. ND-mode origins keep pools, not history.
+Recommendation: keep everything — every raw sighting and every shrink accept, no
+eviction. A recency bound evicts the entries an early slip-in needs most (the boundary
+sits at the oldest accepts there), and forcing the scan back onto a raw sighting costs a
+full gauntleted re-shrink — thousands of replays to save kilobytes. The memory argument
+runs the other way now the tree is gone: the tree interned every execution (~77k nodes
+on 010's stateful workload) where history holds only interesting cases, and accepts
+shrink monotonically, so the entry sizes telescope. The `__bench` dump records history
+bytes per origin; if a real workload bites, the recorded fallback is middle decimation —
+drop every other interior entry, so both ends survive and the geometric scan loses one
+probe of resolution — never end-eviction. An origin's history is dropped when it
+confirms (the pool takes over) or at run end; dropping at confirmation also keeps the
+accept segment shortlex-sorted — accepts strictly shrink the incumbent and no
+post-restore accept is ever recorded — the sorted domain G25's scan searches. ND-mode
+origins keep pools, not history.
 
 **G25. Backtrack scan and budgets.** The scan hunts the reproduction boundary rather
 than walking linearly: newest-first, a linear walk burns its budget on the degraded tail
 before reaching anything worth restoring, and barring the first entry that happens to
 reproduce re-runs mechanism 1 in miniature — the bar is permissive by design (it targets
 p >= 0.1), so it admits a degraded-but-genuine entry and the anchor then ratifies the
-loss. Algorithm: probe the accept ring at geometric offsets from the newest (1, 2, 4,
+loss. Algorithm: probe the accept segment at geometric offsets from the newest (1, 2, 4,
 ...) plus every raw sighting, one `nd_replay_once` replay each — a coarse reproduction
-profile in ~log2(32) + |raw| replays; binary-refine between the newest reproducing probe
+profile in ~log2(accepts) + |raw| replays; binary-refine between the newest reproducing probe
 and its nearest newer non-reproducing one, budget permitting, else take the
 known-reproducing position (the old-biased error: a too-old restore re-shrinks under the
 gauntlet, priced by decision 2's machinery, while a too-new one anchors on degraded p);
@@ -167,9 +169,9 @@ bar the candidate; a reject resumes the scan on the older side; no reproducing p
 spends the remaining replay budget on a second pass before caveat-only. On the slip-in
 landscape this is binary search for the slip-in point — the old side reproduces at ~1,
 so the only noise is racy-side false positives at rate p, which the bar adjudicates;
-elsewhere the probes are Bernoulli samples and the same adjudication applies. The
-history is small (<= ~40 entries), so the gain is budget allocation, not asymptotics:
-cheap replays go to refinement, second passes, and bar attempts instead of the tail.
+elsewhere the probes are Bernoulli samples and the same adjudication applies. With G24's
+unbounded retention the accept segment runs to hundreds of entries, so the geometric
+scan is what keeps the profile at ~2 log2(m) replays instead of linear in the chain.
 Recommendation: cap scan replays at `CONFIRM_CAP` (40) and bar attempts at 3 — a probed
 entry reaches the bar at roughly its true rate, each attempt holds 45% target-regime
 power, and three compose to ~83% — everything counted as measurement, with
@@ -178,7 +180,7 @@ Resume: on mid-run
 evidence the existing loop mechanics suffice (restore the incumbent, `confirm` with the
 batch witness, skip `shrunk_origins` — the R4 requeue pattern, :805-810); at
 final-replay time the scan calls the per-origin shrink method phase 14 extracts from
-`run()`. Termination re-uses R4's argument: the history is bounded, `nd_active` never
+`run()`. Termination re-uses R4's argument: the scan is replay-capped, `nd_active` never
 clears, and the resumed shrink is gauntleted.
 
 **G26. Contract amendments.** Three prior decisions get amended and the changes are this
@@ -348,7 +350,7 @@ clean.
 
 Steps 2-4, in dependency order:
 
-- **History first** (shape per G24) — the check and the backtrack both read it. Recording
+- **History first** (retention per G24) — the check and the backtrack both read it. Recording
   hooks `record_run`'s interesting arm (:1949-1953), not `update_interesting`'s
   mutations: after a fluke displaces the incumbent, later genuine sightings are
   shortlex-larger and never insert or replace, yet they are exactly what the scan needs.
@@ -382,8 +384,8 @@ Steps 2-4, in dependency order:
   displacement`, `a_first_check_realized_timeline_miss_flips_the_run`,
   `first_check_evidence_seeds_the_origins_ledger`, `each_origin_gets_its_own_first_
   check`, `an_all_reproduce_first_check_keeps_the_run_deterministic` (exact +k count),
-  `history_records_raw_displacements_and_shrink_accepts`, `history_is_bounded_per_
-  origin`, `history_is_kept_only_while_deterministic`,
+  `history_records_raw_displacements_and_shrink_accepts`,
+  `history_dedupes_repeated_timelines`, `history_is_kept_only_while_deterministic`,
   `a_displaced_incumbent_is_recoverable_after_a_late_flip` (the L1 loss as one test;
   its seed pins fluke displacement — the gradient case is 011's restored-vs-best
   column, not a unit pin),
@@ -451,12 +453,15 @@ passes an honest check, priced by 012).
   truncates generation on a small-but-unexhausted space (bounded by G22's S·c^N
   argument), a missed stop costs budget, not correctness. The health-check tests pin
   exact counts on large spaces, and 011's no-bug column pins non-interference.
-- **History retention vs the gradient landscape.** The scan restores near the top of
-  the reproducing region, but on a smooth gradient single-replay probes still land
-  stochastically below the history's best entry. G24's split retention keeps the raw
-  sightings the recovery needs, the scan's old bias bounds the error's direction, and
-  011's restored-vs-best column measures the residual gap instead of the plan claiming
-  full recovery.
+- **The gradient landscape.** The scan restores near the top of the reproducing region,
+  but on a smooth gradient single-replay probes still land stochastically below the
+  history's best entry. The scan's old bias bounds the error's direction, and 011's
+  restored-vs-best column measures the residual gap instead of the plan claiming full
+  recovery.
+- **History memory.** Unbounded retention on a long shrink chain over a large stateful
+  case is real memory, though less than the tree it replaces held for the same run. The
+  `__bench` history-bytes column measures it; the fallback is G24's middle decimation,
+  and no bound gets reintroduced silently.
 - **Error-mode earlier detection.** Suites that passed under `error` because the old
   engine never re-executed their racy case will now abort at first discovery. Correct as
   a lint, but a behavior change the changelog and decision 30's amendment must own.
