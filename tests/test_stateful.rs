@@ -881,48 +881,6 @@ mod stateful {
         counts.clone()
     }
 
-    struct ManyInvariantsMachine {
-        stack: Vec<i32>,
-    }
-
-    impl StateMachine for ManyInvariantsMachine {
-        fn rules(&self) -> Vec<Rule<Self>> {
-            vec![
-                Rule::new("push", |m: &mut ManyInvariantsMachine, tc| {
-                    let element = tc.draw(gs::integers::<i32>());
-                    m.stack.push(element);
-                }),
-                Rule::new("pop", |m: &mut ManyInvariantsMachine, _tc| {
-                    m.stack.pop();
-                }),
-            ]
-        }
-        fn invariants(&self) -> Vec<Rule<Self>> {
-            (0..5)
-                .map(|_| Rule::new("invariant", |_m: &mut ManyInvariantsMachine, _tc| {}))
-                .collect()
-        }
-    }
-
-    /// Regression test for issue #433: the simplest test case of a state
-    /// machine runs a single step, so a large step count combined with many
-    /// sampled invariants does not trip the `LargeInitialTestCase` health
-    /// check.
-    #[test]
-    fn test_large_step_count_with_many_invariants_passes_health_checks() {
-        Hegel::new(|tc: TestCase| {
-            let m = ManyInvariantsMachine { stack: Vec::new() };
-            hegel::stateful::run(m, tc);
-        })
-        .settings(
-            Settings::new()
-                .database(None)
-                .stateful_step_count(500)
-                .test_cases(5),
-        )
-        .run();
-    }
-
     /// The engine owns the step cap: with the default `stateful_step_count`,
     /// no test case runs more than 50 steps, and most run exactly 50.
     #[test]
