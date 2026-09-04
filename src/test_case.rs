@@ -486,7 +486,9 @@ impl TestCase {
     /// generator printable with
     /// [`print_as_value`](crate::generators::Generator::print_as_value),
     /// [`print_as_debug`](crate::generators::Generator::print_as_debug), or
-    /// [`print_with`](crate::generators::Generator::print_with).
+    /// [`print_with`](crate::generators::Generator::print_with). The
+    /// [`pretty`](crate::pretty) module docs explain the printing system and
+    /// how to make your own types printable.
     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
         self.__draw_named(generator, "draw", true)
     }

@@ -1,9 +1,136 @@
-//! Pretty-printing of generated values.
+//! Pretty-printing of generated values: how a failing test reports what it
+//! drew, and how to make your own types and generators take part.
+//!
+//! When a test fails, Hegel replays the minimal failing example and prints
+//! every drawn value as a `let` binding:
+//!
+//! ```text
+//! let draw_1 = vec![Record {
+//!          name: "000".to_string(),
+//!          tags: None,
+//!          scores: HashMap::from([("0".to_string(), 0)]) }];
+//! ```
+//!
+//! The goal is output you can paste into an ordinary example-based test:
+//! valid Rust expressions (`"000".to_string()` rather than `Debug`'s
+//! `"000"`, `f64::NAN` rather than `NaN`), wrapped and indented like source
+//! code. This page explains the machinery behind that report and what to do
+//! when the compiler tells you a draw is not printable.
+//!
+//! # Printing is the generator's job
+//!
+//! A value often cannot print itself. There is no `Debug` for a drawn
+//! closure, and the useful representation of a `HegelRandom` (the `rand`
+//! integration's fake PRNG) is the sequence of values it hands out *after*
+//! it is drawn. The process that constructed a value can always describe it,
+//! so in Hegel printing is a capability of the generator, not the value.
+//! That capability is the
+//! [`PrintableGenerator`](crate::PrintableGenerator) trait: a
+//! [`Generator`](crate::Generator) draws silently through `do_draw`, and a
+//! `PrintableGenerator` can also draw-and-describe through
+//! `do_draw_and_print`. [`TestCase::draw`](crate::TestCase::draw) accepts
+//! only printable generators, so that the failure report can say what was
+//! drawn; [`TestCase::draw_silent`](crate::TestCase::draw_silent) accepts
+//! any generator and reports nothing.
+//!
+//! The engine explores silently and prints only when replaying a failure,
+//! and the two paths must draw identical choices, which is why printable
+//! generators implement both methods and why hand-written ones share one
+//! drawing body (see [`PrintableGenerator`](crate::PrintableGenerator)'s
+//! contract).
+//!
+//! # What is already printable
+//!
+//! Most tests never think about any of this, because printability is the
+//! default throughout the generator library:
+//!
+//! - Every leaf generator prints: integers, floats, booleans, strings and
+//!   regexes, bytes, characters, dates and times, UUIDs, IP addresses,
+//!   emails, URLs, durations.
+//! - Structural combinators print whenever their components do:
+//!   collections, tuples, [`optional`](crate::generators::optional),
+//!   [`one_of!`](crate::one_of), `flat_map`,
+//!   [`recursive`](crate::generators::recursive).
+//! - Value-producing combinators print whenever the produced type
+//!   implements [`PrettyPrintable`]: `map`, `filter`,
+//!   [`just`](crate::generators::just),
+//!   [`sampled_from`](crate::generators::sampled_from),
+//!   [`boxed`](crate::Generator::boxed), and
+//!   [`#[hegel::composite]`](crate::composite) functions.
+//! - `#[derive(DefaultGenerator)]` generators print field by field as they
+//!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
+//!
+//! [`PrettyPrintable`] — the protocol a value uses to describe its own
+//! representation — is implemented for the primitives and standard
+//! containers the library produces. So a draw only fails to compile when a
+//! type the library does not know about enters the picture, and the fix
+//! depends on whose type it is.
+//!
+//! # Making your own type printable
+//!
+//! For a type you own, implement [`PrettyPrintable`] once and every
+//! generator of it (through `map`, composites, boxing, containers of it, …)
+//! becomes printable:
+//!
+//! - `#[derive(PrettyPrintable)]` prints in Rust-expression syntax, field by
+//!   field. A field whose type cannot implement [`PrettyPrintable`] — a
+//!   foreign type, say — can opt into its `Debug` representation with
+//!   `#[pretty(debug)]`. See [the derive's
+//!   documentation](derive@crate::PrettyPrintable).
+//! - [`pretty_print_as_debug!`](crate::pretty_print_as_debug) implements
+//!   the trait via the type's existing `Debug` representation, re-laid-out
+//!   through the layout engine.
+//! - A hand-written impl gives full control. Print in Rust-expression
+//!   syntax where possible, using the group machinery so large values wrap
+//!   (see [`PrettyPrinter`], and [`print_debug_repr`] to embed a `Debug`
+//!   representation).
+//!
+//! # Printing a foreign type
+//!
+//! The orphan rule keeps other crates' types out of [`PrettyPrintable`], so
+//! for those, make the *generator* printable at the point you build it:
+//!
+//! - [`print_as_debug`](crate::Generator::print_as_debug) — print drawn
+//!   values by their `Debug` representation. The usual choice, but read the
+//!   output once before settling: for a type whose `Debug` is opaque (a
+//!   tagged pointer, a bit-packed struct), a report you cannot decode is
+//!   little better than none, and `print_with` is the fix.
+//! - [`print_with`](crate::Generator::print_with) — print a custom
+//!   representation from a closure.
+//! - [`print_as_value`](crate::Generator::print_as_value) — print values by
+//!   their [`PrettyPrintable`] impl, for generators (hand-written ones, say)
+//!   that don't track printability themselves.
+//! - [`TestCase::draw_silent`](crate::TestCase::draw_silent) — draw without
+//!   reporting the value, when the value genuinely isn't worth reporting.
+//!
+//! Annotate only the draws the compiler rejects: `.print_as_debug()` on an
+//! already-printable draw only degrades the report from Rust-expression
+//! syntax to `Debug` syntax.
+//!
+//! # Boxing
+//!
+//! [`Generator::boxed`](crate::Generator::boxed) erases a generator's type;
+//! the result prints drawn values by their [`PrettyPrintable`] impl, so for
+//! printable value types boxing preserves printability. What it cannot
+//! preserve is a printing strategy carried by the erased generator (a
+//! `print_with` closure, a composite that prints as it draws), because the
+//! erased type is exactly what remembered it. Box with
+//! [`boxed_printable`](crate::PrintableGenerator::boxed_printable) to keep
+//! the generator's own printing, or when the value type is not
+//! [`PrettyPrintable`].
+//!
+//! # The layout engine
+//!
+//! Everything above renders through a shared layout engine, which you meet
+//! directly when writing a [`PrettyPrintable`] or
+//! [`PrintableGenerator`](crate::PrintableGenerator) implementation.
 //!
 //! [`Document`] owns one pretty-printed document: its builder methods
 //! choose the layout options, [`Document::printer`] exposes the surface to
 //! write through, and [`Document::finish`] consumes it to render exactly
-//! once at the end.
+//! once at the end. In a test run the document belongs to the test case,
+//! and user code only ever writes. Rendering happens after the test body
+//! finishes.
 //!
 //! [`PrettyPrinter`] is that write surface, wrapping libhegel's layout
 //! engine (an Oppen-style pretty-printer ported from Hypothesis's
@@ -16,12 +143,13 @@
 //! breakable renders as its separator — or breaks as a whole, outermost
 //! groups first.
 //!
-//! [`PrettyPrintable`] is the protocol a value uses to describe its own
-//! representation, in Rust-expression syntax wherever possible. It is
-//! implemented for the standard types the generator library produces,
-//! derivable for user types with `#[derive(PrettyPrintable)]`, and
-//! available for any `Debug` type — without writing an implementation —
-//! through [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+//! Because printing happens *during* the draw, the printer is more than an
+//! append-only stream: a combinator that may reject a draw (a `filter`
+//! retry, a duplicate collection element) prints each attempt into a
+//! speculative region ([`PrettyPrinter::speculate`]) and commits only the
+//! accepted one, and cloning a printer opens a child region that later
+//! (even from another thread) fills in at the point where the clone was
+//! made. Hand-written implementations can use the same mechanisms.
 
 use crate::ffi::{PrinterCallError, PrinterHandle};
 use std::cell::Cell;

@@ -233,6 +233,10 @@
 //! ## Learning more
 //!
 //! - Browse the [`generators`] module for the full list of available generators.
+//! - `use hegel::prelude::*;` brings in the imports these examples spell out
+//!   (see [`prelude`]).
+//! - Read the [`pretty`] module docs for how a failing test reports the values
+//!   it drew, and how to make your own types printable.
 //! - See [`Settings`] for more configuration settings to customise how your test runs.
 
 #![forbid(future_incompatible)]
