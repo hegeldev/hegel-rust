@@ -746,7 +746,9 @@ pub(crate) fn flaky_diagnostic() -> String {
 /// into nondeterministic mode (see [`Engine::nondeterministic`]).
 /// Informational rather than a warning: the concurrency was asked for
 /// explicitly, but the user should learn why their failure is reported
-/// unshrunk and without a reproduce blob.
+/// unshrunk and without a reproduce blob. Not printed inside Antithesis,
+/// which is deterministic and does its own reproduction, so none of the
+/// caveats apply there.
 pub(crate) fn concurrent_machine_notice() -> &'static str {
     "Concurrent state machine detected: this run is nondeterministic, so failures \
      are reported from the execution that discovered them, without shrinking, \
@@ -1037,7 +1039,7 @@ impl<'a> Engine<'a> {
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.nondeterministic && family.concurrent_machine() {
             self.nondeterministic = true;
-            if self.settings.verbosity != Verbosity::Quiet {
+            if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
                 self.settings.output.line(concurrent_machine_notice());
             }
         }

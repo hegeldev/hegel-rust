@@ -178,7 +178,7 @@ impl Settings {
         )
     }
 
-    fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
+    pub(crate) fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
         Self {
             test_cases: 100,
             stateful_step_count: 50,

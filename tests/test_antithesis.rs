@@ -8,7 +8,10 @@
 mod common;
 
 use common::exec::self_test;
+use hegel::TestCase;
 use hegel::generators as gs;
+use hegel::stateful::run_concurrent;
+use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::TempDir;
 
 #[hegel::test]
@@ -141,4 +144,52 @@ fn test_health_checks_still_run_outside_antithesis() {
         .env_remove("ANTITHESIS_OUTPUT_DIR")
         .expect_failure("FailedHealthCheck: FilterTooMuch")
         .run();
+}
+
+struct Counter {
+    value: AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl Counter {
+    #[rule]
+    fn increment(&self, _: TestCase) {
+        self.value.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// A genuinely concurrent machine (two workers), which outside Antithesis
+/// prints the notice that the run is nondeterministic.
+#[hegel::test]
+#[ignore = "fixture: run via exec::self_test"]
+fn antithesis_concurrent_machine_fixture(tc: TestCase) {
+    let m = Counter {
+        value: AtomicI64::new(0),
+    };
+    run_concurrent(m, tc, 2, 2);
+}
+
+#[test]
+fn test_nondeterminism_notice_is_not_printed_in_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    let out = self_test("antithesis_concurrent_machine_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+    let text = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        !text.contains("Concurrent state machine detected"),
+        "Antithesis is deterministic and owns reproduction:\n{text}"
+    );
+}
+
+#[test]
+fn test_nondeterminism_notice_is_printed_outside_antithesis() {
+    let out = self_test("antithesis_concurrent_machine_fixture")
+        .env_remove("ANTITHESIS_OUTPUT_DIR")
+        .run();
+    let text = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        text.contains("Concurrent state machine detected"),
+        "the notice must still appear outside Antithesis:\n{text}"
+    );
 }
