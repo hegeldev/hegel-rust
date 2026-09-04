@@ -7,6 +7,7 @@
 use super::ordering::{PermutationJudge, shrink_ordering};
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
+use crate::native::HashSet;
 use crate::native::core::{ChoiceNode, sort_key};
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -45,6 +46,53 @@ impl PermutationJudge for ReorderJudge<'_, '_> {
 }
 
 impl<'a> Shrinker<'a> {
+    /// Try deleting each span outright: first the span's own extent, then,
+    /// when that fails, the extent widened to the start of the next span,
+    /// which also removes any spanless choices recorded after the span
+    /// closed.
+    ///
+    /// This handles deletions too wide for
+    /// [`delete_chunks`](Self::delete_chunks), which tries windows of at
+    /// most eight choices. A stateful round's rule span plus the
+    /// per-invariant sampling draws after it can cost well over eight
+    /// choices, and only the widened extent removes the sampling draws in
+    /// the same attempt.
+    pub(crate) async fn delete_spans(&mut self) -> ShrinkResult<()> {
+        let mut attempted: HashSet<(usize, usize)> = HashSet::default();
+        let mut epoch = self.improvements;
+        let mut i = 0;
+        while i < self.current_spans.len() {
+            let span = self.current_spans[i].clone();
+            i += 1;
+            if self.improvements != epoch {
+                epoch = self.improvements;
+                attempted.clear();
+            }
+            if span.end > self.current_nodes.len() || span.end.saturating_sub(span.start) < 2 {
+                continue;
+            }
+            let widened_end = self
+                .current_spans
+                .iter()
+                .map(|s| s.start)
+                .filter(|&s| s >= span.end)
+                .min()
+                .unwrap_or(self.current_nodes.len());
+            for end in [span.end, widened_end] {
+                let deletes_everything = span.start == 0 && end == self.current_nodes.len();
+                if deletes_everything || !attempted.insert((span.start, end)) {
+                    continue;
+                }
+                let mut attempt = self.current_nodes[..span.start].to_vec();
+                attempt.extend_from_slice(&self.current_nodes[end..]);
+                if self.consider(&attempt).await? {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Delete every contiguous non-overlapping discarded span in one pass.
     ///
     /// Useful for rejection-sampling data left behind by filtered
@@ -286,6 +334,10 @@ impl<'a> Shrinker<'a> {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_remove_discarded_tests.rs"]
 mod remove_discarded_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_delete_spans_tests.rs"]
+mod delete_spans_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_pass_to_descendant_tests.rs"]
