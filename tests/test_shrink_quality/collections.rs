@@ -428,6 +428,38 @@ fn test_deletes_fat_collection_elements() {
     assert_deletes_down_to_one_chunk(11);
 }
 
+struct SpanlessChunk {
+    width: usize,
+}
+
+impl Generator<Vec<i64>> for SpanlessChunk {
+    fn do_draw(&self, tc: &hegel::TestCase) -> Vec<i64> {
+        (0..self.width)
+            .map(|_| tc.draw_silent(gs::integers::<i64>().min_value(0).max_value(9)))
+            .collect()
+    }
+}
+
+/// Like `test_deletes_fat_collection_elements`, but the element generator is a
+/// hand-written `Generator` impl that opens no span, so span-based deletion
+/// passes get no help finding element boundaries.
+#[test]
+fn test_deletes_fat_collection_elements_without_spans() {
+    let width = 11;
+    let mut expected = vec![0i64; width];
+    expected[width - 1] = 7;
+    for seed in 1..=5 {
+        let result = Minimal::new(
+            gs::vecs(SpanlessChunk { width }).max_size(20),
+            move |x: &Vec<Vec<i64>>| x.iter().any(|chunk| chunk[width - 1] == 7),
+        )
+        .test_cases(300)
+        .seed(seed)
+        .run();
+        assert_eq!(result, vec![expected.clone()], "seed {seed}");
+    }
+}
+
 /// The shrinker should reduce to two distinct empty inner lists.
 #[test]
 fn test_multiple_empty_lists_are_independent() {
