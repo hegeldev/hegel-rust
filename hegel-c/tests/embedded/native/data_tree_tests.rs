@@ -137,7 +137,8 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
 
 /// The novel-prefix walk must sample boolean proposals from the recorded
 /// draw's `p`, not a fair coin: while the common branch is unexhausted, a
-/// rare branch like the `p = 2^-16` stateful stop signal must stay rare.
+/// rare branch like the `p = 2^-16` stop side of the stateful round
+/// decision must stay rare.
 #[test]
 fn novel_prefix_respects_boolean_probability() {
     let mut root = DataTreeNode::default();
