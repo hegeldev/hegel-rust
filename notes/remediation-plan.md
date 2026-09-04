@@ -148,7 +148,9 @@ net-negative on the stateful shrink; a duplicate-counter stop recovers the tiny-
 exhaustion win. Ditching the tree is supported with those two replacements. Same seam, opposite direction (009a):
 at p = 0.9, 11.5% of clone episodes never flip at all and emit v1 exact-choice blobs
 that reproduce at 13% where v2 blobs hit 100% — blob quality currently depends on
-whether the run noticed its own nondeterminism (decision 58's audit note).
+whether the run noticed its own nondeterminism (decision 58's audit note). Resolved
+2026-09-04: option (d) accepted for implementation; the plan is `seam-plan.md` (phases
+14-17, gates G21-G26, experiments 011/012).
 
 ## Experiments
 

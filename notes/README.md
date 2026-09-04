@@ -14,6 +14,8 @@ from each throwaway are knowledge, worked use cases, and tests — they live her
   design), and of the as-built implementation (`critique-asbuilt.md`, 2026-09-03).
 - `remediation-plan.md` — the fix plan for the as-built review's findings; continues
   `production-plan.md`'s phases, gates, and experiment series.
+- `seam-plan.md` — the implementation plan for gate G20's resolution (tree removal, the
+  first-interesting check, history and backtracking); continues the same series.
 - `experiments/` — one directory per experiment; `000-plan.md` is the sequence and status.
 
 Experiment code lives in `/experiments` at the repo root (standalone crates, not workspace
