@@ -312,7 +312,7 @@ impl<'a> Engine<'a> {
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 log_phase("Reuse", "Start");
                 let key_bytes = key.as_bytes().to_vec();
-                let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
+                let secondary_key = crate::native::database::sub_key(&key_bytes, b"secondary");
                 let mut values = self.db().map(|db| db.fetch(&key_bytes)).unwrap_or_default();
                 values.sort_by(|a, b| shortlex(a, b));
                 replay_aligned = !values.is_empty();
@@ -638,7 +638,7 @@ impl<'a> Engine<'a> {
             if !self.nd_handling() {
                 if let (Some(_), Some(key)) = (self.db(), database_key) {
                     let key_bytes = key.as_bytes().to_vec();
-                    let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
+                    let secondary_key = crate::native::database::sub_key(&key_bytes, b"secondary");
                     let mut entries = self
                         .db()
                         .map(|db| db.fetch(&secondary_key))
@@ -734,7 +734,7 @@ impl<'a> Engine<'a> {
 
         if let (Some(db), Some(key)) = (self.db(), database_key) {
             let key_bytes = key.as_bytes();
-            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            let secondary_key = crate::native::database::sub_key(key_bytes, b"secondary");
             let new_entries: crate::native::HashSet<Vec<u8>> = if self.nd_handling() {
                 let persistable: Vec<(String, Vec<ChoiceValue>)> = self
                     .interesting

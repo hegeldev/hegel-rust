@@ -1038,7 +1038,7 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
@@ -1073,7 +1073,7 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     for n in [4242, 4243, 4244, 4245] {
         db.save(
             &secondary_key,
@@ -1106,7 +1106,7 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
     db.save(&secondary_key, &stale);
 
@@ -1479,7 +1479,7 @@ fn a_concurrent_reuse_run_persists_v2_entries() {
             .all(|e| crate::native::blob::decode_nd_state(e).is_some()),
         "a concurrent run persists version-2 entries"
     );
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
         db.fetch(&secondary).contains(&seeded),
         "the stale v1 entry is demoted, not deleted"
@@ -3493,7 +3493,7 @@ fn stale_nd_entries_demote_to_secondary_then_delete() {
     };
     let result = reuse_run(settings(), "k", body).unwrap();
     assert!(result.failures.is_empty());
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
         db.fetch(b"k").is_empty(),
         "a primary miss demotes the entry instead of deleting it"
@@ -4266,7 +4266,7 @@ fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
         shortlex(&v2_bytes, &pre_shrink) != core::cmp::Ordering::Greater,
         "the seeded entry must sit under the drain's shortlex break"
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
         let db = DirectoryTestCaseDatabase::new(&path);
         db.save(&secondary_key, &v2_bytes);
@@ -4293,7 +4293,7 @@ fn nd_run_skips_the_pre_shrink_secondary_drain() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let v1_bytes = serialize_choices(&[ChoiceValue::Boolean(false)]);
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
         let db = DirectoryTestCaseDatabase::new(&path);
         db.save(&secondary_key, &v1_bytes);
@@ -4322,7 +4322,7 @@ fn shrink_drain_deletes_undecodable_secondary_entries() {
     let garbage = vec![0xFF, 0xFF, 0xFF, 0xFF, 0x07];
     assert!(crate::native::blob::decode_nd_state(&garbage).is_none());
     assert!(deserialize_choices(&garbage).is_none());
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
         let db = DirectoryTestCaseDatabase::new(&path);
         db.save(&secondary_key, &garbage);
@@ -4353,7 +4353,7 @@ fn drain_stops_at_mid_drain_nd_flip() {
         serialize_choices(&[ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)]);
     let survivor = serialize_choices(&[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]);
     assert!(shortlex(&drained_first, &survivor) == core::cmp::Ordering::Less);
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
         let db = DirectoryTestCaseDatabase::new(&path);
         db.save(&secondary_key, &drained_first);
@@ -4558,7 +4558,7 @@ fn persister_deletes_superseded_same_run_saves() {
         db.fetch(b"k"),
         vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))])]
     );
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
         db.fetch(&secondary).is_empty(),
         "a superseded same-run save is deleted, not demoted"
@@ -4596,7 +4596,7 @@ fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
             1000
         ))])]
     );
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert_eq!(
         db.fetch(&secondary),
         vec![run_start],
@@ -4610,7 +4610,7 @@ fn nd_secondary_corpus_stays_bounded_across_runs() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     let body = |execs: &AtomicUsize, ds: &dyn DataSource| match rint(ds, i64::MIN, i64::MAX) {
         Ok(n) if n >= 1000 && execs.fetch_add(1, Ordering::SeqCst) % 2 == 0 => boom("nd"),
         Ok(_) => TestCaseResult::Valid,
@@ -4663,7 +4663,7 @@ fn secondary_corpus_cap_evicts_shortlex_largest() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]);
     for n in 0..55 {
         db.save(&secondary, &entry(n));
@@ -4698,7 +4698,7 @@ fn reuse_stops_sampling_secondary_once_the_primary_reproduces() {
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     let sampled = serialize_choices(&[ChoiceValue::Boolean(false)]);
     db.save(&secondary, &sampled);
 
@@ -4735,7 +4735,7 @@ fn shrink_drain_stops_at_secondary_entries_above_the_incumbent() {
             ChoiceValue::Boolean(true),
         ]),
     );
-    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
     let above = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(2000)),
         ChoiceValue::Integer(BigInt::from(2000)),

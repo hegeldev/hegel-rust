@@ -820,16 +820,6 @@ fn simulate_clone_stream(
     }
 }
 
-/// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
-/// Mirrors `ConjectureRunner.sub_key`.
-pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(database_key.len() + 1 + sub.len());
-    out.extend_from_slice(database_key);
-    out.push(b'.');
-    out.extend_from_slice(sub);
-    out
-}
-
 #[cfg(test)]
 #[path = "../../tests/embedded/native/data_tree_tests.rs"]
 mod tests;
