@@ -92,10 +92,13 @@ pub trait Generator<T> {
     /// but the same output type and need to store them together, e.g. in a
     /// `Vec` or when passing to [`one_of()`](super::one_of).
     ///
-    /// A `BoxedGenerator` is *not* a [`PrintableGenerator`], even when the
-    /// generator it erases is one — box with
-    /// [`boxed_printable`](PrintableGenerator::boxed_printable) instead to
-    /// keep the result usable with [`draw`](crate::TestCase::draw).
+    /// A `BoxedGenerator<T>` is a [`PrintableGenerator`] whenever `T`
+    /// implements [`PrettyPrintable`], printing each drawn value's own
+    /// representation. For a `T` that is not [`PrettyPrintable`], or to keep
+    /// a custom printing strategy (a
+    /// [`print_with`](Generator::print_with), say) through the type erasure,
+    /// box with [`boxed_printable`](PrintableGenerator::boxed_printable)
+    /// instead.
     ///
     /// # Example
     ///
@@ -192,7 +195,7 @@ pub trait Generator<T> {
 /// generators in the library are printable — leaves unconditionally,
 /// structural combinators (collections, tuples, `optional`, `one_of!`,
 /// `flat_map`, `recursive`) whenever their component generators are, and value-transforming
-/// combinators (`map`, `filter`, `just`, `sampled_from`, composites) whenever
+/// combinators (`map`, `filter`, `just`, `sampled_from`, `boxed`, composites) whenever
 /// the produced type implements [`PrettyPrintable`]. For everything else
 /// there are [`Generator::print_as_value`], [`Generator::print_as_debug`],
 /// and [`Generator::print_with`].
@@ -213,7 +216,8 @@ pub trait Generator<T> {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot print the values it draws",
     label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
-    note = "make it printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`",
+    note = "if `{T}` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `{T}` at once",
+    note = "otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`",
     note = "or draw without reporting the value via `tc.draw_silent(..)`"
 )]
 pub trait PrintableGenerator<T>: Generator<T> {
@@ -510,6 +514,16 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
         Self: Sized + Send + Sync + 'b,
     {
         BoxedGenerator { inner: self.inner }
+    }
+}
+
+/// A boxed generator prints by value: the erased generator draws silently
+/// and the drawn value's own representation is printed. A custom printing
+/// strategy on the erased generator is not preserved — for that, erase with
+/// [`PrintableGenerator::boxed_printable`].
+impl<T: PrettyPrintable> PrintableGenerator<T> for BoxedGenerator<'_, T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 

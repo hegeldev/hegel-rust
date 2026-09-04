@@ -1,0 +1,28 @@
+error[E0277]: `SilentText` cannot print the values it draws
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:20:29
+ |
+LL |     let _: Config = tc.draw(generator);
+ |                        ---- ^^^^^^^^^ `SilentText` does not implement `PrintableGenerator<String>`
+ |                        |
+ |                        required by a bound introduced by this call
+ |
+help: the trait `PrintableGenerator<String>` is not implemented for `SilentText`
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:9:1
+ |
+LL | struct SilentText;
+ | ^^^^^^^^^^^^^^^^^
+ = note: if `String` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `String` at once
+ = note: otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`
+ = note: or draw without reporting the value via `tc.draw_silent(..)`
+ = help: the following other types implement trait `PrintableGenerator<T>`:
+note: required for `ConfigGenerator<SilentText>` to implement `PrintableGenerator<Config>`
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:4:17
+ |
+LL | #[derive(Debug, DefaultGenerator)]
+ |                 ^^^^^^^^^^^^^^^^ type parameter would need to implement `PrintableGenerator<Config>`
+note: required by a bound in `TestCase::draw`
+ --> src/test_case.rs
+ |
+LL |     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
+ |                                           ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
+ = note: this error originates in the derive macro `DefaultGenerator` (in Nightly builds, run with -Z macro-backtrace for more info)

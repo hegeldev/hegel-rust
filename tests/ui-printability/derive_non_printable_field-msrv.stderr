@@ -1,0 +1,15 @@
+error[E0277]: `Style` has no printed representation, so this field cannot derive `PrettyPrintable`
+ --> tests/ui-printability/derive_non_printable_field.rs:13:5
+ |
+LL |     style: Style,
+ |     ^^^^^^^-----
+ |     |      |
+ |     |      required by a bound introduced by this call
+ |     `Style` does not implement `PrettyPrintable`
+ |
+ = help: the trait `PrettyPrintable` is not implemented for `Style`
+ = note: `#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`
+ = note: to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`
+ = note: or make the field's type printable: `#[derive(PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type
+ = help: the following other types implement trait `PrettyPrintable`:
+ = note: required for `Style` to implement `PrettyPrintableField`

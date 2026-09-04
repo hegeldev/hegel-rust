@@ -683,6 +683,31 @@ pub trait PrettyPrintable {
     fn pretty_print(&self, printer: &mut PrettyPrinter);
 }
 
+/// The per-field obligation of `#[derive(PrettyPrintable)]`, split from
+/// [`PrettyPrintable`] so that a field whose type is not printable produces
+/// a diagnostic about the derive — pointing at the field, suggesting
+/// `#[pretty(debug)]` — instead of [`PrettyPrintable`]'s draw-site advice.
+/// Implemented for every [`PrettyPrintable`] type; only derive-generated
+/// code should ever name it.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no printed representation, so this field cannot derive `PrettyPrintable`",
+    label = "`{Self}` does not implement `PrettyPrintable`",
+    note = "`#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`",
+    note = "to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`",
+    note = "or make the field's type printable: `#[derive(PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type"
+)]
+pub trait PrettyPrintableField {
+    #[doc(hidden)]
+    fn pretty_print_field(&self, printer: &mut PrettyPrinter);
+}
+
+impl<T: PrettyPrintable + ?Sized> PrettyPrintableField for T {
+    fn pretty_print_field(&self, printer: &mut PrettyPrinter) {
+        self.pretty_print(printer);
+    }
+}
+
 /// Implement [`PrettyPrintable`] for one or more local `Debug` types by
 /// printing their `{:?}` representation through
 /// [`print_debug_repr`](crate::pretty::print_debug_repr), so derived-`Debug`

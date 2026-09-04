@@ -1,16 +1,17 @@
-error[E0277]: `BoxedGenerator<'_, String>` cannot print the values it draws
- --> tests/ui-printability/derive_non_printable_field_draw.rs:12:29
+error[E0277]: `SilentText` cannot print the values it draws
+ --> tests/ui-printability/derive_non_printable_field_draw.rs:20:29
  |
 LL |     let _: Config = tc.draw(generator);
- |                        ---- ^^^^^^^^^ `BoxedGenerator<'_, String>` does not implement `PrintableGenerator<String>`
+ |                        ---- ^^^^^^^^^ `SilentText` does not implement `PrintableGenerator<String>`
  |                        |
  |                        required by a bound introduced by this call
  |
- = help: the trait `PrintableGenerator<String>` is not implemented for `BoxedGenerator<'_, String>`
- = note: make it printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`
+ = help: the trait `PrintableGenerator<String>` is not implemented for `SilentText`
+ = note: if `String` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `String` at once
+ = note: otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(..)`
  = note: or draw without reporting the value via `tc.draw_silent(..)`
  = help: the following other types implement trait `PrintableGenerator<T>`:
-note: required for `ConfigGenerator<BoxedGenerator<'_, String>>` to implement `PrintableGenerator<Config>`
+note: required for `ConfigGenerator<SilentText>` to implement `PrintableGenerator<Config>`
  --> tests/ui-printability/derive_non_printable_field_draw.rs:4:17
  |
 LL | #[derive(Debug, DefaultGenerator)]
