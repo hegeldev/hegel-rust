@@ -1,9 +1,4 @@
 RELEASE_TYPE: patch
 
-This patch adds a shrink pass that deletes the region between two
-occurrences of a repeated run of choice values. The existing deletion
-passes only try windows of up to eight choices, so a collection element
-costing more than that could never be deleted, and shrunk collections
-kept elements with no effect on the failure. Value shrinking makes
-sibling elements identical, and the repeats then mark the element
-boundaries, so whole elements can be deleted at any width.
+This patch adds a new shrink pass that is able to delete regions of the test case where it would previously have got stuck.
+You should see improvements in cases where there were previously redundant elements that were "obviously" deletable but that the shrinker was for some reason struggling with.
