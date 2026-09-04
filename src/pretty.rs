@@ -148,10 +148,11 @@
 //! `#[hegel::test]` (and `#[state_machine]` rule bodies) rewrite
 //! `let x = tc.draw(..)` so the report names the draw `x`. The rewrite only
 //! sees draws written directly in that body — a draw inside a helper
-//! function falls back to the anonymous `draw_1`, `draw_2`, …. Name such
-//! draws explicitly with
-//! [`TestCase::draw_named`](crate::TestCase::draw_named), which reports
-//! `let name_1 = …;`, numbered per call.
+//! function falls back to the anonymous `draw_1`, `draw_2`, …. Mark such a
+//! helper [`#[hegel::test_helper]`](macro@crate::test_helper) to apply the
+//! same rewrite to its body (names gain a per-call counter: `x_1`, `x_2`, …),
+//! or name a single draw with
+//! [`TestCase::draw_named`](crate::TestCase::draw_named).
 //!
 //! # The layout engine
 //!

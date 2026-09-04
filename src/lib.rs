@@ -665,6 +665,35 @@ pub use hegel_macros::concurrent_state_machine;
 /// ```
 pub use hegel_macros::test;
 
+/// Name the draws in a helper function after their bindings.
+///
+/// [`#[hegel::test]`](macro@test) and `#[state_machine]` rules rewrite
+/// `let x = tc.draw(..)` so the failure report names the draw `x`, but only
+/// for draws written directly in that body — a draw inside a helper function
+/// reports as the anonymous `draw_1`, `draw_2`, …. This attribute applies the
+/// same rewrite to the helper's body. Because a helper can run any number of
+/// times per test, its names always carry a counter suffix: `x_1`, `x_2`, ….
+///
+/// The attribute works on free functions and methods, and finds the test
+/// case by type: exactly one parameter must be a [`TestCase`] (by reference
+/// or value).
+///
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// #[hegel::test_helper]
+/// fn draw_index(tc: &TestCase, len: usize) -> usize {
+///     let index = tc.draw(gs::integers::<usize>().max_value(len - 1));
+///     index
+/// }
+/// ```
+///
+/// A failing test that calls `draw_index` twice reports `let index_1 = …;`
+/// and `let index_2 = …;`. To name a single draw without the attribute, use
+/// [`TestCase::draw_named`].
+pub use hegel_macros::test_helper;
+
 /// Turn a function into a standalone Hegel binary entry point.
 ///
 /// The function must take exactly one parameter of type [`TestCase`]. Behaves

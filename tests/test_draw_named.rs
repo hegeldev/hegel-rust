@@ -649,3 +649,74 @@ draw_lines_case!(
     },
     ["let key_1 = false;", "let key_2 = false;"]
 );
+
+#[hegel::test_helper]
+fn helper_pair(tc: &hegel::TestCase, flip: bool) -> (bool, bool) {
+    let left = tc.draw(gs::booleans());
+    let right = tc.draw(gs::booleans());
+    if flip { (right, left) } else { (left, right) }
+}
+
+draw_lines_case!(
+    test_helper_attribute_names_draws_after_their_bindings,
+    test_helper_in_helper_fixture,
+    tc,
+    {
+        let first = helper_pair(&tc, false);
+        let second = helper_pair(&tc, true);
+    },
+    [
+        "let left_1 = false;",
+        "let right_1 = false;",
+        "let left_2 = false;",
+        "let right_2 = false;",
+    ]
+);
+
+struct HelperHolder;
+
+impl HelperHolder {
+    #[allow(clippy::let_and_return)]
+    #[hegel::test_helper]
+    fn draw_flag(&self, case: hegel::TestCase) -> bool {
+        let flag = case.draw(gs::booleans());
+        flag
+    }
+}
+
+draw_lines_case!(
+    test_helper_attribute_works_on_methods_and_by_value_test_cases,
+    test_helper_method_fixture,
+    tc,
+    {
+        let holder = HelperHolder;
+        let flag = holder.draw_flag(tc);
+    },
+    ["let flag_1 = false;"]
+);
+
+#[hegel::test_helper]
+fn helper_loop_draws(tc: &hegel::TestCase) -> u32 {
+    let mut total = 0;
+    for _ in 0..2 {
+        let bit = tc.draw(gs::booleans());
+        total += u32::from(bit);
+    }
+    total
+}
+
+draw_lines_case!(
+    test_helper_attribute_numbers_draws_across_calls_and_loops,
+    test_helper_loop_fixture,
+    tc,
+    {
+        let total = helper_loop_draws(&tc);
+        let again = helper_loop_draws(&tc);
+    },
+    [
+        "let bit_1 = false;",
+        "let bit_2 = false;",
+        "let bit_3 = false;",
+        "let bit_4 = false;",
+    ]
+);

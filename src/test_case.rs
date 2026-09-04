@@ -499,7 +499,9 @@ impl TestCase {
     /// `let name_N = value;`, numbered per call under that name. Use it in
     /// helper functions: `#[hegel::test]` captures binding names only for
     /// `draw` calls written directly in the test (or rule) body, so a draw
-    /// inside a helper otherwise reports as the anonymous `draw_N`.
+    /// inside a helper otherwise reports as the anonymous `draw_N`. To name
+    /// every draw in a helper after its binding instead, mark the helper
+    /// [`#[hegel::test_helper]`](macro@crate::test_helper).
     ///
     /// ```no_run
     /// use hegel::generators as gs;
