@@ -33,41 +33,19 @@
 //! drawn; [`TestCase::draw_silent`](crate::TestCase::draw_silent) accepts
 //! any generator and reports nothing.
 //!
-//! The engine explores silently and prints only when replaying a failure,
-//! and the two paths must draw identical choices, which is why printable
-//! generators implement both methods and why hand-written ones share one
-//! drawing body (see [`PrintableGenerator`](crate::PrintableGenerator)'s
-//! contract).
-//!
-//! # What is already printable
-//!
-//! Most tests never think about any of this, because printability is the
-//! default throughout the generator library:
-//!
-//! - Every leaf generator prints: integers, floats, booleans, strings and
-//!   regexes, bytes, characters, dates and times, UUIDs, IP addresses,
-//!   emails, URLs, durations.
-//! - Structural combinators print whenever their components do:
-//!   collections, tuples, [`optional`](crate::generators::optional),
-//!   [`one_of!`](crate::one_of), `flat_map`,
-//!   [`recursive`](crate::generators::recursive).
-//! - Value-producing combinators print whenever the produced type
-//!   implements [`PrettyPrintable`]: `map`, `filter`,
-//!   [`just`](crate::generators::just),
-//!   [`sampled_from`](crate::generators::sampled_from),
-//!   [`boxed`](crate::Generator::boxed), and
-//!   [`#[hegel::composite]`](crate::composite) functions. These print the
-//!   finished value, not the draws that built it: a composite's inner
-//!   draws never appear in the report, only its return value.
-//! - `#[derive(DefaultGenerator)]` generators print field by field as they
-//!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
-//!
+//! Sometimes you do need to print values. For example,
+//! [`just`](crate::generators::just) and
+//! [`sampled_from`](crate::generators::sampled_from)
+//! can generate arbitrary values that you need to print, and if you have
+//! a generator with no obvious way to print its construction you might
+//! still want to print its output. For this, we have an additional trait
 //! [`PrettyPrintable`] — the protocol a value uses to describe its own
-//! representation — is implemented for the primitives and the common
+//! representation. This is implemented for the primitives and the common
 //! standard-library types: strings, the sequence and map collections,
 //! `Option`/`Result`, tuples, smart pointers, ranges, paths, durations, IP
 //! addresses, and more ([`PrettyPrintable`]'s rustdoc lists every
-//! implementor). So a draw only fails to compile when a type the library
+//! implementor), and you can also derive it for your own types. So a
+//! draw only fails to compile when a type the library
 //! does not know about enters the picture, and the fix depends on whose
 //! type it is.
 //!
@@ -112,6 +90,33 @@
 //! Annotate only the draws the compiler rejects: `.print_as_debug()` on an
 //! already-printable draw only degrades the report from Rust-expression
 //! syntax to `Debug` syntax.
+//!
+//! # What is already printable
+//!
+//! Most tests never think about any of this, because printability is the
+//! default throughout the generator library:
+//!
+//! - Every leaf generator prints: integers, floats, booleans, strings and
+//!   regexes, bytes, characters, dates and times, UUIDs, IP addresses,
+//!   emails, URLs, durations.
+//! - Structural combinators print whenever their components do:
+//!   collections, tuples, [`optional`](crate::generators::optional),
+//!   [`one_of!`](crate::one_of), `flat_map`,
+//!   [`recursive`](crate::generators::recursive).
+//! - Value-producing combinators print whenever the produced type
+//!   implements [`PrettyPrintable`]: `map`, `filter`,
+//!   [`just`](crate::generators::just),
+//!   [`sampled_from`](crate::generators::sampled_from),
+//!   [`boxed`](crate::Generator::boxed), and
+//!   [`#[hegel::composite]`](crate::composite) functions. These print the
+//!   finished value, not the draws that built it: a composite's inner
+//!   draws never appear in the report, only its return value. NB: If you
+//!   have a generator with custom printing and you box it with `boxed`,
+//!   you will throw away that printing. Use
+//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable)
+//!   if you want to preserve that.
+//! - `#[derive(DefaultGenerator)]` generators print field by field as they
+//!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
 //!
 //! # Helpers and type erasure
 //!
