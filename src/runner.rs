@@ -294,8 +294,10 @@ impl Settings {
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
     /// counterexample when a test fails. Defaults to `false`.
     ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
+    /// This setting only controls printing. A failure without a blob — an
+    /// unconfirmed nondeterministic failure reported caveat-only, or one
+    /// reproduced from a blob replay — prints no reproducer line. Has
+    /// effect only on the native backend.
     pub fn print_blob(mut self, print_blob: bool) -> Self {
         self.print_blob = print_blob;
         self
@@ -492,9 +494,11 @@ where
     /// deterministic failure, or the stored failing timelines of a
     /// nondeterministic one. Enable [`print_blob`](Settings::print_blob) to
     /// have a native failure print one. When set, [`run`](Self::run) replays
-    /// the blob — a deterministic blob exactly once, a nondeterministic blob
-    /// until a replay fails, under a replay budget — bypassing
-    /// generation and shrinking, so you can reproduce a CI failure locally.
+    /// the blob — a deterministic blob up to four times, each attempt free
+    /// to draw fresh values past the recorded choices, stopping at the first
+    /// failure; a nondeterministic blob's stored timelines until one fails,
+    /// under a replay budget — bypassing generation and shrinking, so you
+    /// can reproduce a CI failure locally.
     ///
     /// First-wins: if a blob is already set, further calls are ignored.
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated

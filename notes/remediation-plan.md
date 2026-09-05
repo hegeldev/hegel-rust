@@ -290,8 +290,8 @@ follows the shared seams (shrink loop, run tail, then frontend).
   required), D13's risk entries (estimator bias, stalled-vs-finished shrink, quiet-flip
   visibility — the last replaced by G17's line if accepted), and D2/D4 in constant-free
   form (the boost sentence corrected; "never lower" reworded to bounded-loss now,
-  strengthened later only if 008 justifies it — per C10, phase-9 doc text avoids pinning
-  constants phase 12 changes).
+  strengthened later only if 008 justifies it — per C10 (no such register id,
+  unresolved), phase-9 doc text avoids pinning constants phase 12 changes).
 - **In parallel**: start 008's sim sweep (standalone, no code dependency).
 
 Tests (each named test fails on the pre-fix code): `final_replay_evicts_a_dry_
@@ -418,7 +418,8 @@ probe, spec'd by DP fixtures:
   DP said otherwise. `GAUNTLET_FLOOR` re-derived and cited.
 - **Anchor seeding**: `nd_evidence_batch` extends past a bar accept to `ANCHOR_SEED_RUNS`
   (provisional 20) before seeding the anchor — applied to every anchor-seeding batch,
-  trusted promotions included (C2); the gauntlet Accept arm tops the accepted timeline's
+  trusted promotions included (C2 — no such register id, unresolved); the gauntlet
+  Accept arm tops the accepted timeline's
   ledger up to the same size before stashing the accept, restoring 006's core-retention
   anchor (~0.84 at LCB 20/20). Bar accept/reject semantics (decision 23) untouched.
 - **Retention** (G6): gamma schedule — 0.8 below `RETENTION_HIGH_WATER` (provisional
@@ -428,7 +429,8 @@ probe, spec'd by DP fixtures:
   procedure becomes the recorded operating points; bias-direction note in the module doc;
   z widens only if the realized false-accept missed target.
 - **M5d** `constants_match_their_documented_values` asserting the frozen post-008 values
-  (per C9, it waits for them). 009b's re-verification. The in-engine
+  (per C9 — no such register id, unresolved — it waits for them). 009b's
+  re-verification. The in-engine
   `experiments/gauntlet-calibration` spot check.
 
 Tests: `gauntlet_never_accepts_below_minimum_evidence` replaces the deleted
@@ -487,7 +489,7 @@ replays are stamped too; header regenerated.
 Exit: every register finding traceable to a landed fix, a recorded deliberate non-fix, or
 a DRM-accepted risk entry.
 
-Exit verified 2026-09-03: an independent audit traced all 40 register findings to landed
+Exit verified 2026-09-03: an independent audit traced all 41 register findings to landed
 fixes with their pinning tests or decision entries (deliberate retentions — z = 1.96, the
 asymmetric miss weighting, FINAL_REPLAY_FRESH chosen not derived — are recorded in
 decisions 53/54). None untraceable.

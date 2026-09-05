@@ -1528,8 +1528,9 @@ pub struct NativeTestCase {
     /// status) lets `conclude_test` conclude before calling `freeze()`
     /// without triggering the idempotency early-return.
     frozen: bool,
-    /// Whether this test case belongs to a run already known to be
-    /// nondeterministic. Copied into every cloned stream.
+    /// Whether the engine stamped this test case for capture: the client
+    /// buffers its output and, if it fails, its rendered diagnostic — the
+    /// material for the failure report. Copied into every cloned stream.
     should_capture: bool,
     /// State shared with every other stream of this test case's family.
     pub(crate) family: Arc<FamilyCore>,
@@ -1721,12 +1722,12 @@ impl NativeTestCase {
         &self.family
     }
 
-    /// Mark this test case as belonging to a nondeterministic run.
+    /// Stamp this test case for capture.
     pub(crate) fn set_should_capture(&mut self) {
         self.should_capture = true;
     }
 
-    /// Whether this test case belongs to a nondeterministic run.
+    /// Whether the engine stamped this test case for capture.
     pub(crate) fn should_capture(&self) -> bool {
         self.should_capture
     }
@@ -1794,9 +1795,9 @@ impl NativeTestCase {
     }
 
     /// Replace each clone node's placeholder value with the realized record
-    /// of its stream — nodes, spans, and span events — recursively, so
-    /// [`Self::nodes`] becomes the self-contained pieced-together choice
-    /// sequence of the whole family.
+    /// of its stream — nodes and spans — recursively, so [`Self::nodes`]
+    /// becomes the self-contained pieced-together choice sequence of the
+    /// whole family.
     ///
     /// A no-op until the family has concluded: streams can still grow while
     /// the family is running, and a concluded family's streams cannot (every

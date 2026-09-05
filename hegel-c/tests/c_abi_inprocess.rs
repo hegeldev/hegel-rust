@@ -1450,6 +1450,123 @@ fn concurrent_run_failure_has_blob_and_caveat() {
     }
 }
 
+/// Drain `run` with an always-failing body that creates a concurrent state
+/// machine, marking each completed case interesting at `origin`.
+unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, origin: &CString) {
+    let rule = CString::new("only").unwrap();
+    loop {
+        let tc = unsafe { next_case(ctx, run) };
+        if tc.is_null() {
+            break;
+        }
+        let rules = [rule.as_ptr()];
+        let rule_groups: [i64; 1] = [0];
+        let mut machine: *mut HegelStateMachine = ptr::null_mut();
+        let mut out_concurrency = 0i64;
+        let rc = unsafe {
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                2,
+                2,
+                &mut machine,
+                &mut out_concurrency,
+            )
+        };
+        if rc == HEGEL_E_STOP_TEST {
+            ok(unsafe {
+                hegel_mark_complete(
+                    ctx,
+                    tc,
+                    hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
+                    ptr::null(),
+                )
+            });
+            ok(unsafe { hegel_test_case_free(ctx, tc) });
+            continue;
+        }
+        assert_eq!(rc, HEGEL_OK);
+        ok(unsafe { hegel_state_machine_free(ctx, machine) });
+        let mut value = 0i64;
+        let status = if unsafe { hegel_generate_integer(ctx, tc, 0, 100, &mut value) } == HEGEL_OK {
+            hegel_status_t::HEGEL_STATUS_INTERESTING
+        } else {
+            hegel_status_t::HEGEL_STATUS_OVERRUN
+        };
+        ok(unsafe { hegel_mark_complete(ctx, tc, status as u32, origin.as_ptr()) });
+        ok(unsafe { hegel_test_case_free(ctx, tc) });
+    }
+}
+
+/// A nondeterministic reproduce blob fed back through `hegel_run_start_blob`
+/// replays its stored timelines until one fails: the run reports the
+/// failure, its caveat crosses the boundary, and its reproduce blob is NULL
+/// (the caller already holds it).
+#[test]
+fn run_start_blob_replays_a_nondeterministic_blob() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let empty = CString::new("").unwrap();
+        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        let origin = CString::new("nondeterministic bug").unwrap();
+
+        let run = start(ctx, s);
+        drive_concurrent_body(ctx, run, &origin);
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        let f = failure_at(ctx, res, 0);
+        let blob = std::ffi::CStr::from_ptr(repro_blob_of(ctx, f)).to_owned();
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, run));
+
+        let mut replay: *mut HegelRun = ptr::null_mut();
+        ok(hegel_run_start_blob(
+            ctx,
+            s,
+            blob.as_ptr(),
+            None,
+            ptr::null_mut(),
+            &mut replay,
+        ));
+        drive_concurrent_body(ctx, replay, &origin);
+        let res = result(ctx, replay);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        assert_eq!(failure_count_of(ctx, res), 1);
+        let f = failure_at(ctx, res, 0);
+        let origin_back = std::ffi::CStr::from_ptr(origin_of(ctx, f))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            origin_back.contains("nondeterministic bug"),
+            "got {origin_back:?}"
+        );
+        assert!(
+            repro_blob_of(ctx, f).is_null(),
+            "the caller already holds the blob"
+        );
+        let caveat_back = std::ffi::CStr::from_ptr(caveat_of(ctx, f))
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            caveat_back.starts_with("nondeterministic failure, reproduced from stored"),
+            "got {caveat_back:?}"
+        );
+        ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, replay));
+
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 /// Once a test case has overrun its choice budget, the engine marks the data
 /// source aborted, and *every* subsequent primitive — even the bookkeeping
 /// ones (`start_span`, `stop_span`, `new_collection`, `new_pool`, `pool_add`)

@@ -412,7 +412,8 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     = 4` (short of it the verdict is Continue, never Reject; m = 3 has no floor passing
     both floor criteria), `ANCHOR_SEED_RUNS = 20` at both seeding sites — the discovery
     bar's batch extends past its accept, and a gauntlet accept tops the candidate's
-    ledger up before the anchor can move (trusted promotions ride the same batch, C2) —
+    ledger up before the anchor can move (trusted promotions ride the same batch, C2 —
+    no such register id, unresolved) —
     and `GAUNTLET_FLOOR = 0.05` now derived: 0.05 < LCB(4/30) = 0.0531, the min-fails
     acceptance boundary at the cap, so the floor costs zero power (S4). Neither piece
     works alone: extension without min-fails is *worse* than shipped (51% vs 67% L4b
@@ -428,7 +429,7 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     regime, where the reference loses the bug half the time. PRELIMINARY until 009a
     prices the miss-weighting column: safe under {shipped watermark, floored 0.2}, and
     w ~ 0 re-opens a noise channel min-fails cannot close (the G9/G10 escalation path).
-    (Findings S1, S2, S4, S5, C2; experiment 008.)
+    (Findings S1, S2, S4, S5, C2 — no such register id, unresolved; experiment 008.)
 
 55. **Retention gamma is 1.0 at anchors of 0.8 and above.** `RETENTION_HIGH_WATER = 0.8`
     is a zero-miss detector, not a tuning dial: with 20-run seeding the only reachable
@@ -480,6 +481,8 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     Recorded under gate G20's seam family for the phase-13 decision-3 audit: a
     failure's blob quality currently depends on whether the run noticed its own
     nondeterminism. (Gate G10; experiment 009a.)
+
+## 2026-09-04
 
 59. **v1 blobs replay with continuation and retries.** A v1 exact-choice blob got one
     `for_choices` replay with no continuation budget — the fragility decision 58
@@ -576,9 +579,10 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
 
 64. **Every generation-discovered origin passes a first-interesting check before
     anything consumes it, extending decision 21's principle to every run.** Before each
-    `nd_discovery_sweep` (same call sites, pre-flip only), the discovering sighting of
-    each unchecked origin replays `FIRST_CHECK_REPLAYS` = 4 times exactly, stopping at
-    the first miss; a reproduction concludes interesting at the same origin with the
+    `nd_discovery_sweep` (same call sites, pre-flip only), each unchecked origin's
+    incumbent sighting at sweep time (in-batch displacement may already have replaced
+    the discovery) replays `FIRST_CHECK_REPLAYS` = 4 times exactly, stopping at the
+    first miss; a reproduction concludes interesting at the same origin with the
     same realized values. A miss flips the run (its own `FirstCheck` seam site) and
     seeds the origin's discovery bar with the check's evidence through a new lifecycle
     seed slot, consumed by the next `nd_evidence_batch`, so the observations are not
@@ -594,7 +598,7 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     the check. Cost is +4 exact replays per deterministically-failing origin, pinned,
     with the passing-run count untouched; in exchange quiet/warn regain a
     generation-level detection channel — 011 measured the tree's version firing 0 in
-    600 trials, where this one replays the actual discovery. (Seam plan phase 16,
+    600 trials, where this one replays the recorded sighting. (Seam plan phase 16,
     gates G23/G26.)
 
 65. **Every pre-flip interesting execution is kept per origin, and measurement runs

@@ -413,8 +413,10 @@ impl RunOutput {
 impl TestCase {
     /// `emit` is decided by the lifecycle (`run_lifecycle::run_test_case`):
     /// true on a non-quiet final replay, in verbose mode, or for a non-final
-    /// case the engine stamped as belonging to a nondeterministic run —
-    /// wherever drawn values and notes should be surfaced. `sink` is the run's resolved
+    /// case the engine stamped for capture ([`CTestCase::should_capture`] —
+    /// the replays, confirmation batches, and generation cases a failure
+    /// report can be built from) — wherever drawn values and notes should be
+    /// surfaced. `sink` is the run's resolved
     /// output destination ([`RunOutput::sink`]) — passed in rather than read
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.

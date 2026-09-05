@@ -793,7 +793,7 @@ enum CloneChildren {
 ///
 /// A record's *identity* — equality, hashing, and its contribution to sort
 /// keys — is the sequence of child choice values, recursively. The realized
-/// info (child kinds, forced flags, spans, span events) is carried when the
+/// info (child kinds, forced flags, spans) is carried when the
 /// record was produced by executing the stream (as a shared
 /// [`RealizedStream`]); it is never serialized and never part of equality,
 /// so a record round-tripped through storage compares equal to the realized

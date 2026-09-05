@@ -57,7 +57,9 @@ Seeds fixed in code: trial i uses start RNG `i·0xA5A5 ^ 0x5EED`, sim RNG `i ^ 0
 (001's scheme); the seeding study uses `(base+i)·0x9E37 ^ 0xBA5E`. Outputs are
 byte-identical across reruns. N = 500 per headline cell, 200 per factorial cell, 10000 per
 seeding cell. Every table below reproduces from `cargo run --release -- <cmd>` in
-`/experiments/shrink-sim`; full suite ~40 s CPU (~4 s wall on 18 cores).
+`/experiments/shrink-sim`, except the floor table's per-shrink columns — derived from
+its `uncond` column at the measured exposure (the harness prints K=30/K=60); full suite
+~40 s CPU (~4 s wall on 18 cores).
 
 ## Results
 

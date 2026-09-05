@@ -91,7 +91,8 @@ Seam columns (aborted, no-bug, and evicts were 0 everywhere; caveat-only 0 every
 | D0 | 0/100 | — | — | 0 | 100/0 |
 
 D2 core transitions (flip incumbent → shrunk incumbent): kept 37, gained 13, lost 0,
-never 30; plus 20 never-flipped deterministic finishes, giving the 68/100 det finals.
+never 30; plus 18 core-bearing of the 20 never-flipped deterministic finishes, giving
+the 68/100 det finals.
 
 ### Against the acceptance letters
 

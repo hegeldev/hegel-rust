@@ -205,7 +205,7 @@ pub enum hegel_backend_t {
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
 ///
 /// Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
-/// 0.34 ABI break) is retired and must never be reused for a new meaning:
+/// 0.35 ABI break) is retired and must never be reused for a new meaning:
 /// bindings built against the old header may still compare against it
 /// (decision 27).
 #[repr(C)]
@@ -694,15 +694,16 @@ pub struct HegelRunResult {
 /// independent of the result and run it came from.
 ///
 /// A failure carries the origin `libhegel` grouped on and the reproduce blob.
-/// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
-/// the diagnostic and re-raise the test's own failure.
+/// The diagnostic comes from the stamped final-replay capture; the blob is
+/// for reproducing the failure later via `hegel_run_start_blob`.
 #[derive(Clone)]
 pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
-    /// sequence, or `None` when the engine produced no blob (a
-    /// single-test-case run, or an unconfirmed nondeterministic failure).
-    /// Read via `hegel_failure_reproduction_blob`.
+    /// sequence — or, for a nondeterministic failure, its replay state — or
+    /// `None` when the engine produced no blob (a single-test-case run, an
+    /// unconfirmed nondeterministic failure, or a failure returned from a
+    /// blob replay). Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
     /// The failure's confirmation standing when the run handled
     /// nondeterminism, quoting the run's own replay evidence; `None` for
@@ -1313,9 +1314,11 @@ pub unsafe extern "C" fn hegel_run_start(
 }
 
 /// Like `hegel_run_start`, but the run replays a reproduce blob instead of
-/// exploring. A deterministic blob replays its choices once; a
-/// nondeterministic blob replays its stored timelines until one fails, with
-/// the same replay-until-failure sequence database reuse uses. The caller
+/// exploring. Both blob kinds replay until a replay fails, under a bounded
+/// budget: a deterministic blob replays its choices up to 4 times, each
+/// attempt allowed a bounded number of fresh draws past a divergence; a
+/// nondeterministic blob replays its stored timelines with the same
+/// replay-until-failure sequence database reuse uses. The caller
 /// drives the run exactly like `hegel_run_start`: a reproducing replay is
 /// the run's failure (with its caveat for a nondeterministic blob, and no
 /// reproduce blob — the caller already holds it), a run with no failures
@@ -1649,7 +1652,8 @@ pub unsafe extern "C" fn hegel_test_case_free(
 /// diagnostic, keyed by the failure's origin — a stamped failing
 /// execution is the material for that origin's failure report. The
 /// engine stamps the executions whose failures can become the report:
-/// the report-time final replay (on deterministic runs too), every
+/// the report-time final replay and each generation-discovered failure's
+/// first-check replays (both on deterministic runs too), every
 /// `hegel_run_start_blob` replay, and, under nondeterministic handling,
 /// confirmation batches, database-reuse replays, and generation-phase
 /// cases (whose failing origins may be reported unconfirmed). Read the

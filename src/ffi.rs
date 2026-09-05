@@ -423,8 +423,7 @@ impl CTestCase {
     /// (`hegel_test_case_should_capture`): buffer its output and, on
     /// failure, its diagnostic for the failure report. The engine stamps
     /// the case before it starts, so the answer is stable for the case's
-    /// whole lifetime; standalone handles (blob replays) are never
-    /// stamped.
+    /// whole lifetime; blob-replay cases are always stamped.
     pub(crate) fn should_capture(&self) -> bool {
         let mut out = false;
         // SAFETY: self.raw is a live handle; &mut out is a valid out-param.

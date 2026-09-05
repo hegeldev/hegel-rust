@@ -72,7 +72,8 @@ formats in `blob.rs`.
   first-interesting check, the pre-shrink verify, and the final-replay status checks flip
   the run rather than aborting under deterministic handling). Every generation-discovered
   origin gets the first-interesting check before anything consumes it: `FIRST_CHECK_REPLAYS`
-  = 4 exact replays of its discovering sighting, stopping at the first miss, whose evidence
+  = 4 exact replays of its incumbent sighting at sweep time (in-batch displacement may
+  already have replaced the discovery), stopping at the first miss, whose evidence
   seeds the origin's discovery bar (decision 64). Under `error` strictness the kind ledger
   also aborts on within-run generation kind drift, and a check miss aborts — structural
   divergence with a position-naming diagnostic, an aligned outcome change as flaky. A

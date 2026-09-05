@@ -25,10 +25,12 @@ header = """
  *   same test case, each with its own choice sequence.
  * - Span: a labeled grouping of draws that tells the shrinker which draws
  *   belong to one unit.
- * - Reproduce blob: a base64 string encoding a test case's choice sequence,
- *   which can be replayed later to reproduce it exactly. It is only
- *   guaranteed to reproduce the failure in the version of Hegel in which it
- *   was generated.
+ * - Reproduce blob: a base64 string from which a failure can be replayed
+ *   later — a test case's choice sequence or, for a nondeterministic
+ *   failure, a self-identifying entry carrying its replay state, replayed
+ *   until failure under a bounded budget. It is only guaranteed to
+ *   reproduce the failure in the version of Hegel in which it was
+ *   generated.
  *
  * Calling convention
  * ------------------
@@ -63,6 +65,7 @@ header = """
  *     hegel_context_new          ->  hegel_context_free
  *     hegel_settings_new         ->  hegel_settings_free
  *     hegel_run_start            ->  hegel_run_free
+ *     hegel_run_start_blob       ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
  *     hegel_next_test_case       ->  hegel_test_case_free
  *     hegel_test_case_clone      ->  hegel_test_case_free
@@ -119,10 +122,10 @@ usize_is_size_t = true
 #   - hegel_phase_t / hegel_health_check_t: bitwise-OR'd into a uint32_t mask.
 #   - hegel_label_t: a uint64_t span label (the label space is open, so the
 #     parameter can't be the closed enum type).
-#   - hegel_mode_t / hegel_backend_t / hegel_verbosity_t / hegel_status_t:
-#     passed as uint32_t and validated, so an out-of-range value from a
-#     miscast C argument is a reportable error instead of undefined behavior
-#     in Rust.
+#   - hegel_mode_t / hegel_backend_t / hegel_verbosity_t /
+#     hegel_nondeterminism_strictness_t / hegel_status_t: passed as uint32_t
+#     and validated, so an out-of-range value from a miscast C argument is a
+#     reportable error instead of undefined behavior in Rust.
 [export]
 include = [
     "hegel_phase_t",

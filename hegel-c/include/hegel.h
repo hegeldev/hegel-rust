@@ -23,10 +23,12 @@
  *   same test case, each with its own choice sequence.
  * - Span: a labeled grouping of draws that tells the shrinker which draws
  *   belong to one unit.
- * - Reproduce blob: a base64 string encoding a test case's choice sequence,
- *   which can be replayed later to reproduce it exactly. It is only
- *   guaranteed to reproduce the failure in the version of Hegel in which it
- *   was generated.
+ * - Reproduce blob: a base64 string from which a failure can be replayed
+ *   later — a test case's choice sequence or, for a nondeterministic
+ *   failure, a self-identifying entry carrying its replay state, replayed
+ *   until failure under a bounded budget. It is only guaranteed to
+ *   reproduce the failure in the version of Hegel in which it was
+ *   generated.
  *
  * Calling convention
  * ------------------
@@ -61,6 +63,7 @@
  *     hegel_context_new          ->  hegel_context_free
  *     hegel_settings_new         ->  hegel_settings_free
  *     hegel_run_start            ->  hegel_run_free
+ *     hegel_run_start_blob       ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
  *     hegel_next_test_case       ->  hegel_test_case_free
  *     hegel_test_case_clone      ->  hegel_test_case_free
@@ -186,7 +189,7 @@ typedef enum {
  Aggregate outcome of a finished run, read via `hegel_run_result_status`.
 
  Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
- 0.34 ABI break) is retired and must never be reused for a new meaning:
+ 0.35 ABI break) is retired and must never be reused for a new meaning:
  bindings built against the old header may still compare against it
  (decision 27).
  */
@@ -590,8 +593,8 @@ typedef struct hegel_context_t hegel_context_t;
  independent of the result and run it came from.
 
  A failure carries the origin `libhegel` grouped on and the reproduce blob.
- The caller replays the blob (via `hegel_test_case_from_blob`) to produce
- the diagnostic and re-raise the test's own failure.
+ The diagnostic comes from the stamped final-replay capture; the blob is
+ for reproducing the failure later via `hegel_run_start_blob`.
  */
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -1113,9 +1116,11 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
 
 /*
  Like `hegel_run_start`, but the run replays a reproduce blob instead of
- exploring. A deterministic blob replays its choices once; a
- nondeterministic blob replays its stored timelines until one fails, with
- the same replay-until-failure sequence database reuse uses. The caller
+ exploring. Both blob kinds replay until a replay fails, under a bounded
+ budget: a deterministic blob replays its choices up to 4 times, each
+ attempt allowed a bounded number of fresh draws past a divergence; a
+ nondeterministic blob replays its stored timelines with the same
+ replay-until-failure sequence database reuse uses. The caller
  drives the run exactly like `hegel_run_start`: a reproducing replay is
  the run's failure (with its caveat for a nondeterministic blob, and no
  reproduce blob — the caller already holds it), a run with no failures
@@ -1241,7 +1246,8 @@ hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc)
  diagnostic, keyed by the failure's origin — a stamped failing
  execution is the material for that origin's failure report. The
  engine stamps the executions whose failures can become the report:
- the report-time final replay (on deterministic runs too), every
+ the report-time final replay and each generation-discovered failure's
+ first-check replays (both on deterministic runs too), every
  `hegel_run_start_blob` replay, and, under nondeterministic handling,
  confirmation batches, database-reuse replays, and generation-phase
  cases (whose failing origins may be reported unconfirmed). Read the

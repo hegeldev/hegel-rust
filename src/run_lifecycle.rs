@@ -21,7 +21,7 @@ use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
-    with_test_context,
+    hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Mode, Settings, Verbosity};
@@ -437,10 +437,10 @@ fn render_diagnostic(
 /// or `None` when nothing should be printed.
 ///
 /// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
-/// enabled *and* the failure carries a reproduce blob. A replayed
-/// counterexample always has one; a blobless failure (e.g.
-/// `Mode::SingleTestCase`, whose one random case has no shrunk choice
-/// sequence to encode) prints nothing.
+/// enabled *and* the failure carries a reproduce blob. A blobless failure —
+/// `Mode::SingleTestCase`, an unconfirmed nondeterministic failure reported
+/// caveat-only, a blob replay (the caller already holds the blob) — prints
+/// nothing.
 fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<String> {
     if !settings.print_blob {
         return None;
@@ -656,7 +656,7 @@ fn drive_run<F: FnMut(TestCase)>(
                 let failure = result.failure(index);
                 let report = captured
                     .remove(&failure.origin)
-                    .expect("every reported failure had an interesting test case");
+                    .unwrap_or_else(|| hegel_internal_error!("failure {index} has no capture"));
                 for line in &report.lines {
                     output.line(line);
                 }
@@ -680,7 +680,8 @@ fn drive_run<F: FnMut(TestCase)>(
                 )));
             } else {
                 std::panic::resume_unwind(
-                    last_payload.expect("a failed run reports at least one failure"),
+                    last_payload
+                        .unwrap_or_else(|| hegel_internal_error!("a failed run has no failures")),
                 );
             }
         }
@@ -727,14 +728,15 @@ fn drive_single_case(
 /// Replay a base64 failure blob through the C ABI (`hegel_run_start_blob`),
 /// bypassing generation and shrinking.
 ///
-/// The engine owns the replay: a deterministic blob replays its choices
-/// once; a nondeterministic blob replays its stored timelines until one
-/// fails, like database reuse. Decoding failures (corrupt or incompatible
-/// blobs) panic with the engine's diagnostic. A blob that decodes but does
-/// not reproduce panics naming both hypotheses: the failure is fixed, or a
-/// nondeterministic one did not recur within the replay budget. A
-/// reproduced failure re-raises the test's own panic; a replayed example
-/// has no fresh blob to print.
+/// The engine owns the replay: a deterministic blob replays its choices up
+/// to four times — each attempt may draw fresh values past the recorded
+/// choices — stopping at the first failure; a nondeterministic blob replays
+/// its stored timelines until one fails, like database reuse. Decoding
+/// failures (corrupt or incompatible blobs) panic with the engine's
+/// diagnostic. A blob that decodes but does not reproduce panics naming
+/// both hypotheses: the failure is fixed, or a nondeterministic one did not
+/// recur within the replay budget. A reproduced failure re-raises the
+/// test's own panic; a replayed example has no fresh blob to print.
 pub(crate) fn drive_blob_replay<F>(
     test_fn: F,
     settings: &Settings,

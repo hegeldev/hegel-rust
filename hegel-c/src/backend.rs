@@ -331,10 +331,12 @@ pub struct Failure {
     /// counterexample.
     pub origin: String,
     /// A base64 "failure blob" encoding the minimal counterexample's choice
-    /// sequence. `Some` for an interesting counterexample surfaced by a full
-    /// run (the shrunk choices are available); `None` for a single-test-case
-    /// run, which has no shrunk choice sequence to encode. The client replays
-    /// it via `hegel_test_case_from_blob`; paste into
+    /// sequence, or — under nondeterministic handling — the failure's replay
+    /// state (its timeline pool). `Some` on the failures an exploration run
+    /// reports; `None` for a single-test-case run, for a caveat-only
+    /// unconfirmed nondeterministic failure, and on the failures a blob
+    /// replay returns (the caller already holds the blob). The client
+    /// replays it via `hegel_run_start_blob`; paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
     /// The failure's confirmation standing when the run handled
