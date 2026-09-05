@@ -3,7 +3,8 @@
 //! The discovery-bar and gauntlet tests recompute the exact DPs from
 //! experiments 005A and 008 over the production decision functions and
 //! assert the recorded operating points (decisions 23 and 54); the budget
-//! tests pin the fixture values from experiments 001 and 003.
+//! tests pin the replay budgets decisions 11 and 16 derive and experiment
+//! 004's continuation budget.
 
 use super::*;
 

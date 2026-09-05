@@ -3,12 +3,14 @@
 //! Confirmation gates origin admission on every path (decisions 20, 21,
 //! 24): a raw interesting execution may fill a vacant origin, pending
 //! confirmation; an occupied origin changes only through validated accepts;
-//! an origin becomes `Confirmed` through the discovery bar or, for a
-//! trusted origin, a failing shrink-time evidence batch; confirmed and
-//! trusted origins carry replay state. Origins reproduced from the
-//! database are `Trusted` on reproduction, exempt from the bar's verdict —
-//! the prior run persisted only confirmed origins, and subjecting real
-//! p ~ 0.1 bugs to the bar again would drop them ~55% of the time.
+//! an origin becomes `Confirmed` through a discovery-bar accept (sweep,
+//! shrink admission, or backtrack), any failure in the final replay's
+//! pooled review, or, for a trusted origin, a failing shrink-time evidence
+//! batch; confirmed and trusted origins carry replay state. Origins
+//! reproduced from the database are `Trusted` on reproduction, exempt
+//! from the bar's verdict — the prior run persisted only confirmed
+//! origins, and subjecting real p ~ 0.1 bugs to the bar again would drop
+//! them ~55% of the time.
 //!
 //! The lifecycle also accumulates each origin's physical replay evidence —
 //! fails and replays across confirmation batches, reuse reproductions, and
@@ -27,19 +29,19 @@ use crate::native::core::ChoiceValue;
 use crate::native::test_runner::RunResult;
 
 /// One origin's confirmation state. The only transitions are the ones
-/// [`OriginLifecycle`]'s methods implement: `Unconfirmed → Confirmed` (bar
-/// accept), `Unconfirmed → Trusted` (database reproduction), `Trusted →
-/// Confirmed` (promotion by a failing evidence batch). Rejection never
-/// demotes and never removes state.
+/// [`OriginLifecycle`]'s methods implement. `Unconfirmed → Confirmed` has
+/// three admission paths: a discovery-bar accept (the post-generation
+/// sweep or shrink admission; an accept requires a reproducing replay in
+/// the batch itself), a backtrack's bar accept, and the final replay's
+/// pooled review, which confirms on any failure with no bar. `Unconfirmed
+/// → Trusted` is database reproduction; `Trusted → Confirmed` is
+/// promotion by a failing evidence batch. Rejection never demotes and
+/// never removes state.
 pub(crate) enum OriginState {
-    /// Observed interesting; hasn't passed the discovery bar. `rejections`
-    /// counts failed confirmation batches, `fails`/`replays` the cumulative
-    /// physical evidence behind them, for the caveated report.
-    Unconfirmed {
-        rejections: u64,
-        fails: u64,
-        replays: u64,
-    },
+    /// Observed interesting; hasn't passed the discovery bar.
+    /// `fails`/`replays` accumulate the physical evidence behind rejected
+    /// confirmation batches, for the caveated report.
+    Unconfirmed { fails: u64, replays: u64 },
     /// Reproduced from the database: exempt from eviction (decision 24).
     /// Carries the stored entry's timeline pool (empty for v1 entries) but
     /// no anchor until an evidence batch promotes it.
@@ -111,7 +113,6 @@ impl OriginLifecycle {
             self.origins.insert(
                 origin.to_string(),
                 OriginState::Unconfirmed {
-                    rejections: 0,
                     fails: 0,
                     replays: 0,
                 },
@@ -210,7 +211,7 @@ impl OriginLifecycle {
         pool.truncate(super::POOL_CAP);
         let (prior_fails, prior_replays, report_fails, report_replays) =
             match self.origins.get(origin) {
-                Some(OriginState::Unconfirmed { fails, replays, .. }) => (*fails, *replays, 0, 0),
+                Some(OriginState::Unconfirmed { fails, replays }) => (*fails, *replays, 0, 0),
                 Some(OriginState::Trusted {
                     fails,
                     replays,
@@ -283,12 +284,7 @@ impl OriginLifecycle {
     /// confirmed ones, which are exempt.
     pub(crate) fn reject(&mut self, origin: &str, evidence: (u64, u64)) -> bool {
         match self.origins.get_mut(origin) {
-            Some(OriginState::Unconfirmed {
-                rejections,
-                fails,
-                replays,
-            }) => {
-                *rejections += 1;
+            Some(OriginState::Unconfirmed { fails, replays }) => {
                 *fails += evidence.0;
                 *replays += evidence.1;
                 true
@@ -297,7 +293,6 @@ impl OriginLifecycle {
                 self.origins.insert(
                     origin.to_string(),
                     OriginState::Unconfirmed {
-                        rejections: 1,
                         fails: evidence.0,
                         replays: evidence.1,
                     },
@@ -391,7 +386,7 @@ impl OriginLifecycle {
                     )
                 }
             }
-            OriginState::Unconfirmed { fails, replays, .. } => {
+            OriginState::Unconfirmed { fails, replays } => {
                 if *fails > 0 {
                     format!(
                         "unconfirmed failure: failed {fails} of {replays} replays \

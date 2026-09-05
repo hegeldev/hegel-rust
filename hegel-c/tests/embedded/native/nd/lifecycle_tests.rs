@@ -67,7 +67,7 @@ fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
 }
 
 #[test]
-fn trusted_origins_survive_rejection_without_a_caveat() {
+fn trusted_origins_survive_rejection_without_eviction() {
     let mut lc = OriginLifecycle::default();
     lc.observe("a");
     lc.trust("a", Vec::new(), (1, 2));
@@ -148,6 +148,11 @@ fn record_trusted_batch_folds_evidence_only_while_trusted() {
     lc.observe("a");
     lc.record_trusted_batch("a", (0, 20));
     assert!(lc.needs_confirmation("a"));
+    assert_eq!(
+        lc.caveat("a").unwrap(),
+        "unconfirmed failure: observed once, never replayed — a rare \
+         failure, or the environment changed between executions"
+    );
 }
 
 #[test]
