@@ -206,19 +206,24 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
 }
 
 #[test]
-fn test_settings_for_ci_disables_database_and_derandomizes() {
+fn test_settings_for_ci_disables_database_derandomizes_and_suppresses_too_slow() {
     use crate::runner::Database;
     let settings = Settings::for_ci(true);
     assert_eq!(settings.database, Database::Disabled);
     assert!(settings.derandomize);
+    assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
+
+    let settings = settings.suppress_health_check([]);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 #[test]
-fn test_settings_outside_ci_leave_database_unset_and_randomized() {
+fn test_settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
     use crate::runner::Database;
     let settings = Settings::for_ci(false);
     assert_eq!(settings.database, Database::Unset);
     assert!(!settings.derandomize);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 #[test]

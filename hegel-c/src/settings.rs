@@ -137,8 +137,8 @@ pub enum Verbosity {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled
-/// and tests are derandomized by default.
+/// In CI environments (detected automatically), the database is disabled,
+/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by default.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -179,7 +179,11 @@ impl Settings {
             } else {
                 Database::Unset
             },
-            suppress_health_check: Vec::new(),
+            suppress_health_check: if in_ci {
+                vec![HealthCheck::TooSlow]
+            } else {
+                Vec::new()
+            },
             phases: vec![
                 Phase::Explicit,
                 Phase::Reuse,
