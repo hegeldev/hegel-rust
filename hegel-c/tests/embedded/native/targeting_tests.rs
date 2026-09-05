@@ -394,6 +394,55 @@ fn run_trial_records_interesting_result_into_ctx() {
     });
 }
 
+/// Drives `run_trial`'s mismatch propagation under `Error` strictness: the
+/// climber steps `n = 2` to `n = 3` (Valid, best score), then the next
+/// `optimise_targets` round replays the new best and the body flips that
+/// same sequence to INTERESTING — a verdict change the execution cache
+/// reports and the trial must surface as `RunError::Flaky`.
+#[test]
+fn error_strictness_aborts_on_a_verdict_flip_during_hill_climbing() {
+    use crate::settings::NondeterminismStrictness;
+    let settings = crate::Settings::new()
+        .database(None)
+        .seed(Some(0xc0ffee))
+        .nondeterminism_strictness(NondeterminismStrictness::Error);
+    let exchange = crate::exchange::CaseExchange::new();
+    let hits = core::cell::Cell::new(0u32);
+    let fut = async {
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
+        engine.targeting.record(
+            &[ChoiceValue::Integer(BigInt::from(2))],
+            &HashMap::from_iter([("".to_string(), -1.0)]),
+        );
+        let mut optimiser = Optimiser {
+            engine: &mut engine,
+            max_valid: 10_000,
+            max_calls: 100_000,
+        };
+        let err = match optimiser.optimise_targets().await {
+            Err(err) => err,
+            Ok(()) => panic!("expected the verdict flip to abort the climb"),
+        };
+        assert!(matches!(err, RunError::Flaky(_)));
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
+        let result = (|| -> Result<TestCaseResult, ()> {
+            let n = draw_int(&*ds, 0, 20)?;
+            if n == 3 {
+                hits.set(hits.get() + 1);
+                if hits.get() > 1 {
+                    return Ok(interesting());
+                }
+            }
+            ds.target_observation(-((n - 3).saturating_abs() as f64), "")
+                .unwrap();
+            Ok(TestCaseResult::Valid)
+        })()
+        .unwrap_or(TestCaseResult::Overrun);
+        ds.mark_complete(&result);
+    });
+}
+
 #[test]
 fn the_optimiser_stops_when_the_run_flips_nondeterministic() {
     let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));

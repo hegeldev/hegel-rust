@@ -2175,14 +2175,10 @@ fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
     }
 }
 
-fn plain_settings() -> Settings {
-    Settings::new().database(None).verbosity(Verbosity::Quiet)
-}
-
 #[test]
 fn history_records_raw_displacements_and_shrink_accepts() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -2217,7 +2213,7 @@ fn history_records_raw_displacements_and_shrink_accepts() {
 #[test]
 fn history_dedupes_repeated_timelines() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -2237,7 +2233,7 @@ fn history_dedupes_repeated_timelines() {
 #[test]
 fn history_is_kept_only_while_deterministic() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -2275,7 +2271,7 @@ fn history_is_kept_only_while_deterministic() {
 #[test]
 fn a_measurement_run_neither_displaces_nor_persists() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         Some("k"),
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -2318,7 +2314,7 @@ fn a_measurement_run_neither_displaces_nor_persists() {
 fn history_is_dropped_when_the_origin_confirms() {
     let bug = "deliberate";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -2351,7 +2347,7 @@ fn history_is_dropped_when_the_origin_confirms() {
 #[test]
 fn a_first_check_outcome_miss_flips_the_run_before_displacement() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -2382,7 +2378,7 @@ fn a_first_check_outcome_miss_flips_the_run_before_displacement() {
 fn a_first_check_realized_timeline_miss_flips_the_run() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -2410,7 +2406,7 @@ fn a_first_check_realized_timeline_miss_flips_the_run() {
 fn first_check_evidence_seeds_the_origins_ledger() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -2439,7 +2435,7 @@ fn the_discovery_bar_starts_from_the_first_check_seed() {
     let bug = "bug";
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -2480,7 +2476,7 @@ fn each_origin_gets_its_own_first_check() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -2516,7 +2512,7 @@ fn an_all_reproduce_first_check_keeps_the_run_deterministic() {
     let bug = "bug";
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -2561,7 +2557,7 @@ fn seed_history(ctx: &mut Engine<'_>, origin: &str, values: &[i128]) {
 fn a_final_replay_miss_backtracks_to_the_reproduction_boundary() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2602,7 +2598,7 @@ fn the_backtrack_scan_probes_geometrically() {
     let bug = "bug";
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -2638,7 +2634,7 @@ fn the_scan_continues_past_a_bar_rejected_candidate() {
     let seen = Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
     let body_seen = seen.clone();
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         move |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2672,7 +2668,7 @@ fn three_bar_rejections_exhaust_the_backtrack() {
     let seen = Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
     let body_seen = seen.clone();
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         move |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2703,7 +2699,7 @@ fn three_bar_rejections_exhaust_the_backtrack() {
 fn backtrack_pools_the_other_reproducing_entries() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2737,7 +2733,7 @@ fn backtrack_pools_the_other_reproducing_entries() {
 fn a_backtracked_incumbent_anchors_from_its_bar_batch() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2770,7 +2766,7 @@ fn a_backtracked_incumbent_anchors_from_its_bar_batch() {
 #[test]
 fn an_exhausted_backtrack_reports_caveat_only() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() {
@@ -2802,7 +2798,7 @@ fn backtrack_replays_are_capped() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -2833,7 +2829,7 @@ fn backtrack_replays_are_capped() {
 fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2890,7 +2886,7 @@ fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
 fn backtrack_resumes_gauntleted_shrinking_under_remaining_budget() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2922,7 +2918,7 @@ fn backtrack_resumes_gauntleted_shrinking_under_remaining_budget() {
 #[test]
 fn a_flip_during_final_replay_reviews_already_replayed_origins() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2965,7 +2961,7 @@ fn a_flip_during_final_replay_reviews_already_replayed_origins() {
 fn a_single_entry_history_probes_its_founding_sighting() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -2993,7 +2989,7 @@ fn a_single_entry_history_probes_its_founding_sighting() {
 fn the_refinement_narrows_to_the_newest_reproducing_entry() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -3025,7 +3021,7 @@ fn the_refinement_narrows_to_the_newest_reproducing_entry() {
 fn a_raw_sighting_can_be_the_restored_incumbent() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -3058,7 +3054,7 @@ fn a_raw_sighting_can_be_the_restored_incumbent() {
 #[test]
 fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() {
@@ -3098,7 +3094,7 @@ fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
 fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -3141,7 +3137,7 @@ fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
 #[test]
 fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rbool(ds) else {
@@ -3192,7 +3188,7 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
 #[test]
 fn an_exact_final_replay_vanish_aborts_under_error_strictness() {
     with_engine(
-        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() {
@@ -3222,7 +3218,7 @@ fn an_exact_final_replay_vanish_aborts_under_error_strictness() {
 #[test]
 fn a_backtrack_without_history_is_exhausted() {
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -3241,7 +3237,7 @@ fn the_scan_budget_caps_the_first_pass() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             execs.fetch_add(1, Ordering::SeqCst);
@@ -3273,7 +3269,7 @@ fn the_scan_budget_caps_the_first_pass() {
 fn tied_raw_candidates_restore_the_shortlex_least() {
     let bug = "bug";
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -3307,7 +3303,7 @@ fn a_second_pass_probe_can_find_the_candidate() {
     ));
     let body_counts = counts.clone();
     with_engine(
-        plain_settings(),
+        quiet_settings(),
         None,
         move |ds| {
             let Ok(v) = rint(ds, 0, 100) else {
@@ -3337,7 +3333,7 @@ fn a_second_pass_probe_can_find_the_candidate() {
 #[test]
 fn an_exact_shrink_verify_vanish_aborts_under_error_strictness() {
     with_engine(
-        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() {
@@ -3376,7 +3372,7 @@ fn an_exact_shrink_verify_vanish_aborts_under_error_strictness() {
 #[test]
 fn a_divergent_shrink_verify_vanish_aborts_under_error_strictness() {
     with_engine(
-        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() || rint(ds, 0, 100).is_err() {
@@ -3419,7 +3415,7 @@ fn a_divergent_shrink_verify_vanish_aborts_under_error_strictness() {
 fn a_first_check_structural_miss_aborts_under_error_strictness() {
     let bug = "bug";
     with_engine(
-        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
         None,
         |ds| {
             if rint(ds, 0, 100).is_err() {
@@ -3447,7 +3443,7 @@ fn a_first_check_structural_miss_aborts_under_error_strictness() {
 #[test]
 fn a_first_check_outcome_miss_aborts_under_error_strictness() {
     with_engine(
-        plain_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
         None,
         |ds| {
             if rbool(ds).is_err() {
@@ -6551,5 +6547,504 @@ fn shrink_drain_stops_at_secondary_entries_above_the_incumbent() {
     assert!(
         db.fetch(&secondary).contains(&above),
         "the drain stops before entries shortlex above the incumbent"
+    );
+}
+
+#[test]
+fn a_flip_during_a_successful_final_replay_keeps_the_failure() {
+    let bug = "bug";
+    let executions = Rc::new(Cell::new(0u32));
+    let execs = executions.clone();
+    with_engine(
+        quiet_settings(),
+        None,
+        move |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            execs.set(execs.get() + 1);
+            if v == 3 && execs.get() > 1 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            let ntc =
+                NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(3))], None, None);
+            let (run, mismatch) = ctx.test_function(ntc).await.unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert!(mismatch.is_none());
+            ctx.record_run(
+                &interesting_at(&origin, vec![int_node(3)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(!ctx.nd_handling());
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap();
+            assert!(
+                ctx.nd_handling(),
+                "the verdict flip inside the successful replay entered nd handling"
+            );
+            assert!(
+                !ctx.nd_origins.needs_confirmation(&origin),
+                "the reproduced origin re-entered the queue and confirmed"
+            );
+            assert!(ctx.interesting.contains_key(&origin));
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert!(report.failures[0].reproduce_blob.is_some());
+        },
+    );
+}
+
+#[test]
+fn a_dry_pooled_review_backtracks_over_history_at_the_final_replay() {
+    let bug = "bug";
+    with_engine(
+        quiet_settings(),
+        None,
+        |ds| {
+            let Ok(a) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if a != 77 {
+                return TestCaseResult::Valid;
+            }
+            let Ok(b) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if b == 77 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            ctx.record_run(
+                &interesting_at(&origin, vec![int_node(77), int_node(77)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.record_run(
+                &interesting_at(&origin, vec![int_node(3)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.nd_flip();
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, true)
+                .await
+                .unwrap();
+            assert!(
+                !ctx.nd_origins.needs_confirmation(&origin),
+                "the dry review backtracked over history and confirmed"
+            );
+            assert_eq!(
+                ctx.interesting.get(&origin).unwrap(),
+                &vec![int_node(77), int_node(77)],
+                "the restored incumbent displaced the fluke"
+            );
+        },
+    );
+}
+
+/// The dry pooled review's backtrack finds nothing either: the history
+/// timeline (v = 999_999, distinguishable from the incumbent and from any
+/// plausible fresh draw) replays without failing, so the backtrack exhausts
+/// and the origin is rejected into the caveat-only report with the batch's
+/// and the backtrack's evidence combined.
+#[test]
+fn an_exhausted_backtrack_after_a_dry_pooled_review_rejects_the_origin() {
+    let saw_history_value = Rc::new(Cell::new(false));
+    let saw = saw_history_value.clone();
+    with_engine(
+        quiet_settings(),
+        None,
+        move |ds| match rint(ds, 0, 1_000_000) {
+            Ok(v) => {
+                if v == 999_999 {
+                    saw.set(true);
+                }
+                TestCaseResult::Valid
+            }
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            let wide_node = |v: i128| {
+                ChoiceNode::integer(
+                    crate::native::core::choices::IntegerChoice {
+                        min_value: BigInt::from(0),
+                        max_value: BigInt::from(1_000_000),
+                        shrink_towards: BigInt::from(0),
+                    },
+                    BigInt::from(v),
+                    false,
+                )
+            };
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![wide_node(999_999)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.record_run(
+                &interesting_at(origin, vec![wide_node(3)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.nd_flip();
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, true)
+                .await
+                .unwrap();
+            assert!(
+                ctx.interesting.get(origin).is_none(),
+                "an origin nothing reproduces is rejected into the caveat-only report"
+            );
+            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            assert!(
+                caveat.starts_with("unconfirmed failure: failed 0 of"),
+                "unexpected caveat: {caveat}"
+            );
+        },
+    );
+    assert!(
+        saw_history_value.get(),
+        "the dry pooled review must backtrack over the recorded history"
+    );
+}
+
+#[test]
+fn a_seeded_bar_quota_with_no_reproducing_replay_rejects_at_the_cap() {
+    with_engine(
+        quiet_settings(),
+        None,
+        |ds| match rint(ds, 0, 100) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            let mut seed = nd::Evidence::default();
+            for _ in 0..nd::CONFIRM_MIN_FAILS {
+                seed.record(true, 1.0);
+            }
+            ctx.nd_origins.seed_evidence(origin, seed);
+            ctx.nd_flip();
+            let batch = ctx
+                .nd_evidence_batch(origin, &[ChoiceValue::Integer(BigInt::from(3))])
+                .await
+                .unwrap();
+            assert!(
+                !batch.bar_accepted,
+                "an accept needs an in-batch reproduction"
+            );
+            assert!(batch.witness.is_none());
+            assert_eq!(batch.evidence.runs(), nd::CONFIRM_CAP);
+        },
+    );
+}
+
+#[test]
+fn a_seeded_bar_quota_accepts_once_a_replay_reproduces() {
+    let bug = "bug";
+    let executions = Rc::new(Cell::new(0u32));
+    let execs = executions.clone();
+    with_engine(
+        quiet_settings(),
+        None,
+        move |ds| {
+            let Ok(_) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            execs.set(execs.get() + 1);
+            if execs.get() >= 3 {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            let mut seed = nd::Evidence::default();
+            for _ in 0..nd::CONFIRM_MIN_FAILS {
+                seed.record(true, 1.0);
+            }
+            ctx.nd_origins.seed_evidence(&origin, seed);
+            ctx.nd_flip();
+            let batch = ctx
+                .nd_evidence_batch(&origin, &[ChoiceValue::Integer(BigInt::from(3))])
+                .await
+                .unwrap();
+            assert!(batch.bar_accepted);
+            assert!(batch.witness.is_some());
+        },
+    );
+}
+
+#[test]
+fn error_strictness_aborts_on_a_shrink_probe_verdict_flip() {
+    let executions = Rc::new(Cell::new(0u32));
+    let execs = executions.clone();
+    with_engine(
+        quiet_settings().nondeterminism_strictness(NondeterminismStrictness::Error),
+        None,
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            execs.set(execs.get() + 1);
+            if execs.get() > 1 {
+                boom("flake")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            ctx.collect_statistics = true;
+            let first = ctx
+                .cached_test_function(&[ChoiceValue::Boolean(true)], None, 0)
+                .await
+                .unwrap();
+            assert_eq!(first.status, Status::Valid);
+            ctx.collect_statistics = false;
+            let err = match ctx
+                .cached_test_function(&[ChoiceValue::Boolean(true)], None, 0)
+                .await
+            {
+                Err(err) => err,
+                Ok(_) => panic!("expected the probe verdict flip to abort"),
+            };
+            assert!(matches!(err, crate::backend::RunError::Flaky(_)));
+        },
+    );
+}
+
+#[test]
+fn error_strictness_aborts_on_kind_drift_in_the_pre_shrink_drain() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[
+            ChoiceValue::Integer(BigInt::from(9)),
+            ChoiceValue::Integer(BigInt::from(3)),
+        ]),
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+    );
+    let executions = Rc::new(Cell::new(0u32));
+    let execs = executions.clone();
+    let mut run_case = move |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let range_max = if execs.get() == 2 { 50 } else { 100 };
+        let result = match rint(&*ds, 0, range_max) {
+            Ok(9) => boom("B"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .database(Some(path))
+        .phases([Phase::Reuse, Phase::Shrink])
+        .verbosity(Verbosity::Quiet)
+        .nondeterminism_strictness(NondeterminismStrictness::Error);
+    let err = run_main_sync(
+        &settings,
+        Some("k"),
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap_err();
+    let crate::backend::RunError::NonDeterministic(msg) = err else {
+        panic!("expected the drain's kind drift to abort, got {err:?}");
+    };
+    assert!(msg.contains("choice kind changed"));
+}
+
+#[test]
+fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let misaligned = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(95)),
+        ChoiceValue::Integer(BigInt::from(3)),
+    ]);
+    db.save(b"k", &run_start);
+    db.save(b"k", &misaligned);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = match rint(&*ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .database(Some(path))
+        .phases([Phase::Reuse, Phase::Shrink])
+        .verbosity(Verbosity::Quiet);
+    let result = run_main_sync(
+        &settings,
+        Some("k"),
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).contains(&run_start),
+        "the superseded run-start entry demotes instead of deleting"
+    );
+}
+
+#[test]
+fn reconciliation_demotes_a_reproduced_run_start_entry_after_a_flip() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    db.save(b"k", &run_start);
+    let junk_v2 = crate::native::blob::encode_nd_state(&crate::native::blob::NdReproState {
+        timelines: vec![vec![ChoiceValue::Integer(BigInt::from(7))]],
+        entropy: 0,
+        extension: 4,
+    });
+    db.save(b"k", &junk_v2);
+    let executions = Rc::new(Cell::new(0u32));
+    let execs = executions.clone();
+    let mut run_case = move |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = match rint(&*ds, 0, 100) {
+            Ok(90) if execs.get() == 1 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .database(Some(path))
+        .phases([Phase::Reuse, Phase::Shrink])
+        .verbosity(Verbosity::Quiet);
+    let result = run_main_sync(
+        &settings,
+        Some("k"),
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let primary = db.fetch(b"k");
+    assert_eq!(primary.len(), 1);
+    assert!(crate::native::blob::decode_nd_state(&primary[0]).is_some());
+    assert!(
+        db.fetch(&crate::native::database::sub_key(b"k", b"secondary"))
+            .contains(&run_start),
+        "the reproduced run-start entry demotes instead of deleting"
+    );
+}
+
+#[test]
+fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let settings = Settings::new()
+        .database(Some(path))
+        .verbosity(Verbosity::Quiet);
+    let exchange = CaseExchange::new();
+    let fut = async {
+        let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
+        ctx.nd_flip();
+        ctx.record_nd_incumbent("Panic: a", &[int_node(90)]);
+        ctx.record_nd_incumbent("Panic: b", &[int_node(90)]);
+        assert_eq!(db.fetch(b"k").len(), 1);
+        ctx.record_nd_incumbent("Panic: a", &[int_node(50)]);
+        assert_eq!(
+            db.fetch(b"k").len(),
+            2,
+            "the shared entry survives the other origin's supersession"
+        );
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
+        ds.mark_complete(&TestCaseResult::Valid);
+    });
+}
+
+#[test]
+fn the_caveat_only_fallback_honors_report_multiple_failures() {
+    with_engine(
+        quiet_settings().report_multiple_failures(false),
+        None,
+        |_ds| TestCaseResult::Valid,
+        async |ctx| {
+            ctx.nd_flip();
+            ctx.nd_origins.observe("Panic: a");
+            ctx.nd_origins.observe("Panic: b");
+            let report = ctx.build_report();
+            assert_eq!(report.failures.len(), 1);
+            assert_eq!(report.failures[0].origin, "Panic: a");
+        },
+    );
+}
+
+#[test]
+fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
+    with_engine(
+        quiet_settings(),
+        None,
+        |ds| match rint(ds, 0, 100) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            ctx.nd_flip();
+            let output = ctx.settings.output.clone();
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: bug".to_string(),
+                verbosity: Verbosity::Quiet,
+                output,
+                gauntlet: true,
+                ledger: HashMap::default(),
+                anchor: 0.5,
+                sweep: SweepMode::Fast,
+                raised: crate::native::HashSet::default(),
+                pending_accept: None,
+            };
+            let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]);
+            let mut evidence = nd::Evidence::default();
+            for _ in 0..nd::ANCHOR_SEED_RUNS {
+                evidence.record(true, 1.0);
+            }
+            probe.ledger.insert(key, evidence);
+            let nodes = vec![int_node(9)];
+            let (matched, actual, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(
+                matched,
+                "a conclusive ledger accept survives one dry replay"
+            );
+            assert!(probe.pending_accept.is_some());
+            assert_eq!(actual, nodes);
+        },
     );
 }

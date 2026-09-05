@@ -91,8 +91,10 @@ const DUPLICATE_STOP: u64 = RANDOM_GENERATION_BATCH;
 const FIRST_CHECK_REPLAYS: u64 = 4;
 
 /// Scan-replay cap for one backtrack (gate G25): the geometric profile
-/// plus binary refinement over a history of hundreds of entries fits in
-/// ~2·log2(m) replays, so the cap is headroom, not the budget.
+/// plus binary refinement fit in ~2·log2(m) replays over the accept
+/// segment, but the first pass also probes every raw sighting once, so a
+/// raw-heavy history spends the cap on raws — the cap is the budget there,
+/// not headroom.
 const BACKTRACK_SCAN_REPLAYS: u64 = nd::CONFIRM_CAP;
 
 /// Bar attempts per backtrack (gate G25): a probed entry reaches the bar
@@ -117,7 +119,8 @@ struct NdReplayOnce {
 struct NdBatch {
     /// Whether the discovery bar's arithmetic accepted. Decides admission
     /// for unconfirmed origins; for trusted origins the bar is only the
-    /// batch's stopping rule and any failure is evidence enough.
+    /// batch's stopping rule and any failure is evidence enough. True only
+    /// with `witness` set: an accept needs an in-batch reproduction.
     bar_accepted: bool,
     evidence: nd::Evidence,
     witness: Option<RunResult>,
@@ -176,13 +179,15 @@ const SECONDARY_CORPUS_CAP: usize = 50;
 
 /// Run the exploration half of a test run — database replay, generation, and
 /// shrinking — and return a [`TestRunResult`] with one [`Failure`] per
-/// distinct bug, each carrying the origin the engine grouped on and (unless
-/// the run turned nondeterministic) the base64 reproduce blob encoding the
-/// minimal counterexample's choices. `Err` means the run itself failed
+/// distinct bug, each carrying the origin the engine grouped on and the
+/// base64 reproduce blob for the minimal counterexample: its choices, or its
+/// replay state under nondeterministic handling. Only caveat-only
+/// unconfirmed failures carry no blob. `Err` means the run itself failed
 /// (health check, nondeterminism mismatch) before reaching a verdict.
 ///
-/// The caller replays each blob (via `hegel_test_case_from_blob`) to produce
-/// the final report. Every test case this runs is non-final.
+/// The client builds the final report from the stamped final-replay captures;
+/// the blob is for later reproduction via `hegel_run_start_blob`. Every test
+/// case this runs is non-final.
 pub(crate) async fn explore(
     settings: &Settings,
     database_key: Option<&str>,
@@ -223,7 +228,9 @@ pub(crate) async fn run_single_case(
 /// Replay a reproduce blob (used by `hegel_run_start_blob`) and return the
 /// reproducing failure, if any.
 ///
-/// A deterministic blob replays its choices once. A nondeterministic blob
+/// A deterministic blob replays its choices up to [`nd::V1_BLOB_REPLAYS`]
+/// times, each attempt with the standard continuation budget, stopping at
+/// the first failure. A nondeterministic blob
 /// replays its stored timelines through the same replay-until-failure
 /// sequence as database reuse — per-timeline first-fit, then positional
 /// splices — with no fresh-generation tier: a fresh case could fail for a
@@ -694,7 +701,10 @@ impl<'a> Engine<'a> {
                         }
                         if let Some(stored_choices) = deserialize_choices(&raw) {
                             let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
-                            self.test_function(ntc).await?;
+                            let (_, mismatch) = self.test_function(ntc).await?;
+                            if let Some(err) = mismatch {
+                                return Err(err);
+                            }
                             if let Some(db) = self.db() {
                                 db.delete(&secondary_key, &raw);
                             }
@@ -794,18 +804,20 @@ impl<'a> Engine<'a> {
                     .collect()
             };
             let primary_now = db.fetch(key_bytes);
+            for new_bytes in &new_entries {
+                db.save(key_bytes, new_bytes);
+            }
             for old in primary_now {
                 if new_entries.contains(&old) {
                     continue;
                 }
-                if self.persister.saved_this_run.contains(&old) {
+                if self.persister.saved_this_run.contains(&old)
+                    && !self.persister.preexisting.contains(&old)
+                {
                     db.delete(key_bytes, &old);
                 } else {
                     db.move_value(key_bytes, &secondary_key, &old);
                 }
-            }
-            for new_bytes in &new_entries {
-                db.save(key_bytes, new_bytes);
             }
             let mut secondary_now = db.fetch(&secondary_key);
             if secondary_now.len() > SECONDARY_CORPUS_CAP {
@@ -876,8 +888,11 @@ impl<'a> Engine<'a> {
             });
         }
         if failures.is_empty() && nd_blobs {
-            let unconfirmed: Vec<String> =
+            let mut unconfirmed: Vec<String> =
                 self.nd_origins.unconfirmed().map(str::to_string).collect();
+            if !self.settings.report_multiple_failures {
+                unconfirmed.truncate(1);
+            }
             for origin in unconfirmed {
                 failures.push(Failure {
                     caveat: self.nd_origins.caveat(&origin),
@@ -1207,9 +1222,13 @@ fn pooled_timelines(
 ///
 /// A superseded same-run save is deleted, never demoted: it never ended a
 /// run as anyone's best example, so it earned no cross-run staleness
-/// strike. The run-start primary entry is left in place, and end-of-run
-/// reconciliation demotes it (decision 11's strike one), using
-/// `saved_this_run` to tell it from same-run leftovers.
+/// strike. A run-start primary entry (in `preexisting`) *did* end a run as
+/// someone's best example, so superseding it demotes it to the secondary
+/// key (decision 11's strike one) even when a reuse replay re-saved its
+/// bytes this run; end-of-run reconciliation demotes the rest, using
+/// `saved_this_run` to tell run-start entries from same-run leftovers.
+/// Bytes another origin's last save still points at are never deleted:
+/// entries are content-addressed, so two origins can share one file.
 struct Persister<'a> {
     db: Option<Box<dyn TestCaseDatabase>>,
     database_key: Option<&'a str>,
@@ -1221,15 +1240,23 @@ struct Persister<'a> {
     /// Every byte string saved this run, so end-of-run reconciliation can
     /// delete superseded same-run leftovers instead of demoting them.
     saved_this_run: crate::native::HashSet<Vec<u8>>,
+    /// The primary key's entries at run start: superseding one demotes it
+    /// instead of deleting it, whether mid-run or at reconciliation.
+    preexisting: crate::native::HashSet<Vec<u8>>,
 }
 
 impl<'a> Persister<'a> {
     fn new(db: Option<Box<dyn TestCaseDatabase>>, database_key: Option<&'a str>) -> Self {
+        let preexisting = match (db.as_deref(), database_key) {
+            (Some(db), Some(key)) => db.fetch(key.as_bytes()).into_iter().collect(),
+            _ => crate::native::HashSet::default(),
+        };
         Persister {
             db,
             database_key,
             last_saved: HashMap::default(),
             saved_this_run: crate::native::HashSet::default(),
+            preexisting,
         }
     }
 
@@ -1301,7 +1328,19 @@ impl<'a> Persister<'a> {
         db.save(key_bytes, &new_bytes);
         if let Some((_, prev_bytes)) = self.last_saved.get(origin) {
             if *prev_bytes != new_bytes {
-                db.delete(key_bytes, prev_bytes);
+                let shared = self
+                    .last_saved
+                    .iter()
+                    .any(|(o, (_, bytes))| o != origin && bytes == prev_bytes);
+                if !shared {
+                    if self.preexisting.contains(prev_bytes) {
+                        let secondary_key =
+                            crate::native::database::sub_key(key_bytes, b"secondary");
+                        db.move_value(key_bytes, &secondary_key, prev_bytes);
+                    } else {
+                        db.delete(key_bytes, prev_bytes);
+                    }
+                }
             }
         }
         self.saved_this_run.insert(new_bytes.clone());
@@ -1428,6 +1467,13 @@ pub(crate) struct Engine<'a> {
     /// probes are measurement runs), and the case that itself flips the
     /// run (its stamp decision predates the flip).
     capture_discoveries: bool,
+    /// Seam-dump site for a cache-mismatch flip detected inside the
+    /// execution this is set around (the shrink verify and the
+    /// deterministic final replay), so experiment 011's flip-site table
+    /// attributes an aligned outcome-only miss to its calling site instead
+    /// of the generic cache channel.
+    #[cfg(feature = "__bench")]
+    flip_site_hint: Option<nd::seam_dump::FlipSite>,
 }
 
 impl<'a> Engine<'a> {
@@ -1472,6 +1518,8 @@ impl<'a> Engine<'a> {
             reuse_replays: false,
             capture_replays: false,
             capture_discoveries: false,
+            #[cfg(feature = "__bench")]
+            flip_site_hint: None,
         })
     }
 
@@ -1655,7 +1703,16 @@ impl<'a> Engine<'a> {
             None
         } else {
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-            let (verify, mismatch) = self.test_function(verify_ntc).await?;
+            #[cfg(feature = "__bench")]
+            {
+                self.flip_site_hint = Some(nd::seam_dump::FlipSite::ShrinkVerify);
+            }
+            let outcome = self.test_function(verify_ntc).await;
+            #[cfg(feature = "__bench")]
+            {
+                self.flip_site_hint = None;
+            }
+            let (verify, mismatch) = outcome?;
             if let Some(err) = mismatch {
                 return Err(err);
             }
@@ -1678,10 +1735,8 @@ impl<'a> Engine<'a> {
             probe_anchor = anchor;
             witness
         } else if !self.nd_origins.needs_confirmation(&origin) {
-            // Trusted: already admitted (decision 24), so any
-            // failure in the batch promotes with the batch's LCB
-            // as anchor — the bar arithmetic is only the stopping
-            // rule.
+            // For a trusted origin the bar arithmetic is only the batch's
+            // stopping rule: admission happened at reuse (decision 24).
             let batch = self.nd_evidence_batch(&origin, &choices).await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if let Some(witness) = batch.witness {
@@ -1802,9 +1857,12 @@ impl<'a> Engine<'a> {
     /// origin with history then backtracks (gate G25) — a restored
     /// incumbent re-shrinks under the gauntlet on the shrink deadline's
     /// remaining budget before its pooled replay, an exhausted backtrack
-    /// rejects into the caveat-only report. Origins exactly replayed
-    /// before a later origin's flip re-enter the queue for the pooled
-    /// review: their single replay predates what the run now knows.
+    /// rejects into the caveat-only report. The same backtrack runs when a
+    /// never-confirmed origin's pooled review itself comes up dry with
+    /// history on record. Origins exactly replayed before a flip —
+    /// a later origin's, or one detected inside their own successful
+    /// replay — re-enter the queue for the pooled review: their single
+    /// replay predates what the run now knows.
     async fn final_replay(
         &mut self,
         verbosity: Verbosity,
@@ -1824,59 +1882,70 @@ impl<'a> Engine<'a> {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             if !self.nd_handling() {
                 self.capture_replays = true;
+                #[cfg(feature = "__bench")]
+                {
+                    self.flip_site_hint = Some(nd::seam_dump::FlipSite::FinalReplay);
+                }
                 let ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
-                let (run, mismatch) = self.measure(ntc).await?;
+                let outcome = self.measure(ntc).await;
                 self.capture_replays = false;
+                #[cfg(feature = "__bench")]
+                {
+                    self.flip_site_hint = None;
+                }
+                let (run, mismatch) = outcome?;
                 if let Some(err) = mismatch {
                     return Err(err);
                 }
-                if run.status == Status::Interesting
-                    && run.origin.as_deref() == Some(origin.as_str())
-                {
+                let reproduced = run.status == Status::Interesting
+                    && run.origin.as_deref() == Some(origin.as_str());
+                if reproduced && !self.nd_handling() {
                     replayed.push(origin);
                     continue;
                 }
-                if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
-                    return Err(RunError::Flaky(flaky_diagnostic()));
-                }
-                #[cfg(feature = "__bench")]
-                self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
-                self.nd_flip();
                 pending.append(&mut replayed);
-                if self.nd_origins.needs_confirmation(&origin)
-                    && self
-                        .history
-                        .get(&origin)
-                        .is_some_and(|h| !h.entries.is_empty())
-                {
-                    match self.backtrack(&origin).await? {
-                        Backtrack::Restored { nodes } => {
-                            self.interesting.insert(origin.clone(), nodes.clone());
-                            if reshrink {
-                                let mut shrunk = crate::native::HashSet::default();
-                                self.shrink_origin(
-                                    origin.clone(),
-                                    nodes,
-                                    verbosity,
-                                    output,
-                                    shrink_deadline,
-                                    &mut shrunk,
-                                )
-                                .await?;
+                if !reproduced {
+                    if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
+                        return Err(RunError::Flaky(flaky_diagnostic()));
+                    }
+                    #[cfg(feature = "__bench")]
+                    self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
+                    self.nd_flip();
+                    if self.nd_origins.needs_confirmation(&origin)
+                        && self
+                            .history
+                            .get(&origin)
+                            .is_some_and(|h| !h.entries.is_empty())
+                    {
+                        match self.backtrack(&origin).await? {
+                            Backtrack::Restored { nodes } => {
+                                self.interesting.insert(origin.clone(), nodes.clone());
+                                if reshrink {
+                                    let mut shrunk = crate::native::HashSet::default();
+                                    self.shrink_origin(
+                                        origin.clone(),
+                                        nodes,
+                                        verbosity,
+                                        output,
+                                        shrink_deadline,
+                                        &mut shrunk,
+                                    )
+                                    .await?;
+                                }
                             }
-                        }
-                        Backtrack::Exhausted { evidence } => {
-                            self.nd_origins.observe(&origin);
-                            if self.nd_origins.reject(&origin, evidence) {
-                                #[cfg(feature = "__bench")]
-                                nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                                    origin: origin.clone(),
-                                    values: choices,
-                                    at_final_replay: true,
-                                });
-                                self.interesting.remove(&origin);
+                            Backtrack::Exhausted { evidence } => {
+                                self.nd_origins.observe(&origin);
+                                if self.nd_origins.reject(&origin, evidence) {
+                                    #[cfg(feature = "__bench")]
+                                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                                        origin: origin.clone(),
+                                        values: choices,
+                                        at_final_replay: true,
+                                    });
+                                    self.interesting.remove(&origin);
+                                }
+                                continue;
                             }
-                            continue;
                         }
                     }
                 }
@@ -1912,7 +1981,36 @@ impl<'a> Engine<'a> {
                     self.history.remove(&origin);
                 } else {
                     self.nd_origins.observe(&origin);
-                    if self.nd_origins.reject(&origin, batch) {
+                    let mut reject_evidence = batch;
+                    if self
+                        .history
+                        .get(&origin)
+                        .is_some_and(|h| !h.entries.is_empty())
+                    {
+                        match self.backtrack(&origin).await? {
+                            Backtrack::Restored { nodes: restored } => {
+                                self.interesting.insert(origin.clone(), restored.clone());
+                                if reshrink {
+                                    let mut shrunk = crate::native::HashSet::default();
+                                    self.shrink_origin(
+                                        origin.clone(),
+                                        restored,
+                                        verbosity,
+                                        output,
+                                        shrink_deadline,
+                                        &mut shrunk,
+                                    )
+                                    .await?;
+                                }
+                                pending.push(origin);
+                                continue;
+                            }
+                            Backtrack::Exhausted { evidence } => {
+                                reject_evidence = (batch.0 + evidence.0, batch.1 + evidence.1);
+                            }
+                        }
+                    }
+                    if self.nd_origins.reject(&origin, reject_evidence) {
                         #[cfg(feature = "__bench")]
                         nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
                             origin: origin.clone(),
@@ -1937,6 +2035,11 @@ impl<'a> Engine<'a> {
     /// and an evidence-gathering batch for trusted origins, where the bar
     /// arithmetic is only the stopping rule. The triggering run is
     /// selection, not evidence — only these fresh replays count. An accept
+    /// requires a reproducing replay in *this* batch as its witness: a
+    /// first-check seed can carry the bar's whole failure quota, and a
+    /// seeded quota with no in-batch reproduction rejects at
+    /// [`nd::CONFIRM_CAP`] physical runs instead of confirming an origin
+    /// the batch never saw fail. An accept
     /// extends to [`nd::ANCHOR_SEED_RUNS`] physical runs (decision 54), so
     /// the anchor a caller seeds from the batch is not biased by the bar's
     /// stopping rule; a reject stops at the bar.
@@ -1962,7 +2065,14 @@ impl<'a> Engine<'a> {
                 }
             }
             match nd::discovery_bar(&evidence) {
-                nd::BarVerdict::Accept => break true,
+                nd::BarVerdict::Accept => {
+                    if witness.is_some() {
+                        break true;
+                    }
+                    if evidence.runs() >= nd::CONFIRM_CAP {
+                        break false;
+                    }
+                }
                 nd::BarVerdict::Reject => break false,
                 nd::BarVerdict::Continue => {}
             }
@@ -2266,8 +2376,9 @@ impl<'a> Engine<'a> {
 
     /// The universal first-interesting determinism check (seam plan step
     /// 2, extending decision 21's principle to every run): before anything
-    /// else consumes a generation-discovered origin, its discovering
-    /// sighting replays [`FIRST_CHECK_REPLAYS`] times exactly, stopping at
+    /// else consumes a generation-discovered origin, its incumbent sighting
+    /// at sweep time (in-batch displacement may already have replaced the
+    /// discovery) replays [`FIRST_CHECK_REPLAYS`] times exactly, stopping at
     /// the first miss. A replay reproduces when it concludes interesting
     /// at the same origin with the same realized values. Any miss flips
     /// the run — under `error` strictness a structural divergence aborts
@@ -2395,6 +2506,12 @@ impl<'a> Engine<'a> {
                 self.history.remove(&origin);
                 self.record_nd_incumbent(&origin, &nodes);
             } else if self.nd_origins.reject(&origin, evidence) {
+                #[cfg(feature = "__bench")]
+                nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                    origin: origin.clone(),
+                    values: nodes.iter().map(|n| n.value()).collect(),
+                    at_final_replay: false,
+                });
                 self.interesting.remove(&origin);
             }
         }
@@ -2493,11 +2610,11 @@ impl<'a> Engine<'a> {
             && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
         {
             #[cfg(feature = "__bench")]
-            self.seam_flip(if self.check_window {
+            self.seam_flip(self.flip_site_hint.unwrap_or(if self.check_window {
                 nd::seam_dump::FlipSite::FirstCheck
             } else {
                 nd::seam_dump::FlipSite::CacheMismatch
-            });
+            }));
             self.nd_flip();
             mismatch = None;
         }
@@ -2706,7 +2823,10 @@ impl<'a> Engine<'a> {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
         };
-        let (run, _mismatch) = self.test_function(ntc).await?;
+        let (run, mismatch) = self.test_function(ntc).await?;
+        if let Some(err) = mismatch {
+            return Err(err);
+        }
         Ok(run)
     }
 }
@@ -2726,7 +2846,9 @@ struct EngineShrinkProbe<'e, 'a> {
     /// evidence clears the anchor-derived threshold or is proven below it
     /// ([`nd::gauntlet`]). The ledger persists for the whole shrink of one
     /// origin, so pass repetitions add power to retried rejects instead of
-    /// starting over.
+    /// starting over — and a fast-sweep miss cannot reject a realized
+    /// timeline whose ledger already holds a conclusive accept (a nested
+    /// clone shrink's final splice re-proposes exactly such timelines).
     gauntlet: bool,
     /// Cumulative evidence per candidate, keyed by serialized realized
     /// choices — a candidate whose replay punned into another realization
@@ -2823,7 +2945,13 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             let key = serialize_choices(&realized);
             self.record_evidence(&key, matched, 1.0);
             if !matched && self.sweep == SweepMode::Fast {
-                return Ok((false, run.nodes, Spans::from(run.spans)));
+                let evidence = *self.ledger.get(&key).unwrap();
+                if !matches!(
+                    nd::gauntlet(&evidence, self.anchor),
+                    nd::GauntletVerdict::Accept
+                ) {
+                    return Ok((false, run.nodes, Spans::from(run.spans)));
+                }
             }
             let mut accepted = false;
             loop {
@@ -2837,9 +2965,8 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         nd::GauntletVerdict::Continue => {}
                     }
                 }
-                // The ledger is topped up to ANCHOR_SEED_RUNS before
-                // the accept returns, so the anchor moves on a bound the
-                // stopping rule didn't bias (decision 54).
+                // The anchor must move on a bound the stopping rule didn't
+                // bias (decision 54).
                 if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
                     self.pending_accept = Some(PendingAccept {
                         key,

@@ -720,6 +720,107 @@ impl crate::native::shrinker::ShrinkProbe for AdoptionRecorder {
     }
 }
 
+/// Interesting only in a confirmation sweep, and only for the value 40 —
+/// the last candidate the wiring test's pass proposes.
+struct ConfirmOnlyWinner {
+    mode: SweepMode,
+}
+
+impl ShrinkProbe for ConfirmOnlyWinner {
+    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
+        let previous = self.mode;
+        self.mode = mode;
+        Some(previous)
+    }
+
+    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s> {
+        let outcome = match req {
+            ShrinkRun::Full(nodes) => (
+                self.mode == SweepMode::Confirm
+                    && matches!(&nodes[0].value(),
+                        ChoiceValue::Integer(v) if i128::try_from(v).unwrap() == 40),
+                nodes.to_vec(),
+                Spans::new(),
+            ),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        };
+        Box::pin(core::future::ready(Ok(outcome)))
+    }
+}
+
+/// Pins the scheduler's sweep bookkeeping around the confirmation
+/// iteration: with `improvements` set and a tiny `max_stall`, the fast
+/// iteration latches its stall guard after three quiet candidates and
+/// drops the rest, so the pass's only winning candidate — its last
+/// proposal, interesting only under Confirm — is reachable solely through
+/// a confirmation iteration that runs with the guard off.
+#[test]
+fn the_confirmation_sweep_reaches_candidates_the_latched_stall_guard_dropped() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(ConfirmOnlyWinner {
+            mode: SweepMode::Fast,
+        }),
+        vec![int_node(50)],
+        Spans::new(),
+    );
+    shrinker.improvements = 1;
+    shrinker.max_stall = 3;
+    let mut passes = vec![ShrinkPass::new(
+        "descend_to_forty",
+        Box::new(|sh| {
+            Box::pin(async move {
+                for v in (40..50).rev() {
+                    sh.consider(&[int_node(v)]).await?;
+                }
+                Ok(())
+            })
+        }),
+    )];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    let v = match &shrinker.current_nodes[0].value() {
+        ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        v, 40,
+        "the confirmation iteration must run with the stall guard off"
+    );
+}
+
+#[test]
+fn the_stall_guard_yields_to_the_confirmation_sweep() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| {
+            calls_clone.fetch_add(1, Ordering::Relaxed);
+            match run {
+                ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
+                ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+            }
+        }),
+        vec![int_node(5)],
+        Spans::new(),
+    );
+    shrinker.improvements = 1;
+    shrinker.max_stall = 0;
+    assert!(!drive_no_yield(shrinker.consider(&[int_node(0)])).unwrap());
+    drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).unwrap();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "a latched stall guard drops fast-sweep candidates without executing"
+    );
+    shrinker.sweep = SweepMode::Confirm;
+    drive_no_yield(shrinker.consider(&[int_node(0)])).unwrap();
+    drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).unwrap();
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        2,
+        "the confirmation sweep must execute candidates the stall guard would drop"
+    );
+}
+
 #[test]
 fn accept_improvement_notifies_the_probe() {
     let adopted = Arc::new(AtomicUsize::new(0));

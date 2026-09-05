@@ -126,8 +126,10 @@ impl<'a> Shrinker<'a> {
             let Some(previous) = self.test_fn.set_sweep_mode(SweepMode::Confirm) else {
                 return Ok(());
             };
+            self.sweep = SweepMode::Confirm;
             let confirmed = self.pass_iteration(passes).await;
             self.test_fn.set_sweep_mode(previous);
+            self.sweep = SweepMode::Fast;
             if !confirmed? {
                 return Ok(());
             }

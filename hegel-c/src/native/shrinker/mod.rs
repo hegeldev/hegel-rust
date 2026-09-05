@@ -270,6 +270,12 @@ pub struct Shrinker<'a> {
     /// Latched once `deadline` is first observed to have passed. The runner
     /// reads it after `shrink()` to emit the slow-shrink warning.
     pub timed_out: bool,
+    /// The scheduler's current sweep regime. During the confirmation sweep
+    /// (decision 18) the stall guard is off: its certificate — every
+    /// candidate driven to a bound verdict — holds only if every candidate
+    /// actually executes, and the wall-clock deadline stays the physical
+    /// backstop.
+    pub(super) sweep: SweepMode,
 }
 
 impl<'a> Shrinker<'a> {
@@ -297,6 +303,7 @@ impl<'a> Shrinker<'a> {
             debug: None,
             deadline: None,
             timed_out: false,
+            sweep: SweepMode::Fast,
         }
     }
 
@@ -370,7 +377,8 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkHalt::Stop);
         }
-        if self.improvements > 0
+        if self.sweep == SweepMode::Fast
+            && self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(false);
@@ -416,7 +424,8 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkHalt::Stop);
         }
-        if self.improvements > 0
+        if self.sweep == SweepMode::Fast
+            && self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(());
