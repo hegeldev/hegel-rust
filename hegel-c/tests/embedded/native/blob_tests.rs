@@ -204,6 +204,27 @@ fn nd_state_decode_rejects_malformed_bytes() {
 }
 
 #[test]
+fn nd_state_decode_rejects_trailing_bytes_after_the_last_timeline() {
+    let mut bytes = encode_nd_state(&sample_nd_state());
+    bytes.push(0);
+    assert!(decode_nd_state(&bytes).is_none());
+}
+
+#[test]
+fn nd_state_decode_rejects_a_timeline_body_with_trailing_bytes() {
+    let state = NdReproState {
+        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        entropy: 1,
+        extension: 0,
+    };
+    let mut bytes = encode_nd_state(&state);
+    let len = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
+    bytes[21..25].copy_from_slice(&(len + 1).to_le_bytes());
+    bytes.push(0);
+    assert!(decode_nd_state(&bytes).is_none());
+}
+
+#[test]
 fn nd_blob_decode_rejects_corrupt_payloads() {
     let blob = base64_encode(&[PREFIX_ND_RAW, 0xAB]);
     assert!(decode_blob(&blob).is_none());
@@ -211,13 +232,17 @@ fn nd_blob_decode_rejects_corrupt_payloads() {
     assert!(decode_blob(&blob).is_none());
 }
 
+fn hand_built_zlib_blob(prefix: u8, raw: &[u8]) -> String {
+    let mut payload = vec![prefix];
+    payload.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(raw, ZLIB_LEVEL));
+    base64_encode(&payload)
+}
+
 #[test]
 fn decode_blob_rejects_zlib_bomb_v1() {
-    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])];
-    assert!(serialize_choices(&choices).len() > MAX_DECOMPRESSED_LEN);
-    let blob = encode_failure(&choices);
-    let bytes = base64_decode(&blob).unwrap();
-    assert_eq!(bytes[0], PREFIX_ZLIB);
+    let raw = serialize_choices(&[ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]);
+    assert!(raw.len() > MAX_DECOMPRESSED_LEN);
+    let blob = hand_built_zlib_blob(PREFIX_ZLIB, &raw);
     assert!(decode_blob(&blob).is_none());
 }
 
@@ -228,11 +253,35 @@ fn decode_blob_rejects_zlib_bomb_nd() {
         entropy: 1,
         extension: 0,
     };
-    assert!(encode_nd_state(&state).len() > MAX_DECOMPRESSED_LEN);
+    let raw = encode_nd_state(&state);
+    assert!(raw.len() > MAX_DECOMPRESSED_LEN);
+    let blob = hand_built_zlib_blob(PREFIX_ND_ZLIB, &raw);
+    assert!(decode_blob(&blob).is_none());
+}
+
+#[test]
+fn over_bound_payload_takes_the_raw_prefix_and_round_trips() {
+    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])];
+    let blob = encode_failure(&choices);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_RAW);
+    assert_eq!(decode_failure(&blob).unwrap(), choices);
+}
+
+#[test]
+fn over_bound_nd_state_takes_the_raw_prefix_and_round_trips() {
+    let state = NdReproState {
+        timelines: vec![vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]],
+        entropy: 1,
+        extension: 0,
+    };
     let blob = encode_nd_failure(&state);
     let bytes = base64_decode(&blob).unwrap();
-    assert_eq!(bytes[0], PREFIX_ND_ZLIB);
-    assert!(decode_blob(&blob).is_none());
+    assert_eq!(bytes[0], PREFIX_ND_RAW);
+    let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
+        panic!("expected nd state");
+    };
+    assert_eq!(decoded.timelines, state.timelines);
 }
 
 #[test]

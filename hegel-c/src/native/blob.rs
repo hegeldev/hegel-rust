@@ -26,9 +26,12 @@
 //! [`encode_failure`] computes both and keeps whichever is shorter — for the
 //! tiny choice sequences a shrunk counterexample usually has, the zlib header
 //! overhead loses and the raw form wins (so most blobs carry prefix `0`); for
-//! large sequences the compressed form wins. The inner `serialize_choices`
-//! encoding (see [`crate::native::database`]) is Hegel's own, so it is only
-//! guaranteed to reproduce a failure within a specific version of Hegel.
+//! large sequences the compressed form wins, except past
+//! [`MAX_DECOMPRESSED_LEN`], where the raw form is kept so [`decode_blob`]'s
+//! inflation bound never rejects the encoder's own output. The inner
+//! `serialize_choices` encoding (see [`crate::native::database`]) is Hegel's
+//! own, so it is only guaranteed to reproduce a failure within a specific
+//! version of Hegel.
 //!
 //! [`decode_blob`] reverses every step and returns `None` on *any*
 //! malformation (bad base64, unknown prefix byte, corrupt zlib stream, or a
@@ -45,7 +48,7 @@
 
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
-use crate::native::database::{deserialize_choices, serialize_choices};
+use crate::native::database::{deserialize_choices, deserialize_choices_exact, serialize_choices};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -79,7 +82,8 @@ const ZLIB_LEVEL: u8 = 6;
 /// (64) timelines × [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192)
 /// choices × [`serialize_choices`]' ~17-byte per-choice sizing = 8.5 MiB.
 /// 16 MiB leaves comparable headroom for content-carrying choices (bytes and
-/// strings also serialize their payloads).
+/// strings also serialize their payloads). Encoders keep the raw form for
+/// payloads past this bound, so their output always decodes.
 const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
 
 /// Encode a choice sequence into a failure blob (see the module docs for the
@@ -89,7 +93,7 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> String {
     let raw = serialize_choices(choices);
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
-    let (prefix, body) = if compressed.len() < raw.len() {
+    let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
         (PREFIX_ZLIB, compressed)
     } else {
         (PREFIX_RAW, raw)
@@ -140,8 +144,9 @@ pub(crate) fn encode_nd_state(state: &NdReproState) -> Vec<u8> {
 }
 
 /// Decode [`encode_nd_state`] output, or `None` on any malformation —
-/// wrong magic or version, truncation, a zero or absurd timeline count, or
-/// a timeline [`deserialize_choices`] rejects.
+/// wrong magic or version, truncation, a zero or absurd timeline count, a
+/// timeline body that is rejected or not fully consumed, or trailing bytes
+/// after the last timeline.
 pub(crate) fn decode_nd_state(bytes: &[u8]) -> Option<NdReproState> {
     let rest = bytes.strip_prefix(&ND_STATE_MAGIC)?;
     let (&version, rest) = rest.split_first()?;
@@ -165,8 +170,11 @@ pub(crate) fn decode_nd_state(bytes: &[u8]) -> Option<NdReproState> {
             return None;
         }
         let (body, tail) = tail.split_at(len);
-        timelines.push(deserialize_choices(body)?);
+        timelines.push(deserialize_choices_exact(body)?);
         rest = tail;
+    }
+    if !rest.is_empty() {
+        return None;
     }
     Some(NdReproState {
         timelines,
@@ -181,7 +189,7 @@ pub(crate) fn encode_nd_failure(state: &NdReproState) -> String {
     let raw = encode_nd_state(state);
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
-    let (prefix, body) = if compressed.len() < raw.len() {
+    let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
         (PREFIX_ND_ZLIB, compressed)
     } else {
         (PREFIX_ND_RAW, raw)

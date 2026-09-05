@@ -345,6 +345,13 @@ pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     Some(choices)
 }
 
+/// Like [`deserialize_choices`], but also `None` unless the choice list
+/// consumes every byte of the slice.
+pub(crate) fn deserialize_choices_exact(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
+    let (choices, end) = deserialize_choice_list(bytes, 0, 0)?;
+    (end == bytes.len()).then_some(choices)
+}
+
 fn deserialize_choice_list(
     bytes: &[u8],
     start: usize,

@@ -111,6 +111,16 @@ fn round_trip_mixed_choices() {
 }
 
 #[test]
+fn deserialize_choices_exact_rejects_trailing_bytes() {
+    let choices = vec![ChoiceValue::Boolean(true)];
+    let mut bytes = serialize_choices(&choices);
+    assert_eq!(deserialize_choices_exact(&bytes), Some(choices.clone()));
+    bytes.push(0);
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+    assert!(deserialize_choices_exact(&bytes).is_none());
+}
+
+#[test]
 fn deserialize_legacy_per_width_integers_as_bigint() {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&10u32.to_le_bytes());
