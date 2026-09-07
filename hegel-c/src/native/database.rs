@@ -225,6 +225,18 @@ pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
     buf
 }
 
+/// Serialize the realized values of `nodes` with the same encoding (and so
+/// the same key semantics) as [`serialize_choices`].
+pub(crate) fn serialize_nodes(nodes: &[crate::native::core::ChoiceNode]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4 + nodes.len() * 17);
+    serialize_choice_list(
+        &mut buf,
+        nodes.len(),
+        nodes.iter().map(|n| n.data.value_ref()),
+    );
+    buf
+}
+
 fn serialize_choice_list<'a>(
     buf: &mut Vec<u8>,
     count: usize,
@@ -232,37 +244,43 @@ fn serialize_choice_list<'a>(
 ) {
     buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
-        match choice {
-            ChoiceValueRef::Integer(v) => {
-                buf.push(0);
-                serialize_any_integer(buf, v);
+        serialize_one_choice(buf, choice);
+    }
+}
+
+/// Serialize one value with its type tag — the per-position unit of the
+/// [`serialize_choices`] encoding, exposed for prefix-incremental hashing.
+pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>) {
+    match choice {
+        ChoiceValueRef::Integer(v) => {
+            buf.push(0);
+            serialize_any_integer(buf, v);
+        }
+        ChoiceValueRef::Boolean(v) => {
+            buf.push(1);
+            buf.push(v as u8);
+        }
+        ChoiceValueRef::Float(v) => {
+            buf.push(2);
+            buf.extend_from_slice(&v.to_bits().to_le_bytes());
+        }
+        ChoiceValueRef::Bytes(v) => {
+            buf.push(3);
+            let len = v.len() as u32;
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(v);
+        }
+        ChoiceValueRef::String(v) => {
+            buf.push(4);
+            let len = v.len() as u32;
+            buf.extend_from_slice(&len.to_le_bytes());
+            for &cp in v {
+                buf.extend_from_slice(&cp.to_le_bytes());
             }
-            ChoiceValueRef::Boolean(v) => {
-                buf.push(1);
-                buf.push(v as u8);
-            }
-            ChoiceValueRef::Float(v) => {
-                buf.push(2);
-                buf.extend_from_slice(&v.to_bits().to_le_bytes());
-            }
-            ChoiceValueRef::Bytes(v) => {
-                buf.push(3);
-                let len = v.len() as u32;
-                buf.extend_from_slice(&len.to_le_bytes());
-                buf.extend_from_slice(v);
-            }
-            ChoiceValueRef::String(v) => {
-                buf.push(4);
-                let len = v.len() as u32;
-                buf.extend_from_slice(&len.to_le_bytes());
-                for &cp in v {
-                    buf.extend_from_slice(&cp.to_le_bytes());
-                }
-            }
-            ChoiceValueRef::Clone(children) => {
-                buf.push(5);
-                serialize_choice_list(buf, children.len(), children.values());
-            }
+        }
+        ChoiceValueRef::Clone(children) => {
+            buf.push(5);
+            serialize_choice_list(buf, children.len(), children.values());
         }
     }
 }
@@ -412,6 +430,16 @@ fn deserialize_choice_list(
         }
     }
     Some((choices, pos))
+}
+
+/// Concatenate `database_key + b"." + sub` to derive a sub-corpus key.
+/// Mirrors `ConjectureRunner.sub_key`.
+pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(database_key.len() + 1 + sub.len());
+    out.extend_from_slice(database_key);
+    out.push(b'.');
+    out.extend_from_slice(sub);
+    out
 }
 
 #[cfg(test)]

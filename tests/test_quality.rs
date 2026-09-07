@@ -467,12 +467,17 @@ mod shrink_quality {
         }
     }
 
+    /// The exact condition `a + gap == b` at `gap = ±20` is satisfied by a
+    /// single pair in the 21×21 space. Random generation needs more than the
+    /// default 500 attempts to find it reliably.
     fn check_lowering_together(min_lo: i64, max_hi: i64, gap: i64) {
         let s = gs::tuples!(
             gs::integers::<i64>().min_value(min_lo).max_value(max_hi),
             gs::integers::<i64>().min_value(min_lo).max_value(max_hi)
         );
-        let (a, b) = minimal(s, move |(a, b): &(i64, i64)| a + gap == *b);
+        let (a, b) = Minimal::new(s, move |(a, b): &(i64, i64)| a + gap == *b)
+            .test_cases(5000)
+            .run();
         assert_eq!((a, b), (0, gap), "for gap={gap}");
     }
 

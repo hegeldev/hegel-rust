@@ -31,10 +31,7 @@ fn bool_node(value: bool) -> ChoiceNode {
 }
 
 fn clone_node(children: Vec<ChoiceNode>) -> ChoiceNode {
-    ChoiceNode::clone_stream(
-        Arc::new(RealizedStream::new(children, Vec::new(), Vec::new())),
-        false,
-    )
+    ChoiceNode::clone_stream(Arc::new(RealizedStream::new(children, Vec::new())), false)
 }
 
 fn int_value(node: &ChoiceNode) -> Option<i128> {

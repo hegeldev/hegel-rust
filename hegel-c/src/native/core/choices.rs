@@ -3,7 +3,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::state::{Span, SpanEvent};
+use super::state::Span;
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_error, hegel_internal_unwrap,
 };
@@ -721,14 +721,13 @@ pub enum ChoiceValue {
 
 /// The realized execution of one cloned stream: its child [`ChoiceNode`]s
 /// plus the span structure recorded alongside them. This is what the
-/// shrinker and data tree interrogate, and what a [`ChoiceData::Clone`]
+/// shrinker interrogates, and what a [`ChoiceData::Clone`]
 /// node carries — a node's clone payload is realized *by construction*, so
 /// consumers never have to re-prove it.
 #[derive(Debug)]
 pub struct RealizedStream {
     nodes: Vec<ChoiceNode>,
     spans: Vec<Span>,
-    span_events: Vec<(usize, SpanEvent)>,
     /// Cached [`flattened_len`] of the children, so sort-key comparison of
     /// deep trees costs one integer read per stream instead of a walk.
     flat_len: usize,
@@ -737,23 +736,18 @@ pub struct RealizedStream {
 impl RealizedStream {
     /// A realized stream from an execution: its nodes plus the span
     /// structure recorded alongside them.
-    pub fn new(
-        nodes: Vec<ChoiceNode>,
-        spans: Vec<Span>,
-        span_events: Vec<(usize, SpanEvent)>,
-    ) -> Self {
+    pub fn new(nodes: Vec<ChoiceNode>, spans: Vec<Span>) -> Self {
         let flat_len = flattened_len(&nodes);
         RealizedStream {
             nodes,
             spans,
-            span_events,
             flat_len,
         }
     }
 
     /// The empty stream: a clone that drew nothing.
     pub fn empty() -> Self {
-        Self::new(Vec::new(), Vec::new(), Vec::new())
+        Self::new(Vec::new(), Vec::new())
     }
 
     /// The realized child nodes, in order.
@@ -764,12 +758,6 @@ impl RealizedStream {
     /// The cloned stream's recorded spans.
     pub fn spans(&self) -> &[Span] {
         &self.spans
-    }
-
-    /// The cloned stream's span open/close events, tagged with the child
-    /// draw position at which each fired.
-    pub fn span_events(&self) -> &[(usize, SpanEvent)] {
-        &self.span_events
     }
 
     /// Number of direct children (top-level choices in the cloned stream).
@@ -805,7 +793,7 @@ enum CloneChildren {
 ///
 /// A record's *identity* — equality, hashing, and its contribution to sort
 /// keys — is the sequence of child choice values, recursively. The realized
-/// info (child kinds, forced flags, spans, span events) is carried when the
+/// info (child kinds, forced flags, spans) is carried when the
 /// record was produced by executing the stream (as a shared
 /// [`RealizedStream`]); it is never serialized and never part of equality,
 /// so a record round-tripped through storage compares equal to the realized
@@ -835,17 +823,13 @@ impl CloneRecord {
 
     /// A record from an executed stream: its realized nodes plus the span
     /// structure recorded alongside them.
-    pub fn from_run(
-        nodes: Vec<ChoiceNode>,
-        spans: Vec<Span>,
-        span_events: Vec<(usize, SpanEvent)>,
-    ) -> Self {
-        Self::from_stream(Arc::new(RealizedStream::new(nodes, spans, span_events)))
+    pub fn from_run(nodes: Vec<ChoiceNode>, spans: Vec<Span>) -> Self {
+        Self::from_stream(Arc::new(RealizedStream::new(nodes, spans)))
     }
 
     /// The empty record: a clone that drew nothing.
     pub fn empty() -> Self {
-        Self::from_run(Vec::new(), Vec::new(), Vec::new())
+        Self::from_run(Vec::new(), Vec::new())
     }
 
     /// Number of direct children (top-level choices in the cloned stream).
@@ -1104,56 +1088,6 @@ impl core::hash::Hash for CloneValues<'_> {
     }
 }
 
-/// `base^exp`, saturating at `u128::MAX`, in `O(log exp)` multiplications.
-fn saturating_pow(mut base: u128, mut exp: usize) -> u128 {
-    let mut result: u128 = 1;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            result = result.saturating_mul(base);
-        }
-        exp >>= 1;
-        if exp > 0 {
-            base = base.saturating_mul(base);
-        }
-    }
-    result
-}
-
-/// `Σ_{len=min_size..=max_size} alphabet^len` — the number of distinct
-/// sequences over an `alphabet`-symbol set — saturating at `cap`.
-///
-/// Backs [`ChoiceKind::max_children_saturating`] for the `Bytes` / `String`
-/// kinds: it accumulates in `u128` and returns `cap` the instant the running
-/// total reaches it, so a huge `max_size` never forces a multi-hundred-bit
-/// `BigUint`. The degenerate alphabets get closed forms and the sum starts
-/// directly at `alphabet^min_size`, so a huge `min_size` (the draws layer
-/// imposes no size cap) costs `O(log min_size)` rather than a spin up to it;
-/// for `alphabet >= 2` the running total then reaches any realistic `cap`
-/// within a bounded number of doublings.
-fn sequence_max_children_saturating(
-    alphabet: u128,
-    min_size: usize,
-    max_size: usize,
-    cap: u128,
-) -> u128 {
-    if alphabet == 0 {
-        return u128::from(min_size == 0).min(cap);
-    }
-    if alphabet == 1 {
-        return ((max_size - min_size) as u128 + 1).min(cap);
-    }
-    let mut total: u128 = 0;
-    let mut power = saturating_pow(alphabet, min_size);
-    for _ in min_size..=max_size {
-        total = total.saturating_add(power);
-        if total >= cap {
-            return cap;
-        }
-        power = power.saturating_mul(alphabet);
-    }
-    total
-}
-
 impl ChoiceKind {
     /// The simplest value for this choice kind.
     pub fn simplest(&self) -> Result<ChoiceValue, InternalError> {
@@ -1238,121 +1172,6 @@ impl ChoiceKind {
                 Some(ChoiceData::String(sc.clone(), v.clone()))
             }
             _ => None,
-        }
-    }
-
-    /// Cardinality of this kind's choice space, or `None` for a clone kind
-    /// (a clone's child space is unbounded).
-    pub fn max_children(&self) -> Option<crate::native::bignum::BigUint> {
-        use crate::native::bignum::BigUint;
-        self.max_index().map(|mi| mi + BigUint::from(1u32))
-    }
-
-    /// `min(max_children(), cap)`, computed *without* materialising the exact
-    /// cardinality for sequence kinds.
-    ///
-    /// The data-tree exhaustion check only needs to compare a node's
-    /// cardinality against a small explored-child count, never the exact value.
-    /// [`max_children`](Self::max_children) for a `Bytes`/`String` choice is
-    /// `Σ alphabet^len` — a `BigUint` of up to hundreds of bits whose
-    /// `BigUint::pow` dominated generation in profiles. This variant sums in
-    /// saturating `u128` and stops the moment the running total reaches `cap`,
-    /// so the astronomically-large powers are never built. Scalar kinds reuse
-    /// their (cheap, `pow`-free) `max_index`, saturating any value past `u128`
-    /// to `cap`.
-    pub fn max_children_saturating(&self, cap: u128) -> u128 {
-        use crate::native::bignum::ToPrimitive;
-        let scalar = |max_index: crate::native::bignum::BigUint| {
-            max_index
-                .to_u128()
-                .map_or(cap, |mi| mi.saturating_add(1).min(cap))
-        };
-        match self {
-            ChoiceKind::Boolean(_) => 2u128.min(cap),
-            ChoiceKind::Clone => cap,
-            ChoiceKind::Integer(ic) => scalar(ic.max_index()),
-            ChoiceKind::Float(fc) => scalar(fc.max_index()),
-            ChoiceKind::Bytes(bc) => {
-                sequence_max_children_saturating(256, bc.min_size, bc.max_size, cap)
-            }
-            ChoiceKind::String(sc) => sequence_max_children_saturating(
-                sc.intervals.len() as u128,
-                sc.min_size,
-                sc.max_size,
-                cap,
-            ),
-        }
-    }
-
-    /// Random value sampled from this kind's domain (with kind-appropriate
-    /// bias), or `None` for a clone kind (clone values arise from executing
-    /// a stream, never from sampling).
-    ///
-    /// `params` are the per-test-case swarm parameters; only the integer arm
-    /// consults them (they reweight the boundary distribution). The other kinds
-    /// ignore them.
-    pub fn random_value(
-        &self,
-        rng: &mut crate::native::rng::EngineRng,
-        params: crate::native::core::GenerationParameters,
-    ) -> Result<Option<ChoiceValue>, InternalError> {
-        Ok(match self {
-            ChoiceKind::Integer(ic) => Some(ChoiceValue::Integer(
-                crate::native::core::state::biased_integer_sample(ic, rng, params)?,
-            )),
-            ChoiceKind::Boolean(bc) => Some(ChoiceValue::Boolean(if bc.p <= 0.0 {
-                false
-            } else if bc.p >= 1.0 {
-                true
-            } else {
-                crate::native::core::state::weighted_boolean_sample_precise(bc.p, rng)
-            })),
-            ChoiceKind::Float(fc) => Some(ChoiceValue::Float(
-                crate::native::core::state::biased_float_sample(fc, rng)?,
-            )),
-            ChoiceKind::Bytes(bc) => Some(ChoiceValue::Bytes(
-                crate::native::core::state::biased_bytes_sample(bc, rng)?,
-            )),
-            ChoiceKind::String(sc) => Some(ChoiceValue::String(
-                crate::native::core::state::biased_string_sample(sc, rng)?,
-            )),
-            ChoiceKind::Clone => None,
-        })
-    }
-
-    /// Every possible value of this kind, if the total count fits under
-    /// `cap`. `None` for the kinds whose domains never fit — floats (every
-    /// bit pattern is distinct), non-empty sequences, and clones (unbounded
-    /// child space).
-    pub fn enumerate(&self, cap: u64) -> Option<Vec<ChoiceValue>> {
-        let fits = |kind: &ChoiceKind| kind.max_children_saturating(cap as u128 + 1) <= cap as u128;
-        match self {
-            ChoiceKind::Integer(ic) => {
-                if !fits(self) {
-                    return None;
-                }
-                let mut v = Vec::new();
-                let mut n = ic.min_value.clone();
-                loop {
-                    v.push(ChoiceValue::Integer(n.clone()));
-                    if n == ic.max_value {
-                        break;
-                    }
-                    n += 1;
-                }
-                Some(v)
-            }
-            ChoiceKind::Boolean(_) => {
-                fits(self).then(|| vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)])
-            }
-            ChoiceKind::Float(_) => None,
-            ChoiceKind::Bytes(bc) => {
-                (bc.max_size == 0 && fits(self)).then(|| vec![ChoiceValue::Bytes(Vec::new())])
-            }
-            ChoiceKind::String(sc) => {
-                (sc.max_size == 0 && fits(self)).then(|| vec![ChoiceValue::String(Vec::new())])
-            }
-            ChoiceKind::Clone => None,
         }
     }
 }
