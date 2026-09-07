@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.4 - 2026-09-07
+
+This patch fixes a missed flakiness detection during targeting. A test whose data generation first changed shape during the targeted-search phase was silently ignored and the run carried on. It now fails the run with the usual non-determinism diagnostic, matching every other phase.
+
 ## 0.37.3 - 2026-09-07
 
 This patch bounds zlib decompression when decoding a failure blob. A corrupt or hostile `reproduce_failure` blob could previously force an arbitrarily large allocation. Decoding now rejects payloads that inflate past 16 MiB, and the encoder falls back to the uncompressed encoding for anything that large, so every blob it emits still decodes.
