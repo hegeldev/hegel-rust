@@ -68,6 +68,9 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for new_val in &decrement_targets {
+                    if i >= self.current_nodes.len() {
+                        break;
+                    }
                     if gap == 1 {
                         let mut attempt = self.current_nodes.clone();
                         if let Some(lowered) = attempt[i].with_value(new_val) {

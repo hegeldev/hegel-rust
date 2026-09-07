@@ -117,6 +117,27 @@ fn redistribute_integers_moves_values_toward_shrink_towards() {
 }
 
 #[test]
+fn lower_and_bump_survives_an_adopted_candidate_shorter_than_the_node_index() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let values: Vec<i128> = nodes.iter().map(int_value).collect();
+                if values == [0, 0] {
+                    (true, Vec::new(), Spans::new())
+                } else {
+                    (false, nodes.to_vec(), Spans::new())
+                }
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node_st(2, 0, 100, 0), int_node_st(0, 0, 100, 0)],
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.lower_and_bump()).unwrap();
+    assert!(shrinker.current_nodes.is_empty());
+}
+
+#[test]
 fn lower_and_bump_accepts_relative_bump() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
