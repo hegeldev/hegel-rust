@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.37.1 - 2026-09-07
+
+This patch suppresses `TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Calls to `hegel_settings_set_suppress_health_check` still replace the default.
+
+## 0.37.0 - 2026-09-07
+
+This release changes `hegel_new_state_machine`: it takes a new
+`invariant_always_check` argument, an array of per-invariant flags parallel to
+`invariant_names` (NULL for all false).
+`hegel_state_machine_should_check_invariant` answers true unconditionally for
+a flagged invariant, consuming no entropy, and samples the rest as before.
+
 ## 0.36.6 - 2026-09-07
 
 A test that rejects its input via `assume()` without drawing any data can never produce a valid case. The engine now stops after one call and fails the run with `Unsatisfiable`, instead of passing. Over the C ABI this surfaces as an ordinary error result; no signatures or status values change.
