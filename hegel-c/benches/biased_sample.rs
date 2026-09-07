@@ -7,8 +7,8 @@
 //! ```
 //!
 //! These functions sit on the hottest path of native test-case generation
-//! (`data_tree::pick_non_exhausted_value` → `ChoiceKind::random_value` → here),
-//! so even small per-call wins compound across a full property-test run.
+//! (every random `NativeTestCase` draw samples through them), so even small
+//! per-call wins compound across a full property-test run.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
