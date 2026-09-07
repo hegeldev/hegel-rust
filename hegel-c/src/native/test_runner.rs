@@ -421,6 +421,18 @@ impl<'a> Engine<'a> {
             }
         }
 
+        if self.test_is_trivial
+            && self.valid_test_cases == 0
+            && self.interesting.is_empty()
+            && self.invalid_test_cases > 0
+        {
+            return Err(RunError::Unsatisfiable(
+                "Unsatisfiable: unable to satisfy the test's assumptions. The \
+             test draws no data, and assume() rejected its only possible input."
+                    .to_string(),
+            ));
+        }
+
         if self.tree_root.is_exhausted
             && self.valid_test_cases == 0
             && self.interesting.is_empty()

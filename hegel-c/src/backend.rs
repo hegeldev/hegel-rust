@@ -364,6 +364,10 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// The test's assumptions cannot be satisfied: it rejected its input
+    /// before drawing any data, so every run repeats the same rejection.
+    /// Mirrors Hypothesis's `Unsatisfiable`.
+    Unsatisfiable(String),
     /// The client misused Hegel at run scope — violated the driving
     /// contract (e.g. never reported a test case's outcome before the run
     /// resumed) or launched the process with an invalid configuration. Not
@@ -387,6 +391,7 @@ impl core::fmt::Display for RunError {
             RunError::HealthCheck(msg)
             | RunError::Flaky(msg)
             | RunError::NonDeterministic(msg)
+            | RunError::Unsatisfiable(msg)
             | RunError::UsageError(msg) => {
                 write!(f, "{}", msg)
             }
