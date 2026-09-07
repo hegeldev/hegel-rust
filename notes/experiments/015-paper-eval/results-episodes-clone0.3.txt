@@ -1,0 +1,5 @@
+# paper-eval episode suite (200 episodes per cell, sequential)
+
+| cell | reported | confirmed | caveat-only | flips by first site | never-flip (reported) | blobs v1/v2 | reuse | blob replay | meas. replays p50 (max) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| clone p=0.3 | 200/200 | 197 | 3 | first-check 200 | 0 | 0/197 | 197/197 | 197/197 | 771471 (2893244) |

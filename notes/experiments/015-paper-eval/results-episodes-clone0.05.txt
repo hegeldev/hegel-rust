@@ -1,0 +1,33 @@
+# paper-eval episode suite (200 episodes per cell, sequential)
+
+| cell | reported | confirmed | caveat-only | flips by first site | never-flip (reported) | blobs v1/v2 | reuse | blob replay | meas. replays p50 (max) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+
+thread 'main' (21555644) panicked at /Users/drmaciver/hegel/hegel-rust/src/run_lifecycle.rs:634:17:
+reproduce_failure: the supplied failure blob did not reproduce a failure. The failure may have been fixed — or, for a nondeterministic blob, it may not have recurred within the replay budget (a bug failing 10% of the time escapes it about 5% of the time). Re-run to retry, or delete the attribute once the failure is fixed.
+| clone p=0.05 | 200/200 | 74 | 126 | first-check 200 | 0 | 0/74 | 64/74 | 65/74 | 109 (2014890) |
