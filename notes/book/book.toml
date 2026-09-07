@@ -1,0 +1,8 @@
+[book]
+title = "The Nondeterminism Branch"
+description = "What the DRMacIver/nondeterminism branch built, and how it got there"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
