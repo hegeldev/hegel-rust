@@ -1177,6 +1177,7 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 2,
                 2,
@@ -1274,6 +1275,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             rule_groups.as_ptr(),
             1,
             ptr::null(),
+            ptr::null(),
             0,
             1,
             1,
@@ -1331,6 +1333,7 @@ fn primitives_after_overrun_all_report_stop_test() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1409,6 +1412,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1457,6 +1461,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1472,6 +1477,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1489,6 +1495,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1508,6 +1515,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1525,6 +1533,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 null_entry.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1544,6 +1553,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1562,6 +1572,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 bad_inv.as_ptr(),
+                ptr::null(),
                 1,
                 1,
                 1,
@@ -1580,6 +1591,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 reserved_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1597,6 +1609,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 1,
@@ -1613,6 +1626,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 3,
@@ -1631,6 +1645,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1740,6 +1755,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 invariants.as_ptr(),
+                ptr::null(),
                 1,
                 1,
                 1,
@@ -1782,6 +1798,41 @@ fn state_machine_and_primitive_boolean_paths() {
         }
         assert_eq!(hegel_state_machine_free(ctx, checked), HEGEL_OK);
 
+        let always_check: [bool; 1] = [true];
+        let mut always_checked: *mut HegelStateMachine = ptr::null_mut();
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                invariants.as_ptr(),
+                always_check.as_ptr(),
+                1,
+                1,
+                1,
+                &mut always_checked,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK
+        );
+        for _ in 0..20 {
+            let mut should_check = false;
+            assert_eq!(
+                hegel_state_machine_should_check_invariant(
+                    ctx,
+                    tc,
+                    always_checked,
+                    0,
+                    &mut should_check
+                ),
+                HEGEL_OK
+            );
+            assert!(should_check, "an always-check invariant is always checked");
+        }
+        assert_eq!(hegel_state_machine_free(ctx, always_checked), HEGEL_OK);
+
         let mut ranged: *mut HegelStateMachine = ptr::null_mut();
         assert_eq!(
             hegel_new_state_machine(
@@ -1790,6 +1841,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 2,
@@ -1832,6 +1884,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 2,
@@ -2437,6 +2490,7 @@ fn object_handles_are_freed_safely_after_the_run() {
             rules.as_ptr(),
             rule_groups.as_ptr(),
             1,
+            ptr::null(),
             ptr::null(),
             0,
             1,

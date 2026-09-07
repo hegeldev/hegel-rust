@@ -264,7 +264,7 @@ fn capture_flag() -> bool {
 
 #[test]
 fn stateful_overrun_mid_rule_is_reported_as_overrun() {
-    use crate::stateful::{Rule, StateMachine};
+    use crate::stateful::{Invariant, Rule, StateMachine};
     struct Hungry;
     impl StateMachine for Hungry {
         fn rules(&self) -> Vec<Rule<Self>> {
@@ -274,7 +274,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
                 }
             })]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }

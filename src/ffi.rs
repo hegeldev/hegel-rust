@@ -771,7 +771,9 @@ impl CTestCase {
 
     /// Register a state machine. Each rule is assigned to a concurrency
     /// group by `rule_groups` (parallel to `rule_names`); group ids are
-    /// arbitrary and the machine has one group per distinct value. The
+    /// arbitrary and the machine has one group per distinct value. Each
+    /// invariant is flagged always-check or sampled by
+    /// `invariant_always_check` (parallel to `invariant_names`). The
     /// engine draws the concurrency level in
     /// `[min_concurrency, max_concurrency]` at creation — weighted toward
     /// the maximum (the engine owns the distribution) — and returns it
@@ -781,6 +783,7 @@ impl CTestCase {
         rule_names: &[&str],
         rule_groups: &[i64],
         invariant_names: &[&str],
+        invariant_always_check: &[bool],
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
@@ -800,6 +803,7 @@ impl CTestCase {
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
+                invariant_always_check.as_ptr(),
                 invariant_ptrs.len(),
                 min_concurrency,
                 max_concurrency,
