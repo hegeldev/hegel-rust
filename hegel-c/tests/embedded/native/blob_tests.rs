@@ -85,6 +85,37 @@ fn decode_rejects_raw_payload_that_is_not_valid_choices() {
 }
 
 #[test]
+fn decode_rejects_zlib_bomb() {
+    let raw = serialize_choices(&[ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]);
+    assert!(raw.len() > MAX_DECOMPRESSED_LEN);
+    let mut payload = vec![PREFIX_ZLIB];
+    payload.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(
+        &raw, ZLIB_LEVEL,
+    ));
+    let blob = base64_encode(&payload);
+    assert!(decode_failure(&blob).is_none());
+}
+
+#[test]
+fn over_bound_payload_takes_the_raw_prefix_and_round_trips() {
+    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])];
+    let blob = encode_failure(&choices);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_RAW);
+    assert_eq!(decode_failure(&blob).unwrap(), choices);
+}
+
+#[test]
+fn zlib_decode_limit_admits_large_legitimate_blobs() {
+    let choices = vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN - 9])];
+    assert_eq!(serialize_choices(&choices).len(), MAX_DECOMPRESSED_LEN);
+    let blob = encode_failure(&choices);
+    let bytes = base64_decode(&blob).unwrap();
+    assert_eq!(bytes[0], PREFIX_ZLIB);
+    assert_eq!(decode_failure(&blob).unwrap(), choices);
+}
+
+#[test]
 fn blob_roundtrips_clone_values() {
     let choices = vec![
         ChoiceValue::Boolean(true),
