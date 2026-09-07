@@ -137,11 +137,12 @@ pub enum Verbosity {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled
-/// and tests are derandomized by default. Inside Antithesis (detected via
-/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
-/// by default: Antithesis owns reproduction, and its thread pausing makes
-/// wall-clock health checks like `TooSlow` meaningless.
+/// In CI environments (detected automatically), the database is disabled,
+/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
+/// default. Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), the
+/// database and all health checks are disabled by default: Antithesis owns
+/// reproduction, and its thread pausing makes wall-clock health checks like
+/// `TooSlow` meaningless.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -185,7 +186,11 @@ impl Settings {
             } else {
                 Database::Unset
             },
-            suppress_health_check: Vec::new(),
+            suppress_health_check: if in_ci {
+                vec![HealthCheck::TooSlow]
+            } else {
+                Vec::new()
+            },
             in_antithesis,
             phases: vec![
                 Phase::Explicit,
