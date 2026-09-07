@@ -1,13 +1,14 @@
 use crate::generators::binary;
 
 use super::{
-    BoolGenerator, BoxedGenerator, CharactersGenerator, DurationGenerator, FloatGenerator,
-    Generator, HashMapGenerator, HashSetGenerator, IntegerGenerator, IpAddressGenerator,
-    Ipv4AddressGenerator, Ipv6AddressGenerator, OptionalGenerator, TextGenerator, VecGenerator,
-    booleans, characters, collections::ArrayGenerator, durations, floats, hashmaps, hashsets,
-    integers, ip_addresses, optional, text, vecs,
+    BTreeMapGenerator, BTreeSetGenerator, BoolGenerator, BoxedGenerator, CharactersGenerator,
+    DurationGenerator, FloatGenerator, Generator, HashMapGenerator, HashSetGenerator,
+    IntegerGenerator, IpAddressGenerator, Ipv4AddressGenerator, Ipv6AddressGenerator,
+    OptionalGenerator, TextGenerator, VecGenerator, booleans, btree_maps, btree_sets, characters,
+    collections::ArrayGenerator, durations, floats, hashmaps, hashsets, integers, ip_addresses,
+    optional, text, vecs,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
@@ -279,6 +280,30 @@ where
     type Generator = HashSetGenerator<T::Generator, T>;
     fn default_generator() -> Self::Generator {
         hashsets(T::default_generator())
+    }
+}
+
+impl<K: DefaultGenerator + 'static, V: DefaultGenerator + 'static> DefaultGenerator
+    for BTreeMap<K, V>
+where
+    K: Ord,
+    K::Generator: Send + Sync,
+    V::Generator: Send + Sync,
+{
+    type Generator = BTreeMapGenerator<K::Generator, V::Generator, K, V>;
+    fn default_generator() -> Self::Generator {
+        btree_maps(K::default_generator(), V::default_generator())
+    }
+}
+
+impl<T: DefaultGenerator + 'static> DefaultGenerator for BTreeSet<T>
+where
+    T: Ord,
+    T::Generator: Send + Sync,
+{
+    type Generator = BTreeSetGenerator<T::Generator, T>;
+    fn default_generator() -> Self::Generator {
+        btree_sets(T::default_generator())
     }
 }
 

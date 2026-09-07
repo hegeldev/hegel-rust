@@ -182,6 +182,18 @@ fn sets_and_maps_print_in_draw_order() {
         lines,
         vec!["let draw_1 = HashMap::from([(\"\".to_string(), false)]);"]
     );
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_sets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = BTreeSet::from([1]);"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_maps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = BTreeMap::from([(9, false)]);"]);
 }
 
 #[test]
@@ -540,6 +552,16 @@ fn invalid_collection_sizes_report_while_printing() {
         |tc| {
             let _ = tc.draw(
                 gs::hashmaps(gs::booleans(), gs::booleans())
+                    .min_size(5)
+                    .max_size(2),
+            );
+        },
+        |tc| {
+            let _ = tc.draw(gs::btree_sets(gs::booleans()).min_size(5).max_size(2));
+        },
+        |tc| {
+            let _ = tc.draw(
+                gs::btree_maps(gs::booleans(), gs::booleans())
                     .min_size(5)
                     .max_size(2),
             );
