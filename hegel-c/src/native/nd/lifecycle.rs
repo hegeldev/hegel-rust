@@ -4,9 +4,12 @@
 //! 24): a raw interesting execution may fill a vacant origin, pending
 //! confirmation; an occupied origin changes only through validated accepts;
 //! an origin becomes `Confirmed` through a discovery-bar accept (sweep,
-//! shrink admission, or backtrack), any failure in the final replay's
-//! pooled review, or, for a trusted origin, a failing shrink-time evidence
-//! batch; confirmed and trusted origins carry replay state. Origins
+//! shrink admission, backtrack, or the final replay's pooled review
+//! handing its reproducing run to a batch — decision 72) or, for a trusted
+//! origin, a failing shrink-time evidence batch; confirmed and trusted
+//! origins carry replay state. Bar batches spend per-origin per-run
+//! attempt budgets (decision 72), so a fluke re-sighted all run cannot
+//! recycle the bar's false-accept rate without bound. Origins
 //! reproduced from the database are `Trusted` on reproduction, exempt
 //! from the bar's verdict — the prior run persisted only confirmed
 //! origins, and subjecting real p ~ 0.1 bugs to the bar again would drop
@@ -29,14 +32,14 @@ use crate::native::core::ChoiceValue;
 use crate::native::test_runner::RunResult;
 
 /// One origin's confirmation state. The only transitions are the ones
-/// [`OriginLifecycle`]'s methods implement. `Unconfirmed → Confirmed` has
-/// three admission paths: a discovery-bar accept (the post-generation
-/// sweep or shrink admission; an accept requires a reproducing replay in
-/// the batch itself), a backtrack's bar accept, and the final replay's
-/// pooled review, which confirms on any failure with no bar. `Unconfirmed
-/// → Trusted` is database reproduction; `Trusted → Confirmed` is
-/// promotion by a failing evidence batch. Rejection never demotes and
-/// never removes state.
+/// [`OriginLifecycle`]'s methods implement. Every `Unconfirmed →
+/// Confirmed` admission is a discovery-bar accept (an accept requires a
+/// reproducing replay in the batch itself): the post-generation sweep,
+/// shrink admission, a backtrack, or the final replay's pooled review
+/// handing its reproducing run to a fresh batch (decision 72).
+/// `Unconfirmed → Trusted` is database reproduction; `Trusted →
+/// Confirmed` is promotion by a failing evidence batch. Rejection never
+/// demotes and never removes state.
 pub(crate) enum OriginState {
     /// Observed interesting; hasn't passed the discovery bar.
     /// `fails`/`replays` accumulate the physical evidence behind rejected
@@ -90,6 +93,14 @@ pub(crate) struct OriginLifecycle {
     /// filled instead of from zero. Taken once, by the origin's first
     /// evidence batch.
     seeds: BTreeMap<String, super::Evidence>,
+    /// Bar batches spent per origin this run by the sweep, shrink
+    /// admission, and the pooled review, capped at
+    /// [`super::BAR_ATTEMPTS_PER_RUN`] (decision 72).
+    bar_attempts: BTreeMap<String, u64>,
+    /// Bar batches spent per origin across its backtracks, capped at
+    /// [`super::BACKTRACK_BAR_ATTEMPTS`] — a budget separate from
+    /// `bar_attempts` because backtrack candidates come from history.
+    backtrack_attempts: BTreeMap<String, u64>,
 }
 
 impl OriginLifecycle {
@@ -103,6 +114,37 @@ impl OriginLifecycle {
     /// The seeded starting evidence for `origin`, taken at most once.
     pub(crate) fn take_seed(&mut self, origin: &str) -> Option<super::Evidence> {
         self.seeds.remove(origin)
+    }
+
+    /// Spend one of `origin`'s per-run bar attempts (decision 72). False
+    /// once the budget is gone: the caller treats the origin as a bar
+    /// reject without running a batch.
+    pub(crate) fn spend_bar_attempt(&mut self, origin: &str) -> bool {
+        let spent = self.bar_attempts.entry(origin.to_string()).or_insert(0);
+        if *spent >= super::BAR_ATTEMPTS_PER_RUN {
+            return false;
+        }
+        *spent += 1;
+        true
+    }
+
+    /// Whether `origin` has backtrack bar attempts left, without spending
+    /// one — checked before a backtrack pays for its history scan.
+    pub(crate) fn backtrack_attempts_left(&self, origin: &str) -> bool {
+        self.backtrack_attempts.get(origin).copied().unwrap_or(0) < super::BACKTRACK_BAR_ATTEMPTS
+    }
+
+    /// Spend one of `origin`'s backtrack bar attempts (decision 72): the
+    /// budget holds across backtracks of the same origin, not per call.
+    pub(crate) fn spend_backtrack_attempt(&mut self, origin: &str) -> bool {
+        if !self.backtrack_attempts_left(origin) {
+            return false;
+        }
+        *self
+            .backtrack_attempts
+            .entry(origin.to_string())
+            .or_insert(0) += 1;
+        true
     }
 
     /// A raw interesting execution observed `origin`. Creates the

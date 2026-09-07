@@ -90,9 +90,13 @@ within the cap — the 012 lottery spends nothing). The flat rule's exposure
 without a budget: 1-(1-alpha_4)^K reaches 0.33 (Fast) / 0.94 (Confirm) at
 K = 1000.
 
+Every proposal is charged unconditionally, before its outcome is known —
+per proposal, not per candidate, so retried recruits of the same candidate
+each pay their own way and the sum bounds E[false accepts] by linearity.
 Affordability of the budget (proposals charged per stage, escalating the
 failure minimum when the remainder can't afford the next charge; the table
-splits each stage at half the remaining budget):
+splits each stage at half the remaining budget for display — the engine
+spends greedily, affording ~50 Fast floor proposals at m=4 from B = 0.02):
 
 | budget B | mode | threshold | at m=4 | m=5 | m=6 | m=7 | then m=8, per 10k |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -174,8 +178,8 @@ around an unbiased-to-low mean, not a shifted estimate.
   false-confirm ≤ 4.7% at q = 0.02, target-regime power ≥ 95% on pure
   origins, mixed-origin cost priced above.
 - `GAUNTLET_ALPHA_BUDGET` = 0.02 per origin per run, exact DP charges per
-  (state, threshold, minimum), minima escalating 4 → 8 for new ledgers
-  only; bound 0.02 + 1e-7 per ledger beyond.
+  proposal from (state, threshold, pinned minimum), minima escalating
+  4 → 8 for new ledgers only; bound 0.02 + 1e-7 per proposal beyond.
 - The pooled review confirms through the standard evidence batch; the
   any-failure rule retires.
 - No anchor haircut; z = 1.96 stands.

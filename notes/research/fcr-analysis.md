@@ -154,26 +154,34 @@ it survives re-shrinks — the shrink probe is rebuilt per `shrink_origin`
 call (flip requeues and backtrack restores re-enter it), so probe-local
 state would silently reset the bound to per-pass. Charges:
 
-- A ledger is charged once, when it first reaches the evidence loop (a
-  failing recruit in a Fast sweep, or a confirmation-sweep drive): the exact
-  DP false-accept probability from its current (runs, fails) state at the
-  design fluke q0 = 0.02, the current threshold, and its pinned failure
-  minimum. Unconditional Fast-mode entry at the floor charges 4.0e-4; a
-  confirmation-sweep drive from empty charges 2.9e-3.
-- A ledger Fast-charged and later confirmation-driven while still unresolved
-  is charged the top-up from its current state, so its lifetime charge never
-  exceeds the bound-verdict alpha. Bound verdicts are final: an accepted
-  ledger stays accepted (the fast-sweep guard that protects a nested clone
-  shrink's final splice keeps consulting the latched verdict), and a
-  cap-rejected ledger stays rejected.
-- When the remaining budget cannot afford the next charge at the current
-  failure minimum, the minimum escalates for **new** ledgers (4 → 5 → … →
-  8); at 8 the per-ledger charge is at most ~1e-7 (Fast) / ~1e-6 (Confirm),
-  so the total spend is bounded by the budget plus a negligible tail for
-  any realized K.
-- The charge is computed at the threshold in force when the ledger is
-  charged; the anchor is monotone, so later thresholds only lower the true
-  alpha below what was charged.
+- Every proposal on an unbound ledger is charged, before its outcome is
+  recorded, its exact unconditional false-accept mass at the design fluke
+  q0 = 0.02: in a Fast sweep, q0 times the DP drive-to-bound probability
+  from the ledger's state plus one hypothetical failure (the recruit must
+  fail for the drive to happen); in a confirmation sweep, the DP
+  probability from the ledger's current state (the drive is
+  unconditional). At the floor a fresh Fast proposal charges 4.0e-4 and a
+  confirmation-sweep drive from empty charges 2.9e-3. Charging per
+  proposal rather than once per ledger is what makes the sum an upper
+  bound on E[false accepts] by linearity — a candidate re-proposed across
+  passes accumulates recruit chances, and each chance pays its own way.
+- A ledger's failure minimum is pinned by its first charge and never
+  changes (the stopping rule never changes mid-test); re-proposals of a
+  pinned ledger are charged at its own minimum even past the budget (the
+  overdraft per ledger is bounded by one charge). Bound verdicts latch: an
+  accepted ledger stays accepted (the fast-sweep guard that protects a
+  nested clone shrink's final splice consults the latched verdict), a
+  rejected one stays rejected, and a bound ledger is never charged again.
+- When the remaining budget cannot afford a **new** ledger's charge at the
+  current failure minimum, the minimum escalates (4 → 5 → … → 8); at 8 the
+  per-proposal charge is at most ~1e-7 (Fast) / ~1e-6 (Confirm), so the
+  total spend is bounded by the budget plus a negligible tail for any
+  realized K. The engine spends greedily (no stage-splitting), so at the
+  floor the budget affords ~50 Fast proposals at the base minimum before
+  the first escalation.
+- The charge is computed at the threshold in force at charge time; the
+  anchor is monotone, so later thresholds only lower the true alpha below
+  what was charged.
 
 Exact charging is what keeps the two measured regimes cheap: at high-water
 anchors the accept threshold is unreachable by a fluke within

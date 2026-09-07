@@ -103,12 +103,12 @@ fn gauntlet_section() {
 
 fn schedule_section() {
     println!("\n## Budget-based alpha spending per shrink\n");
-    println!("Each proposal reaching the evidence loop is charged its exact per-proposal");
-    println!("false-accept probability at the design fluke q0 = 0.02, the current");
-    println!("threshold, and the sweep mode; when the remaining budget cannot afford the");
-    println!("next proposal at the current failure minimum, the minimum escalates (to 8");
-    println!("at most). An unreachable threshold charges zero, so the high-anchor cost");
-    println!("lottery (experiment 012) spends nothing. Proposals affordable per stage:\n");
+    println!("Every proposal is charged its exact unconditional false-accept mass at the");
+    println!("design fluke q0 = 0.02, the current threshold, and the sweep mode; when the");
+    println!("remaining budget cannot afford the next proposal at the current failure");
+    println!("minimum, the minimum escalates (to 8 at most). An unreachable threshold");
+    println!("charges zero, so the high-anchor cost lottery (experiment 012) spends");
+    println!("nothing. Proposals affordable per stage:\n");
     println!("| budget B | mode | threshold | at m=4 | m=5 | m=6 | m=7 | then m=8, per 10k |");
     println!("| --- | --- | --- | --- | --- | --- | --- | --- |");
     for budget in [0.01f64, 0.02, 0.05] {

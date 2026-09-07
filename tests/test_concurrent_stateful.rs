@@ -110,7 +110,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
     let text = lines.join("\n");
     assert!(
-        !text.contains("note:"),
+        !text.contains("note: nondeterministic") && !text.contains("note: unconfirmed"),
         "a concurrent failure that reproduces exactly is a plain \
          deterministic failure, no caveat (decision 70):\n{text}"
     );

@@ -97,11 +97,6 @@ const FIRST_CHECK_REPLAYS: u64 = 4;
 /// not headroom.
 const BACKTRACK_SCAN_REPLAYS: u64 = nd::CONFIRM_CAP;
 
-/// Bar attempts per backtrack (gate G25): a probed entry reaches the bar
-/// at roughly its true reproduction rate, each attempt holds 45%
-/// target-regime power, and three compose to ~83%.
-const BACKTRACK_BAR_ATTEMPTS: u64 = 3;
-
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
 /// Outcome of one [`Engine::nd_replay_once`] measurement replay.
@@ -1426,6 +1421,10 @@ pub(crate) struct Engine<'a> {
     /// trust, confirmation state (anchor/witness/pool), and the caveated
     /// unconfirmed report. See [`OriginLifecycle`].
     nd_origins: OriginLifecycle,
+    /// Per-origin gauntlet alpha-spending state (decision 72), on the
+    /// engine rather than the shrink probe so a re-shrink's rebuilt probe
+    /// keeps spending from the same budget.
+    gauntlet_spend: HashMap<String, nd::GauntletSpend>,
     /// Per-origin pre-flip interesting history, the backtrack scan's
     /// domain. See [`OriginHistory`].
     history: HashMap<String, OriginHistory>,
@@ -1505,6 +1504,7 @@ impl<'a> Engine<'a> {
             first_bug_time: None,
             nd_active: settings.nd_force,
             nd_origins: OriginLifecycle::default(),
+            gauntlet_spend: HashMap::default(),
             history: HashMap::default(),
             first_checked: crate::native::HashSet::default(),
             check_window: false,
@@ -1658,11 +1658,13 @@ impl<'a> Engine<'a> {
     /// otherwise. Under ND handling each origin replays until failure —
     /// incumbent, pool, splices, then [`nd::FINAL_REPLAY_FRESH`] fresh
     /// generations, up to the standard reuse budget — and the evidence
-    /// lands in the lifecycle: a reproducing replay confirms a
-    /// yet-unconfirmed origin; a dry confirmed origin switches its
-    /// caveat's wording instead of unreporting the failure (decision 3); a
-    /// dry unconfirmed origin is evicted like a bar reject and reaches the
-    /// report only through the caveat-only fallback (decision 24).
+    /// lands in the lifecycle: a reproducing replay on a yet-unconfirmed
+    /// origin is a sighting whose realized run then faces the standard bar
+    /// on the origin's remaining attempts (decision 72); a dry confirmed
+    /// origin switches its caveat's wording instead of unreporting the
+    /// failure (decision 3); a dry unconfirmed origin is evicted like a
+    /// bar reject and reaches the report only through the caveat-only
+    /// fallback (decision 24).
     /// One origin's shrink pass: the pre-shrink verify, admission (stashed
     /// witness, trusted batch, or the discovery bar), optional boost, and
     /// the shrinker run, with decision 38's requeue semantics. Returns
@@ -1718,7 +1720,7 @@ impl<'a> Engine<'a> {
         } else if !self.nd_origins.needs_confirmation(&origin) {
             // For a trusted origin the bar arithmetic is only the batch's
             // stopping rule: admission happened at reuse (decision 24).
-            let batch = self.nd_evidence_batch(&origin, &choices).await?;
+            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if let Some(witness) = batch.witness {
                 probe_anchor = batch.evidence.lower_bound();
@@ -1761,7 +1763,20 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
-            let batch = self.nd_evidence_batch(&origin, &choices).await?;
+            if !self.nd_origins.spend_bar_attempt(&origin) {
+                if self.nd_origins.reject(&origin, (0, 0)) {
+                    #[cfg(feature = "__bench")]
+                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                        origin: origin.clone(),
+                        values: choices.clone(),
+                        at_final_replay: false,
+                    });
+                    self.interesting.remove(&origin);
+                }
+                shrunk_origins.insert(origin);
+                return Ok(false);
+            }
+            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if !batch.bar_accepted {
                 if self.nd_origins.reject(&origin, evidence) {
@@ -1938,7 +1953,7 @@ impl<'a> Engine<'a> {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             let timelines = pooled_timelines(choices, self.nd_origins.pool(&origin).to_vec());
             self.capture_replays = true;
-            let (_, evidence) = self
+            let (reproduction, evidence) = self
                 .nd_reproduce(
                     Some(&origin),
                     &timelines,
@@ -1950,19 +1965,42 @@ impl<'a> Engine<'a> {
             self.capture_replays = false;
             let batch = (evidence.fails(), evidence.runs());
             if self.nd_origins.needs_confirmation(&origin) {
-                if batch.0 > 0 {
-                    let confirmed = self.nd_origins.confirm(
-                        &origin,
-                        evidence.lower_bound(),
-                        None,
-                        timelines,
-                        batch,
-                    );
-                    confirmed?;
-                    self.history.remove(&origin);
-                } else {
+                // A reproducing review run is a sighting, not a
+                // confirmation: it faces the standard bar on the origin's
+                // remaining attempt budget (decision 72).
+                let mut confirmed = false;
+                let mut review_evidence = (0, 0);
+                if let Some(run) = reproduction {
+                    if self.nd_origins.spend_bar_attempt(&origin) {
+                        let reproduced: Vec<ChoiceValue> =
+                            run.nodes.iter().map(|n| n.value()).collect();
+                        let review = self
+                            .nd_evidence_batch(&origin, &reproduced, shrink_deadline)
+                            .await?;
+                        review_evidence = (review.evidence.fails(), review.evidence.runs());
+                        if review.bar_accepted {
+                            let pool = pooled_timelines(
+                                timelines[0].clone(),
+                                review.captured.into_iter().chain(timelines),
+                            );
+                            let confirmed_origin = self.nd_origins.confirm(
+                                &origin,
+                                review.evidence.lower_bound(),
+                                None,
+                                pool,
+                                review_evidence,
+                            );
+                            confirmed_origin?;
+                            self.history.remove(&origin);
+                            self.nd_origins.record_final_replay(&origin, batch);
+                            confirmed = true;
+                        }
+                    }
+                }
+                if !confirmed {
                     self.nd_origins.observe(&origin);
-                    let mut reject_evidence = batch;
+                    let mut reject_evidence =
+                        (batch.0 + review_evidence.0, batch.1 + review_evidence.1);
                     if self
                         .history
                         .get(&origin)
@@ -1987,7 +2025,10 @@ impl<'a> Engine<'a> {
                                 continue;
                             }
                             Backtrack::Exhausted { evidence } => {
-                                reject_evidence = (batch.0 + evidence.0, batch.1 + evidence.1);
+                                reject_evidence = (
+                                    reject_evidence.0 + evidence.0,
+                                    reject_evidence.1 + evidence.1,
+                                );
                             }
                         }
                     }
@@ -2023,11 +2064,15 @@ impl<'a> Engine<'a> {
     /// the batch never saw fail. An accept
     /// extends to [`nd::ANCHOR_SEED_RUNS`] runs (decision 54), so
     /// the anchor a caller seeds from the batch is not biased by the bar's
-    /// stopping rule; a reject stops at the bar.
+    /// stopping rule; a reject stops at the bar. An expired `deadline`
+    /// (passed only by the final replay's review) rejects before the next
+    /// replay — a batch cut short proves nothing; the accept extension
+    /// runs unchecked, bounded by [`nd::ANCHOR_SEED_RUNS`].
     async fn nd_evidence_batch(
         &mut self,
         origin: &str,
         choices: &[ChoiceValue],
+        deadline: Option<crate::sys::Instant>,
     ) -> Result<NdBatch, RunError> {
         let mut evidence = self.nd_origins.take_seed(origin).unwrap_or_default();
         let mut witness = None;
@@ -2035,6 +2080,9 @@ impl<'a> Engine<'a> {
         let capture_entry = self.capture_replays;
         self.capture_replays = true;
         let bar_accepted = loop {
+            if deadline.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d)) {
+                break false;
+            }
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
             evidence.record(replay.failed);
             if replay.failed {
@@ -2084,7 +2132,9 @@ impl<'a> Engine<'a> {
     /// and every raw sighting, then binary refinement between the newest
     /// reproducing probe and its nearest newer non-reproducing one, capped
     /// at [`BACKTRACK_SCAN_REPLAYS`] in total. The best candidate faces
-    /// the full discovery bar, up to [`BACKTRACK_BAR_ATTEMPTS`] batches; a
+    /// the full discovery bar, spending the origin's
+    /// [`nd::BACKTRACK_BAR_ATTEMPTS`]-batch budget — held across
+    /// backtracks of the same origin (decision 72); a
     /// reject resumes the scan on the older side, and with no reproducing
     /// probe the remaining replay budget goes on a second pass before
     /// giving up. A cleared bar confirms the origin — witness and anchor
@@ -2103,7 +2153,7 @@ impl<'a> Engine<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        if entries.is_empty() {
+        if entries.is_empty() || !self.nd_origins.backtrack_attempts_left(origin) {
             return Ok(Backtrack::Exhausted { evidence: (0, 0) });
         }
         let accepts: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].1).collect();
@@ -2132,7 +2182,6 @@ impl<'a> Engine<'a> {
         probe_order.extend(raws.iter().copied());
 
         let mut second_pass_done = false;
-        let mut bar_attempts = 0u64;
         for idx in probe_order {
             if replays_left == 0 {
                 break;
@@ -2206,19 +2255,18 @@ impl<'a> Engine<'a> {
                 }
                 continue;
             };
+            if !self.nd_origins.spend_backtrack_attempt(origin) {
+                return Ok(Backtrack::Exhausted {
+                    evidence: (fails, runs),
+                });
+            }
             let batch = self
-                .nd_evidence_batch(origin, &entries[candidate].0)
+                .nd_evidence_batch(origin, &entries[candidate].0, None)
                 .await?;
             runs += batch.evidence.runs();
             fails += batch.evidence.fails();
-            bar_attempts += 1;
             if !batch.bar_accepted {
                 status[candidate] = Some(false);
-                if bar_attempts >= BACKTRACK_BAR_ATTEMPTS {
-                    return Ok(Backtrack::Exhausted {
-                        evidence: (fails, runs),
-                    });
-                }
                 continue;
             }
             let witness = crate::control::hegel_internal_unwrap!(
@@ -2717,6 +2765,8 @@ impl<'a> Engine<'a> {
     /// after the loop) rather than keyed on the iteration's own run, because
     /// span-mutation and targeting executions also fill vacant origins.
     /// Loops because confirmation replays can themselves discover origins.
+    /// Each batch spends the origin's per-run bar budget (decision 72); at
+    /// the cap the origin is rejected and evicted without a batch.
     async fn nd_discovery_sweep(
         &mut self,
         verbosity: Verbosity,
@@ -2735,7 +2785,24 @@ impl<'a> Engine<'a> {
                 return Ok(());
             };
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-            let batch = self.nd_evidence_batch(&origin, &choices).await?;
+            if !self.nd_origins.spend_bar_attempt(&origin) {
+                if verbosity == Verbosity::Debug {
+                    output.line(&format!(
+                        "nd discovery confirm: origin={origin} out of bar attempts"
+                    ));
+                }
+                if self.nd_origins.reject(&origin, (0, 0)) {
+                    #[cfg(feature = "__bench")]
+                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                        origin: origin.clone(),
+                        values: choices,
+                        at_final_replay: false,
+                    });
+                    self.interesting.remove(&origin);
+                }
+                continue;
+            }
+            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
                     "nd discovery confirm: origin={origin} fails={}/{} accepted={}",
@@ -3096,13 +3163,14 @@ struct EngineShrinkProbe<'e, 'a> {
     /// timeline whose ledger already holds a conclusive accept (a nested
     /// clone shrink's final splice re-proposes exactly such timelines).
     gauntlet: bool,
-    /// Cumulative evidence per candidate, keyed by serialized realized
-    /// choices — a candidate whose replay punned into another realization
-    /// merges evidence with it, deliberately: the realized run is the test
-    /// case an accept would adopt, whatever proposal produced it, and its
+    /// Per-candidate gauntlet state, keyed by serialized realized choices
+    /// — a candidate whose replay punned into another realization merges
+    /// evidence with it, deliberately: the realized run is the test case
+    /// an accept would adopt, whatever proposal produced it, and its
     /// replays are plain trials of that test case however they realize
-    /// (decision 71).
-    ledger: HashMap<Vec<u8>, nd::Evidence>,
+    /// (decision 71). Every proposal on an unbound ledger is charged
+    /// against the origin's alpha budget before it runs (decision 72).
+    ledger: HashMap<Vec<u8>, CandidateLedger>,
     anchor: f64,
     /// Under [`SweepMode::Confirm`] a non-matching first run is not a
     /// reject — the ledger is driven to a bound verdict either way
@@ -3130,14 +3198,25 @@ struct PendingAccept {
     nodes: Vec<ChoiceNode>,
 }
 
+/// One realized timeline's gauntlet state within the shrink of one origin.
+struct CandidateLedger {
+    evidence: nd::Evidence,
+    /// Failure minimum pinned by the candidate's first charge (decision
+    /// 72): the stopping rule never changes mid-test, so budget escalation
+    /// only positions candidates not yet proposed.
+    min_fails: u64,
+    /// The evidence loop's verdict, latched — a bound is final. A latched
+    /// reject spends no further budget or replays; a latched accept keeps
+    /// re-proposals of a conclusively accepted timeline acceptable however
+    /// their recruiting run went (a nested clone shrink's final splice
+    /// re-proposes exactly such timelines).
+    verdict: Option<bool>,
+}
+
 impl EngineShrinkProbe<'_, '_> {
     fn matches(&self, run: &RunResult) -> bool {
         run.status == Status::Interesting
             && run.origin.as_deref() == Some(self.target_origin.as_str())
-    }
-
-    fn record_evidence(&mut self, key: &[u8], matched: bool) {
-        self.ledger.entry(key.to_vec()).or_default().record(matched);
     }
 }
 
@@ -3188,23 +3267,50 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let key = serialize_choices(&realized);
-            self.record_evidence(&key, matched);
-            if !matched && self.sweep == SweepMode::Fast {
-                let evidence = *self.ledger.get(&key).unwrap();
-                if !matches!(
-                    nd::gauntlet(&evidence, self.anchor),
-                    nd::GauntletVerdict::Accept
-                ) {
+            if self.ledger.get(&key).is_none_or(|l| l.verdict.is_none()) {
+                let (seed, pinned) = self
+                    .ledger
+                    .get(&key)
+                    .map_or((nd::Evidence::default(), None), |l| {
+                        (l.evidence, Some(l.min_fails))
+                    });
+                let min_fails = self
+                    .engine
+                    .gauntlet_spend
+                    .entry(self.target_origin.clone())
+                    .or_default()
+                    .charge(&seed, self.anchor, self.sweep == SweepMode::Confirm, pinned);
+                self.ledger.entry(key.clone()).or_insert(CandidateLedger {
+                    evidence: nd::Evidence::default(),
+                    min_fails,
+                    verdict: None,
+                });
+            }
+            let entry = self.ledger.get_mut(&key).unwrap();
+            entry.evidence.record(matched);
+            let min_fails = entry.min_fails;
+            if let Some(accepted) = entry.verdict {
+                if !accepted {
                     return Ok((false, run.nodes, Spans::from(run.spans)));
                 }
+                self.pending_accept = Some(PendingAccept {
+                    key,
+                    lower_bound: entry.evidence.lower_bound(),
+                    nodes: run.nodes.clone(),
+                });
+                return Ok((true, run.nodes, Spans::from(run.spans)));
+            }
+            if !matched && self.sweep == SweepMode::Fast {
+                return Ok((false, run.nodes, Spans::from(run.spans)));
             }
             let mut accepted = false;
             loop {
-                let evidence = *self.ledger.get(&key).unwrap();
+                let evidence = self.ledger.get(&key).unwrap().evidence;
                 if !accepted {
-                    match nd::gauntlet(&evidence, self.anchor) {
+                    match nd::gauntlet(&evidence, self.anchor, min_fails) {
                         nd::GauntletVerdict::Accept => accepted = true,
                         nd::GauntletVerdict::Reject => {
+                            self.ledger.get_mut(&key).unwrap().verdict = Some(false);
                             return Ok((false, run.nodes, Spans::from(run.spans)));
                         }
                         nd::GauntletVerdict::Continue => {}
@@ -3213,6 +3319,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 // The anchor must move on a bound the stopping rule didn't
                 // bias (decision 54).
                 if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
+                    self.ledger.get_mut(&key).unwrap().verdict = Some(true);
                     self.pending_accept = Some(PendingAccept {
                         key,
                         lower_bound: evidence.lower_bound(),
@@ -3224,7 +3331,11 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     .engine
                     .nd_replay_once(&realized, Some(self.target_origin.as_str()))
                     .await?;
-                self.record_evidence(&key, rerun.failed);
+                self.ledger
+                    .get_mut(&key)
+                    .unwrap()
+                    .evidence
+                    .record(rerun.failed);
             }
         })
     }

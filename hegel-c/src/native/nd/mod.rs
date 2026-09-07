@@ -6,6 +6,8 @@
 //! simulation results that derived it (`notes/experiments/`, decisions
 //! 7, 11, 16, 17, 19, 23, 54-56, 71 in `notes/decisions.md`).
 
+use alloc::collections::BTreeMap;
+
 /// Replay evidence for one proposition ("this test case reproduces this
 /// origin"). Every replay is one Bernoulli trial of the test case under the
 /// standing replay procedure — whatever timeline it realized — so failures
@@ -94,6 +96,25 @@ pub(crate) fn discovery_bar(evidence: &Evidence) -> BarVerdict {
     BarVerdict::Continue
 }
 
+/// Discovery-bar batches one origin may spend per run across the sweep,
+/// shrink admission, and the pooled review (decision 72): recycling a
+/// re-sighted origin into fresh batches compounds the bar's per-batch
+/// false accept without bound over a long run (21% per q = 0.02 fluke by
+/// 200 sweep epochs, experiment 014); five attempts pin it at 2.9% and
+/// keep >95% power at the target rate. At the cap the origin is rejected
+/// without a batch.
+pub(crate) const BAR_ATTEMPTS_PER_RUN: u64 = 5;
+
+/// Bar attempts per origin across its backtracks (gate G25): a probed
+/// entry reaches the bar at roughly its true reproduction rate, each
+/// attempt holds 45% target-regime power, and three compose to ~83%. A
+/// budget separate from [`BAR_ATTEMPTS_PER_RUN`] because backtrack
+/// candidates come from history, which is disproportionately the real
+/// bug's pre-flip sightings (experiment 014's mixed-origin table); the
+/// two compose to a per-origin ceiling of eight batches, 4.6% false
+/// confirm per q = 0.02 fluke.
+pub(crate) const BACKTRACK_BAR_ATTEMPTS: u64 = 3;
+
 pub(crate) const GAUNTLET_CAP: u64 = 30;
 pub(crate) const GAUNTLET_GAMMA: f64 = 0.8;
 
@@ -104,12 +125,13 @@ pub(crate) const GAUNTLET_GAMMA: f64 = 0.8;
 /// q = 0.02 fluke.
 pub(crate) const GAUNTLET_FLOOR: f64 = 0.05;
 
-/// Failures a gauntlet accept requires. A single failure on a fresh ledger
-/// bounds the rate above 0.2065 (Wilson at 1/1), so without a minimum every
-/// threshold below that accepts on the recruiting run and the whole
-/// low-anchor regime degenerates to single-run accepts (experiment 008,
-/// H1: 33% bug loss at the decision-16 target). Falling short is never
+/// Base failure minimum for a gauntlet accept. A single failure on a fresh
+/// ledger bounds the rate above 0.2065 (Wilson at 1/1), so without a
+/// minimum every threshold below that accepts on the recruiting run and the
+/// whole low-anchor regime degenerates to single-run accepts (experiment
+/// 008, H1: 33% bug loss at the decision-16 target). Falling short is never
 /// grounds to reject — the verdict stays Continue and evidence accumulates.
+/// [`GauntletSpend`] escalates the minimum within a run (decision 72).
 pub(crate) const GAUNTLET_MIN_FAILS: u64 = 4;
 
 /// Anchors at or above this run the gauntlet at gamma 1.0 instead of
@@ -137,34 +159,148 @@ pub(crate) enum GauntletVerdict {
     Continue,
 }
 
-/// The shrink-candidate gauntlet (decisions 7, 17, 54): accept when the
-/// evidence carries [`GAUNTLET_MIN_FAILS`] failures and its lower bound
-/// clears `max(gamma * anchor, GAUNTLET_FLOOR)`, with gamma
+/// The accept threshold the gauntlet prices candidates against for an
+/// incumbent at `anchor`: `max(gamma * anchor, GAUNTLET_FLOOR)`, with gamma
 /// [`GAUNTLET_GAMMA`] below [`RETENTION_HIGH_WATER`] and 1.0 at or above
-/// it; reject when the upper bound proves the threshold unreachable or the
-/// cap is spent, otherwise keep rerunning — short of the failure
-/// minimum the verdict is Continue, never Reject. Operating points: the
-/// exact-DP rows in experiment 008, pinned by
-/// `gauntlet_matches_the_008_operating_points`; worst-case false accept is
-/// 4.0e-4 per proposal against a q = 0.02 fluke, under the 1e-3 target,
-/// which also absorbs the check-per-run stopping bias (z stays 1.96). The
-/// caller raises its monotone anchor from the accepted candidate's
-/// topped-up ledger — never lowering it, and post-accept re-measurement
-/// of the standing incumbent never feeds it (decision 19).
-pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
+/// it.
+pub(crate) fn gauntlet_threshold(anchor: f64) -> f64 {
     let gamma = if anchor >= RETENTION_HIGH_WATER {
         1.0
     } else {
         GAUNTLET_GAMMA
     };
-    let threshold = (gamma * anchor).max(GAUNTLET_FLOOR);
-    if evidence.fails >= GAUNTLET_MIN_FAILS && evidence.lower_bound() >= threshold {
+    (gamma * anchor).max(GAUNTLET_FLOOR)
+}
+
+/// The shrink-candidate gauntlet (decisions 7, 17, 54): accept when the
+/// evidence carries `min_fails` failures and its lower bound clears
+/// [`gauntlet_threshold`]; reject when the upper bound proves the threshold
+/// unreachable or the cap is spent, otherwise keep rerunning — short of the
+/// failure minimum the verdict is Continue, never Reject. `min_fails` is
+/// [`GAUNTLET_MIN_FAILS`] until the alpha budget escalates it (decision 72),
+/// and is pinned per candidate: a stopping rule never changes mid-test.
+/// Operating points: the exact-DP rows in experiments 008 and 014, pinned
+/// by `gauntlet_matches_the_008_operating_points`; the check-per-run
+/// stopping bias is absorbed in those numbers (z stays 1.96). The caller
+/// raises its monotone anchor from the accepted candidate's topped-up
+/// ledger — never lowering it, and post-accept re-measurement of the
+/// standing incumbent never feeds it (decision 19).
+pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64, min_fails: u64) -> GauntletVerdict {
+    gauntlet_at(evidence, gauntlet_threshold(anchor), min_fails)
+}
+
+fn gauntlet_at(evidence: &Evidence, threshold: f64, min_fails: u64) -> GauntletVerdict {
+    if evidence.fails >= min_fails && evidence.lower_bound() >= threshold {
         return GauntletVerdict::Accept;
     }
     if evidence.upper_bound() < threshold || evidence.runs >= GAUNTLET_CAP {
         return GauntletVerdict::Reject;
     }
     GauntletVerdict::Continue
+}
+
+/// False-accept budget one origin's gauntlet proposals share per run
+/// (decision 72): every proposal is charged its exact false-accept mass
+/// against a [`CHARGE_FLUKE_RATE`] fluke before it runs, so expected false
+/// accepts stay under the budget however many candidates the body realizes
+/// — the uncharged rule's exposure reaches 33% by a thousand
+/// floor-threshold proposals (experiment 014). At the floor the budget
+/// affords ~50 fast-sweep proposals before the failure minimum escalates.
+pub(crate) const GAUNTLET_ALPHA_BUDGET: f64 = 0.02;
+
+/// Escalation ceiling for the failure minimum: at eight required failures
+/// a proposal's charge is at most ~1e-7, so proposals past an exhausted
+/// budget still run instead of stalling the shrink, adding a negligible
+/// tail (experiment 014).
+pub(crate) const GAUNTLET_MIN_FAILS_CEILING: u64 = 8;
+
+/// The design fluke rate charges are priced against (decisions 16, 23).
+const CHARGE_FLUKE_RATE: f64 = 0.02;
+
+/// One origin's per-run gauntlet alpha-spending state (decision 72).
+pub(crate) struct GauntletSpend {
+    remaining: f64,
+    min_fails: u64,
+}
+
+impl Default for GauntletSpend {
+    fn default() -> Self {
+        GauntletSpend {
+            remaining: GAUNTLET_ALPHA_BUDGET,
+            min_fails: GAUNTLET_MIN_FAILS,
+        }
+    }
+}
+
+impl GauntletSpend {
+    /// Charge one gauntlet proposal and return the failure minimum its
+    /// verdicts use. `seed` is the candidate's ledger before the proposal;
+    /// the charge is the proposal's false-accept mass against a
+    /// [`CHARGE_FLUKE_RATE`] fluke — recruit-then-drive in a fast sweep,
+    /// drive-to-bound under `drive` (a confirmation sweep). A candidate
+    /// already `pinned` is charged at its own minimum even past the budget
+    /// (its stopping rule cannot change, and per-candidate overdraft is
+    /// bounded by one charge); a new candidate is pinned at the current
+    /// minimum, escalated up to [`GAUNTLET_MIN_FAILS_CEILING`] first when
+    /// the remainder cannot afford it. An unreachable threshold charges
+    /// zero — the high-anchor cost lottery (experiment 012) spends nothing.
+    pub(crate) fn charge(
+        &mut self,
+        seed: &Evidence,
+        anchor: f64,
+        drive: bool,
+        pinned: Option<u64>,
+    ) -> u64 {
+        let threshold = gauntlet_threshold(anchor);
+        let alpha = |min_fails: u64| {
+            if drive {
+                gauntlet_alpha(*seed, threshold, min_fails)
+            } else {
+                let recruited = Evidence {
+                    fails: seed.fails + 1,
+                    runs: seed.runs + 1,
+                };
+                CHARGE_FLUKE_RATE * gauntlet_alpha(recruited, threshold, min_fails)
+            }
+        };
+        if let Some(min_fails) = pinned {
+            self.remaining -= alpha(min_fails);
+            return min_fails;
+        }
+        loop {
+            let charge = alpha(self.min_fails);
+            if charge <= self.remaining || self.min_fails >= GAUNTLET_MIN_FAILS_CEILING {
+                self.remaining -= charge;
+                return self.min_fails;
+            }
+            self.min_fails += 1;
+        }
+    }
+}
+
+/// P(the evidence loop accepts | the candidate is a [`CHARGE_FLUKE_RATE`]
+/// fluke): exact DP over the (runs, fails) probability mass from `seed`
+/// under the per-replay verdict checks — the false-accept mass one driven
+/// proposal contributes (experiment 014). Terminates because every
+/// Continue adds a run and [`GAUNTLET_CAP`] runs force a verdict.
+fn gauntlet_alpha(seed: Evidence, threshold: f64, min_fails: u64) -> f64 {
+    let mut mass = BTreeMap::from([((seed.runs, seed.fails), 1.0f64)]);
+    let mut accept = 0.0;
+    while !mass.is_empty() {
+        let mut next = BTreeMap::new();
+        for (&(runs, fails), &m) in &mass {
+            match gauntlet_at(&Evidence { fails, runs }, threshold, min_fails) {
+                GauntletVerdict::Accept => accept += m,
+                GauntletVerdict::Reject => {}
+                GauntletVerdict::Continue => {
+                    *next.entry((runs + 1, fails + 1)).or_insert(0.0) += m * CHARGE_FLUKE_RATE;
+                    *next.entry((runs + 1, fails)).or_insert(0.0) += m * (1.0 - CHARGE_FLUKE_RATE);
+                }
+            }
+        }
+        mass = next;
+    }
+    accept
 }
 
 /// Total stored timelines per origin, incumbent included — the invariant

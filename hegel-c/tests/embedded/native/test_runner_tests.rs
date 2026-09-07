@@ -2466,7 +2466,7 @@ fn the_discovery_bar_starts_from_the_first_check_seed() {
             ctx.nd_origins.seed_evidence(&origin, seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(&origin, &[ChoiceValue::Boolean(true)])
+                .nd_evidence_batch(&origin, &[ChoiceValue::Boolean(true)], None)
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -2704,6 +2704,348 @@ fn three_bar_rejections_exhaust_the_backtrack() {
                 evidence.0, 3,
                 "each one-shot candidate failed its scan probe once"
             );
+        },
+    );
+}
+
+#[test]
+fn a_spent_backtrack_budget_short_circuits_the_next_backtrack() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        quiet_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            seed_history(ctx, origin, &[90, 80, 70]);
+            ctx.nd_flip();
+            for _ in 0..nd::BACKTRACK_BAR_ATTEMPTS {
+                assert!(ctx.nd_origins.spend_backtrack_attempt(origin));
+            }
+            let Backtrack::Exhausted { evidence } = ctx.backtrack(origin).await.unwrap() else {
+                panic!("expected exhaustion");
+            };
+            assert_eq!(evidence, (0, 0));
+            assert_eq!(
+                execs.load(Ordering::SeqCst),
+                0,
+                "a spent budget skips the scan"
+            );
+        },
+    );
+}
+
+#[test]
+fn the_backtrack_stops_at_a_candidate_it_cannot_afford_to_bar() {
+    let bug = "bug";
+    let seen = Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
+    let body_seen = seen.clone();
+    with_engine(
+        quiet_settings(),
+        None,
+        move |ds| {
+            let Ok(v) = rint(ds, 0, 100) else {
+                return TestCaseResult::Overrun;
+            };
+            if v >= 80 && body_seen.borrow_mut().insert(v) {
+                boom(bug)
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            seed_history(ctx, &origin, &[90, 80]);
+            ctx.nd_flip();
+            for _ in 0..nd::BACKTRACK_BAR_ATTEMPTS - 1 {
+                assert!(ctx.nd_origins.spend_backtrack_attempt(&origin));
+            }
+            let Backtrack::Exhausted { evidence } = ctx.backtrack(&origin).await.unwrap() else {
+                panic!("expected exhaustion");
+            };
+            assert_eq!(
+                evidence,
+                (2, 12),
+                "two reproducing scan probes and one rejected batch, then the \
+                 second candidate finds no attempt left"
+            );
+        },
+    );
+}
+
+#[test]
+fn the_sweep_rejects_an_origin_out_of_bar_attempts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
+                assert!(ctx.nd_origins.spend_bar_attempt(origin));
+            }
+            let output = Settings::new().output;
+            ctx.nd_discovery_sweep(Verbosity::Debug, &output)
+                .await
+                .unwrap();
+            assert!(
+                !ctx.interesting.contains_key(origin),
+                "at the attempt cap the origin is evicted"
+            );
+            assert_eq!(execs.load(Ordering::SeqCst), 0, "no batch runs at the cap");
+            assert_eq!(ctx.nd_origins.unconfirmed().next(), Some(origin));
+        },
+    );
+}
+
+#[test]
+fn shrink_admission_rejects_an_origin_out_of_bar_attempts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let origin = "Panic: bug".to_string();
+            ctx.record_run(
+                &interesting_at(&origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.history.remove(&origin);
+            for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
+                assert!(ctx.nd_origins.spend_bar_attempt(&origin));
+            }
+            let output = ctx.settings.output.clone();
+            let mut shrunk = crate::native::HashSet::default();
+            let timed_out = ctx
+                .shrink_origin(
+                    origin.clone(),
+                    vec![bool_node(true)],
+                    Verbosity::Quiet,
+                    &output,
+                    None,
+                    &mut shrunk,
+                )
+                .await
+                .unwrap();
+            assert!(!timed_out);
+            assert!(shrunk.contains(&origin));
+            assert!(!ctx.interesting.contains_key(&origin));
+            assert_eq!(
+                execs.load(Ordering::SeqCst),
+                0,
+                "no admission batch runs at the cap"
+            );
+        },
+    );
+}
+
+#[test]
+fn the_final_replay_review_confirms_through_the_bar() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            assert!(ctx.nd_origins.needs_confirmation(origin));
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap();
+            assert!(
+                !ctx.nd_origins.needs_confirmation(origin),
+                "the review's reproducing run passed the bar"
+            );
+            assert!(
+                ctx.interesting.contains_key(origin),
+                "the map incumbent stays"
+            );
+            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            assert!(caveat.contains("confirmed"), "{caveat}");
+            assert!(
+                caveat.contains("report time"),
+                "the review replays land in the report counts: {caveat}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_bar_rejected_review_falls_through_to_eviction() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let n = execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if n == 0 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.history.remove(origin);
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap();
+            assert!(ctx.nd_origins.needs_confirmation(origin));
+            assert!(
+                !ctx.interesting.contains_key(origin),
+                "a bar-rejected review evicts"
+            );
+            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            assert!(caveat.contains("below the confirmation bar"), "{caveat}");
+        },
+    );
+}
+
+#[test]
+fn a_dry_review_folds_the_exhausted_backtracks_evidence() {
+    with_engine(
+        quiet_settings(),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            seed_history(ctx, origin, &[90, 80]);
+            ctx.nd_flip();
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap();
+            assert!(!ctx.interesting.contains_key(origin));
+            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            assert!(
+                caveat.contains("failed 0 of 32 replays"),
+                "the review's 29 trials and the scan's 3 both count: {caveat}"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_out_of_attempts_review_evicts_without_a_batch() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let origin = "Panic: bug";
+            ctx.record_run(
+                &interesting_at(origin, vec![bool_node(true)]),
+                Duration::ZERO,
+                false,
+            );
+            ctx.history.remove(origin);
+            for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
+                assert!(ctx.nd_origins.spend_bar_attempt(origin));
+            }
+            let output = ctx.settings.output.clone();
+            ctx.final_replay(Verbosity::Quiet, &output, None, false)
+                .await
+                .unwrap();
+            assert!(
+                !ctx.interesting.contains_key(origin),
+                "a reproducing review at the attempt cap still evicts"
+            );
+            assert_eq!(
+                execs.load(Ordering::SeqCst),
+                1,
+                "the reproduction runs, the bar batch does not"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_expired_deadline_rejects_the_evidence_batch() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let Some(now) = crate::sys::Instant::now() else {
+                return;
+            };
+            let batch = ctx
+                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], Some(now))
+                .await
+                .unwrap();
+            assert!(!batch.bar_accepted, "a batch cut short proves nothing");
+            assert_eq!(batch.evidence.runs(), 0);
+            assert_eq!(execs.load(Ordering::SeqCst), 0);
         },
     );
 }
@@ -3859,7 +4201,7 @@ fn nd_evidence_batch_restores_the_capture_flag() {
         },
         async |ctx| {
             ctx.capture_replays = true;
-            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
                 .await
                 .unwrap();
             assert!(
@@ -3867,7 +4209,7 @@ fn nd_evidence_batch_restores_the_capture_flag() {
                 "a batch inside a capture window restores the flag"
             );
             ctx.capture_replays = false;
-            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
                 .await
                 .unwrap();
             assert!(!ctx.capture_replays);
@@ -3893,7 +4235,7 @@ fn anchor_seed_extension_reaches_the_reference_batch() {
         },
         async |ctx| {
             let batch = ctx
-                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)])
+                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -3905,7 +4247,7 @@ fn anchor_seed_extension_reaches_the_reference_batch() {
             assert!(batch.evidence.lower_bound() > nd::RETENTION_HIGH_WATER);
             assert!(batch.witness.is_some());
             let rejected = ctx
-                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(false)])
+                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(false)], None)
                 .await
                 .unwrap();
             assert!(!rejected.bar_accepted);
@@ -3947,16 +4289,113 @@ fn nd_gauntlet_accept_tops_the_ledger_up_to_the_reference_batch() {
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(matched);
             let accept = probe.pending_accept.as_ref().unwrap();
-            let evidence = probe.ledger.get(&accept.key).unwrap();
+            let ledger = probe.ledger.get(&accept.key).unwrap();
             assert_eq!(
-                evidence.runs(),
+                ledger.evidence.runs(),
                 nd::ANCHOR_SEED_RUNS,
                 "an accept tops the ledger up before it can raise the anchor"
             );
+            assert_eq!(ledger.verdict, Some(true), "an accept latches");
             assert!(
                 accept.lower_bound > nd::RETENTION_HIGH_WATER,
                 "an always-failing candidate seeds a high-water anchor, got {}",
                 accept.lower_bound
+            );
+        },
+    );
+}
+
+#[test]
+fn an_exhausted_alpha_budget_pins_new_candidates_at_the_ceiling() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            boom("bug")
+        },
+        async |ctx| {
+            let origin = "Panic: bug".to_string();
+            let spend = ctx.gauntlet_spend.entry(origin.clone()).or_default();
+            while spend.charge(&nd::Evidence::default(), 0.0, true, None)
+                != nd::GAUNTLET_MIN_FAILS_CEILING
+            {}
+            let output = ctx.settings.output.clone();
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: origin,
+                verbosity: Verbosity::Quiet,
+                output,
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.0,
+                sweep: SweepMode::Fast,
+                pending_accept: None,
+            };
+            let nodes = vec![bool_node(true)];
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(
+                matched,
+                "an always-failing candidate still accepts at the ceiling"
+            );
+            let accept = probe.pending_accept.as_ref().unwrap();
+            let ledger = probe.ledger.get(&accept.key).unwrap();
+            assert_eq!(
+                ledger.min_fails,
+                nd::GAUNTLET_MIN_FAILS_CEILING,
+                "the engine-held spend map outlives probe rebuilds"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_rejected_candidate_latches_its_verdict() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let n = execs.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if n == 0 {
+                boom("bug")
+            } else {
+                TestCaseResult::Valid
+            }
+        },
+        async |ctx| {
+            let output = ctx.settings.output.clone();
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: bug".to_string(),
+                verbosity: Verbosity::Quiet,
+                output,
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.5,
+                sweep: SweepMode::Fast,
+                pending_accept: None,
+            };
+            let nodes = vec![bool_node(true)];
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(!matched, "the recruit's ledger drives to a reject");
+            let key = serialize_choices(&[ChoiceValue::Boolean(true)]);
+            assert_eq!(probe.ledger.get(&key).unwrap().verdict, Some(false));
+            let replays = execs.load(Ordering::SeqCst);
+            let (rematch, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(!rematch, "a bound verdict is final");
+            assert_eq!(
+                execs.load(Ordering::SeqCst),
+                replays + 1,
+                "a latched reject costs the proposal run and no drive"
             );
         },
     );
@@ -6895,7 +7334,7 @@ fn a_seeded_bar_quota_with_no_reproducing_replay_rejects_at_the_cap() {
             ctx.nd_origins.seed_evidence(origin, seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(origin, &[ChoiceValue::Integer(BigInt::from(3))])
+                .nd_evidence_batch(origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
                 .await
                 .unwrap();
             assert!(
@@ -6936,7 +7375,7 @@ fn a_seeded_bar_quota_accepts_once_a_replay_reproduces() {
             ctx.nd_origins.seed_evidence(&origin, seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(&origin, &[ChoiceValue::Integer(BigInt::from(3))])
+                .nd_evidence_batch(&origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -7193,7 +7632,14 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
             for _ in 0..nd::ANCHOR_SEED_RUNS {
                 evidence.record(true);
             }
-            probe.ledger.insert(key, evidence);
+            probe.ledger.insert(
+                key,
+                CandidateLedger {
+                    evidence,
+                    min_fails: nd::GAUNTLET_MIN_FAILS,
+                    verdict: Some(true),
+                },
+            );
             let nodes = vec![int_node(9)];
             let (matched, actual, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(

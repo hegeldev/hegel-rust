@@ -292,6 +292,32 @@ fn confirm_truncates_an_oversized_pool_to_pool_cap() {
 }
 
 #[test]
+fn bar_attempts_are_budgeted_per_origin_per_run() {
+    let mut lc = OriginLifecycle::default();
+    for _ in 0..crate::native::nd::BAR_ATTEMPTS_PER_RUN {
+        assert!(lc.spend_bar_attempt("a"));
+    }
+    assert!(!lc.spend_bar_attempt("a"));
+    assert!(!lc.spend_bar_attempt("a"));
+    assert!(lc.spend_bar_attempt("b"), "budgets are per origin");
+}
+
+#[test]
+fn backtrack_attempts_are_a_separate_budget() {
+    let mut lc = OriginLifecycle::default();
+    for _ in 0..crate::native::nd::BAR_ATTEMPTS_PER_RUN {
+        assert!(lc.spend_bar_attempt("a"));
+    }
+    assert!(lc.backtrack_attempts_left("a"));
+    for _ in 0..crate::native::nd::BACKTRACK_BAR_ATTEMPTS {
+        assert!(lc.spend_backtrack_attempt("a"));
+    }
+    assert!(!lc.backtrack_attempts_left("a"));
+    assert!(!lc.spend_backtrack_attempt("a"));
+    assert!(lc.backtrack_attempts_left("b"));
+}
+
+#[test]
 fn a_never_replayed_origin_gets_the_observed_once_caveat() {
     let mut lc = OriginLifecycle::default();
     lc.observe("a");

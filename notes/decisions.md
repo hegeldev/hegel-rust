@@ -750,3 +750,57 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     describe the old estimator, and divergence-heavy bodies now measure at the
     lower rate a user replaying the stored state actually sees; re-measurement
     is a candidate follow-up. (DRM directed.)
+
+72. **Multiplicity control: repeated statistical tests spend bounded per-origin
+    budgets** (experiment 014; design in `research/fcr-analysis.md`). The
+    per-test operating points were sound but composed without bound: the sweep
+    re-barred every re-sighting (21% false confirm per q = 0.02 fluke by 200
+    epochs), the gauntlet charged nothing per proposal while a body can realize
+    unbounded candidate counts (33% exposure per thousand floor-threshold
+    proposals, and a confirmation-sweep drive carries 2.9e-3 — seven times the
+    Fast alpha decision 54's arithmetic composed), and the final replay's
+    pooled review confirmed on any failure with no bar at all (49-59% per
+    fluke). Control is sequential and online, not Benjamini-Hochberg: verdicts
+    act immediately and irreversibly, so there is no batch of p-values to
+    rank — budgets bound the per-origin error rate instead. Three mechanisms:
+    `BAR_ATTEMPTS_PER_RUN = 5` bar batches per origin per run shared by the
+    sweep, shrink admission, and the pooled review (composed false confirm
+    2.9%, >95% target-regime power); at the cap the origin is rejected with
+    evidence (0, 0) and evicted, keeping the full unconfirmed treatment, and
+    the backtrack keeps a separate `BACKTRACK_BAR_ATTEMPTS = 3` budget, now
+    per origin per run rather than per call (history skews toward the real
+    bug's pre-flip sightings; ceiling F = 8, 4.6%).
+    `GAUNTLET_ALPHA_BUDGET = 0.02` per origin per run, held on the engine so
+    re-shrink probe rebuilds keep spending from it: every proposal on an
+    unbound ledger is charged its exact unconditional false-accept mass (DP at
+    q0 = 0.02 — fast recruit-then-drive 4.0e-4 at the floor, confirmation
+    drive 2.9e-3, unreachable thresholds zero, so the 012 lottery is free);
+    when a new ledger's charge is unaffordable the failure minimum escalates
+    4 → `GAUNTLET_MIN_FAILS_CEILING` = 8 (tail ≤ 1e-7 per proposal). A
+    ledger's minimum pins at its first charge and its bound verdict latches —
+    a stopping rule never changes mid-test, and the latched accept preserves
+    the nested-clone-splice guard. The pooled review's any-failure rule
+    retires: a reproducing review run is a sighting handed to a standard
+    evidence batch on the origin's remaining bar attempts (fluke confirm
+    0.487 → 0.003; power at p = 0.1 falls 0.97 → 0.44 before the backtrack
+    rescue), with the shrink deadline bounding the batch — an expired
+    deadline rejects, since a cut-short batch proves nothing. Anchors keep
+    z = 1.96 with no haircut: selection miscoverage concentrates at the
+    accept boundary while mean anchors sit at or below truth, the
+    conservative direction under decision 2, absorbed by the gamma slack.
+    Amendments: decision 35's "no post-final-replay bar" headline is
+    superseded for pending origins (its review-discovered-origins scope
+    stands); decision 18's stopping certificate gets easier to obtain at
+    escalated minima, stopping sooner and missing recoverable reductions
+    (recruited-accept at p = 0.1 against its realistic 0.053 threshold:
+    0.57/0.33/0.16 at minima 4/5/6); decision 54's per-shrink composition
+    claim is superseded by the budget bound; decision 66's backtrack budget
+    becomes per-origin-per-run; decision 23's within-run recycling is capped,
+    so sub-target bugs lean on cross-run recycling (p = 0.05 confirms 42%
+    per run instead of near-certainly given a long run, p ≥ 0.1 loses ≤ 5
+    points, and mixed bug-plus-fluke origins pay most: bug confirm
+    0.951/0.719/0.450 at fluke share 0/0.5/0.75). Rejected: BH over batched
+    p-values (nothing to batch), alpha-investing with accept payouts (bounds
+    mFDR, not the per-origin rate, and needs its own calibration), a
+    count-based doubling schedule (terminal stage still leaks unboundedly and
+    it overcharges mid-anchor proposals). (DRM directed; review-refined.)

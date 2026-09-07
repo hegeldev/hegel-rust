@@ -100,14 +100,23 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
   the per-timeline estimand rather than fixing it.
 - Discovery bar (decision 23, experiment 005A): gate 10 misses, reject on zero
   failures; otherwise extend to 40 replays, accepting early on the 4th failure
-  (`GATE_RUNS`, `CONFIRM_CAP`, `CONFIRM_MIN_FAILS`).
+  (`GATE_RUNS`, `CONFIRM_CAP`, `CONFIRM_MIN_FAILS`). Bar batches spend a per-origin
+  per-run budget of `BAR_ATTEMPTS_PER_RUN = 5` across the sweep, shrink admission, and
+  the pooled review (decision 72, experiment 014): at the cap the origin is rejected
+  with evidence (0, 0) instead of batched, so a re-sighted fluke cannot recycle the
+  bar's false-accept rate without bound.
 - Gauntlet (experiments 001/003, recalibrated by 008/decision 54): accept on at least
   `GAUNTLET_MIN_FAILS = 4` failures with ledger LCB clearing `max(gamma * anchor, 0.05)`,
   where gamma is 0.8 below `RETENTION_HIGH_WATER = 0.8` and 1.0 at or above it (decision
   55); reject when the UCB proves the threshold unreachable or at 30 runs; short
   of the failure minimum the verdict is Continue, never Reject (`GAUNTLET_GAMMA`,
   `GAUNTLET_FLOOR`, `GAUNTLET_CAP`; the floor is derived: the min-fails acceptance
-  boundary at the cap).
+  boundary at the cap). Proposals spend a per-origin per-run alpha budget
+  (`GauntletSpend`, `GAUNTLET_ALPHA_BUDGET = 0.02`, decision 72): each is charged its
+  exact unconditional false-accept mass against a q = 0.02 fluke (an exact DP,
+  `gauntlet_alpha`), and when a new candidate's charge is unaffordable the failure
+  minimum escalates up to `GAUNTLET_MIN_FAILS_CEILING = 8`, pinned per candidate at
+  first charge.
 - Anchor seeding (decision 54): every anchor-seeding batch reaches `ANCHOR_SEED_RUNS = 20`
   runs — the discovery bar's batch extends past its accept, and a gauntlet
   accept's ledger is topped up — so anchors estimate the reproduction rate rather than the
@@ -115,7 +124,9 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 - First-interesting check: `FIRST_CHECK_REPLAYS = 4` exact replays per discovered origin,
   stop on first miss (decision 64 — reproduction odds and the seeded bar make more
   redundant). Backtrack: the scan is capped at `BACKTRACK_SCAN_REPLAYS` = `CONFIRM_CAP` =
-  40 replays and `BACKTRACK_BAR_ATTEMPTS = 3` discovery-bar batches (decision 66).
+  40 replays and `BACKTRACK_BAR_ATTEMPTS = 3` discovery-bar batches, a budget held per
+  origin per run across backtracks (decision 66, amended by 72), separate from
+  `BAR_ATTEMPTS_PER_RUN` because history skews toward the real bug's pre-flip sightings.
 - Replay budgets from the p >= 0.1 target: `replay_budget(rate, tolerance)` with 5% miss
   tolerance gives ~29 replays, early exit on failure, so live bugs cost ~1/p
   (`TARGET_FAILURE_RATE`, `reuse_replay_budget`).
@@ -209,7 +220,13 @@ raised only at validated events, so candidate and incumbent sit on one estimand
 `GAUNTLET_MIN_FAILS` failures, and the accepted ledger is topped up to `ANCHOR_SEED_RUNS`
 before its bound can move the anchor (decision 54); at anchors of `RETENTION_HIGH_WATER`
 and above the gauntlet runs at gamma 1.0, refusing to trade a zero-miss incumbent's
-reliability down (decision 55). There is no checkpoint/rollback (decision 17). All
+reliability down (decision 55). Every proposal on an unbound ledger is charged against
+the origin's alpha budget before it runs (decision 72): the budget lives on the engine
+(`Engine.gauntlet_spend`) so a re-shrink's rebuilt probe keeps spending from it, each
+ledger's failure minimum pins at its first charge, and bound verdicts latch — a latched
+accept keeps re-proposals of a conclusively accepted timeline acceptable (the nested
+clone shrink's final-splice guard), a latched reject spends no further replays or
+budget. There is no checkpoint/rollback (decision 17). All
 acceptance paths gate on the same validated-accept event, which is a
 gauntlet accept *and* the shrinker's adoption (`candidate_adopted`): an accepted candidate
 the shrinker discards — a punned realization, a sort-key-larger mutation probe — raises no
@@ -317,7 +334,11 @@ single-failure truncation. An origin unconfirmed at report time — a bar reject
 first observed by a report-time measurement run — still fails the run (decision 3), reported
 caveat-only with no blob, and only when nothing confirmed or trusted (decision 24). The
 final replay evicts an origin its bar rejects; origins admitted during the final replay are
-never barred and recycle via rediscovery next run (decision 35). The frontend
+never barred and recycle via rediscovery next run (decision 35). A pending origin the
+pooled review reproduces is not confirmed by that failure alone: the reproducing run faces
+a standard evidence batch on the origin's remaining bar attempts, bounded by the shrink
+deadline, and a rejected or unaffordable batch falls through to backtrack-then-evict
+(decision 72 — the any-failure rule confirmed a q = 0.02 fluke about half the time). The frontend
 (`src/run_lifecycle.rs::drive`) captures each interesting case's buffered output per origin
 as the run pumps — replacement is rank-gated (diagnostic, then draw lines, then bare), newest
 at the best rank, the panic payload travelling with its capture (decision 37) — then prints
@@ -380,6 +401,7 @@ root crate's changelog covers only the user-facing behavior.
 | FAILED vs FAILED_NONDETERMINISTIC | FAILED + caveat accessor (decision 27) |
 | Boost default | Reliability-floor heuristic, no setting (decision 28) |
 | Clone-kind serialization fidelity | Values-only kept (decision 32) |
+| Multiple-testing correction | Sequential per-origin budgets, not Benjamini-Hochberg (decision 72): verdicts act immediately and irreversibly, so there is no p-value batch to rank |
 
 ## Known risks (accepted)
 
@@ -397,7 +419,16 @@ root crate's changelog covers only the user-facing behavior.
 - **Anti-conservative statistics**: per-run peeking, stop-on-fail, and asymmetric miss
   weighting all bias the Wilson intervals toward acceptance relative to nominal coverage.
   The exact-DP operating points are the specification and z is a tuning constant.
-  Experiment 008 measures the realized error.
+  Experiment 008 measures the realized error per test; composition across repeated tests
+  is bounded by decision 72's per-origin budgets.
+- **Multiplicity control's power price** (decision 72, experiment 014): within-run
+  recycling is capped, so a sub-target bug (p ~ 0.05) confirms in 42% of runs instead of
+  near-certainly given a long one, leaning on cross-run recycling; a mixed bug-plus-fluke
+  origin pays most (bug confirm 0.95/0.72/0.45 at fluke share 0/0.5/0.75); and
+  floor-threshold shrinks that exhaust the alpha budget escalate the failure minimum,
+  which also makes decision 18's "accepted nothing" stopping certificate easier to
+  obtain — stopping earlier and missing recoverable reductions. All conservative under
+  decision 2: refused candidates and confirms keep incumbents, never lose failures.
 - **Shrink opacity below `Debug`**: a stalled shrink and a finished one print identically
   except at `Debug` verbosity.
 - **Quiet-flip invisibility**: under quiet strictness nothing below `Debug` reveals that a
