@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.8 - 2026-09-07
+
+This patch improves the failure reports of stateful tests. A failing `#[invariant]` now ends the report with `Invariant <name> failed:`, and a panicking `#[rule]` body with `Rule <name> failed:`, instead of leaving only the panic's file and line to identify the failing method. The `Initial invariant check.` line is reworded to `Checking invariants on the initial state.` (likewise for the final check) and no longer printed for machines with no invariants. ([#440](https://github.com/hegeldev/hegel-rust/issues/440))
+
 ## 0.39.7 - 2026-09-07
 
 This patch adds `generators::btree_sets` and `generators::btree_maps` for generating `BTreeSet` and `BTreeMap` values, with the same `min_size`/`max_size` builders as `hashsets` and `hashmaps`. Both types also implement `DefaultGenerator`, so `gs::default::<BTreeMap<u8, u8>>()` and `#[derive(DefaultGenerator)]` on structs containing them now work.
