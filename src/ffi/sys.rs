@@ -2,6 +2,148 @@
 //!
 //! Everything the frontend knows about libhegel comes through this module:
 //! the opaque handle types, the `repr(C)` enums and structs, and the
-//! `hegel_*` functions themselves. For now it re-exports the `hegel_c` rlib.
+//! `hegel_*` functions themselves. It has two interchangeable forms. By
+//! default the engine is a separately built `libhegel_c` shared library:
+//! [`types`] mirrors the `repr(C)` types and [`loader`] resolves each
+//! function out of the library at runtime, so the `hegeltest-c` crate — and
+//! its whole dependency tree — never appears in a consumer's cargo graph.
+//! With the `static-engine` feature the module is instead a re-export of the
+//! `hegel_c` rlib, linking the engine into the binary like any other Rust
+//! dependency.
+//!
+//! Either way the surface is identical, down to every function being
+//! `unsafe`: the one safe C function, `hegel_context_new`, is wrapped so
+//! call sites cannot tell the modes apart. [`for_each_hegel_fn`] is the
+//! single list of functions both forms are generated from; the embedded
+//! tests compile-assert it, and the mirrored types, against the real
+//! `hegel_c` definitions whenever `static-engine` makes both visible.
 
+#[cfg_attr(feature = "static-engine", allow(unused_macros))]
+macro_rules! for_each_hegel_fn {
+    ($callback:ident) => {
+        $callback! {
+            fn hegel_collection_free(ctx: *mut HegelContext, collection: *mut HegelCollection) -> hegel_result_t;
+            fn hegel_collection_more(ctx: *mut HegelContext, tc: *mut HegelTestCase, collection: *mut HegelCollection, out_more: *mut bool) -> hegel_result_t;
+            fn hegel_collection_reject(ctx: *mut HegelContext, tc: *mut HegelTestCase, collection: *mut HegelCollection, why: *const c_char) -> hegel_result_t;
+            fn hegel_context_free(ctx: *mut HegelContext) -> hegel_result_t;
+            fn hegel_context_last_error(ctx: *const HegelContext) -> *const c_char;
+            fn hegel_context_new() -> *mut HegelContext;
+            fn hegel_event(ctx: *mut HegelContext, tc: *mut HegelTestCase, label: *const c_char) -> hegel_result_t;
+            fn hegel_event_value(ctx: *mut HegelContext, tc: *mut HegelTestCase, value: f64, label: *const c_char) -> hegel_result_t;
+            fn hegel_failure_free(ctx: *mut HegelContext, f: *mut HegelFailure) -> hegel_result_t;
+            fn hegel_failure_reproduction_blob(ctx: *mut HegelContext, f: *const HegelFailure, out_blob: *mut *const c_char) -> hegel_result_t;
+            fn hegel_generate_boolean(ctx: *mut HegelContext, tc: *mut HegelTestCase, p: f64, forced: bool, has_forced: bool, out_value: *mut bool) -> hegel_result_t;
+            fn hegel_generate_bytes(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_result: *mut hegel_generate_bytes_result_t) -> hegel_result_t;
+            fn hegel_generate_bytes_result_free(ctx: *mut HegelContext, result: *mut hegel_generate_bytes_result_t) -> hegel_result_t;
+            fn hegel_generate_date(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: hegel_date_t, max_value: hegel_date_t, out_value: *mut hegel_date_t) -> hegel_result_t;
+            fn hegel_generate_datetime(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: hegel_datetime_t, max_value: hegel_datetime_t, out_value: *mut hegel_datetime_t) -> hegel_result_t;
+            fn hegel_generate_float(ctx: *mut HegelContext, tc: *mut HegelTestCase, width: u32, min_value: f64, max_value: f64, allow_nan: bool, allow_infinity: bool, exclude_min: bool, exclude_max: bool, smallest_nonzero_magnitude: f64, out_value: *mut f64) -> hegel_result_t;
+            fn hegel_generate_integer(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: i64, max_value: i64, out_value: *mut i64) -> hegel_result_t;
+            fn hegel_generate_integer_big(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: *const u8, min_value_len: usize, max_value: *const u8, max_value_len: usize, out_value: *mut u8, out_value_cap: usize, out_value_len: *mut usize) -> hegel_result_t;
+            fn hegel_generate_ipv4(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_bytes: *mut u8) -> hegel_result_t;
+            fn hegel_generate_ipv6(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_bytes: *mut u8) -> hegel_result_t;
+            fn hegel_generate_string(ctx: *mut HegelContext, tc: *mut HegelTestCase, generator: *const HegelStringGenerator, out_result: *mut hegel_generate_string_result_t) -> hegel_result_t;
+            fn hegel_generate_string_result_free(ctx: *mut HegelContext, result: *mut hegel_generate_string_result_t) -> hegel_result_t;
+            fn hegel_generate_time(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: hegel_time_t, max_value: hegel_time_t, out_value: *mut hegel_time_t) -> hegel_result_t;
+            fn hegel_generate_uuid(ctx: *mut HegelContext, tc: *mut HegelTestCase, version: u8, has_version: bool, out_bytes: *mut u8) -> hegel_result_t;
+            fn hegel_mark_complete(ctx: *mut HegelContext, tc: *mut HegelTestCase, status: u32, origin: *const c_char) -> hegel_result_t;
+            fn hegel_new_collection(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_collection: *mut *mut HegelCollection) -> hegel_result_t;
+            fn hegel_new_pool(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_pool: *mut *mut HegelPool) -> hegel_result_t;
+            fn hegel_new_recursion(ctx: *mut HegelContext, tc: *mut HegelTestCase, max_depth: u64, max_leaves: u64, out_recursion: *mut *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_new_state_machine(ctx: *mut HegelContext, tc: *mut HegelTestCase, rule_names: *const *const c_char, rule_groups: *const i64, num_rules: usize, invariant_names: *const *const c_char, num_invariants: usize, min_concurrency: i64, max_concurrency: i64, out_state_machine: *mut *mut HegelStateMachine, out_concurrency: *mut i64) -> hegel_result_t;
+            fn hegel_next_test_case(ctx: *mut HegelContext, run: *mut HegelRun, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
+            fn hegel_pool_add(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, out_variable_id: *mut i64) -> hegel_result_t;
+            fn hegel_pool_free(ctx: *mut HegelContext, pool: *mut HegelPool) -> hegel_result_t;
+            fn hegel_pool_generate(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, consume: bool, out_variable_id: *mut i64) -> hegel_result_t;
+            fn hegel_printer_abort_speculative(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_begin_group(ctx: *mut HegelContext, printer: *mut HegelPrinter, indent: u64, open: *const u8, open_len: usize) -> hegel_result_t;
+            fn hegel_printer_begin_speculative(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_breakable(ctx: *mut HegelContext, printer: *mut HegelPrinter, sep: *const u8, len: usize) -> hegel_result_t;
+            fn hegel_printer_comment(ctx: *mut HegelContext, printer: *mut HegelPrinter, text: *const u8, len: usize) -> hegel_result_t;
+            fn hegel_printer_commit_speculative(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_deferred(ctx: *mut HegelContext, printer: *mut HegelPrinter, out_printer: *mut *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_end_group(ctx: *mut HegelContext, printer: *mut HegelPrinter, close: *const u8, close_len: usize) -> hegel_result_t;
+            fn hegel_printer_free(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_hard_break(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_new(ctx: *mut HegelContext, options: *const HegelPrinterOptions, out_printer: *mut *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_options_free(ctx: *mut HegelContext, options: *mut HegelPrinterOptions) -> hegel_result_t;
+            fn hegel_printer_options_new(ctx: *mut HegelContext, out_options: *mut *mut HegelPrinterOptions) -> hegel_result_t;
+            fn hegel_printer_options_set_max_width(ctx: *mut HegelContext, options: *mut HegelPrinterOptions, max_width: u64) -> hegel_result_t;
+            fn hegel_printer_resolve(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_printer_shift_indent(ctx: *mut HegelContext, printer: *mut HegelPrinter, delta: i64) -> hegel_result_t;
+            fn hegel_printer_text(ctx: *mut HegelContext, printer: *mut HegelPrinter, text: *const u8, len: usize) -> hegel_result_t;
+            fn hegel_printer_value(ctx: *mut HegelContext, printer: *mut HegelPrinter, out_result: *mut hegel_printer_value_result_t) -> hegel_result_t;
+            fn hegel_printer_value_result_free(ctx: *mut HegelContext, result: *mut hegel_printer_value_result_t) -> hegel_result_t;
+            fn hegel_recursion_branch(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion, depth: u64, out_branch: *mut bool) -> hegel_result_t;
+            fn hegel_recursion_finish(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_recursion_free(ctx: *mut HegelContext, recursion: *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_recursion_leaf(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_recursion_retry(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_run_free(ctx: *mut HegelContext, run: *mut HegelRun) -> hegel_result_t;
+            fn hegel_run_result(ctx: *mut HegelContext, run: *mut HegelRun, out_result: *mut *mut HegelRunResult) -> hegel_result_t;
+            fn hegel_run_result_error(ctx: *mut HegelContext, r: *const HegelRunResult, out_error: *mut *const c_char) -> hegel_result_t;
+            fn hegel_run_result_failure(ctx: *mut HegelContext, r: *const HegelRunResult, index: usize, out_failure: *mut *mut HegelFailure) -> hegel_result_t;
+            fn hegel_run_result_failure_count(ctx: *mut HegelContext, r: *const HegelRunResult, out_count: *mut usize) -> hegel_result_t;
+            fn hegel_run_result_free(ctx: *mut HegelContext, r: *mut HegelRunResult) -> hegel_result_t;
+            fn hegel_run_result_status(ctx: *mut HegelContext, r: *const HegelRunResult, out_status: *mut hegel_run_status_t) -> hegel_result_t;
+            fn hegel_run_start(ctx: *mut HegelContext, settings: *const HegelSettings, callback: hegel_output_callback_t, user_data: *mut c_void, out_run: *mut *mut HegelRun) -> hegel_result_t;
+            fn hegel_settings_free(ctx: *mut HegelContext, s: *mut HegelSettings) -> hegel_result_t;
+            fn hegel_settings_new(ctx: *mut HegelContext, out_settings: *mut *mut HegelSettings) -> hegel_result_t;
+            fn hegel_settings_set_backend(ctx: *mut HegelContext, s: *mut HegelSettings, backend: u32) -> hegel_result_t;
+            fn hegel_settings_set_database(ctx: *mut HegelContext, s: *mut HegelSettings, database: *const c_char) -> hegel_result_t;
+            fn hegel_settings_set_database_key(ctx: *mut HegelContext, s: *mut HegelSettings, key: *const c_char) -> hegel_result_t;
+            fn hegel_settings_set_derandomize(ctx: *mut HegelContext, s: *mut HegelSettings, derandomize: bool) -> hegel_result_t;
+            fn hegel_settings_set_phases(ctx: *mut HegelContext, s: *mut HegelSettings, phases: u32) -> hegel_result_t;
+            fn hegel_settings_set_report_multiple_failures(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
+            fn hegel_settings_set_seed(ctx: *mut HegelContext, s: *mut HegelSettings, seed: u64, has_seed: bool) -> hegel_result_t;
+            fn hegel_settings_set_show_statistics(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
+            fn hegel_settings_set_stateful_step_count(ctx: *mut HegelContext, s: *mut HegelSettings, n: i64) -> hegel_result_t;
+            fn hegel_settings_set_suppress_health_check(ctx: *mut HegelContext, s: *mut HegelSettings, checks: u32) -> hegel_result_t;
+            fn hegel_settings_set_test_cases(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
+            fn hegel_settings_set_verbosity(ctx: *mut HegelContext, s: *mut HegelSettings, v: u32) -> hegel_result_t;
+            fn hegel_start_span(ctx: *mut HegelContext, tc: *mut HegelTestCase, label: u64) -> hegel_result_t;
+            fn hegel_state_machine_free(ctx: *mut HegelContext, state_machine: *mut HegelStateMachine) -> hegel_result_t;
+            fn hegel_state_machine_next_group(ctx: *mut HegelContext, tc: *mut HegelTestCase, state_machine: *mut HegelStateMachine, out_group_id: *mut i64) -> hegel_result_t;
+            fn hegel_state_machine_next_rule(ctx: *mut HegelContext, tc: *mut HegelTestCase, state_machine: *mut HegelStateMachine, worker_index: i64, out_rule_index: *mut i64) -> hegel_result_t;
+            fn hegel_state_machine_rule_rejected(ctx: *mut HegelContext, tc: *mut HegelTestCase, state_machine: *mut HegelStateMachine, worker_index: i64) -> hegel_result_t;
+            fn hegel_state_machine_should_check_invariant(ctx: *mut HegelContext, tc: *mut HegelTestCase, state_machine: *mut HegelStateMachine, invariant_index: i64, out_should_check: *mut bool) -> hegel_result_t;
+            fn hegel_stop_span(ctx: *mut HegelContext, tc: *mut HegelTestCase, discard: bool) -> hegel_result_t;
+            fn hegel_string_generator_domain(ctx: *mut HegelContext, max_length: u64, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_email(ctx: *mut HegelContext, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_free(ctx: *mut HegelContext, generator: *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_regex(ctx: *mut HegelContext, pattern: *const c_char, fullmatch: bool, alphabet: *const HegelStringGenerator, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_text(ctx: *mut HegelContext, min_size: u64, max_size: u64, codec: *const c_char, min_codepoint: u32, max_codepoint: u32, categories: *const *const c_char, categories_len: usize, exclude_categories: *const *const c_char, exclude_categories_len: usize, include_characters: *const u8, include_characters_len: usize, exclude_characters: *const u8, exclude_characters_len: usize, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_url(ctx: *mut HegelContext, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_target(ctx: *mut HegelContext, tc: *mut HegelTestCase, value: f64, label: *const c_char) -> hegel_result_t;
+            fn hegel_test_case_clone(ctx: *mut HegelContext, tc: *const HegelTestCase, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
+            fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut HegelTestCase) -> hegel_result_t;
+            fn hegel_test_case_from_blob(ctx: *mut HegelContext, s: *const HegelSettings, blob: *const c_char, callback: hegel_output_callback_t, user_data: *mut c_void, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
+            fn hegel_test_case_is_nondeterministic(ctx: *mut HegelContext, tc: *const HegelTestCase, out_is_nondeterministic: *mut bool) -> hegel_result_t;
+            fn hegel_test_case_printer(ctx: *mut HegelContext, tc: *mut HegelTestCase, options: *const HegelPrinterOptions, out_printer: *mut *mut HegelPrinter) -> hegel_result_t;
+        }
+    };
+}
+#[cfg_attr(feature = "static-engine", allow(unused_imports))]
+pub(crate) use for_each_hegel_fn;
+
+#[cfg(feature = "static-engine")]
 pub(crate) use hegel_c::*;
+
+#[cfg(feature = "static-engine")]
+pub(crate) unsafe fn hegel_context_new() -> *mut HegelContext {
+    hegel_c::hegel_context_new()
+}
+
+#[cfg(not(feature = "static-engine"))]
+mod loader;
+#[cfg(any(not(feature = "static-engine"), test))]
+mod types;
+
+#[cfg(not(feature = "static-engine"))]
+pub(crate) use loader::*;
+#[cfg(not(feature = "static-engine"))]
+pub(crate) use types::*;
+
+#[cfg(test)]
+#[path = "../../tests/embedded/ffi/sys_tests.rs"]
+mod tests;

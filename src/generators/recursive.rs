@@ -1,9 +1,9 @@
 use super::{Generator, PrintableGenerator, TestCase};
 use crate::control::{AttemptMispriced, LeafBudgetExceeded, raise_control};
 use crate::ffi::RecursionHandle;
+use crate::ffi::sys::hegel_result_t;
 use crate::pretty::PrettyPrinter;
 use crate::test_case::{labels, raise_for_rc};
-use crate::ffi::sys::hegel_result_t;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;

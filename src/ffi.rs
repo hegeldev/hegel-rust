@@ -35,7 +35,7 @@ impl Context {
     fn new() -> Self {
         // SAFETY: hegel_context_new never returns null.
         Context {
-            raw: hegel_c::hegel_context_new(),
+            raw: unsafe { hegel_c::hegel_context_new() },
         }
     }
 

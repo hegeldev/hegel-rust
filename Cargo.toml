@@ -103,7 +103,7 @@ hegeltest-macros = { version = "=0.40.6", path = "hegel-macros" }
 # C ABI (the hegel_* extern "C" functions), exactly like other language
 # bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
 # is `hegeltest-c`.
-hegeltest-c = { version = "=0.37.5", path = "hegel-c", default-features = false }
+hegeltest-c = { version = "=0.37.5", path = "hegel-c", default-features = false, optional = true }
 rand = { version = "0.10" }
 dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
 miniz_oxide = { version = "0.8" }
@@ -161,9 +161,13 @@ jiff = ["dep:jiff"]
 serde_json = []
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
+# Links the engine into the binary as a normal Rust dependency instead of
+# loading the libhegel shared library at runtime. Self-contained binaries, at
+# the cost of exposing the engine's entire dependency tree to your build.
+static-engine = ["dep:hegeltest-c"]
 # Internal: re-exports engine internals needed by `benches/` (from hegel-c,
 # where the engine lives). Not part of the public API; depend on at your peril.
-__bench = ["hegeltest-c/__bench"]
+__bench = ["static-engine", "hegeltest-c/__bench"]
 
 # Tune the dev/test profile for CI speed.
 #
