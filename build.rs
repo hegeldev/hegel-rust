@@ -10,7 +10,9 @@
 //! generated shim crate because a cdylib must be a top-level target: cargo
 //! never builds the cdylib of a dependency. The resulting directory is baked
 //! into the frontend as `HEGEL_C_BAKED_LIB_DIR`, the loader's fallback
-//! search path.
+//! search path. The pinned engine version is always baked in as
+//! `HEGEL_C_EXPECTED_VERSION`, which the loader checks against the loaded
+//! library's `hegel_version`.
 
 use std::env;
 use std::fs;
@@ -22,6 +24,12 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-env-changed=HEGEL_C_LIB_DIR");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
+
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    println!(
+        "cargo:rustc-env=HEGEL_C_EXPECTED_VERSION={}",
+        pinned_engine_version(&manifest_dir).trim_start_matches('=')
+    );
 
     if env::var_os("CARGO_FEATURE_STATIC_ENGINE").is_some() || env::var_os("DOCS_RS").is_some() {
         println!("cargo:rustc-env=HEGEL_C_BAKED_LIB_DIR=");

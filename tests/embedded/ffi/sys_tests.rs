@@ -78,6 +78,26 @@ mod loading {
     }
 
     #[test]
+    fn the_loaded_library_reports_the_expected_version() {
+        let lib = loader::load_library();
+        assert_eq!(
+            loader::engine_version(&lib),
+            env!("HEGEL_C_EXPECTED_VERSION")
+        );
+    }
+
+    #[test]
+    fn a_version_mismatch_names_the_library_and_both_versions() {
+        let lib = loader::load_library();
+        let err = loader::check_engine_version(&lib, "999.999.999").unwrap_err();
+        assert!(err.contains("999.999.999"), "{err}");
+        assert!(err.contains(env!("HEGEL_C_EXPECTED_VERSION")), "{err}");
+        assert!(err.contains(loader::LIB_FILE_NAME), "{err}");
+        assert!(err.contains("HEGEL_C_LIB_DIR"), "{err}");
+        assert!(err.contains("static-engine"), "{err}");
+    }
+
+    #[test]
     fn an_incompatible_library_is_reported_by_symbol_name() {
         let lib = loader::load_library();
         let panic =
@@ -232,4 +252,7 @@ mod drift {
             size_of::<mirror::hegel_output_callback_t>() == size_of::<hegel_output_callback_t>()
         );
     };
+
+    const _: unsafe extern "C" fn(*mut HegelContext, *mut *const c_char) -> hegel_result_t =
+        hegel_version;
 }

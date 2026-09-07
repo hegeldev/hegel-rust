@@ -242,7 +242,9 @@
 //! platform's own library search looks (`LD_LIBRARY_PATH` and friends),
 //! which is tried last. `HEGEL_C_LIB_DIR` overrides the whole search,
 //! including in the build script, where a prebuilt library lets offline
-//! builds skip the compile.
+//! builds skip the compile. Whichever copy is found must be the exact
+//! engine version this crate was built against. A mismatched library is
+//! refused on load with an error naming both versions.
 //!
 //! Alternatively, the `static-engine` feature links the engine into your
 //! binary as an ordinary Rust dependency. Binaries are then self-contained,

@@ -13,11 +13,13 @@
 //!    `PATH` on Windows. This comes last so a system-installed engine can
 //!    never shadow the version-matched copies above.
 //!
-//! Loading happens once, on the first engine call, and resolves every
-//! `hegel_*` symbol eagerly so an incompatible library fails immediately
-//! rather than mid-run. The library is never unloaded.
+//! Loading happens once, on the first engine call. The loaded library's
+//! `hegel_version` must match the engine version this crate was built
+//! against, and every `hegel_*` symbol is resolved eagerly, so an
+//! incompatible library fails immediately rather than mid-run. The library
+//! is never unloaded.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -91,7 +93,41 @@ pub(super) fn load_library() -> Library {
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let paths = candidate_paths(env_dir, exe_dir, env!("HEGEL_C_BAKED_LIB_DIR"));
-    load_from(&paths).unwrap_or_else(|err| panic!("{err}"))
+    let lib = load_from(&paths).unwrap_or_else(|err| panic!("{err}"));
+    let expected = env!("HEGEL_C_EXPECTED_VERSION");
+    check_engine_version(&lib, expected).unwrap_or_else(|err| panic!("{err}"));
+    lib
+}
+
+pub(super) fn engine_version(lib: &Library) -> String {
+    let sym = require_symbol(lib, "hegel_version\0");
+    let hegel_version = unsafe {
+        std::mem::transmute::<
+            *mut c_void,
+            unsafe extern "C" fn(*mut HegelContext, *mut *const c_char) -> hegel_result_t,
+        >(sym)
+    };
+    let mut version: *const c_char = std::ptr::null();
+    let result = unsafe { hegel_version(std::ptr::null_mut(), &mut version) };
+    hegel_internal_assert!(result == hegel_result_t::HEGEL_OK);
+    hegel_internal_assert!(!version.is_null());
+    unsafe { CStr::from_ptr(version) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub(super) fn check_engine_version(lib: &Library, expected: &str) -> Result<(), String> {
+    let found = engine_version(lib);
+    if found == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is libhegel {found}, but this build of hegeltest requires libhegel {expected}. \
+         Replace the library with the matching version, set HEGEL_C_LIB_DIR to a directory \
+         containing one, or enable hegeltest's `static-engine` feature to link the engine \
+         into the binary instead.",
+        lib.path.display(),
+    ))
 }
 
 pub(super) fn require_symbol(lib: &Library, name: &'static str) -> *mut c_void {
