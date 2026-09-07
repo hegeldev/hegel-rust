@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.6 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.5.
+
 ## 0.39.5 - 2026-09-07
 
 This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.
