@@ -192,6 +192,34 @@
 //! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
 //! ```
 //!
+//! ## Settings profiles
+//!
+//! Suite-wide settings live in named *profiles*. Hegel ships three:
+//! `default`, `ci` (selected automatically on CI servers), and `antithesis`
+//! (selected automatically inside [Antithesis](https://antithesis.com/)).
+//! Modify them or define your own in a `hegel.toml` at your package or
+//! workspace root:
+//!
+//! ```toml
+//! [profiles.default]
+//! test_cases = 200
+//!
+//! [profiles.nightly]
+//! extends = "ci"
+//! test_cases = 10000
+//! ```
+//!
+//! Select a profile explicitly with `#[hegel::test(profile = "nightly")]`,
+//! or suite-wide with the `HEGEL_DEFAULT_PROFILE` environment variable:
+//!
+//! ```bash
+//! HEGEL_DEFAULT_PROFILE=nightly cargo test
+//! ```
+//!
+//! See [`Settings`] for what each shipped profile sets, the selection
+//! order, every `hegel.toml` key, and programmatic registration with
+//! [`Settings::register_profile`].
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone

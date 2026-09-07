@@ -53,7 +53,11 @@ where
 {
     let mut iter = args.into_iter();
     let _program = iter.next();
-    let args: Vec<String> = iter.collect();
+    let mut args: Vec<String> = iter.collect();
+
+    if let Some(profile_settings) = extract_profile(&mut args)? {
+        settings = profile_settings;
+    }
 
     let mut i = 0;
     while i < args.len() {
@@ -119,6 +123,29 @@ fn next_value(args: &[String], i: &mut usize, name: &str) -> Result<String, CliE
         .ok_or_else(|| CliError::Parse(format!("{name} requires a value")))
 }
 
+/// Extract `--profile <NAME>` from `args` before the flag loop runs, so the
+/// profile forms the base whatever its position and the remaining flags
+/// apply on top. The resolved profile replaces the compiled-in
+/// `#[hegel::main(...)]` settings entirely.
+fn extract_profile(args: &mut Vec<String>) -> Result<Option<Settings>, CliError> {
+    let Some(pos) = args.iter().position(|a| a == "--profile") else {
+        return Ok(None);
+    };
+    args.remove(pos);
+    if pos >= args.len() {
+        return Err(CliError::Parse("--profile requires a value".to_string()));
+    }
+    let name = args.remove(pos);
+    if args.iter().any(|a| a == "--profile") {
+        return Err(CliError::Parse(
+            "--profile may be given at most once".to_string(),
+        ));
+    }
+    Settings::try_from_profile(&name)
+        .map(Some)
+        .map_err(CliError::Parse)
+}
+
 fn parse_verbosity(s: &str) -> Result<Verbosity, CliError> {
     match s {
         "quiet" => Ok(Verbosity::Quiet),
@@ -182,6 +209,11 @@ fn usage() -> String {
     s.push_str("Hegel property-based testing binary. Runs exactly one test case.\n");
     s.push('\n');
     s.push_str("Options:\n");
+    s.push_str(
+        "  --profile <NAME>                     Start from the named settings profile,\n\
+         \x20                                      replacing the binary's compiled-in settings;\n\
+         \x20                                      other flags apply on top\n",
+    );
     s.push_str(
         "  --seed <N|none>                      Seed for randomisation ('none' for unset)\n",
     );

@@ -280,3 +280,69 @@ fn test_apply_cli_args_parse_error() {
         other => panic!("expected ParseError, got {other:?}"),
     }
 }
+
+#[test]
+fn test_profile_flag_replaces_the_compiled_in_settings() {
+    let compiled_in = Settings::from_profile("default").test_cases(3);
+    let parsed = try_apply_cli_args(compiled_in, s(&["--profile", "ci"])).unwrap();
+    assert!(parsed.derandomize);
+    assert!(parsed.print_blob);
+    assert_eq!(parsed.database, Database::Disabled);
+    assert_eq!(parsed.test_cases, 100, "the profile replaces, not merges");
+}
+
+#[test]
+fn test_profile_flag_is_order_independent() {
+    for args in [
+        &["--profile", "ci", "--derandomize", "false"][..],
+        &["--derandomize", "false", "--profile", "ci"][..],
+    ] {
+        let parsed = apply(args);
+        assert!(
+            !parsed.derandomize,
+            "{args:?}: the flag wins over the profile"
+        );
+        assert!(parsed.print_blob, "{args:?}: unrelated profile values stay");
+    }
+}
+
+#[test]
+fn test_profile_flag_missing_value_error() {
+    let err = try_apply_cli_args(Settings::new(), s(&["--profile"])).unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert_eq!(msg, "--profile requires a value"),
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_profile_flag_repeated_error() {
+    let err = try_apply_cli_args(
+        Settings::new(),
+        s(&["--profile", "ci", "--profile", "default"]),
+    )
+    .unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert_eq!(msg, "--profile may be given at most once"),
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_profile_flag_unknown_profile_error() {
+    let err = try_apply_cli_args(Settings::new(), s(&["--profile", "nope"])).unwrap_err();
+    match err {
+        CliError::Parse(msg) => {
+            assert!(msg.contains("unknown settings profile \"nope\""), "{msg}");
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_usage_documents_the_profile_flag() {
+    match apply_cli_args(Settings::new(), s(&["--help"])) {
+        CliOutcome::Help(msg) => assert!(msg.contains("--profile <NAME>")),
+        other => panic!("expected Help, got {other:?}"),
+    }
+}

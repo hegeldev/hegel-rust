@@ -11,6 +11,7 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     let main_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
+            profile: None,
             settings_args: Vec::new(),
         }
     } else {

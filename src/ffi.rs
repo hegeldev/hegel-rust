@@ -132,16 +132,22 @@ pub(crate) struct SettingsHandle {
 impl SettingsHandle {
     /// Materialize a libhegel settings handle from the frontend settings,
     /// translating every field through the corresponding `hegel_settings_*`
-    /// setter. `print_blob` has no setter — the blob is always returned by the
-    /// engine and printing is a frontend decision — so it is intentionally not
-    /// forwarded here.
+    /// setter. The handle starts from the engine's `default` profile rather
+    /// than the ambient one — every field is overwritten below, and starting
+    /// from a named profile keeps a broken `HEGEL_DEFAULT_PROFILE` from
+    /// failing runs whose settings were already resolved.
     pub(crate) fn build(settings: &Settings, database_key: Option<&str>) -> Self {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
+            let default_profile = CString::new("default").unwrap();
             // SAFETY: ctx is this thread's live context; &mut raw is a valid
             // out-parameter.
             unsafe {
-                require_ok(hegel_c::hegel_settings_new(ctx, &mut raw));
+                require_ok(hegel_c::hegel_settings_new_for_profile(
+                    ctx,
+                    default_profile.as_ptr(),
+                    &mut raw,
+                ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
                     ctx,
                     raw,
@@ -184,8 +190,15 @@ impl SettingsHandle {
                         let c = cstring_lossy(path);
                         require_ok(hegel_c::hegel_settings_set_database(ctx, raw, c.as_ptr()));
                     }
-                    Database::Unset => {}
+                    Database::Unset => {
+                        require_ok(hegel_c::hegel_settings_set_database(ctx, raw, ptr::null()));
+                    }
                 }
+                require_ok(hegel_c::hegel_settings_set_print_blob(
+                    ctx,
+                    raw,
+                    settings.print_blob,
+                ));
                 if let Some(key) = database_key {
                     let c = cstring_lossy(key);
                     require_ok(hegel_c::hegel_settings_set_database_key(
@@ -224,6 +237,149 @@ impl Drop for SettingsHandle {
         // SAFETY: `raw` came from hegel_settings_new and is freed exactly once.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_settings_free(ctx, self.raw) });
     }
+}
+
+/// Materialize a frontend [`Settings`] from an engine-resolved profile: the
+/// one `name` names, or the automatically selected one for `None`. The
+/// engine owns profile resolution (shipped profiles, `hegel.toml`,
+/// `HEGEL_DEFAULT_PROFILE`, registrations), and this reads the resolved
+/// handle back field by field through the `hegel_settings_get_*` functions.
+/// The `Err` carries the engine's diagnostic (an unknown profile, a
+/// malformed `hegel.toml`).
+pub(crate) fn settings_from_profile(name: Option<&str>) -> Result<Settings, String> {
+    with_context(|ctx| {
+        let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
+        // SAFETY: ctx is this thread's live context; &mut raw is a valid
+        // out-parameter, and the name pointer outlives the call.
+        let rc = unsafe {
+            match name {
+                Some(name) => {
+                    let c = cstring_lossy(name);
+                    hegel_c::hegel_settings_new_for_profile(ctx, c.as_ptr(), &mut raw)
+                }
+                None => hegel_c::hegel_settings_new(ctx, &mut raw),
+            }
+        };
+        if rc == hegel_result_t::HEGEL_E_INVALID_ARG {
+            return Err(last_error_string());
+        }
+        require_ok(rc);
+        let handle = SettingsHandle { raw };
+        Ok(read_settings(ctx, handle.as_ptr()))
+    })
+}
+
+/// Read every field of an engine settings handle into a frontend
+/// [`Settings`].
+fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSettings) -> Settings {
+    let mut test_cases = 0u64;
+    let mut stateful_step_count = 0i64;
+    let mut verbosity = hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL;
+    let mut seed = 0u64;
+    let mut has_seed = false;
+    let mut derandomize = false;
+    let mut database: *const c_char = ptr::null();
+    let mut phases = 0u32;
+    let mut suppress_health_check = 0u32;
+    let mut report_multiple_failures = false;
+    let mut show_statistics = false;
+    let mut print_blob = false;
+    let mut backend = hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO;
+    // SAFETY: ctx and raw are live handles, and every out pointer is a valid
+    // local.
+    unsafe {
+        require_ok(hegel_c::hegel_settings_get_test_cases(
+            ctx,
+            raw,
+            &mut test_cases,
+        ));
+        require_ok(hegel_c::hegel_settings_get_stateful_step_count(
+            ctx,
+            raw,
+            &mut stateful_step_count,
+        ));
+        require_ok(hegel_c::hegel_settings_get_verbosity(
+            ctx,
+            raw,
+            &mut verbosity,
+        ));
+        require_ok(hegel_c::hegel_settings_get_seed(
+            ctx,
+            raw,
+            &mut seed,
+            &mut has_seed,
+        ));
+        require_ok(hegel_c::hegel_settings_get_derandomize(
+            ctx,
+            raw,
+            &mut derandomize,
+        ));
+        require_ok(hegel_c::hegel_settings_get_database(
+            ctx,
+            raw,
+            &mut database,
+        ));
+        require_ok(hegel_c::hegel_settings_get_phases(ctx, raw, &mut phases));
+        require_ok(hegel_c::hegel_settings_get_suppress_health_check(
+            ctx,
+            raw,
+            &mut suppress_health_check,
+        ));
+        require_ok(hegel_c::hegel_settings_get_report_multiple_failures(
+            ctx,
+            raw,
+            &mut report_multiple_failures,
+        ));
+        require_ok(hegel_c::hegel_settings_get_show_statistics(
+            ctx,
+            raw,
+            &mut show_statistics,
+        ));
+        require_ok(hegel_c::hegel_settings_get_print_blob(
+            ctx,
+            raw,
+            &mut print_blob,
+        ));
+        require_ok(hegel_c::hegel_settings_get_backend(ctx, raw, &mut backend));
+    }
+    let database = match cstr_opt(database) {
+        None => Database::Unset,
+        Some(path) if path.is_empty() => Database::Disabled,
+        Some(path) => Database::Path(path),
+    };
+    Settings {
+        test_cases,
+        stateful_step_count,
+        verbosity: verbosity_from_c(verbosity),
+        seed: has_seed.then_some(seed),
+        derandomize,
+        database,
+        suppress_health_check: health_checks_from_bitmask(suppress_health_check),
+        phases: phases_from_bitmask(phases),
+        report_multiple_failures,
+        show_statistics,
+        print_blob,
+        backend: backend_from_c(backend),
+    }
+}
+
+/// Register `settings` as the named profile, process-wide, through the
+/// engine's registry. The `Err` carries the engine's diagnostic (an invalid
+/// name).
+pub(crate) fn register_profile(name: &str, settings: &Settings) -> Result<(), String> {
+    let handle = SettingsHandle::build(settings, None);
+    with_context(|ctx| {
+        let c = cstring_lossy(name);
+        // SAFETY: ctx is this thread's live context, and both pointers
+        // outlive the call.
+        let rc =
+            unsafe { hegel_c::hegel_settings_register_profile(ctx, c.as_ptr(), handle.as_ptr()) };
+        if rc == hegel_result_t::HEGEL_E_INVALID_ARG {
+            return Err(last_error_string());
+        }
+        require_ok(rc);
+        Ok(())
+    })
 }
 
 /// Engine-output trampoline passed to `hegel_run_start` /
@@ -1622,6 +1778,68 @@ fn health_check_bitmask(checks: &[HealthCheck]) -> u32 {
         };
     }
     mask
+}
+
+fn verbosity_from_c(v: hegel_c::hegel_verbosity_t) -> Verbosity {
+    match v {
+        hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET => Verbosity::Quiet,
+        hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL => Verbosity::Normal,
+        hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE => Verbosity::Verbose,
+        hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG => Verbosity::Debug,
+    }
+}
+
+fn backend_from_c(backend: hegel_c::hegel_backend_t) -> Option<Backend> {
+    match backend {
+        hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO => None,
+        hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT => Some(Backend::Default),
+        hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM => Some(Backend::Urandom),
+    }
+}
+
+fn phases_from_bitmask(mask: u32) -> Vec<Phase> {
+    [
+        (
+            hegel_c::hegel_phase_t::HEGEL_PHASE_EXPLICIT,
+            Phase::Explicit,
+        ),
+        (hegel_c::hegel_phase_t::HEGEL_PHASE_REUSE, Phase::Reuse),
+        (
+            hegel_c::hegel_phase_t::HEGEL_PHASE_GENERATE,
+            Phase::Generate,
+        ),
+        (hegel_c::hegel_phase_t::HEGEL_PHASE_TARGET, Phase::Target),
+        (hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK, Phase::Shrink),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| mask & (*bit as u32) != 0)
+    .map(|(_, phase)| phase)
+    .collect()
+}
+
+fn health_checks_from_bitmask(mask: u32) -> Vec<HealthCheck> {
+    [
+        (
+            hegel_c::hegel_health_check_t::HEGEL_HC_FILTER_TOO_MUCH,
+            HealthCheck::FilterTooMuch,
+        ),
+        (
+            hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW,
+            HealthCheck::TooSlow,
+        ),
+        (
+            hegel_c::hegel_health_check_t::HEGEL_HC_TEST_CASES_TOO_LARGE,
+            HealthCheck::TestCasesTooLarge,
+        ),
+        (
+            hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE,
+            HealthCheck::LargeInitialTestCase,
+        ),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| mask & (*bit as u32) != 0)
+    .map(|(_, check)| check)
+    .collect()
 }
 
 #[cfg(test)]

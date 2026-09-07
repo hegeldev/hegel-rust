@@ -94,6 +94,10 @@ path = "tests/fixtures/payload_failing.rs"
 name = "fixture_threaded_rejects"
 path = "tests/fixtures/threaded_rejects.rs"
 
+[[bin]]
+name = "fixture_main_profile"
+path = "tests/fixtures/main_profile.rs"
+
 [dependencies]
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.43.1", path = "hegel-macros" }
