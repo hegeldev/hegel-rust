@@ -70,11 +70,21 @@ runtime = []
 # Not part of the public C API; depend on at your peril.
 __bench = []
 
+[[bench]]
+name = "biased_sample"
+harness = false
+required-features = ["__bench"]
+
 [dev-dependencies]
 # 0.29.2 is the minimum that reproduces the checked-in `include/hegel.h`
 # byte-for-byte; earlier 0.29.x emit slightly different formatting, which the
 # header drift test (correctly) rejects — surfacing under `-Z minimal-versions`.
 cbindgen = "0.29.2"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Not used directly: this is a `-Z minimal-versions` floor. criterion pulls in
+# `is-terminal`, and its pre-0.4.13 releases depend on a `rustix 0.37.0` that no
+# longer compiles on current nightly. 0.4.13 dropped the rustix dependency.
+is-terminal = "0.4.13"
 libloading = "0.8"
 tempfile = "3"
 regex = "1.0"

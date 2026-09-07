@@ -465,8 +465,8 @@ def _ensure_smoke_cdylib() -> None:
 def public_features() -> str:
     """Every root-crate feature except `default` and internal `__*` ones.
 
-    The `__` prefix marks internal features. `__bench` gates bench-only
-    code that would report as permanently uncovered.
+    The `__` prefix marks internal features, which gate code that would
+    report as permanently uncovered.
     """
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version=1"],

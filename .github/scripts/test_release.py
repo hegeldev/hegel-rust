@@ -29,11 +29,11 @@ edition = "2024"
 
 [dependencies]
 hegeltest-macros = { version = "=0.19.1", path = "hegel-macros" }
-hegeltest-c = { version = "=0.5.0", path = "hegel-c", default-features = false }
+hegeltest-c = { version = "=0.5.0", path = "hegel-c", default-features = false, optional = true }
 serde = { version = "1.0.103", features = ["derive"] }
 
 [features]
-__bench = ["hegeltest-c/__bench"]
+static-engine = ["dep:hegeltest-c"]
 """
 
 MACROS_CARGO = """\
@@ -97,7 +97,7 @@ class ApplyVersionBumpTest(unittest.TestCase):
         )
         self.assertIn(
             'hegeltest-c = { version = "=0.6.0", path = "hegel-c", '
-            "default-features = false }",
+            "default-features = false, optional = true }",
             root_text,
         )
 
@@ -105,9 +105,9 @@ class ApplyVersionBumpTest(unittest.TestCase):
         release.apply_version_bump(self.root, "0.19.2", "0.6.0")
         root_text = (self.root / "Cargo.toml").read_text()
         # External deps carry no `path =`, so they must be left alone — and the
-        # `__bench` feature reference is not a version pin either.
+        # `static-engine` feature reference is not a version pin either.
         self.assertIn('serde = { version = "1.0.103", features = ["derive"] }', root_text)
-        self.assertIn('__bench = ["hegeltest-c/__bench"]', root_text)
+        self.assertIn('static-engine = ["dep:hegeltest-c"]', root_text)
 
 
 class PlanReleaseTest(unittest.TestCase):

@@ -296,10 +296,6 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 #[doc(hidden)]
 pub use antithesis::TestLocation;
 
-#[doc(hidden)]
-#[cfg(feature = "__bench")]
-pub use hegel_c::__bench;
-
 /// Derive a generator for a struct or enum.
 ///
 /// This implements [`DefaultGenerator`](generators::DefaultGenerator) for the type,
