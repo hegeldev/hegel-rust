@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.36.6 - 2026-09-07
+
+A test that rejects its input via `assume()` without drawing any data can never produce a valid case. The engine now stops after one call and fails the run with `Unsatisfiable`, instead of passing. Over the C ABI this surfaces as an ordinary error result; no signatures or status values change.
+
 ## 0.36.5 - 2026-09-07
 
 GitHub releases now include static `libhegel` libraries and `hegel.h` alongside
