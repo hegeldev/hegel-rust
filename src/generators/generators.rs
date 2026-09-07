@@ -1,5 +1,5 @@
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
-use crate::test_case::{TestCase, labels};
+use crate::test_case::{TestCase, invalid_argument, labels};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -169,7 +169,10 @@ pub trait Generator<T> {
     /// and third-party types alike. Derived-`Debug` output is re-laid-out
     /// through the printer (see
     /// [`print_debug_repr`](crate::pretty::print_debug_repr)), so large
-    /// values wrap like natively printed ones.
+    /// values wrap like natively printed ones. On a `map` whose `Debug`
+    /// output is not pastable Rust,
+    /// [`print_as_call`](Mapped::print_as_call) can report the mapped
+    /// expression instead.
     ///
     /// # Example
     ///
@@ -218,6 +221,7 @@ pub trait Generator<T> {
     label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
     note = "if `{T}` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(hegel::PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `{T}` at once",
     note = "otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(|value, printer| ..)`",
+    note = "a `map` whose input draw is printable can report that instead: `.print_as_call(\"path::to::function\")` prints the mapped expression, `.print_as_input()` just the input",
     note = "a `-> impl Generator<..>` return type or `.boxed()` erases printability: return `impl PrintableGenerator<..>` instead, and box a printing generator with `.boxed_printable()`",
     note = "or draw without reporting the value via `tc.draw_silent(..)`",
     note = "the `hegel::pretty` module docs walk through the whole printing system"
@@ -381,6 +385,116 @@ where
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
         draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl<T, U, F, G> Mapped<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    /// Make this mapped generator printable by printing `function` applied
+    /// to the drawn input: `function(input)`.
+    ///
+    /// A `map` to a foreign type usually resorts to
+    /// [`print_as_debug`](Generator::print_as_debug), whose output framed as
+    /// `let x = …;` can look like Rust without being pastable. The drawn
+    /// input often is pastable, so this prints it through the source
+    /// generator, wrapped in a call of `function` — the mapping function's
+    /// path, which cannot be recovered from the closure. For the bare input
+    /// without a function name, use
+    /// [`print_as_input`](Mapped::print_as_input).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// struct KeyData(u64);
+    ///
+    /// impl KeyData {
+    ///     fn from_ffi(value: u64) -> KeyData {
+    ///         KeyData(value)
+    ///     }
+    /// }
+    ///
+    /// let keys = gs::integers::<u64>()
+    ///     .map(KeyData::from_ffi)
+    ///     .print_as_call("KeyData::from_ffi");
+    /// ```
+    ///
+    /// A failing draw from `keys` reports `let key = KeyData::from_ffi(3);`
+    /// rather than the `Debug` form `let key = 3v0;`.
+    pub fn print_as_call(self, function: &str) -> PrintedAsInput<T, U, F, G> {
+        if function.is_empty() {
+            invalid_argument!("print_as_call requires a non-empty function name");
+        }
+        PrintedAsInput {
+            source: self.source,
+            f: self.f,
+            call: Some(format!("{function}(")),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Make this mapped generator printable by printing the drawn input,
+    /// marked with a `// pre-map input` comment.
+    ///
+    /// Like [`print_as_call`](Mapped::print_as_call) without naming the
+    /// mapping function: a failing draw reports
+    /// `let key = 3;  // pre-map input`. The comment marks the printed value
+    /// as the map's input rather than its output.
+    pub fn print_as_input(self) -> PrintedAsInput<T, U, F, G> {
+        PrintedAsInput {
+            source: self.source,
+            f: self.f,
+            call: None,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// Result of [`Mapped::print_as_call`] and [`Mapped::print_as_input`].
+pub struct PrintedAsInput<T, U, F, G> {
+    source: G,
+    f: Arc<F>,
+    call: Option<String>,
+    _phantom: PhantomData<fn(T) -> U>,
+}
+
+impl<T, U, F, G> Generator<U> for PrintedAsInput<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    fn do_draw(&self, tc: &TestCase) -> U {
+        self.do_draw_and_print(tc, &mut PrettyPrinter::noop())
+    }
+}
+
+impl<T, U, F, G> PrintableGenerator<U> for PrintedAsInput<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
+        tc.start_span(labels::MAPPED);
+        let input = match &self.call {
+            Some(open) => {
+                printer.begin_group(open.chars().count(), open);
+                let input = tc.draw_and_print(&self.source, printer);
+                printer.end_group(")");
+                input
+            }
+            None => {
+                let input = tc.draw_and_print(&self.source, printer);
+                printer.comment("pre-map input");
+                input
+            }
+        };
+        let result = (self.f)(input);
+        tc.stop_span(false);
+        result
     }
 }
 
