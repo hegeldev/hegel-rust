@@ -60,8 +60,8 @@ accumulated evidence, evicted from the interesting map if still unconfirmed,
 and the loop continues without a pooled review.
 
 The abort exists only on this branch. A run in ND handling under `error`
-strictness (declared concurrency, or `nd_force`) takes the pooled review
-like any other.
+strictness (`nd_force`; nothing else reaches that state since decision 70)
+takes the pooled review like any other.
 
 ## The pooled review
 
@@ -73,9 +73,9 @@ review is one stamped call:
 
 ```text
 nd_reproduce(Some(origin), timelines,
-             reuse_replay_budget() / n,   // per-timeline weighted budget
-             REPRODUCE_SPLICES,           // 10
-             FINAL_REPLAY_FRESH)          // 4
+             reuse_replay_budget().div_ceil(n),   // per-timeline replay budget
+             REPRODUCE_SPLICES,                   // 10
+             FINAL_REPLAY_FRESH)                  // 4
 ```
 
 `nd_reproduce` (test_runner.rs) is the replay-until-failure primitive shared
@@ -84,23 +84,21 @@ with database reuse and blob replay (decision 25, see
 first run that concludes interesting at this origin, and evidence accumulates
 across all of them:
 
-1. **Per-timeline first-fit.** Each timeline replays until its weighted
-   evidence reaches the per-timeline budget, physically capped at
-   `ceil(2 × budget)` runs. Each replay is `nd_replay_once`: `for_probe`
+1. **Per-timeline first-fit.** Each timeline replays up to the per-timeline
+   budget. Each replay is `nd_replay_once`: `for_probe`
    with a spawned RNG and a continuation budget of `len + max(4, len/8)`,
    the stored timeline plus `max(4, len/8)` fresh draws past it
-   (experiment 004). A miss weighs its
-   verbatim watermark, so a heavily diverged replay consumes little of the
-   weighted budget and the physical cap bounds its cost (the weighting is
-   [the lifecycle chapter's](lifecycle.md) subject).
+   (experiment 004), counted as one plain trial whatever it realizes
+   (decision 71).
 2. **Positional splices.** With at least two timelines,
    `REPRODUCE_SPLICES` = 10 crossovers: each picks a random ordered pair and
    a random cut at most the shorter length, then glues the left prefix to the
    right suffix.
    Experiment 006 measured splices rescuing 65–100% of full-pool misses.
 3. **Fresh generations.** `FINAL_REPLAY_FRESH` = 4 new random cases, a
-   chosen constant rather than a derived one (decision 53). Their misses
-   carry weight 0.0 because they say nothing about the stored timelines. Only the
+   chosen constant rather than a derived one (decision 53). Only their
+   failures enter the evidence: a fresh generation is a rescue, not a trial
+   of the stored state (decision 71). Only the
    final replay has this tier. Reuse and blob replay pass zero, because a
    fresh case could fail for an unrelated reason (decision 33). Here the
    origin is pinned, so a fresh failure counts only at the same origin.
@@ -112,21 +110,20 @@ across all of them:
 `ceil(ln 0.05 / ln 0.9)` = 29 (hegel-c/src/native/nd/mod.rs): the smallest
 count at which a bug failing at the target rate p = 0.1 escapes with
 probability at most 5% (decisions 11, 16). The pooled review divides it
-evenly across the pool, giving each timeline a weighted budget of 29/n and a
-physical cap of `ceil(58/n)`:
+evenly across the pool, `ceil(29/n)` replays per timeline:
 
-| Pool size n | Weighted budget per timeline | Physical cap per timeline | Dry worst case (timelines + splices + fresh) |
-|---|---|---|---|
-| 1 | 29 | 58 | 58 + 0 + 4 = 62 |
-| 2 | 14.5 | 29 | 58 + 10 + 4 = 72 |
-| 10 | 2.9 | 6 | 60 + 10 + 4 = 74 |
+| Pool size n | Budget per timeline | Dry worst case (timelines + splices + fresh) |
+|---|---|---|
+| 1 | 29 | 29 + 0 + 4 = 33 |
+| 2 | 15 | 30 + 10 + 4 = 44 |
+| 10 | 3 | 30 + 10 + 4 = 44 |
 
 Every tier exits on the first reproduction, so a live bug costs about 1/p
 executions, and the worst case is paid only for a dry review.
 
 ### Outcomes
 
-`batch` is the accumulated evidence's physical (fails, runs).
+`batch` is the accumulated evidence's (fails, runs).
 
 For a still-unconfirmed origin, any failure confirms: the anchor is the
 evidence's Wilson lower bound, there is no witness (the shrinker is done with

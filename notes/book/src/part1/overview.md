@@ -31,7 +31,8 @@ All of the stated goals were met (notes/design.md):
 - Handle tests that fail at least 10% of the times they are run. The replay
   budgets and confidence arithmetic derive from that target (decision 16,
   `TARGET_FAILURE_RATE = 0.1` in `hegel-c/src/native/nd/mod.rs`).
-- Detect nondeterminism as well as accept declarations (concurrent machines).
+- Detect nondeterminism by observation only; nothing declares it up front
+  (decision 70 removed the concurrent-machine declaration).
 - Restore shrinking, multi-failure reporting, database persistence, and
   reproduce blobs for nondeterministic tests.
 - Bound how much failure probability shrinking can trade away, and raise it
@@ -59,8 +60,8 @@ past the stored timeline, and spliced pairwise when whole-timeline replay misses
 
 **Outcome nondeterminism**: the same realized choice sequence produces a
 different verdict. This is a statistics problem. The answer is to treat every
-verdict as a sample: replays accumulate `Evidence` (failures, physical runs,
-weighted misses), and decisions are made on Wilson confidence bounds over the
+verdict as a sample: replays accumulate `Evidence` (fails, runs), and
+decisions are made on Wilson confidence bounds over the
 estimated failure probability, with explicit budgets derived from the p >= 0.1
 target.
 
@@ -87,10 +88,11 @@ must clear before displacing the incumbent.
 ## The shape of the answer
 
 A run is deterministic until proven otherwise. `Engine.nd_active` is a sticky
-run-level flag, and the *flip* into ND handling comes from one of seven
-sites: declared concurrency, an execution-cache verdict mismatch, a
+run-level flag, and the *flip* into ND handling comes from one of six
+sites: an execution-cache verdict mismatch, a
 first-interesting check miss, replay checks at the shrink verify and final
-replay, and stored ND state from the database or a blob. The
+replay, and stored ND state from the database or a blob (concurrency stopped
+being a flip source with decision 70). The
 `nondeterminism_strictness` setting (quiet, warn, or error, defaulting to quiet)
 governs what the flip says: quiet is silent, warn prints once, error keeps the
 old aborts for suites using determinism as a lint (decisions 1, 30). The data

@@ -42,9 +42,7 @@ final-replay miss). The diagnostics reproduce the pre-branch aborts verbatim
 which is richer: it names the divergence position and quotes the choice that changed
 (decision 64).
 
-Two channels are exceptions under `Error`. Declared concurrency flips unconditionally: the
-user asked for real threads, so even `Error` strictness handles the resulting nondeterminism
-rather than aborting on it. And a stored v2 database entry or blob does not flip the run: it
+One channel is an exception under `Error`. A stored v2 database entry or blob does not flip the run: it
 replays with `nd_active` still false, and a database entry's reproductions displace and persist
 through the `reuse_replays` exemption (decision 65). A stored entry that stops reproducing is staleness,
 never nondeterminism evidence (decision 9).
@@ -81,10 +79,10 @@ While `nd_active` is set:
 - Reports and persistence switch to v2 ND state with caveats (see
   [persistence](persistence.md) and [the ABI and frontend](abi-frontend.md)).
 
-`Engine.concurrent` is a sticky subset flag recording that the flip came from declared
-concurrency, set by the first executed case that created a state machine with
-`max_concurrency > 1`. Concurrent runs then flow through the same ND pipeline as any other
-flipped run (experiment 007).
+Concurrency is not a flip source (decision 70): a state machine with `max_concurrency > 1`
+carries no declaration, because a properly serialized concurrent machine can fail
+deterministically. Concurrent runs flip through the observational channels like any other
+run, and once flipped flow through the same ND pipeline (experiment 007).
 
 Under the `__bench` feature, `seam_flip` records each flip's detection site, call count, and
 the interesting map at flip time for experiment 011's seam dump. The `FlipSite` enum
@@ -161,14 +159,16 @@ flips at the `FinalReplay` site, after which origins already replayed re-enter t
 the pooled review (see [the final replay](final-replay.md)). A cache mismatch inside either
 replay flips the run through the same channel.
 
-### Declared concurrency
+### Concurrency (not a channel)
 
-Concurrency is declared rather than detected, so this channel needs no behavioural evidence.
-Creating a state machine with `max_concurrency > 1` sets `FamilyCore::concurrent_machine`
-(`hegel-c/src/native/data_source.rs`, `hegel-c/src/native/core/state.rs`) at creation time.
-After that case executes, `test_function_tagged` sets `concurrent` and flips, even under
-`Error` strictness. A `max_concurrency == 1` machine never flips, pinned by
-`a_run_with_max_concurrency_one_stays_deterministic` in `tests/test_concurrent_stateful.rs`.
+There is no declared-concurrency channel (decision 70; it existed until 2026-09-07).
+Creating a state machine with any concurrency bound changes nothing about detection: a
+machine whose failure reproduces exactly stays deterministic end to end (pinned by
+`a_worker_panic_is_reported_with_its_real_origin_and_buffered_output`), and a racy machine
+flips at whichever observational channel its behaviour first trips — usually the
+first-interesting check or a cache verdict mismatch. The old declaration also carried the
+one `Error`-strictness exception, so its removal makes `error` uniform: every detection
+aborts, threads or not.
 
 ### Stored v2 state
 

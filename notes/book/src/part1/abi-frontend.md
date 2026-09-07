@@ -41,9 +41,9 @@ vendors the header so it gets a compile-time migration signal.
 
 One retirement is behavioural rather than symbolic: `hegel_new_state_machine` no
 longer rejects the run's first `max_concurrency > 1` case with `HEGEL_E_ASSUME`.
-Creation always succeeds, and the engine switches the run into nd handling at
-the end of the first executed case that makes such a creation, whatever the
-configured strictness, because the concurrency was asked for. A binding that
+Creation always succeeds and declares nothing (decision 70): the engine watches
+the run's observed behaviour exactly as for any other test, and a concurrent
+machine whose failure reproduces exactly stays deterministic. A binding that
 special-cased the sacrificed first case can delete that path.
 
 **Renamed.** `hegel_test_case_is_nondeterministic` became

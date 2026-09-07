@@ -8,7 +8,9 @@ as decision 67 on 2026-09-04 (commit 43b2eb35). Four review-fix commits from a f
 adversarial review of the whole branch sit on top (through 48894dc4), and the branch has
 continued past them: decisions 68 and 69 (2026-09-07) restored targeting under ND handling
 as a measured race, with experiment 013 deriving its constants (see
-[shrinking](shrinking.md)). Part II
+[shrinking](shrinking.md)); decisions 70 and 71 (2026-09-07) removed the concurrency
+declaration channel, so detection is by observation only, and the verbatim-watermark
+weighting, so evidence is plain (fails, runs). Part II
 tells the story ([production](../part2/production.md), [remediation](../part2/remediation.md),
 [seam plan](../part2/seam-plan.md)). This chapter records the state as of the plans'
 close plus that addition.
@@ -19,7 +21,8 @@ exit was "the branch is the artefact decision 26 describes". The same day, the a
 as-built review produced the finding register and the branch continued into remediation.
 Remediation's exit audit (verified 2026-09-03) traced all 41 findings to landed fixes with
 pinning tests or recorded decision entries. The deliberate retentions (z = 1.96, the
-asymmetric miss weighting, `FINAL_REPLAY_FRESH` chosen not derived) are decisions 53/54. The
+asymmetric miss weighting, `FINAL_REPLAY_FRESH` chosen not derived) are decisions 53/54;
+the miss weighting was later superseded by plain counting (decision 71). The
 audit carried exactly one item open: G20, raised by phase 12's in-engine spot check. The seam
 plan closed it. The phase-17 closing sweep's full gate run (check, c-test, check-docs, miri,
 minimal-versions, package) is green.
@@ -38,8 +41,8 @@ detailed entries landed with their fixes. G20 was the only gate to spawn a plan 
 | G5 | Anchor estimand | Reproduction rate under pinned replay, raised only at validated events (decision 46) |
 | G6 | Retention shape | Gamma schedule: 0.8 below the retention high-water, 1.0 at or above (decision 55) |
 | G7 | Boost floor units | 0.30 in 20-run-batch LCB units, holdout = `ANCHOR_SEED_RUNS` (decision 56) |
-| G8 | Watermark landing order | Recursive clone-descending watermark in phase 10, validated by experiment 009a (decision 45) |
-| G9 | Physical backstop (`PHYS_GATE`) | Closed no-change: the escalation signal never fired (decision 57) |
+| G8 | Watermark landing order | Recursive clone-descending watermark in phase 10, validated by experiment 009a (decision 45); the watermark itself is superseded by plain counting (decision 71) |
+| G9 | Physical backstop (`PHYS_GATE`) | Closed no-change: the escalation signal never fired (decision 57); moot since decision 71 removed weighting |
 | G10 | Off-ceiling reproduction rates | Closed keeping decision 31: reuse/blob ≥ 98% at p ≤ 0.3 (decision 58) |
 | G11 | Stamping the unconfirmed report | Generation cases stamped once `nd_active` (decision 49), amended by G26 |
 | G12 | Trusted-shrink anchor | Evidence-batch LCB; trusted origins exempt from the bar's verdict, not spared replay (decision 47) |

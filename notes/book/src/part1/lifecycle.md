@@ -14,40 +14,40 @@ So under ND handling a raw interesting run does exactly two things. It may fill 
 
 ## Evidence and Wilson bounds
 
-`nd::Evidence` is the counting type every replay-driven decision shares: `(fails, physical, weighted_misses)`. A failure counts in full. A miss counts its verbatim watermark (decisions 22, 45): the flat-length-weighted fraction of the stored timeline the replay tracked before first divergence. A verbatim miss weighs 1.0, an early-diverging replay weighs only its tracked prefix, and a diverged clone pair still earns credit for its tracked children, recursively. A diverged run said little about whether the stored timeline reproduces, so it rejects more slowly than a verbatim one. The physical count is kept separately: the statistics discount divergence but cost caps stay exact.
+`nd::Evidence` is the counting type every replay-driven decision shares: plain `(fails, runs)`. Every replay is one Bernoulli trial of the test case under the standing replay procedure, whatever timeline it realized (decision 71). The statistics are about the test case — which can realize many timelines across replays — not about tracking one realized timeline, so a structurally diverged miss counts in full: replaying the stored state and not seeing the failure is what non-reproduction means.
 
-The watermark is what keeps divergence-heavy workloads measurable. Experiment 009a ran it on genuinely racy clone and state-machine bodies: median miss weights of 0.28 to 0.44 in every cell with no mass at zero, where the earlier scalar-prefix weighting had put 78-97% of misses at exactly zero and so fed the bar almost nothing but failures (decision 57).
+Until 2026-09-07 misses were weighted by the verbatim watermark, the tracked fraction of the stored timeline before first divergence (decisions 22, 45, 57, all superseded by 71). That weighting patched a per-timeline estimand instead of fixing it, and it was never what the deriving experiments modelled: 005A's DP is pure Bernoulli and 008's headline envelope is its w = 1.0 column, so plain counting puts the shipped arithmetic back on the derived operating points exactly. The cost is honesty about divergence-heavy bodies: their measured reproduction rates drop to what a user replaying the stored state would actually see.
 
-`lower_bound` and `upper_bound` are Wilson score bounds at z = 1.96 over `fails / (fails + weighted_misses)`, clamped to [0, 1]. The constants below are built from these reference values: LCB(4/30) = 0.0531, the Wilson upper bound at 1/1 = 0.2065, LCB(20/20) = 0.839, LCB(10/20) ≈ 0.30.
+`lower_bound` and `upper_bound` are Wilson score bounds at z = 1.96 over `fails / runs`, clamped to [0, 1]. The constants below are built from these reference values: LCB(4/30) = 0.0531, the Wilson upper bound at 1/1 = 0.2065, LCB(20/20) = 0.839, LCB(10/20) ≈ 0.30.
 
 ## The discovery bar
 
 `nd::discovery_bar` (decision 23) is the gate-then-extend accept/reject rule for admitting an unconfirmed origin:
 
 - accept once `fails >= CONFIRM_MIN_FAILS`.
-- reject on zero failures once weighted misses reach `GATE_RUNS`.
-- reject when the quota is unreachable, that is when `fails + (CONFIRM_CAP − physical) < CONFIRM_MIN_FAILS`.
+- reject on zero failures once the replays reach `GATE_RUNS`.
+- reject when the quota is unreachable, that is when `fails + (CONFIRM_CAP − runs) < CONFIRM_MIN_FAILS`.
 - otherwise continue.
 
 | Constant | Value | Role |
 |---|---|---|
-| `GATE_RUNS` | 10 | zero-fail rejection threshold, in weighted misses |
-| `CONFIRM_CAP` | 40 | physical replay cap per batch |
+| `GATE_RUNS` | 10 | zero-fail rejection threshold |
+| `CONFIRM_CAP` | 40 | replay cap per batch |
 | `CONFIRM_MIN_FAILS` | 4 | failures an accept requires, taken early on the fourth |
-| `ANCHOR_SEED_RUNS` | 20 | physical runs an accepting batch extends to before seeding an anchor |
+| `ANCHOR_SEED_RUNS` | 20 | runs an accepting batch extends to before seeding an anchor |
 | `POOL_CAP` | 10 | stored timelines per origin, incumbent included |
 
 The operating points come from an exact-DP derivation (experiment 005A): 0.6% false accepts per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, ~15 replays per rejected fluke, ~4.4 per p = 0.9 confirmation. The asymmetry is deliberate. A false accept is sticky, occupying the origin behind the displacement gate for the rest of the run, while a false reject recycles through rediscovery, so power is the cheap side of the trade. The rejected alternatives were a Wilson-LCB-over-noise-floor rule (26% false accepts) and an SPRT (50+ replays buying power that rediscovery gives free).
 
-Real bodies move the cost letter but not the verdicts: experiment 009a measured fluke rejection at 26-27 physical replays against a target of 20 (a body property), with `CONFIRM_CAP` bounding the worst case at 37 (decision 57). The intervals themselves are not textbook-honest: per-run peeking, stop-on-fail, and the asymmetric miss weighting all bias them towards acceptance. The design treats the exact-DP operating points as the specification and z = 1.96 as a tuning constant, and experiment 008 measures the realized error.
+The intervals themselves are not textbook-honest: per-run peeking and stop-on-fail bias them towards acceptance. The design treats the exact-DP operating points as the specification and z = 1.96 as a tuning constant, and experiment 008 measures the realized error.
 
 ## The evidence batch
 
-`nd_evidence_batch` (hegel-c/src/native/test_runner.rs) is the bar's driver. It replays the origin's incumbent through `nd_replay_once`: one continuation-tolerant replay budgeted at `nd::continuation_budget(len) = len + max(4, len/8)`, the timeline plus `max(4, len/8)` fresh draws (experiment 004), where "failed" means concluded interesting at the target origin and a miss's weight is its watermark. The batch runs with `capture_replays` set so failing replays carry report material, records weighted evidence, collects failing realized timelines (deduplicated, up to `POOL_CAP`), and takes the first failing run as witness. Two rules keep its statistics honest.
+`nd_evidence_batch` (hegel-c/src/native/test_runner.rs) is the bar's driver. It replays the origin's incumbent through `nd_replay_once`: one continuation-tolerant replay budgeted at `nd::continuation_budget(len) = len + max(4, len/8)`, the timeline plus `max(4, len/8)` fresh draws (experiment 004), where "failed" means concluded interesting at the target origin. The batch runs with `capture_replays` set so failing replays carry report material, records each replay as one trial, collects failing realized timelines (deduplicated, up to `POOL_CAP`), and takes the first failing run as witness. Two rules keep its statistics honest.
 
-**An accept needs an in-batch witness.** A batch starts from the origin's first-check seed when one exists, so its evidence can open with failures the batch itself never saw: "a first-check seed can carry the bar's whole failure quota, and a seeded quota with no in-batch reproduction rejects at `CONFIRM_CAP` physical runs instead of confirming an origin the batch never saw fail." On an accept verdict without a witness the loop keeps replaying, and if no replay in this batch fails by `CONFIRM_CAP` physical runs, the batch rejects. The witness is stored on `Confirmed` and taken once by `take_witness` as the shrinker's starting point, so a confirmation must rest on a reproduction the batch actually holds.
+**An accept needs an in-batch witness.** A batch starts from the origin's first-check seed when one exists, so its evidence can open with failures the batch itself never saw: "a first-check seed can carry the bar's whole failure quota, and a seeded quota with no in-batch reproduction rejects at `CONFIRM_CAP` runs instead of confirming an origin the batch never saw fail." On an accept verdict without a witness the loop keeps replaying, and if no replay in this batch fails by `CONFIRM_CAP` runs, the batch rejects. The witness is stored on `Confirmed` and taken once by `take_witness` as the shrinker's starting point, so a confirmation must rest on a reproduction the batch actually holds.
 
-**An accept extends to `ANCHOR_SEED_RUNS` physical runs** before its LCB may seed an anchor (decision 54). Stopping at the accept itself biases the estimate towards the stopping rule: a four-straight-fail batch would seed 0.51 whatever the true rate. Twenty is the largest batch size whose all-fail LCB (0.839) a shrink candidate can still match within `GAUNTLET_CAP`, and seeding from 40-run batches stalls shrinking outright (LCB(40/40) = 0.912 exceeds the cap-reachable 0.887). A reject stops at the bar. What the anchor prices is the subject of [shrinking](shrinking.md).
+**An accept extends to `ANCHOR_SEED_RUNS` runs** before its LCB may seed an anchor (decision 54). Stopping at the accept itself biases the estimate towards the stopping rule: a four-straight-fail batch would seed 0.51 whatever the true rate. Twenty is the largest batch size whose all-fail LCB (0.839) a shrink candidate can still match within `GAUNTLET_CAP`, and seeding from 40-run batches stalls shrinking outright (LCB(40/40) = 0.912 exceeds the cap-reachable 0.887). A reject stops at the bar. What the anchor prices is the subject of [shrinking](shrinking.md).
 
 For trusted origins the same batch runs with the bar arithmetic as its stopping rule only, since any failure is evidence enough (see below).
 
@@ -61,7 +61,7 @@ Not every origin passes through the check. Database-reuse reproductions are exem
 
 `OriginState` (hegel-c/src/native/nd/lifecycle.rs):
 
-- `Unconfirmed { fails, replays }`: observed interesting but not past the bar. The counts accumulate the physical evidence behind rejected batches, for the caveated report.
+- `Unconfirmed { fails, replays }`: observed interesting but not past the bar. The counts accumulate the evidence behind rejected batches, for the caveated report.
 - `Trusted { pool, fails, replays, report_fails, report_replays }`: reproduced from the database, so exempt from the bar's verdict and from eviction, carrying the stored v2 entry's timeline pool (empty for v1) but no anchor until promotion.
 - `Confirmed { anchor, witness, pool, fails, replays, report_fails, report_replays }`: past the bar, or promoted from Trusted. The anchor is the monotone failure-rate estimate the gauntlet prices candidates against, the witness is the confirmation run the shrinker starts from, and the pool is the captured failing timelines, incumbent first.
 
@@ -93,13 +93,13 @@ An accept here must hold a witness, and its absence at `confirm` time is an inte
 
 ## Trust via database reproduction
 
-A reproduced stored entry's origin is Trusted without facing the bar (decision 24): "the prior run persisted only confirmed origins, and subjecting real p ~ 0.1 bugs to the bar again would drop them ~55% of the time." `trust` is called from the reuse phase after a reproducing replay (which also marks the origin `first_checked`) and from `reproduce_blob`'s ND path. It carries the reproducing v2 entry's timeline pool, truncated to `POOL_CAP` (a decoded entry may carry up to the looser format bound), folds the reproducing batch's physical counts into the trusted evidence, never demotes a Confirmed origin, and never replaces an existing pool with an empty one.
+A reproduced stored entry's origin is Trusted without facing the bar (decision 24): "the prior run persisted only confirmed origins, and subjecting real p ~ 0.1 bugs to the bar again would drop them ~55% of the time." `trust` is called from the reuse phase after a reproducing replay (which also marks the origin `first_checked`) and from `reproduce_blob`'s ND path. It carries the reproducing v2 entry's timeline pool, truncated to `POOL_CAP` (a decoded entry may carry up to the looser format bound), folds the reproducing batch's counts into the trusted evidence, never demotes a Confirmed origin, and never replaces an existing pool with an empty one.
 
 Trust exempts the origin from the bar's verdict, not from measurement (decision 47, the honest rewording of "the bar is not re-run", which was never true). At shrink time a trusted origin runs an evidence batch with the bar as stopping rule only. Any failure promotes it to Confirmed: anchor from the batch LCB, pool merged fresh-first with the stored one (decision 48: the stored pool is the previous run's validated replay state, and the earlier promotion path forgot exactly what had just reproduced the failure). A zero-fail batch folds its counts through `record_trusted_batch`: the origin stays Trusted, skips shrinking, and is still reported and persisted.
 
 ## Rejection and eviction
 
-`reject` folds the rejecting batch's physical counts into the origin's evidence and reports whether the caller must evict: true for Unconfirmed origins, false for Trusted and Confirmed ones, which are exempt. Eviction removes the origin from the interesting map: generation keeps hunting, and a rediscovery faces the bar afresh, which is why the bar can afford 45% per-discovery power. The lifecycle entry itself survives ("Rejection never demotes and never removes state"), so the accumulated counts still feed the caveat. A rejected origin reaches the report only through the caveat-only fallback, and only when nothing confirmed or trusted survived: unconfirmed reporting is gated to avoid caveat fatigue (decisions 3, 24).
+`reject` folds the rejecting batch's counts into the origin's evidence and reports whether the caller must evict: true for Unconfirmed origins, false for Trusted and Confirmed ones, which are exempt. Eviction removes the origin from the interesting map: generation keeps hunting, and a rediscovery faces the bar afresh, which is why the bar can afford 45% per-discovery power. The lifecycle entry itself survives ("Rejection never demotes and never removes state"), so the accumulated counts still feed the caveat. A rejected origin reaches the report only through the caveat-only fallback, and only when nothing confirmed or trusted survived: unconfirmed reporting is gated to avoid caveat fatigue (decisions 3, 24).
 
 ## Caveat wording
 

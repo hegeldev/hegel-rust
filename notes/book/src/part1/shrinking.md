@@ -134,18 +134,18 @@ two pieces of cross-candidate state:
   prices fresh candidates out (decisions 19, 46).
 
 Per candidate, `EngineShrinkProbe::run` executes the proposal once through
-`cached_test_function` and records `(matched, weight 1.0)` into the ledger. Under
+`cached_test_function` and records the match into the ledger. Under
 `nd_active` the execution cache never serves, so every replay runs the body
 (experiment 002, see [detection](detection.md)). In Fast sweep, a miss whose ledger is
 not already a conclusive accept rejects immediately: rejects are charged one run
 (decision 7). The exemption for ledgers holding a conclusive accept protects the
 timelines a nested clone shrink's final splice re-proposes. Otherwise the probe loops
 on `nd::gauntlet(evidence, anchor)`. On Continue it reruns the realized timeline via
-`nd_replay_once`, a continuation-tolerant measurement replay whose non-failures count
-their verbatim-watermark weight (decisions 22 and 45, part of
+`nd_replay_once`, a continuation-tolerant measurement replay counted as one plain
+trial of the candidate test case whatever it realizes (decision 71, part of
 [the lifecycle's](lifecycle.md) Evidence machinery), and records the result. On Reject
 it returns false. On Accept it keeps replaying until the ledger holds
-`ANCHOR_SEED_RUNS` = 20 physical runs, so the bound that may move the anchor is not
+`ANCHOR_SEED_RUNS` = 20 runs, so the bound that may move the anchor is not
 biased by the stopping rule (decision 54), then stashes a `PendingAccept` and returns
 true.
 
@@ -154,7 +154,7 @@ true.
 retention high-water and 1.0 at or above it. Accept requires `GAUNTLET_MIN_FAILS`
 failures *and* a Wilson lower bound at or over the threshold. Short of four failures
 the verdict is only ever Continue. Reject fires when the upper bound proves the
-threshold unreachable or at `GAUNTLET_CAP` physical runs.
+threshold unreachable or at `GAUNTLET_CAP` runs.
 
 | Constant | Value | Provenance |
 | --- | --- | --- |
