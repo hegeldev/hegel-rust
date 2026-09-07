@@ -62,7 +62,9 @@
 //!   documentation](derive@crate::PrettyPrintable).
 //! - [`pretty_print_as_debug!`](crate::pretty_print_as_debug) implements
 //!   the trait via the type's existing `Debug` representation, re-laid-out
-//!   through the layout engine.
+//!   through the layout engine. When hegel is only a dev-dependency — a
+//!   library testing itself — the derive cannot go on the type, but this
+//!   macro works from `#[cfg(test)]` code.
 //! - A hand-written impl gives full control. Print in Rust-expression
 //!   syntax where possible, using the group machinery so large values wrap
 //!   (see [`PrettyPrinter`], and [`print_debug_repr`] to embed a `Debug`
@@ -843,6 +845,7 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
     message = "`{Self}` has no printed representation",
     label = "`{Self}` does not implement `PrettyPrintable`",
     note = "for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
+    note = "when hegel is only a dev-dependency the derive cannot go on the type: invoke `hegel::pretty_print_as_debug!` from `#[cfg(test)]` code instead",
     note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation",
     note = "or draw without reporting the value via `tc.draw_silent(..)`",
     note = "the `hegel::pretty` module docs walk through the whole printing system"
@@ -888,6 +891,10 @@ impl<T: PrettyPrintable + ?Sized> PrettyPrintableField for T {
 /// library). To print a foreign type by its `Debug` representation, make
 /// the *generator* printable instead with
 /// [`print_as_debug`](crate::Generator::print_as_debug).
+///
+/// It is also the route when hegel is only a dev-dependency: the derive
+/// cannot go on the type then, but this macro works from `#[cfg(test)]`
+/// code.
 ///
 /// ```
 /// use hegel::{Document, PrettyPrintable};

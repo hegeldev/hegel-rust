@@ -217,6 +217,7 @@ pub trait Generator<T> {
     message = "`{Self}` cannot print the values it draws",
     label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
     note = "if `{T}` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(hegel::PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `{T}` at once",
+    note = "when hegel is only a dev-dependency the derive cannot go on the type: invoke `hegel::pretty_print_as_debug!` from `#[cfg(test)]` code instead",
     note = "otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(|value, printer| ..)`",
     note = "a `-> impl Generator<..>` return type or `.boxed()` erases printability: return `impl PrintableGenerator<..>` instead, and box a printing generator with `.boxed_printable()`",
     note = "or draw without reporting the value via `tc.draw_silent(..)`",

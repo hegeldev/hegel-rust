@@ -12,6 +12,7 @@ LL | |     ));
  |
  = help: the trait `PrettyPrintable` is not implemented for `OsString`
  = note: for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)
+ = note: when hegel is only a dev-dependency the derive cannot go on the type: invoke `hegel::pretty_print_as_debug!` from `#[cfg(test)]` code instead
  = note: for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation
  = note: or draw without reporting the value via `tc.draw_silent(..)`
  = note: the `hegel::pretty` module docs walk through the whole printing system

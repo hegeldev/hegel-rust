@@ -404,9 +404,10 @@ pub use hegel_macros::DefaultGenerator;
 /// parameter is given a [`PrettyPrintable`] bound, mirroring how
 /// `derive(Debug)` bounds `Debug`.
 ///
-/// For a type whose `Debug` output is already the representation you want
-/// (or one you cannot add a derive to), use
-/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
+/// For a type whose `Debug` output is already the representation you want,
+/// or one this derive cannot go on — hegel only a dev-dependency, say — use
+/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead: it
+/// works from `#[cfg(test)]` code.
 ///
 /// A field whose type cannot implement [`PrettyPrintable`] — a foreign type
 /// the orphan rule keeps out, say — can opt out with `#[pretty(debug)]`:
