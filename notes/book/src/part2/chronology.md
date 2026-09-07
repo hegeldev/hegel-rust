@@ -102,7 +102,8 @@ and what remains.
 Every era is bracketed by adversarial review: the design notes shipped with four critiques,
 the production plan was revised against a 21-finding critique before commit, the
 remediation era opened with the as-built register, the seam plan was reviewed before commit
-and twice after, and the branch closes on four review-fix commits. Gate outcomes are
+and twice after, and the plans' story ends with four review-fix commits (later work is
+recorded in the decision log and [where the plan stands](../part1/status.md)). Gate outcomes are
 recorded as numbered decisions in dedicated commits (06f0b81a, ffa83adf, 27ca5d39,
 29e855e2, 5d3aadc3, 43b2eb35). Fixes are pinned by tests verified red on the pre-fix tree.
 Two commits deliberately land out of phase order: the phase-7 smoke pinned right after

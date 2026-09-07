@@ -35,6 +35,7 @@ anchor", also never ran.
 | 010 | data-tree value | `experiments/tree-value` on `claude/experiment-010-tree-value` | tree removed (decisions 60–63) |
 | 011 | instrumented seam spot check | `/experiments/gauntlet-calibration` (`seam`) | G20's acceptance run; both letter misses escalated (decision 67) |
 | 012 | detection-escape recheck | `/experiments/detection-escape` | never-flip corner closed; found the cost lottery (decision 67) |
+| 013 | targeting under ND | `/experiments/target-sim` | post-plan: ND targeting race constants (decisions 68/69, see [shrinking](../part1/shrinking.md)) |
 
 ## 001: shrink-statistics simulation
 

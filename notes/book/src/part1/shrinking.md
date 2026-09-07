@@ -260,13 +260,32 @@ through `consider`. That final splice re-proposes a timeline whose ledger alread
 holds a conclusive accept, which is why the gauntlet's fast reject exempts such
 ledgers.
 
-## Targeting off, span mutation on
+## Targeting and span mutation
 
-Targeting is fully off under ND handling (decision 39): `record_run` records target
-observations only while the run is deterministic, the generation loop fires the
-`Optimiser` only while `!nd_active`, and `Optimiser::budget_exhausted`
-(`hegel-c/src/native/targeting.rs`) treats `nd_active` as exhaustion, stopping an
-in-flight climb at the flip. Pre-flip observations stay in the map, unused.
+Targeting runs under ND handling as a measured race (`optimise_targets_nd`,
+decision 68), boost's design applied to user scores. It replaced decision 39's full
+disablement, which experiment 013 priced: the deterministic climber applied to a noisy
+score keeps a single-run maximum that sits 1.7 standard deviations above truth on
+normal noise, and the climb freezes against that inflated bar in 92-100% of trials
+after roughly ten runs.
+
+The race trusts no single run. Each label holds a reference timeline and a monotone
+reference score, the median of a fresh `TARGET_ND_HOLDOUT` = 20 replay batch (a batch
+that observes no score marks the label dead, and the recorded per-label maximum, being
+a max of noisy draws, is only ever seed material). Per firing of the target phase, up
+to `TARGET_ND_RACES` = 4 races run: a pool of `TARGET_ND_POOL` = 16 perturbations of
+the reference (single-node steps by power-of-two deltas, prefix-cut mutants for the
+structure the stepper cannot reach, and the recorded best while its raw score still
+exceeds the reference) is successive-halved on mean observed score, and the winner is
+adopted only when a fresh holdout clears the sign test `target_adopt`: the Wilson
+lower bound of strictly-beats-the-reference above 0.5, which at 20 runs means 15
+beats, with ties and unobserved runs counting against. Adoption re-estimates the
+reference on yet another fresh batch and only ever raises it. Race replays are
+measurement executions, counted by the statistics line and excluded from generation
+accounting, and every replay yields to a discovery, since a found failure hands the
+run's replay budget to confirmation and shrinking. Experiment 013 measured the race
+reaching the landscape maximum on every gradient it can move on for ~950 replays per
+run, where the old climber froze at 18 of 100.
 
 Span mutation stays on. `try_span_mutation` runs from the generation loop regardless
 of `nd_active`, making up to `SPAN_MUTATION_ATTEMPTS` = 5 probes per eligible run

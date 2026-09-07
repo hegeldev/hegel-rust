@@ -5,9 +5,13 @@ the experiment-era scaffolding to production grade. The remediation plan (phases
 G5–G20) fixed the 41 findings in the as-built register and recalibrated the statistics. The
 seam plan (phases 14–17, gates G21–G26) resolved G20, the deterministic-to-ND seam. The last gate closed
 as decision 67 on 2026-09-04 (commit 43b2eb35). Four review-fix commits from a final
-adversarial review of the whole branch sit on top, and the branch tip is 48894dc4. Part II
+adversarial review of the whole branch sit on top (through 48894dc4), and the branch has
+continued past them: decisions 68 and 69 (2026-09-07) restored targeting under ND handling
+as a measured race, with experiment 013 deriving its constants (see
+[shrinking](shrinking.md)). Part II
 tells the story ([production](../part2/production.md), [remediation](../part2/remediation.md),
-[seam plan](../part2/seam-plan.md)). This chapter records the final state.
+[seam plan](../part2/seam-plan.md)). This chapter records the state as of the plans'
+close plus that addition.
 
 The phases form one continuous series across the three plan documents, each landing as
 ordinary commits green under `just check` and `just check-coverage`. The production plan's

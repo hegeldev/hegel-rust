@@ -95,8 +95,9 @@ replay, and stored ND state from the database or a blob. The
 governs what the flip says: quiet is silent, warn prints once, error keeps the
 old aborts for suites using determinism as a lint (decisions 1, 30). The data
 tree is gone, replaced by a flat execution cache that doubles as the
-verdict-mismatch detector. Under ND handling, caching, targeting, and the
-duplicate stop are all off ([detection](detection.md)).
+verdict-mismatch detector. Under ND handling, caching and the duplicate stop
+are off, and targeting trades its hill climber for a measured race
+([detection](detection.md), [shrinking](shrinking.md)).
 
 Confirmation gates origin admission on every path. An observed origin starts
 *Unconfirmed* and must clear the *discovery bar* (a gate-then-extend

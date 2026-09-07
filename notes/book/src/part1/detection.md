@@ -70,11 +70,12 @@ While `nd_active` is set:
   avoid (experiment 002).
 - The duplicate stop is frozen at zero, and `record_execution` is skipped entirely, so the
   kind ledger goes unfed too.
-- Targeting is fully off (decisions 29, 39): `record_run` records no target observations, the
-  generation loop's target-phase gate requires `!nd_active`, and
-  `Optimiser::budget_exhausted` (`hegel-c/src/native/targeting.rs`) treats `nd_active` as
-  exhaustion, stopping an in-flight climb at the flip. Span mutation, by contrast, stays on
-  (see [shrinking](shrinking.md)).
+- Targeting switches modes (decision 68, superseding decision 39's full disablement).
+  `Optimiser::budget_exhausted` (`hegel-c/src/native/targeting.rs`) still treats
+  `nd_active` as exhaustion, so a flip stops an in-flight deterministic climb, but the
+  target phase keeps firing: under ND handling it runs `optimise_targets_nd`, a
+  holdout-gated race that trusts no single run (see [shrinking](shrinking.md)). Span
+  mutation stays on too.
 - A raw interesting run fills only a vacant origin, and displacement of occupied origins is
   frozen (decision 20). Admission from there is [the lifecycle](lifecycle.md)'s business.
 - Reports and persistence switch to v2 ND state with caveats (see
