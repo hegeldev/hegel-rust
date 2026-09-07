@@ -18,15 +18,38 @@ struct BestTarget {
     choices: Vec<ChoiceValue>,
 }
 
-/// Per-label best score and the choice sequence that produced it.
+/// One label's targeting state under ND handling (decision 68): the
+/// reference timeline's realized nodes (the race perturbs these and derives
+/// replayable values from them), a monotone reference score estimated only
+/// from fresh unselected batches, and a dead marker for labels whose
+/// reference batch observed no score at all — raced never, re-measured
+/// never.
+pub(crate) struct NdTarget {
+    pub(crate) nodes: Vec<ChoiceNode>,
+    pub(crate) reference: f64,
+    pub(crate) dead: bool,
+}
+
+impl NdTarget {
+    pub(crate) fn timeline(&self) -> Vec<ChoiceValue> {
+        self.nodes.iter().map(|n| n.value()).collect()
+    }
+}
+
+/// Per-label best score and the choice sequence that produced it, plus the
+/// per-label ND state. The recorded best is a running maximum of single-run
+/// observations, so under ND handling it is selection-biased and serves
+/// only as seed material for honest measurement (decision 68).
 pub(crate) struct TargetingState {
     best_targets: HashMap<String, BestTarget>,
+    nd_targets: HashMap<String, NdTarget>,
 }
 
 impl TargetingState {
     pub fn new() -> Self {
         Self {
             best_targets: HashMap::default(),
+            nd_targets: HashMap::default(),
         }
     }
 
@@ -53,6 +76,43 @@ impl TargetingState {
 
     pub fn is_empty(&self) -> bool {
         self.best_targets.is_empty()
+    }
+
+    /// Every label's recorded best, sorted by label — the ND race's seed
+    /// material.
+    pub(crate) fn seeds(&self) -> Vec<(String, f64, Vec<ChoiceValue>)> {
+        let mut seeds: Vec<_> = self
+            .best_targets
+            .iter()
+            .map(|(label, best)| (label.clone(), best.score, best.choices.clone()))
+            .collect();
+        seeds.sort_by(|a, b| a.0.cmp(&b.0));
+        seeds
+    }
+
+    pub(crate) fn nd_target(&self, label: &str) -> Option<&NdTarget> {
+        self.nd_targets.get(label)
+    }
+
+    pub(crate) fn set_nd_target(&mut self, label: String, target: NdTarget) {
+        self.nd_targets.insert(label, target);
+    }
+
+    /// Move `label` onto an adopted winner's fresh-batch node view. The
+    /// reference only ever rises, and always from a fresh unselected batch
+    /// (decision 68).
+    pub(crate) fn adopt_nd(&mut self, label: &str, nodes: Vec<ChoiceNode>, median: f64) {
+        let target = self
+            .nd_targets
+            .entry(String::from(label))
+            .or_insert(NdTarget {
+                nodes: Vec::new(),
+                reference: f64::NEG_INFINITY,
+                dead: false,
+            });
+        target.nodes = nodes;
+        target.reference = target.reference.max(median);
+        target.dead = false;
     }
 
     #[cfg(test)]

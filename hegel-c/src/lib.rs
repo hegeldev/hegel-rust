@@ -280,8 +280,9 @@ pub enum hegel_phase_t {
     HEGEL_PHASE_REUSE = 1 << 1,
     /// Randomly generate fresh test cases up to the `test_cases` budget.
     HEGEL_PHASE_GENERATE = 1 << 2,
-    /// Apply hill-climbing toward observed `hegel_target` scores between
-    /// generation rounds.
+    /// Optimise toward observed `hegel_target` scores between generation
+    /// rounds: hill-climbing on deterministic runs, a measured race under
+    /// nondeterministic handling.
     HEGEL_PHASE_TARGET = 1 << 3,
     /// Shrink discovered failing examples.
     HEGEL_PHASE_SHRINK = 1 << 4,

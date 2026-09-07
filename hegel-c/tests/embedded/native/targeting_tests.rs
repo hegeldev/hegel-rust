@@ -81,6 +81,89 @@ fn targeting_state_tracks_multiple_labels_independently() {
 }
 
 #[test]
+fn seeds_are_sorted_by_label_and_carry_the_recorded_best() {
+    let mut state = TargetingState::new();
+    let choices_a = vec![ChoiceValue::Integer(BigInt::from(1))];
+    let choices_b = vec![ChoiceValue::Integer(BigInt::from(2))];
+    state.record(&choices_b, &HashMap::from_iter([("b".to_string(), 2.0)]));
+    state.record(&choices_a, &HashMap::from_iter([("a".to_string(), 1.0)]));
+    assert_eq!(
+        state.seeds(),
+        vec![
+            ("a".to_string(), 1.0, choices_a),
+            ("b".to_string(), 2.0, choices_b),
+        ]
+    );
+}
+
+#[test]
+fn nd_target_timeline_derives_the_node_values() {
+    let target = NdTarget {
+        nodes: vec![integer_node(3, 0, 10), float_node(1.5)],
+        reference: 0.0,
+        dead: false,
+    };
+    assert_eq!(
+        target.timeline(),
+        vec![
+            ChoiceValue::Integer(BigInt::from(3)),
+            ChoiceValue::Float(1.5)
+        ]
+    );
+}
+
+#[test]
+fn set_nd_target_stores_and_nd_target_reads_back() {
+    let mut state = TargetingState::new();
+    assert!(state.nd_target("s").is_none());
+    state.set_nd_target(
+        "s".to_string(),
+        NdTarget {
+            nodes: vec![integer_node(1, 0, 10)],
+            reference: 4.0,
+            dead: false,
+        },
+    );
+    assert_eq!(state.nd_target("s").unwrap().reference, 4.0);
+}
+
+#[test]
+fn adopt_nd_moves_the_nodes_but_never_lowers_the_reference() {
+    let mut state = TargetingState::new();
+    state.set_nd_target(
+        "s".to_string(),
+        NdTarget {
+            nodes: vec![integer_node(1, 0, 10)],
+            reference: 4.0,
+            dead: false,
+        },
+    );
+    state.adopt_nd("s", vec![integer_node(2, 0, 10)], 3.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 4.0);
+    assert_eq!(
+        target.timeline(),
+        vec![ChoiceValue::Integer(BigInt::from(2))]
+    );
+    state.adopt_nd("s", vec![integer_node(5, 0, 10)], 6.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 6.0);
+    assert_eq!(
+        target.timeline(),
+        vec![ChoiceValue::Integer(BigInt::from(5))]
+    );
+}
+
+#[test]
+fn adopt_nd_on_an_unknown_label_inserts_it() {
+    let mut state = TargetingState::new();
+    state.adopt_nd("s", vec![integer_node(2, 0, 10)], 3.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 3.0);
+    assert!(!target.dead);
+}
+
+#[test]
 fn schedule_fires_at_first_threshold() {
     let mut s = TargetingSchedule::new(100);
     assert!(!s.should_fire(49));

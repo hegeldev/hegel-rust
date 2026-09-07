@@ -224,6 +224,32 @@ successive halving over the incumbent, its pool, and prefix-mutant fills (up to
 `BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
 it never runs; each race logs one Debug line at entry; there is no public setting.
 
+### Targeting under ND handling
+
+Targeting runs under ND handling as a measured race (`optimise_targets_nd`,
+decision 68, experiment 013) — boost's design applied to user scores, replacing decision
+39's full disablement. Under a nondeterministic score every rule the deterministic climber
+trusts breaks the same way the shrink loop's did: the recorded per-label maximum is the max
+of noisy draws (013: 1.6-1.7 sd above truth on normal noise, +36 raw with heavy tails), a
+strict-improvement accept ratchets on flukes and then freezes (013: frozen in 92-100% of
+trials with gradient remaining, final position 18 of 100), and `FindInteger`'s
+bisection invariant corrupts on one noisy verdict. So under `nd_active` the recorded best
+is demoted to seed material (observations are recorded again — the record itself is
+harmless once nothing treats it as an estimate), and each label holds an `NdTarget`: a
+reference timeline plus a monotone reference score estimated only from fresh unselected
+batches (the median of `TARGET_ND_HOLDOUT` replays; a batch observing no score marks the
+label dead). Per firing of the target phase, up to `TARGET_ND_RACES` races run: a pool of
+`TARGET_ND_POOL` perturbations of the reference (single-node steps by power-of-two deltas,
+plus boost's prefix-cut mutants — the only lever on structure the stepper cannot reach,
+such as clone streams, and the recorded best when its raw score still exceeds the
+reference), successive-halved on mean observed score, the winner adopted only when a fresh
+`TARGET_ND_HOLDOUT` holdout clears the sign test (`target_adopt`: Wilson LCB of
+strictly-beats-the-reference above 0.5, ties and unobserved runs counting against). On
+adoption the reference is re-estimated on another fresh batch and only ever raised.
+Firing requires the interesting map empty, every replay yields to a discovery, and race
+replays are `measure()` executions: counted by the statistics line, excluded from
+generation accounting, never recorded as observations.
+
 ### The execution cache and kind ledger
 
 The data tree is gone (seam plan phase 15, closing decisions 6 and 29; experiment 010
@@ -251,10 +277,11 @@ measured what its four roles bought). Its replacements, both in `exec_cache.rs`:
   verdict channel plus the replay checks.
 
 Under ND handling both are disabled (gate G3/decision 29): cache recording and serving,
-the duplicate stop, the ledger, and targeting (the optimiser, its observation recording,
-and any in-flight climb) are all off once `nd_active` is set — the flip flushes the cache,
-and `cached_test_function` executes every replay, since serving the first recorded verdict
-is exactly the bias the multi-run machinery exists to avoid.
+the duplicate stop, and the ledger are all off once `nd_active` is set — the flip flushes
+the cache, and `cached_test_function` executes every replay, since serving the first
+recorded verdict is exactly the bias the multi-run machinery exists to avoid. The flip
+also stops any in-flight deterministic climb; targeting continues in its measured mode
+(decision 68, above).
 
 ### Reporting
 

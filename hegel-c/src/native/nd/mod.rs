@@ -205,6 +205,53 @@ pub(crate) fn boost_keep(candidates: usize) -> usize {
     candidates.div_ceil(2)
 }
 
+/// Candidate perturbations per ND targeting race — [`BOOST_POOL`], the same
+/// halving-race width boost runs (decision 68).
+pub(crate) const TARGET_ND_POOL: usize = 16;
+
+/// Fresh replays scoring an ND targeting race's winner against the
+/// reference, and re-estimating the reference after an adoption —
+/// [`ANCHOR_SEED_RUNS`], so score references are estimated on the same
+/// batch size as anchors. Experiment 013: at 20 the sign test needs 15
+/// beats (LCB(15/20) = 0.53), passing a true 75%-beat improvement 62% of
+/// the time per gate at a 2.1% false-adopt rate; 10 runs need 9 beats
+/// (24% power) and stall on tie-heavy scores, and 30 buys nothing over 20
+/// for ~15% more replays.
+pub(crate) const TARGET_ND_HOLDOUT: u64 = ANCHOR_SEED_RUNS;
+
+/// Races per targeting firing under ND handling. A race costs ~130
+/// halving replays plus pool probes and up to two holdout batches, and a
+/// race that adopts is always followed by another, so a live gradient is
+/// climbed until this cap. Experiment 013: at four races a full run costs
+/// ~950 replays (~410 per adopted step) and reaches the landscape maximum
+/// everywhere the race can move; two races reach it too at roughly half
+/// the cost, and eight double the cost and the flat-landscape false-adopt
+/// rate for no progress.
+pub(crate) const TARGET_ND_RACES: u64 = 4;
+
+/// Adoption rule for an ND targeting race winner (decision 68): the Wilson
+/// lower bound of `beats / runs` must clear 0.5, where a beat is a fresh
+/// holdout run whose score strictly exceeds the reference — a sign test
+/// that the winner's median score beats the reference, with ties and
+/// unobserved runs counting against. Winner's-curse-resistant because the
+/// holdout is fresh and the reference was never estimated from a selected
+/// maximum.
+pub(crate) fn target_adopt(beats: u64, runs: u64) -> bool {
+    wilson_bound(beats as f64, runs as f64, false) > 0.5
+}
+
+/// Reference score for an ND target: the upper-middle order statistic of
+/// the observed scores, so an even-sized batch reads conservatively high
+/// and adoption stays strict. `None` when nothing was observed.
+pub(crate) fn target_median(scores: &[f64]) -> Option<f64> {
+    if scores.is_empty() {
+        return None;
+    }
+    let mut sorted = scores.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    Some(sorted[sorted.len() / 2])
+}
+
 /// Continuation budget for replaying a timeline of flattened length `len`:
 /// the timeline plus `max(4, len / 8)` fresh draws. Experiment 004: a budget
 /// of 4 absorbs all net elongation on plateau bodies and larger flat budgets

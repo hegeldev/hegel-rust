@@ -5791,8 +5791,10 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
     );
 }
 
+/// Amends the decision-39 pin: observations record under ND handling too,
+/// as selection-biased seed material for the measured race (decision 68).
 #[test]
-fn nd_runs_record_no_targeting_observations() {
+fn nd_runs_record_targeting_observations_as_race_seeds() {
     let observing_run = || {
         let mut run = interesting_at("Panic: unused", vec![bool_node(true)]);
         run.status = Status::Valid;
@@ -5806,7 +5808,7 @@ fn nd_runs_record_no_targeting_observations() {
         |_ds| TestCaseResult::Valid,
         async |ctx| {
             ctx.record_run(&observing_run(), Duration::ZERO, false);
-            assert!(ctx.targeting.is_empty());
+            assert!(!ctx.targeting.is_empty());
         },
     );
     with_counting_ctx(
@@ -5814,6 +5816,292 @@ fn nd_runs_record_no_targeting_observations() {
         async |ctx, _execs| {
             ctx.record_run(&observing_run(), Duration::ZERO, false);
             assert!(!ctx.targeting.is_empty());
+        },
+    );
+}
+
+/// The full ND targeting loop on a rising landscape: the reference comes
+/// from a fresh batch (not the recorded raw maximum, which is deliberately
+/// cursed here), every race's adoption raises the reference, and the loop
+/// spends exactly its race budget. The body goes invalid every tenth
+/// execution so the invalid arms of the race, holdout, and scoring loops
+/// are all exercised without blocking adoption.
+#[test]
+fn nd_targeting_races_adopt_improvements_onto_a_fresh_reference() {
+    let settings = nd_settings().verbosity(Verbosity::Debug);
+    let execs = Rc::new(Cell::new(0u64));
+    let counter = execs.clone();
+    with_engine(
+        settings,
+        None,
+        move |ds| {
+            counter.set(counter.get() + 1);
+            if counter.get() % 10 == 0 {
+                return TestCaseResult::Invalid;
+            }
+            let n = match rint(ds, 0, 100) {
+                Ok(n) => n,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            ds.target_observation(n as f64, "").unwrap();
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.targeting.record(
+                &[ChoiceValue::Integer(BigInt::from(0))],
+                &HashMap::from_iter([("".to_string(), 1e9)]),
+            );
+            ctx.optimise_targets_nd().await.unwrap();
+            let target = ctx.targeting.nd_target("").unwrap();
+            assert!(!target.dead);
+            assert!(
+                target.reference > 0.0,
+                "adoption should have raised the reference above the seed's \
+                 true score, got {}",
+                target.reference
+            );
+            assert!(
+                target.reference < 1e9,
+                "the reference must come from measurement, not the recorded \
+                 raw maximum"
+            );
+        },
+    );
+}
+
+/// A label whose body never reports it: the reference batch observes no
+/// score, the label is marked dead, and later firings spend nothing on it.
+#[test]
+fn nd_targeting_marks_an_unobserved_label_dead_and_skips_it() {
+    let execs = Rc::new(Cell::new(0u64));
+    let counter = execs.clone();
+    with_engine(
+        nd_settings(),
+        None,
+        move |_ds| {
+            counter.set(counter.get() + 1);
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.targeting.record(
+                &[ChoiceValue::Boolean(true)],
+                &HashMap::from_iter([("s".to_string(), 1.0)]),
+            );
+            ctx.optimise_targets_nd().await.unwrap();
+            assert!(ctx.targeting.nd_target("s").unwrap().dead);
+            let after_first = execs.get();
+            ctx.optimise_targets_nd().await.unwrap();
+            assert_eq!(execs.get(), after_first);
+        },
+    );
+}
+
+/// A winner that never strictly beats the reference is not adopted: the
+/// score is constant, so every holdout run ties and the sign test fails.
+#[test]
+fn nd_targeting_rejects_a_winner_that_never_beats_the_reference() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            if rint(ds, 0, 100).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            ds.target_observation(5.0, "").unwrap();
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.targeting.record(
+                &[ChoiceValue::Integer(BigInt::from(0))],
+                &HashMap::from_iter([("".to_string(), 5.0)]),
+            );
+            ctx.optimise_targets_nd().await.unwrap();
+            assert_eq!(ctx.targeting.nd_target("").unwrap().reference, 5.0);
+        },
+    );
+}
+
+/// A discovery mid-race ends targeting: the failing region is reachable
+/// only by the race's own probes, the discovered origin fills the
+/// interesting map, and the second label's race never starts.
+#[test]
+fn nd_targeting_yields_to_a_discovery() {
+    let execs = Rc::new(Cell::new(0u64));
+    let counter = execs.clone();
+    with_engine(
+        nd_settings(),
+        None,
+        move |ds| {
+            counter.set(counter.get() + 1);
+            let n = match rint(ds, 0, 40) {
+                Ok(n) => n,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if n >= 30 {
+                return TestCaseResult::Interesting(Failure {
+                    origin: "Panic: found by targeting".to_string(),
+                    reproduce_blob: None,
+                    caveat: None,
+                });
+            }
+            ds.target_observation(n as f64, "a").unwrap();
+            ds.target_observation(-(n as f64), "b").unwrap();
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let seed = [ChoiceValue::Integer(BigInt::from(0))];
+            ctx.targeting.record(
+                &seed,
+                &HashMap::from_iter([("a".to_string(), 0.0), ("b".to_string(), 0.0)]),
+            );
+            ctx.optimise_targets_nd().await.unwrap();
+            assert!(!ctx.interesting.is_empty());
+            let spent = execs.get();
+            ctx.optimise_targets_nd().await.unwrap();
+            assert_eq!(execs.get(), spent);
+        },
+    );
+}
+
+/// A body with no draws leaves nothing to perturb: every probe realizes
+/// the reference timeline itself, the candidate pool stays empty, and the
+/// race adopts nothing.
+#[test]
+fn nd_targeting_race_with_no_distinct_candidates_adopts_nothing() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            ds.target_observation(1.0, "").unwrap();
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.targeting
+                .record(&[], &HashMap::from_iter([("".to_string(), 1.0)]));
+            ctx.optimise_targets_nd().await.unwrap();
+            let target = ctx.targeting.nd_target("").unwrap();
+            assert!(!target.dead);
+            assert_eq!(target.reference, 1.0);
+            assert!(target.timeline().is_empty());
+        },
+    );
+}
+
+/// A race whose candidates never observe the label produces a winner with
+/// no observations, which is not adopted: only the seed value reports a
+/// score, and every perturbation moves off it.
+#[test]
+fn nd_targeting_winner_with_zero_observations_is_not_adopted() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let n = match rint(ds, 0, 1000) {
+                Ok(n) => n,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if n == 0 {
+                ds.target_observation(1.0, "").unwrap();
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            ctx.targeting.record(
+                &[ChoiceValue::Integer(BigInt::from(0))],
+                &HashMap::from_iter([("".to_string(), 1.0)]),
+            );
+            ctx.optimise_targets_nd().await.unwrap();
+            assert_eq!(ctx.targeting.nd_target("").unwrap().reference, 1.0);
+        },
+    );
+}
+
+/// The adoption seam directly: a fresh batch that observes the label
+/// re-estimates the reference and moves the node view, and one that
+/// observes nothing abandons the adoption.
+#[test]
+fn nd_target_adopt_requires_an_observing_fresh_batch() {
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let n = match rint(ds, 0, 100) {
+                Ok(n) => n,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if n > 0 {
+                ds.target_observation(n as f64, "").unwrap();
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx| {
+            let observing = [ChoiceValue::Integer(BigInt::from(9))];
+            assert!(ctx.nd_target_adopt("", &observing, 0.0).await.unwrap());
+            assert_eq!(ctx.targeting.nd_target("").unwrap().reference, 9.0);
+            let silent = [ChoiceValue::Integer(BigInt::from(0))];
+            assert!(!ctx.nd_target_adopt("", &silent, 0.0).await.unwrap());
+            assert_eq!(ctx.targeting.nd_target("").unwrap().reference, 9.0);
+        },
+    );
+}
+
+/// The generation loop routes a flipped run's target phase to the measured
+/// race: a full ND run with a targeting body spends far more executions
+/// than its generation budget, and still reports no failure.
+#[test]
+fn nd_runs_fire_the_measured_race_from_the_generation_loop() {
+    let settings = nd_settings();
+    let execs = Rc::new(Cell::new(0u64));
+    let counter = execs.clone();
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        counter.set(counter.get() + 1);
+        let result = match rint(&*ds, 0, 100) {
+            Ok(n) => {
+                ds.target_observation(n as f64, "").unwrap();
+                TestCaseResult::Valid
+            }
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(
+        execs.get() > 300,
+        "the race's measurement replays should dwarf the generation \
+         budget, saw {} executions",
+        execs.get()
+    );
+}
+
+/// An interesting run during the reference batch leaves the label unset —
+/// not dead — so the next firing can retry once the failure machinery has
+/// the origin.
+#[test]
+fn nd_targeting_reference_interrupted_by_a_discovery_is_not_marked_dead() {
+    with_engine(
+        nd_settings(),
+        None,
+        |_ds| {
+            TestCaseResult::Interesting(Failure {
+                origin: "Panic: immediate".to_string(),
+                reproduce_blob: None,
+                caveat: None,
+            })
+        },
+        async |ctx| {
+            ctx.targeting
+                .record(&[], &HashMap::from_iter([("s".to_string(), 1.0)]));
+            ctx.optimise_targets_nd().await.unwrap();
+            assert!(ctx.targeting.nd_target("s").is_none());
+            assert!(!ctx.interesting.is_empty());
         },
     );
 }

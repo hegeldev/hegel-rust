@@ -610,17 +610,20 @@ impl<'a> Engine<'a> {
                 }
 
                 if target_phase
-                    && !self.nd_active
                     && self.interesting.is_empty()
                     && !self.targeting.is_empty()
                     && target_schedule.should_fire(self.valid_test_cases)
                 {
-                    let mut optimiser = crate::native::targeting::Optimiser {
-                        engine: &mut *self,
-                        max_valid: max_test_cases,
-                        max_calls: max_test_cases * 10,
-                    };
-                    optimiser.optimise_targets().await?;
+                    if self.nd_active {
+                        self.optimise_targets_nd().await?;
+                    } else {
+                        let mut optimiser = crate::native::targeting::Optimiser {
+                            engine: &mut *self,
+                            max_valid: max_test_cases,
+                            max_calls: max_test_cases * 10,
+                        };
+                        optimiser.optimise_targets().await?;
+                    }
                 }
 
                 if run.status == Status::Valid
@@ -1417,8 +1420,10 @@ pub(crate) struct Engine<'a> {
     /// behavior — a cache verdict mismatch, a verify status/origin flake,
     /// or a concurrent state machine — or `Settings::nd_force` started it
     /// flipped. While set, the run trusts no cached prediction: execution-
-    /// cache recording and serving, the duplicate stop, and targeting are
-    /// all off. Never cleared within a run.
+    /// cache recording and serving and the duplicate stop are off, and
+    /// targeting switches from single-run hill climbing to the measured
+    /// race ([`Self::optimise_targets_nd`], decision 68). Never cleared
+    /// within a run.
     pub(crate) nd_active: bool,
     /// Sticky flag for the concurrency subset of `nd_active`, flipped by
     /// the first executed test case that creates a state machine with
@@ -2374,6 +2379,284 @@ impl<'a> Engine<'a> {
         })
     }
 
+    /// Targeting under ND handling (decision 68, experiment 013): the
+    /// per-label counterpart of [`crate::native::targeting::Optimiser`],
+    /// with every single-run trust point replaced by measurement. Each
+    /// label's recorded best is selection-biased seed material, never a
+    /// baseline: the label's reference score is the median of a fresh
+    /// replay batch, raced candidates are ranked by mean observed score
+    /// under successive halving, and a winner is adopted only when a fresh
+    /// holdout clears [`nd::target_adopt`]'s sign test against the
+    /// reference, which is then re-estimated on another fresh batch and
+    /// only ever raised. Races stop at [`nd::TARGET_ND_RACES`] per firing,
+    /// after a full label pass with no adoption, or as soon as any
+    /// interesting origin exists — at which point the run's replay budget
+    /// belongs to confirmation and shrinking.
+    async fn optimise_targets_nd(&mut self) -> Result<(), RunError> {
+        let seeds = self.targeting.seeds();
+        let mut races = 0u64;
+        loop {
+            let mut adopted = false;
+            for (label, best_score, best_choices) in &seeds {
+                if races >= nd::TARGET_ND_RACES || !self.interesting.is_empty() {
+                    return Ok(());
+                }
+                if self.targeting.nd_target(label).is_none() {
+                    self.nd_target_reference(label, best_choices).await?;
+                }
+                let (reference, nodes, timeline) = match self.targeting.nd_target(label) {
+                    Some(t) if !t.dead => (t.reference, t.nodes.clone(), t.timeline()),
+                    _ => continue,
+                };
+                races += 1;
+                if self
+                    .nd_target_race(
+                        label,
+                        reference,
+                        &nodes,
+                        &timeline,
+                        *best_score,
+                        best_choices,
+                    )
+                    .await?
+                {
+                    adopted = true;
+                }
+            }
+            if !adopted {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Establish `label`'s ND reference from a fresh batch replaying the
+    /// recorded seed: the reference score is the batch's median observed
+    /// score and the node view comes from its first concluded run. A batch
+    /// that observes no score marks the label dead — the body no longer
+    /// reports it — unless the batch was cut short by a discovery, in
+    /// which case nothing is recorded and the next firing retries.
+    async fn nd_target_reference(
+        &mut self,
+        label: &str,
+        seed: &[ChoiceValue],
+    ) -> Result<(), RunError> {
+        let (scores, nodes) = self
+            .nd_target_scores(seed, label, nd::TARGET_ND_HOLDOUT)
+            .await?;
+        let target = match (nd::target_median(&scores), nodes) {
+            (Some(reference), Some(nodes)) => crate::native::targeting::NdTarget {
+                nodes,
+                reference,
+                dead: false,
+            },
+            _ => {
+                if !self.interesting.is_empty() {
+                    return Ok(());
+                }
+                crate::native::targeting::NdTarget {
+                    nodes: Vec::new(),
+                    reference: f64::NEG_INFINITY,
+                    dead: true,
+                }
+            }
+        };
+        self.targeting.set_nd_target(label.to_string(), target);
+        Ok(())
+    }
+
+    /// One race of the ND targeting loop: build a pool of perturbations of
+    /// the reference timeline (plus the recorded best, when its raw score
+    /// still exceeds the reference and it is not the reference itself),
+    /// successive-halve it on mean observed score, then put the winner to
+    /// the holdout sign test. Adoption moves the label onto the winner's
+    /// fresh-batch node view and raises the reference to at most that
+    /// batch's median — never estimated from the runs that won the race.
+    /// Returns whether an adoption happened.
+    async fn nd_target_race(
+        &mut self,
+        label: &str,
+        reference: f64,
+        nodes: &[ChoiceNode],
+        timeline: &[ChoiceValue],
+        best_score: f64,
+        best_choices: &[ChoiceValue],
+    ) -> Result<bool, RunError> {
+        let mut candidates: Vec<Vec<ChoiceValue>> = Vec::new();
+        if best_score > reference && best_choices != timeline {
+            candidates.push(best_choices.to_vec());
+        }
+        let mut attempts = 0;
+        while candidates.len() < nd::TARGET_ND_POOL && attempts < nd::TARGET_ND_POOL * 3 {
+            attempts += 1;
+            let Some(candidate) = self.nd_target_perturb(nodes, timeline).await? else {
+                continue;
+            };
+            if candidate != timeline && !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(false);
+        }
+        let mut scores: Vec<(usize, f64, u64)> =
+            (0..candidates.len()).map(|i| (i, 0.0, 0)).collect();
+        let mut replays_per_round: u64 = 2;
+        while scores.len() > 1 {
+            for (idx, sum, runs) in scores.iter_mut() {
+                for _ in 0..replays_per_round {
+                    let Some(run) = self.nd_target_run(&candidates[*idx]).await? else {
+                        break;
+                    };
+                    if run.status < Status::Valid {
+                        continue;
+                    }
+                    if let Some(&score) = run.target_observations.get(label) {
+                        *sum += score;
+                        *runs += 1;
+                    }
+                }
+            }
+            let mean = |entry: &(usize, f64, u64)| {
+                if entry.2 == 0 {
+                    f64::NEG_INFINITY
+                } else {
+                    entry.1 / entry.2 as f64
+                }
+            };
+            scores.sort_by(|a, b| mean(b).total_cmp(&mean(a)));
+            scores.truncate(nd::boost_keep(scores.len()));
+            replays_per_round *= 2;
+        }
+        let (winner_idx, _, winner_runs) = scores[0];
+        if winner_runs == 0 {
+            return Ok(false);
+        }
+        let winner = candidates[winner_idx].clone();
+        let (holdout_scores, _nodes) = self
+            .nd_target_scores(&winner, label, nd::TARGET_ND_HOLDOUT)
+            .await?;
+        let beats = holdout_scores.iter().filter(|&&s| s > reference).count() as u64;
+        if !nd::target_adopt(beats, nd::TARGET_ND_HOLDOUT) {
+            return Ok(false);
+        }
+        self.nd_target_adopt(label, &winner, reference).await
+    }
+
+    /// Complete an adoption: re-estimate the reference on a fresh batch of
+    /// the winner and move the label onto that batch's node view. A batch
+    /// observing nothing — cut short by a discovery, or a winner whose
+    /// scores stopped arriving — abandons the adoption.
+    async fn nd_target_adopt(
+        &mut self,
+        label: &str,
+        winner: &[ChoiceValue],
+        reference: f64,
+    ) -> Result<bool, RunError> {
+        let (fresh_scores, fresh_nodes) = self
+            .nd_target_scores(winner, label, nd::TARGET_ND_HOLDOUT)
+            .await?;
+        let (Some(median), Some(new_nodes)) = (nd::target_median(&fresh_scores), fresh_nodes)
+        else {
+            return Ok(false);
+        };
+        self.targeting.adopt_nd(label, new_nodes, median);
+        if self.settings.verbosity == Verbosity::Debug {
+            self.settings.output.line(&format!(
+                "nd targeting: label={label:?} reference {reference:.3} -> {median:.3}"
+            ));
+        }
+        Ok(true)
+    }
+
+    /// A fresh batch of up to `n` measured replays of `timeline`,
+    /// collecting the scores observed for `label` and the first concluded
+    /// run's realized nodes. Stops early when a discovery arrives.
+    async fn nd_target_scores(
+        &mut self,
+        timeline: &[ChoiceValue],
+        label: &str,
+        n: u64,
+    ) -> Result<(Vec<f64>, Option<Vec<ChoiceNode>>), RunError> {
+        let mut scores = Vec::new();
+        let mut nodes = None;
+        for _ in 0..n {
+            let Some(run) = self.nd_target_run(timeline).await? else {
+                break;
+            };
+            if run.status < Status::Valid {
+                continue;
+            }
+            if let Some(&score) = run.target_observations.get(label) {
+                scores.push(score);
+            }
+            if nodes.is_none() {
+                nodes = Some(run.nodes);
+            }
+        }
+        Ok((scores, nodes))
+    }
+
+    /// One measured replay of `timeline` under the standard continuation
+    /// budget, or `None` once an interesting origin exists — targeting
+    /// yields the run's replay budget to the failure machinery.
+    async fn nd_target_run(
+        &mut self,
+        timeline: &[ChoiceValue],
+    ) -> Result<Option<RunResult>, RunError> {
+        if !self.interesting.is_empty() {
+            return Ok(None);
+        }
+        let budget = nd::continuation_budget(crate::native::core::flattened_values_len(timeline));
+        let ntc = NativeTestCase::for_probe(timeline, self.rng.spawn(), budget)?;
+        let (run, _mismatch) = self.measure(ntc).await?;
+        Ok(Some(run))
+    }
+
+    /// One candidate perturbation of the reference: half the time (when the
+    /// node view has a steppable node) a single climbable node stepped by a
+    /// random power-of-two delta in either direction, otherwise a
+    /// prefix-cut probe regenerating a fresh tail — boost's mutant move,
+    /// and the only lever on structure the stepper cannot reach, such as
+    /// clone streams. `None` when the step fell outside the node's
+    /// constraints or a discovery arrived.
+    async fn nd_target_perturb(
+        &mut self,
+        nodes: &[ChoiceNode],
+        timeline: &[ChoiceValue],
+    ) -> Result<Option<Vec<ChoiceValue>>, RunError> {
+        let climbable: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                !node.was_forced && crate::native::targeting::is_climbable(&node.data)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if !climbable.is_empty() && self.rng.random_range(0..2) == 0 {
+            let idx = climbable[self.rng.random_range(0..climbable.len())];
+            let magnitude = 1i128 << self.rng.random_range(0..7);
+            let delta = if self.rng.random_range(0..2) == 0 {
+                magnitude
+            } else {
+                -magnitude
+            };
+            let Some(value) = crate::native::targeting::step_choice(&nodes[idx], delta) else {
+                return Ok(None);
+            };
+            let mut candidate = timeline.to_vec();
+            candidate[idx] = value;
+            return Ok(Some(candidate));
+        }
+        if !self.interesting.is_empty() {
+            return Ok(None);
+        }
+        let cut = self.rng.random_range(0..=timeline.len());
+        let budget = crate::native::core::flattened_values_len(timeline) + 8;
+        let ntc = NativeTestCase::for_probe(&timeline[..cut], self.rng.spawn(), budget)?;
+        let (run, _mismatch) = self.measure(ntc).await?;
+        Ok(Some(run.nodes.iter().map(|n| n.value()).collect()))
+    }
+
     /// The universal first-interesting determinism check (seam plan step
     /// 2, extending decision 21's principle to every run): before anything
     /// else consumes a generation-discovered origin, its incumbent sighting
@@ -2623,8 +2906,9 @@ impl<'a> Engine<'a> {
 
     /// Record one executed test case: the execution cache and kind ledger
     /// (via [`Self::record_execution`]), counters, test time, triviality,
-    /// the targeting observations (deterministic runs only — targeting is
-    /// fully off under `nd_active`, decision 29), the per-origin interesting
+    /// the targeting observations (generation runs only; under `nd_active`
+    /// they are selection-biased seed material for the measured race,
+    /// decision 68), the per-origin interesting
     /// map (with its incremental database save and history entry), and the
     /// bug-window markers. Pre-flip, a measurement run leaves the
     /// interesting map, the database, and history untouched — check and
@@ -2652,8 +2936,7 @@ impl<'a> Engine<'a> {
             if run.nodes.is_empty() && run.status >= Status::Invalid {
                 self.test_is_trivial = true;
             }
-            if run.status >= Status::Valid && !self.nd_active && !run.target_observations.is_empty()
-            {
+            if run.status >= Status::Valid && !run.target_observations.is_empty() {
                 let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
                 self.targeting.record(&choices, &run.target_observations);
             }

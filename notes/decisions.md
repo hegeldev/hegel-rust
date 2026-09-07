@@ -666,3 +666,43 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     per episode on constant p = 0.9 bodies; `012-detection-escape/notes.md`) —
     escalated as a follow-up, not part of G20's loss accounting. (Seam plan phase
     17.)
+
+## 2026-09-07
+
+68. **Targeting runs under ND handling as a measured race** (`optimise_targets_nd`),
+    superseding decision 39's full disablement with the statistics critique's own
+    prescription for noisy-score search (confidence-bound scoring, fresh-holdout
+    re-estimation, race allocation): every single-run trust point becomes
+    measurement. Per label: a reference timeline with a monotone reference score
+    estimated only from fresh unselected batches (median of a `TARGET_ND_HOLDOUT`
+    batch; a batch observing no score marks the label dead); per firing, up to
+    `TARGET_ND_RACES` races of `TARGET_ND_POOL` perturbations (single-node
+    power-of-two steps plus boost's prefix-cut mutants, the lever on clone streams
+    the stepper lacks, plus the recorded best while its raw score exceeds the
+    reference), successive-halved on mean observed score; the winner adopts only when
+    a fresh holdout clears the sign test (`target_adopt`: Wilson LCB of
+    strictly-beats-the-reference above 0.5, ties and unobserved runs counting
+    against), and adoption re-estimates the reference on another fresh batch, raised
+    only. Observations record again under `nd_active` as seed material — harmless
+    once nothing treats the recorded maximum as an estimate. Race replays are
+    `measure()` executions (statistics-line counted, generation-excluded, never
+    recorded as observations), firing still requires an empty interesting map, and
+    every replay yields to a discovery. The deterministic climber is untouched, and a
+    mid-climb flip still stops it (decision 39's stop, retained). (DRM directed:
+    restore targeting under ND. Experiment 013 measured the shipped climber on noisy
+    scores losing to a ~1.7 sd winner's-curse maximum after ~10 runs and freezing in
+    92-100% of trials.)
+
+69. **ND targeting constants** (experiment 013): `TARGET_ND_HOLDOUT = 20`
+    (= `ANCHOR_SEED_RUNS`; the 15/20-beat gate passes a true 75%-beat improvement
+    62% of the time at 2.1% false adoption — 10 runs stall on tie-heavy scores, 30
+    adds ~15% cost for nothing), `TARGET_ND_RACES = 4` (full progress on every
+    gradient landscape at ~950 replays per run, ~410 per adopted step; 8 doubles
+    cost and flat-landscape false adoption for no progress),
+    `TARGET_ND_POOL = 16` (= `BOOST_POOL`). Composed false adoption on a flat
+    landscape is ~4% per race against the gate's 2.1% because the reference is
+    itself estimated; accepted as priced — a false adopt is a lateral move and one
+    holdout batch, losing no bug and moving no anchor. Unobserved runs counting
+    against the beat quota is deliberate: missingness tightens the gate (at 30%
+    no-shows, false adoption fell to zero and the climb still reached 99.5).
+    (Experiment result.)

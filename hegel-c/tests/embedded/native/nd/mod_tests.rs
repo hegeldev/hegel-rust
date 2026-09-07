@@ -345,6 +345,26 @@ fn boost_keep_halves_rounding_up() {
     assert_eq!(boost_keep(1), 1);
 }
 
+/// The sign test's acceptance boundary at the holdout size: 15 of 20 is
+/// the smallest beat count whose Wilson lower bound clears 0.5
+/// (experiment 013's DP table).
+#[test]
+fn target_adopt_needs_fifteen_of_twenty_beats() {
+    assert!(!target_adopt(14, TARGET_ND_HOLDOUT));
+    assert!(target_adopt(15, TARGET_ND_HOLDOUT));
+    assert!(target_adopt(20, TARGET_ND_HOLDOUT));
+    assert!(!target_adopt(0, TARGET_ND_HOLDOUT));
+    assert!(!target_adopt(0, 0));
+}
+
+#[test]
+fn target_median_takes_the_upper_middle_of_the_sorted_scores() {
+    assert_eq!(target_median(&[]), None);
+    assert_eq!(target_median(&[3.0]), Some(3.0));
+    assert_eq!(target_median(&[2.0, 1.0, 3.0]), Some(2.0));
+    assert_eq!(target_median(&[4.0, 1.0, 2.0, 3.0]), Some(3.0));
+}
+
 #[test]
 fn continuation_budget_floors_at_four() {
     assert_eq!(continuation_budget(0), 4);
