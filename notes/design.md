@@ -20,7 +20,8 @@ failure report.
 
 - Handle test cases that fail at least 10% of the times they are run; the replay budgets
   and confidence arithmetic derive from that target.
-- Detect nondeterminism as well as accepting declarations (concurrent machines).
+- Detect nondeterminism by observation only; nothing declares it up front (decision 70
+  removed the concurrent-machine declaration).
 - Restore shrinking, multi-failure reporting, database persistence, and reproduce blobs for
   nondeterministic tests.
 - Bound how much failure probability shrinking can trade away, and raise it when cheap. The
@@ -49,8 +50,8 @@ flakiness errors — is a decision about an estimated probability with explicit 
 
 Vocabulary: a **timeline** is the realized choice sequence of one execution; the **incumbent**
 is the failing timeline held as an origin's best example; the **pool** is a bounded per-origin
-set of other failing timelines; the **evidence ledger** is per-candidate `(fails, weighted
-runs)` counts, never persisted; the **anchor** is a Wilson lower confidence bound on the
+set of other failing timelines; the **evidence ledger** is per-candidate `(fails, runs)`
+counts, never persisted; the **anchor** is a Wilson lower confidence bound on the
 incumbent's failure rate; the **gauntlet** is the evidence bar a shrink candidate must clear.
 
 ## Architecture
@@ -61,11 +62,11 @@ formats in `blob.rs`.
 
 ### Mode lifecycle and strictness
 
-`Engine.nd_active` is the sticky run-level flag; `nd_flip()` sets it. Flip sources:
+`Engine.nd_active` is the sticky run-level flag; `nd_flip()` sets it. Concurrency alone is
+not a flip source: a properly serialized concurrent machine can fail deterministically, so
+creating a concurrent machine declares nothing and `error` strictness has no concurrency
+exception — every detection below aborts under `error` (decision 70). Flip sources:
 
-- **declared** (`test_function_tagged`): the first executed case that creates a state machine
-  with `max_concurrency > 1` (`FamilyCore::concurrent_machine`). Declared concurrency enters ND
-  handling even under `error` strictness — the user asked for threads.
 - **detected**, within-run evidence only: an execution-cache verdict mismatch — the same
   realized values concluding with a different status or origin (`record_run`'s mismatch
   signal, in `test_function_tagged`) — or a replay whose outcome flips (the
@@ -88,26 +89,27 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 
 ### Statistics (`nd/mod.rs`)
 
-- `Evidence`: divergence-weighted Wilson bounds. A replay that diverged from its stored
-  timeline before completing weighs its non-failure by the **verbatim watermark** — the
-  flat-length-weighted fraction tracked before first divergence (decisions 22, 45): each
-  element counts its flattened length, and a diverged clone pair earns credit for the
-  tracked prefix inside it (recursively) before ending the walk. Diverged misses therefore
-  don't count full weight toward demotion or confirmation misses. Measured on racy bodies
-  (009a): W50 0.28-0.44 with no mass at zero, where the pre-45 scalar-prefix weighting put
-  78-97% of misses at exactly zero (decision 57).
-- Discovery bar (decision 23, experiment 005A): gate 10 weighted misses, reject on zero
-  failures; otherwise extend to 40 physical replays, accepting early on the 4th failure
+- `Evidence`: plain `(fails, runs)` counts with Wilson bounds. Every replay is one
+  Bernoulli trial of the test case under the standing replay procedure, whatever timeline
+  it realized (decision 71): the statistics are about the test case, which can realize
+  many timelines, not about tracking one realized timeline, so a structurally diverged
+  miss counts in full — replaying the stored state and not seeing the failure is exactly
+  what non-reproduction means. This is the setting the deriving experiments modelled
+  (005A's DP is pure Bernoulli; 008's headline envelope is its w = 1.0 column), and it
+  retires the verbatim watermark (decisions 22/45/57, superseded), whose weighting patched
+  the per-timeline estimand rather than fixing it.
+- Discovery bar (decision 23, experiment 005A): gate 10 misses, reject on zero
+  failures; otherwise extend to 40 replays, accepting early on the 4th failure
   (`GATE_RUNS`, `CONFIRM_CAP`, `CONFIRM_MIN_FAILS`).
 - Gauntlet (experiments 001/003, recalibrated by 008/decision 54): accept on at least
   `GAUNTLET_MIN_FAILS = 4` failures with ledger LCB clearing `max(gamma * anchor, 0.05)`,
   where gamma is 0.8 below `RETENTION_HIGH_WATER = 0.8` and 1.0 at or above it (decision
-  55); reject when the UCB proves the threshold unreachable or at 30 physical runs; short
+  55); reject when the UCB proves the threshold unreachable or at 30 runs; short
   of the failure minimum the verdict is Continue, never Reject (`GAUNTLET_GAMMA`,
   `GAUNTLET_FLOOR`, `GAUNTLET_CAP`; the floor is derived: the min-fails acceptance
   boundary at the cap).
 - Anchor seeding (decision 54): every anchor-seeding batch reaches `ANCHOR_SEED_RUNS = 20`
-  physical runs — the discovery bar's batch extends past its accept, and a gauntlet
+  runs — the discovery bar's batch extends past its accept, and a gauntlet
   accept's ledger is topped up — so anchors estimate the reproduction rate rather than the
   stopping rule.
 - First-interesting check: `FIRST_CHECK_REPLAYS = 4` exact replays per discovered origin,
@@ -186,7 +188,7 @@ fires solely on constraint drift (decision 32, measured in 007).
 
 One primitive serves database reuse, the final replay, and blob replay (decision 25);
 confirmation runs its own bar-driven batch (`nd_evidence_batch`). Replay order: each stored
-timeline first-fit under a weighted per-timeline budget, then
+timeline first-fit under a per-timeline replay budget, then
 positional splices of random timeline pairs (10, decision 52), then fresh generations where the caller
 allows them. Splices cut whole timelines at top-level positions, so a clone stream — one
 `ChoiceValue::Clone` element — crosses over intact. Executions run through `measure()`, which
@@ -334,8 +336,10 @@ remains for embedders as a documented single attempt.
 
 ### Concurrency unification (experiment 007)
 
-Concurrent-machine runs flow through the pipeline above like any other ND run: creation always
-succeeds, the flip happens at the first executed case that declares concurrency, and
+Concurrent-machine runs flow through the pipeline above like any other run: creation always
+succeeds, the flip happens when the run's nondeterminism is observed (typically the first
+replay miss or verdict flip — a machine whose failure reproduces exactly stays deterministic,
+decision 70), and
 concurrent failures are confirmed, shrunk, persisted, and blob-reproducible. The prior
 regime's case stamping, sacrificed first case, shrink/persistence/span-mutation gates, and
 blobless static-caveat reporting are gone. Measured at ceiling: 20/20 discovery and DB reuse,
@@ -361,7 +365,8 @@ Added: `hegel_settings_set_nondeterminism_strictness`, `hegel_failure_caveat`,
 `hegel_run_start_blob`; blob prefixes 2/3. Changed: run status 3 retired;
 `hegel_test_case_is_nondeterministic` renamed to `hegel_test_case_should_capture` with no
 shim (decision 50), now covering every execution a failure report can be built from;
-concurrent machine creation no longer rejects. hegel-c's changelog carries the break; the
+concurrent machine creation no longer rejects, and no longer declares the run
+nondeterministic (decision 70). hegel-c's changelog carries the break; the
 root crate's changelog covers only the user-facing behavior.
 
 ## Closed decisions

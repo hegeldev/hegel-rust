@@ -1352,12 +1352,13 @@ fn single_test_case_failure_has_origin_but_no_blob() {
     }
 }
 
-/// A full run whose test cases create a state machine with
-/// `max_concurrency > 1` enters nondeterministic handling: creations
-/// always succeed, the always-failing bug is confirmed by replay and
-/// shrunk, and the run reports `HEGEL_RUN_STATUS_FAILED` with a reproduce
-/// blob and a confirmation caveat. The engine stamps the replay
-/// executions it makes for the report (`hegel_test_case_should_capture`).
+/// A full run over a concurrent, intermittently-failing body enters
+/// nondeterministic handling when the engine observes a verdict flip
+/// (decision 70: creating a `max_concurrency > 1` machine declares
+/// nothing): the bug is confirmed by replay and shrunk, and the run
+/// reports `HEGEL_RUN_STATUS_FAILED` with a reproduce blob and a
+/// confirmation caveat. The engine stamps the replay executions it makes
+/// for the report (`hegel_test_case_should_capture`).
 #[test]
 fn concurrent_run_failure_has_blob_and_caveat() {
     let ctx = hegel_context_new();
@@ -1370,6 +1371,7 @@ fn concurrent_run_failure_has_blob_and_caveat() {
         let rule = CString::new("only").unwrap();
 
         let mut stamped = 0usize;
+        let mut executions = 0usize;
         loop {
             let tc = next_case(ctx, run);
             if tc.is_null() {
@@ -1408,12 +1410,16 @@ fn concurrent_run_failure_has_blob_and_caveat() {
             assert_eq!(rc, HEGEL_OK);
             ok(hegel_state_machine_free(ctx, machine));
             let mut value = 0i64;
-            let status = if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_OK {
-                hegel_status_t::HEGEL_STATUS_INTERESTING
-            } else {
-                hegel_status_t::HEGEL_STATUS_OVERRUN
-            };
-            ok(hegel_mark_complete(ctx, tc, status as u32, origin.as_ptr()));
+            executions += 1;
+            let (status, complete_origin) =
+                if hegel_generate_integer(ctx, tc, 0, 100, &mut value) != HEGEL_OK {
+                    (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+                } else if executions % 8 == 5 {
+                    (hegel_status_t::HEGEL_STATUS_VALID, ptr::null())
+                } else {
+                    (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+                };
+            ok(hegel_mark_complete(ctx, tc, status as u32, complete_origin));
             ok(hegel_test_case_free(ctx, tc));
         }
         assert!(
@@ -1450,10 +1456,14 @@ fn concurrent_run_failure_has_blob_and_caveat() {
     }
 }
 
-/// Drain `run` with an always-failing body that creates a concurrent state
-/// machine, marking each completed case interesting at `origin`.
+/// Drain `run` with an intermittently-failing body that creates a
+/// concurrent state machine, marking most completed cases interesting at
+/// `origin` and every eighth one valid — the verdict flips the engine
+/// observes are what put the run into nondeterministic handling
+/// (decision 70).
 unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, origin: &CString) {
     let rule = CString::new("only").unwrap();
+    let mut executions = 0usize;
     loop {
         let tc = unsafe { next_case(ctx, run) };
         if tc.is_null() {
@@ -1493,12 +1503,16 @@ unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, orig
         assert_eq!(rc, HEGEL_OK);
         ok(unsafe { hegel_state_machine_free(ctx, machine) });
         let mut value = 0i64;
-        let status = if unsafe { hegel_generate_integer(ctx, tc, 0, 100, &mut value) } == HEGEL_OK {
-            hegel_status_t::HEGEL_STATUS_INTERESTING
-        } else {
-            hegel_status_t::HEGEL_STATUS_OVERRUN
-        };
-        ok(unsafe { hegel_mark_complete(ctx, tc, status as u32, origin.as_ptr()) });
+        executions += 1;
+        let (status, complete_origin) =
+            if unsafe { hegel_generate_integer(ctx, tc, 0, 100, &mut value) } != HEGEL_OK {
+                (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+            } else if executions % 8 == 5 {
+                (hegel_status_t::HEGEL_STATUS_VALID, ptr::null())
+            } else {
+                (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+            };
+        ok(unsafe { hegel_mark_complete(ctx, tc, status as u32, complete_origin) });
         ok(unsafe { hegel_test_case_free(ctx, tc) });
     }
 }

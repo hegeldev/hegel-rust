@@ -49,7 +49,7 @@ pub mod __bench {
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::core::{ChoiceValue, CloneRecord};
     pub use crate::native::intervalsets::IntervalSet;
-    pub use crate::native::nd::{seam_dump, watermark_dump};
+    pub use crate::native::nd::seam_dump;
     pub use crate::native::rng::EngineRng;
 
     pub fn blob_is_nd(blob: &str) -> Option<bool> {
@@ -2694,16 +2694,12 @@ unsafe fn state_machine_ref<'a>(
 /// up front, so the machine is fully constructed before any rule is
 /// requested.
 ///
-/// Creating a machine with `max_concurrency > 1` declares the run
-/// nondeterministic: thread scheduling is outside the engine's control, so
-/// nothing that assumes deterministic replay can be trusted. The engine
-/// switches the run into nondeterministic handling at the end of the first
-/// test case that makes such a creation — whatever the configured
-/// strictness, since the concurrency was asked for — and from then on
-/// failures face the same confirmation, shrinking, validated persistence,
-/// and caveated reporting as any other nondeterministic failure. This
-/// applies even to test cases whose drawn
-/// concurrency level is 1: the declared bound is what counts.
+/// Concurrency alone does not mark the run nondeterministic: a properly
+/// serialized concurrent machine can fail deterministically, so the engine
+/// watches the run's observed behavior — verdict flips, replay misses —
+/// exactly as it does for any other test, and switches into
+/// nondeterministic handling (or aborts, under `error` strictness) only
+/// when those observations fire (decision 70).
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /

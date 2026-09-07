@@ -109,13 +109,10 @@ struct NdReplayOnce {
     run: RunResult,
     realized: Vec<ChoiceValue>,
     failed: bool,
-    /// Evidence weight of a miss: the verbatim watermark against the
-    /// replayed timeline. 1.0 for failures.
-    weight: f64,
 }
 
 /// Outcome of one evidence batch (experiment 005): the replays, their
-/// weighted evidence, the first failing run, and the failing timelines.
+/// evidence, the first failing run, and the failing timelines.
 struct NdBatch {
     /// Whether the discovery bar's arithmetic accepted. Decides admission
     /// for unconfirmed origins; for trusted origins the bar is only the
@@ -283,7 +280,7 @@ pub(crate) async fn reproduce_blob(
                 .nd_reproduce(
                     None,
                     &state.timelines,
-                    nd::reuse_replay_budget() as f64 / state.timelines.len() as f64,
+                    nd::reuse_replay_budget().div_ceil(state.timelines.len() as u64),
                     nd::REPRODUCE_SPLICES,
                     0,
                 )
@@ -430,7 +427,7 @@ impl<'a> Engine<'a> {
                             .nd_reproduce(
                                 None,
                                 &stored,
-                                nd::reuse_replay_budget() as f64 / stored.len() as f64,
+                                nd::reuse_replay_budget().div_ceil(stored.len() as u64),
                                 nd::REPRODUCE_SPLICES,
                                 0,
                             )
@@ -1417,22 +1414,14 @@ pub(crate) struct Engine<'a> {
     pub(crate) last_bug_at: Option<u64>,
     pub(crate) first_bug_time: Option<crate::sys::Instant>,
     /// Sticky detection flag: the run observed nondeterministic test
-    /// behavior — a cache verdict mismatch, a verify status/origin flake,
-    /// or a concurrent state machine — or `Settings::nd_force` started it
-    /// flipped. While set, the run trusts no cached prediction: execution-
-    /// cache recording and serving and the duplicate stop are off, and
-    /// targeting switches from single-run hill climbing to the measured
-    /// race ([`Self::optimise_targets_nd`], decision 68). Never cleared
-    /// within a run.
+    /// behavior — a cache verdict mismatch or a verify status/origin
+    /// flake — or `Settings::nd_force` started it flipped. While set, the
+    /// run trusts no cached prediction: execution-cache recording and
+    /// serving and the duplicate stop are off, and targeting switches from
+    /// single-run hill climbing to the measured race
+    /// ([`Self::optimise_targets_nd`], decision 68). Never cleared within a
+    /// run.
     pub(crate) nd_active: bool,
-    /// Sticky flag for the concurrency subset of `nd_active`, flipped by
-    /// the first executed test case that creates a state machine with
-    /// `max_concurrency > 1` (see
-    /// [`crate::native::core::FamilyCore::concurrent_machine`]). Declared
-    /// concurrency enters nondeterministic handling unconditionally — the
-    /// user asked for real threads, so even `error` strictness handles the
-    /// resulting nondeterminism rather than aborting on it.
-    pub(crate) concurrent: bool,
     /// Per-origin confirmation lifecycle under ND handling: admission,
     /// trust, confirmation state (anchor/witness/pool), and the caveated
     /// unconfirmed report. See [`OriginLifecycle`].
@@ -1515,7 +1504,6 @@ impl<'a> Engine<'a> {
             last_bug_at: None,
             first_bug_time: None,
             nd_active: settings.nd_force,
-            concurrent: false,
             nd_origins: OriginLifecycle::default(),
             history: HashMap::default(),
             first_checked: crate::native::HashSet::default(),
@@ -1576,9 +1564,10 @@ impl<'a> Engine<'a> {
 
     /// One measurement replay of `timeline` with the standard continuation
     /// budget: reports whether the run reproduced `origin` (any interesting
-    /// origin when `None`), the realized timeline, and the verbatim-
-    /// watermark weight of a miss ([`nd::verbatim_weight`]). A choice-tree
-    /// mismatch aborts under `Error` strictness like any other execution.
+    /// origin when `None`) and the realized timeline. One Bernoulli trial
+    /// of the test case, whatever the replay realized (decision 71). A
+    /// choice-tree mismatch aborts under `Error` strictness like any other
+    /// execution.
     async fn nd_replay_once(
         &mut self,
         timeline: &[ChoiceValue],
@@ -1593,49 +1582,36 @@ impl<'a> Engine<'a> {
         let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
         let failed = run.status == Status::Interesting
             && origin.is_none_or(|o| run.origin.as_deref() == Some(o));
-        let weight = if failed {
-            1.0
-        } else {
-            nd::verbatim_weight(timeline, &realized)
-        };
-        #[cfg(feature = "__bench")]
-        nd::watermark_dump::record(timeline, &realized, weight, failed);
         Ok(NdReplayOnce {
             run,
             realized,
             failed,
-            weight,
         })
     }
 
     /// Replay-until-failure over stored ND state (decision 25): each
-    /// timeline first-fit under a weighted per-timeline budget (physical
-    /// cap at twice that), then positional splices of random timeline
-    /// pairs, then up to `fresh` fresh generations. Returns the first
-    /// reproducing run plus the evidence accumulated across every attempt,
-    /// for the caller's hygiene verdict; fresh misses carry no weight
-    /// (they say nothing about the stored timelines).
+    /// timeline first-fit under a per-timeline replay budget, then
+    /// positional splices of random timeline pairs, then up to `fresh`
+    /// fresh generations. Returns the first reproducing run plus the
+    /// evidence accumulated across every attempt, for the caller's hygiene
+    /// verdict; the fresh tier is a rescue, not a replay of the stored
+    /// state, so only its failures enter the evidence.
     async fn nd_reproduce(
         &mut self,
         origin: Option<&str>,
         timelines: &[Vec<ChoiceValue>],
-        per_timeline_budget: f64,
+        per_timeline_budget: u64,
         splices: u64,
         fresh: u64,
     ) -> Result<(Option<RunResult>, nd::Evidence), RunError> {
         let mut evidence = nd::Evidence::default();
-        let physical_cap = libm::ceil(2.0 * per_timeline_budget) as u64;
         for timeline in timelines {
-            let mut weighted = 0.0f64;
-            let mut physical = 0u64;
-            while weighted < per_timeline_budget && physical < physical_cap {
+            for _ in 0..per_timeline_budget {
                 let replay = self.nd_replay_once(timeline, origin).await?;
-                evidence.record(replay.failed, replay.weight);
+                evidence.record(replay.failed);
                 if replay.failed {
                     return Ok((Some(replay.run), evidence));
                 }
-                weighted += replay.weight;
-                physical += 1;
             }
         }
         if timelines.len() >= 2 {
@@ -1651,7 +1627,7 @@ impl<'a> Engine<'a> {
                 spliced.extend_from_slice(&left[..cut]);
                 spliced.extend_from_slice(&right[cut..]);
                 let replay = self.nd_replay_once(&spliced, origin).await?;
-                evidence.record(replay.failed, replay.weight);
+                evidence.record(replay.failed);
                 if replay.failed {
                     return Ok((Some(replay.run), evidence));
                 }
@@ -1665,8 +1641,8 @@ impl<'a> Engine<'a> {
             }
             let failed = run.status == Status::Interesting
                 && origin.is_none_or(|o| run.origin.as_deref() == Some(o));
-            evidence.record(failed, 0.0);
             if failed {
+                evidence.record(true);
                 return Ok((Some(run), evidence));
             }
         }
@@ -1966,7 +1942,7 @@ impl<'a> Engine<'a> {
                 .nd_reproduce(
                     Some(&origin),
                     &timelines,
-                    nd::reuse_replay_budget() as f64 / timelines.len() as f64,
+                    nd::reuse_replay_budget().div_ceil(timelines.len() as u64),
                     nd::REPRODUCE_SPLICES,
                     nd::FINAL_REPLAY_FRESH,
                 )
@@ -2032,10 +2008,10 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    /// One evidence batch: replay `choices` with capture-at-confirmation
-    /// and divergence-weighted misses (decision 22) until the discovery
-    /// bar ([`nd::discovery_bar`], decision 23) decides, starting from the
-    /// origin's first-check seed when one exists. Two uses: the
+    /// One evidence batch: replay `choices` with capture-at-confirmation,
+    /// each replay one plain trial of the test case (decision 71), until
+    /// the discovery bar ([`nd::discovery_bar`], decision 23) decides,
+    /// starting from the origin's first-check seed when one exists. Two uses: the
     /// bar's driver for admitting unconfirmed origins (experiment 005),
     /// and an evidence-gathering batch for trusted origins, where the bar
     /// arithmetic is only the stopping rule. The triggering run is
@@ -2043,9 +2019,9 @@ impl<'a> Engine<'a> {
     /// requires a reproducing replay in *this* batch as its witness: a
     /// first-check seed can carry the bar's whole failure quota, and a
     /// seeded quota with no in-batch reproduction rejects at
-    /// [`nd::CONFIRM_CAP`] physical runs instead of confirming an origin
+    /// [`nd::CONFIRM_CAP`] runs instead of confirming an origin
     /// the batch never saw fail. An accept
-    /// extends to [`nd::ANCHOR_SEED_RUNS`] physical runs (decision 54), so
+    /// extends to [`nd::ANCHOR_SEED_RUNS`] runs (decision 54), so
     /// the anchor a caller seeds from the batch is not biased by the bar's
     /// stopping rule; a reject stops at the bar.
     async fn nd_evidence_batch(
@@ -2060,7 +2036,7 @@ impl<'a> Engine<'a> {
         self.capture_replays = true;
         let bar_accepted = loop {
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
-            evidence.record(replay.failed, replay.weight);
+            evidence.record(replay.failed);
             if replay.failed {
                 if captured.len() < nd::POOL_CAP && !captured.contains(&replay.realized) {
                     captured.push(replay.realized);
@@ -2084,7 +2060,7 @@ impl<'a> Engine<'a> {
         };
         while bar_accepted && evidence.runs() < nd::ANCHOR_SEED_RUNS {
             let replay = self.nd_replay_once(choices, Some(origin)).await?;
-            evidence.record(replay.failed, replay.weight);
+            evidence.record(replay.failed);
             if replay.failed
                 && captured.len() < nd::POOL_CAP
                 && !captured.contains(&replay.realized)
@@ -2359,7 +2335,7 @@ impl<'a> Engine<'a> {
         let mut witness = None;
         for _ in 0..nd::BOOST_HOLDOUT {
             let replay = self.nd_replay_once(&winner, Some(origin)).await?;
-            holdout.record(replay.failed, replay.weight);
+            holdout.record(replay.failed);
             if replay.failed && witness.is_none() {
                 witness = Some(replay.run);
             }
@@ -2723,14 +2699,7 @@ impl<'a> Engine<'a> {
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let failed = run.status == Status::Interesting && run.origin.as_deref() == Some(origin);
-            evidence.record(
-                failed,
-                if failed {
-                    1.0
-                } else {
-                    nd::verbatim_weight(&choices, &realized)
-                },
-            );
+            evidence.record(failed);
             if !failed || realized != choices {
                 let miss = if realized == choices {
                     RunError::Flaky(flaky_diagnostic())
@@ -2882,12 +2851,6 @@ impl<'a> Engine<'a> {
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
-        if !self.concurrent && family.concurrent_machine() {
-            self.concurrent = true;
-            #[cfg(feature = "__bench")]
-            self.seam_flip(nd::seam_dump::FlipSite::Concurrency);
-            self.nd_flip();
-        }
         let mut mismatch = self.record_run(&run, elapsed, measurement);
         if mismatch.is_some()
             && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
@@ -3135,8 +3098,10 @@ struct EngineShrinkProbe<'e, 'a> {
     gauntlet: bool,
     /// Cumulative evidence per candidate, keyed by serialized realized
     /// choices — a candidate whose replay punned into another realization
-    /// merges evidence with it, deliberately: the realized timeline is
-    /// what the evidence is about, whatever proposal produced it.
+    /// merges evidence with it, deliberately: the realized run is the test
+    /// case an accept would adopt, whatever proposal produced it, and its
+    /// replays are plain trials of that test case however they realize
+    /// (decision 71).
     ledger: HashMap<Vec<u8>, nd::Evidence>,
     anchor: f64,
     /// Under [`SweepMode::Confirm`] a non-matching first run is not a
@@ -3171,11 +3136,8 @@ impl EngineShrinkProbe<'_, '_> {
             && run.origin.as_deref() == Some(self.target_origin.as_str())
     }
 
-    fn record_evidence(&mut self, key: &[u8], matched: bool, weight: f64) {
-        self.ledger
-            .entry(key.to_vec())
-            .or_default()
-            .record(matched, weight);
+    fn record_evidence(&mut self, key: &[u8], matched: bool) {
+        self.ledger.entry(key.to_vec()).or_default().record(matched);
     }
 }
 
@@ -3226,7 +3188,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let key = serialize_choices(&realized);
-            self.record_evidence(&key, matched, 1.0);
+            self.record_evidence(&key, matched);
             if !matched && self.sweep == SweepMode::Fast {
                 let evidence = *self.ledger.get(&key).unwrap();
                 if !matches!(
@@ -3262,7 +3224,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     .engine
                     .nd_replay_once(&realized, Some(self.target_origin.as_str()))
                     .await?;
-                self.record_evidence(&key, rerun.failed, rerun.weight);
+                self.record_evidence(&key, rerun.failed);
             }
         })
     }

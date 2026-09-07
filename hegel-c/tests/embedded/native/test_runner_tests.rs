@@ -53,8 +53,8 @@ fn boom(msg: &str) -> TestCaseResult {
 }
 
 /// Create (and immediately drop) a one-rule state machine whose declared
-/// concurrency bound is above 1, flipping the run into nondeterministic
-/// handling at the end of the executing case.
+/// concurrency bound is above 1. Since decision 70 this does not by itself
+/// flip the run: only observed nondeterminism does.
 fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
@@ -1855,28 +1855,23 @@ fn a_concurrent_one_shot_bug_is_reported_unconfirmed() {
 }
 
 #[test]
-fn a_concurrent_reuse_run_persists_v2_entries() {
+fn a_flipped_reuse_run_persists_v2_entries() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
     db.save(b"k", &seeded);
 
-    let result = reuse_run(
-        Settings::new()
-            .database(Some(path.clone()))
-            .verbosity(Verbosity::Quiet),
-        "k",
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            if let Err(result) = concurrent_machine(ds) {
-                return result;
-            }
-            boom("db origin")
-        },
-    )
+    let mut settings = Settings::new()
+        .database(Some(path.clone()))
+        .verbosity(Verbosity::Quiet);
+    settings.nd_force = true;
+    let result = reuse_run(settings, "k", |ds| {
+        if rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("db origin")
+    })
     .unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].reproduce_blob.is_some());
@@ -1888,7 +1883,7 @@ fn a_concurrent_reuse_run_persists_v2_entries() {
         primary
             .iter()
             .all(|e| crate::native::blob::decode_nd_state(e).is_some()),
-        "a concurrent run persists version-2 entries"
+        "a flipped reuse run persists version-2 entries"
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
@@ -1898,11 +1893,12 @@ fn a_concurrent_reuse_run_persists_v2_entries() {
 }
 
 #[test]
-fn a_concurrent_machine_notices_only_under_warn_strictness() {
+fn a_concurrent_machine_alone_neither_flips_nor_notices() {
     use std::sync::{Arc, Mutex};
-    for (strictness, expected) in [
-        (NondeterminismStrictness::Quiet, 0),
-        (NondeterminismStrictness::Warn, 1),
+    for strictness in [
+        NondeterminismStrictness::Quiet,
+        NondeterminismStrictness::Warn,
+        NondeterminismStrictness::Error,
     ] {
         let lines: Arc<Mutex<Vec<String>>> = Arc::default();
         let sink = Arc::clone(&lines);
@@ -1933,7 +1929,11 @@ fn a_concurrent_machine_notices_only_under_warn_strictness() {
             .iter()
             .filter(|l| l.contains("Nondeterministic test behavior detected"))
             .count();
-        assert_eq!(notices, expected, "under {expected} expected notices");
+        assert_eq!(
+            notices, 0,
+            "declared concurrency is not a detection (decision 70), \
+             got a notice under {strictness:?}"
+        );
     }
 }
 
@@ -2170,6 +2170,19 @@ fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
         nodes,
         spans: Vec::new(),
         origin: Some(origin.to_string()),
+        target_observations: crate::native::HashMap::default(),
+        events: Vec::new(),
+    }
+}
+
+/// A valid [`RunResult`] realizing `nodes`, standing in for a raw
+/// execution's outcome.
+fn valid_at(nodes: Vec<ChoiceNode>) -> RunResult {
+    RunResult {
+        status: Status::Valid,
+        nodes,
+        spans: Vec::new(),
+        origin: None,
         target_observations: crate::native::HashMap::default(),
         events: Vec::new(),
     }
@@ -2448,7 +2461,7 @@ fn the_discovery_bar_starts_from_the_first_check_seed() {
             let origin = format!("Panic: {bug}");
             let mut seed = nd::Evidence::default();
             for _ in 0..3 {
-                seed.record(true, 1.0);
+                seed.record(true);
             }
             ctx.nd_origins.seed_evidence(&origin, seed);
             ctx.nd_flip();
@@ -2756,7 +2769,7 @@ fn a_backtracked_incumbent_anchors_from_its_bar_batch() {
             assert_eq!(witness.origin.as_deref(), Some(origin.as_str()));
             let mut expected = nd::Evidence::default();
             for _ in 0..nd::ANCHOR_SEED_RUNS {
-                expected.record(true, 1.0);
+                expected.record(true);
             }
             assert_eq!(anchor, expected.lower_bound());
         },
@@ -3140,30 +3153,35 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
         quiet_settings(),
         None,
         |ds| {
-            let Ok(v) = rbool(ds) else {
+            let Ok(v) = rint(ds, 0, 100) else {
                 return TestCaseResult::Overrun;
             };
-            if v {
+            if v >= 50 {
                 boom("bug")
             } else {
-                if let Err(result) = concurrent_machine(ds) {
-                    return result;
-                }
                 TestCaseResult::Valid
             }
         },
         async |ctx| {
             let origin = "Panic: bug";
+            // Generation-window records keep digests only, so the shrink
+            // probes that repeat these keys execute (nothing to serve) and
+            // the contradicting verdicts are the observed mid-shrink flip.
+            ctx.collect_statistics = true;
             ctx.record_run(
-                &interesting_at(origin, vec![bool_node(true)]),
+                &interesting_at(origin, vec![int_node(70)]),
                 Duration::ZERO,
                 false,
             );
+            for v in 50..70 {
+                ctx.record_run(&valid_at(vec![int_node(v)]), Duration::ZERO, false);
+            }
+            ctx.collect_statistics = false;
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
                 origin.to_string(),
-                vec![bool_node(true)],
+                vec![int_node(70)],
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3171,14 +3189,17 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
             )
             .await
             .unwrap();
-            assert!(ctx.nd_active, "the shrink probe's machine flips the run");
+            assert!(
+                ctx.nd_active,
+                "a probe contradicting a generation verdict flips the run"
+            );
             assert!(
                 !shrunk.contains(origin),
                 "a mid-shrink flip requeues instead of marking shrunk"
             );
             assert_eq!(
                 ctx.interesting.get(origin).unwrap(),
-                &vec![bool_node(true)],
+                &vec![int_node(70)],
                 "the requeue discards untrusted single-run progress"
             );
         },
@@ -4597,159 +4618,7 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
 }
 
 #[test]
-fn a_diverged_replay_miss_carries_the_verbatim_watermark_weight() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let diverge = AtomicBool::new(false);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            let second = if diverge.load(Ordering::SeqCst) {
-                rint(ds, 0, 100).map(|_| ())
-            } else {
-                rbool(ds).map(|_| ())
-            };
-            match second {
-                Ok(()) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        },
-        async |ctx| {
-            let stored = vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)];
-            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(!replay.failed);
-            assert_eq!(replay.weight, 1.0, "an aligned miss weighs in full");
-            diverge.store(true, Ordering::SeqCst);
-            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(!replay.failed);
-            assert_eq!(
-                replay.weight, 0.5,
-                "a replay that diverged after tracking half the timeline weighs half"
-            );
-        },
-    );
-}
-
-#[cfg(feature = "__bench")]
-#[test]
-fn the_watermark_dump_records_each_measurement_replay_with_its_verdict() {
-    use crate::native::nd::watermark_dump;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    let phase = AtomicU32::new(0);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            let p = phase.load(Ordering::SeqCst);
-            if rint(ds, 770000, 779999).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            let second = if p == 1 {
-                rbool(ds).map(|_| ())
-            } else {
-                rint(ds, 770000, 779999).map(|_| ())
-            };
-            if second.is_err() {
-                return TestCaseResult::Overrun;
-            }
-            if p == 2 {
-                boom("dump")
-            } else {
-                TestCaseResult::Valid
-            }
-        },
-        async |ctx| {
-            let stored = vec![
-                ChoiceValue::Integer(BigInt::from(771234)),
-                ChoiceValue::Integer(BigInt::from(775678)),
-            ];
-            let mine = |s: &&watermark_dump::WatermarkSample| s.stored == stored;
-            ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(
-                !watermark_dump::drain().iter().any(|s| mine(&s)),
-                "unarmed, the hook records nothing"
-            );
-            watermark_dump::arm();
-            phase.store(1, Ordering::SeqCst);
-            let miss = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(!miss.failed);
-            phase.store(2, Ordering::SeqCst);
-            let fail = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(fail.failed);
-            let samples = watermark_dump::drain();
-            let recorded: Vec<_> = samples.iter().filter(mine).collect();
-            assert_eq!(recorded.len(), 2);
-            assert_eq!(recorded[0].weight, 0.5);
-            assert!(!recorded[0].failed);
-            assert_ne!(recorded[0].realized, stored);
-            assert_eq!(recorded[1].weight, 1.0);
-            assert!(recorded[1].failed);
-            assert_eq!(recorded[1].realized, stored);
-            assert!(
-                !watermark_dump::drain().iter().any(|s| mine(&s)),
-                "draining removes the recorded samples"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_diverged_clone_replay_records_a_fractional_miss_weight() {
-    use crate::native::core::CloneRecord;
-    use alloc::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let diverge = AtomicBool::new(false);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            let child = match ds.clone_stream() {
-                Ok(c) => c,
-                Err(_) => return TestCaseResult::Overrun,
-            };
-            if rbool(&*child).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            let second = if diverge.load(Ordering::SeqCst) {
-                rint(&*child, 0, 100).map(|_| ())
-            } else {
-                rbool(&*child).map(|_| ())
-            };
-            match second {
-                Ok(()) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        },
-        async |ctx| {
-            let stored = vec![
-                ChoiceValue::Boolean(true),
-                ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Boolean(true),
-                ]))),
-            ];
-            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(!replay.failed);
-            assert_eq!(replay.weight, 1.0, "an aligned clone miss weighs in full");
-            diverge.store(true, Ordering::SeqCst);
-            let replay = ctx.nd_replay_once(&stored, None).await.unwrap();
-            assert!(!replay.failed);
-            assert_eq!(
-                replay.weight, 0.75,
-                "a divergence at the second clone child leaves three of four flat choices tracked"
-            );
-        },
-    );
-}
-
-#[test]
-fn nd_reproduce_terminates_by_weighted_budget_on_diverged_clone_replays() {
+fn nd_reproduce_spends_the_per_timeline_budget_on_diverged_clone_replays() {
     use crate::native::core::CloneRecord;
     use alloc::sync::Arc;
     with_engine(
@@ -4779,12 +4648,12 @@ fn nd_reproduce_terminates_by_weighted_budget_on_diverged_clone_replays() {
                     ChoiceValue::Boolean(true),
                 ]))),
             ]];
-            let (run, evidence) = ctx.nd_reproduce(None, &stored, 3.0, 0, 0).await.unwrap();
+            let (run, evidence) = ctx.nd_reproduce(None, &stored, 3, 0, 0).await.unwrap();
             assert!(run.is_none());
             assert_eq!(
                 evidence.runs(),
-                4,
-                "four 0.75-weight misses spend the 3.0 weighted budget before the physical cap of 6"
+                3,
+                "every replay is one budgeted trial, diverged or not (decision 71)"
             );
         },
     );
@@ -4812,7 +4681,7 @@ fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
                 vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
             ];
             let (run, evidence) = ctx
-                .nd_reproduce(Some("Panic: splice"), &stored, 2.0, 50, 0)
+                .nd_reproduce(Some("Panic: splice"), &stored, 2, 50, 0)
                 .await
                 .unwrap();
             let run = run.unwrap();
@@ -4858,7 +4727,7 @@ fn a_positional_splice_carries_whole_clone_records_across_intact() {
                 vec![ChoiceValue::Boolean(false), clone_of(600)],
             ];
             let (run, _) = ctx
-                .nd_reproduce(Some("Panic: clone splice"), &stored, 2.0, 50, 0)
+                .nd_reproduce(Some("Panic: clone splice"), &stored, 2, 50, 0)
                 .await
                 .unwrap();
             let run = run.unwrap();
@@ -4888,12 +4757,12 @@ fn nd_reproduce_falls_back_to_fresh_generation_and_reports_a_dry_pool() {
         async |ctx| {
             let stored = vec![vec![ChoiceValue::Boolean(false)]];
             let (run, _) = ctx
-                .nd_reproduce(Some("Panic: fresh"), &stored, 2.0, 0, 0)
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 0, 0)
                 .await
                 .unwrap();
             assert!(run.is_none(), "the stored timeline never fails");
             let (run, _) = ctx
-                .nd_reproduce(Some("Panic: fresh"), &stored, 2.0, 0, 40)
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 0, 40)
                 .await
                 .unwrap();
             assert!(
@@ -5409,7 +5278,7 @@ fn a_fresh_tier_replay_that_detects_nondeterminism_under_error_strictness_aborts
         },
         async |ctx| {
             let stored = vec![vec![ChoiceValue::Boolean(true)]];
-            let result = ctx.nd_reproduce(None, &stored, 0.0, 0, 4).await;
+            let result = ctx.nd_reproduce(None, &stored, 0, 0, 4).await;
             match result {
                 Err(crate::backend::RunError::NonDeterministic(msg)) => {
                     assert!(
@@ -7021,7 +6890,7 @@ fn a_seeded_bar_quota_with_no_reproducing_replay_rejects_at_the_cap() {
             let origin = "Panic: bug";
             let mut seed = nd::Evidence::default();
             for _ in 0..nd::CONFIRM_MIN_FAILS {
-                seed.record(true, 1.0);
+                seed.record(true);
             }
             ctx.nd_origins.seed_evidence(origin, seed);
             ctx.nd_flip();
@@ -7062,7 +6931,7 @@ fn a_seeded_bar_quota_accepts_once_a_replay_reproduces() {
             let origin = format!("Panic: {bug}");
             let mut seed = nd::Evidence::default();
             for _ in 0..nd::CONFIRM_MIN_FAILS {
-                seed.record(true, 1.0);
+                seed.record(true);
             }
             ctx.nd_origins.seed_evidence(&origin, seed);
             ctx.nd_flip();
@@ -7322,7 +7191,7 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
             let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]);
             let mut evidence = nd::Evidence::default();
             for _ in 0..nd::ANCHOR_SEED_RUNS {
-                evidence.record(true, 1.0);
+                evidence.record(true);
             }
             probe.ledger.insert(key, evidence);
             let nodes = vec![int_node(9)];

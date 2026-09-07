@@ -33,3 +33,6 @@ below, and later API changes are expected to have broken some of them.
   composed` is 009b, added at its own commit: the same episodes against
   the composed-rules engine plus the composed bar/gauntlet replay,
   byte-identical across reruns at that commit (~2 h single-threaded).
+  Decision 71 removed the `watermark_dump` hook with the weighting it
+  measured, so the crate no longer compiles against the current branch;
+  its measurements describe the retired estimator.

@@ -706,3 +706,47 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     against the beat quota is deliberate: missingness tightens the gate (at 30%
     no-shows, false adoption fell to zero and the climb still reached 99.5).
     (Experiment result.)
+
+70. **Concurrency is not a declaration; `error` always errors.** Creating a state
+    machine with `max_concurrency > 1` no longer flips the run into ND handling, and
+    the `error`-strictness concurrency exception is gone with it: a properly
+    serialized concurrent machine can fail deterministically, so concurrency is
+    handled like any other potential nondeterminism source — by observing verdict
+    flips and replay misses — and under `error` strictness every detection aborts,
+    threads or not. `FamilyCore::concurrent_machine`, `Engine.concurrent`, and the
+    declaration paragraph in `hegel_new_state_machine`'s contract are removed; the
+    declared-nondeterminism mechanism the old ABI carried (the
+    `is_nondeterministic` stamp, later the max_concurrency declaration) was a
+    plaster and none of it remains. Consequences accepted: a concurrent failure
+    that reproduces exactly reports as a plain deterministic failure (measured in
+    `a_worker_panic_is_reported_with_its_real_origin_and_buffered_output`), and a
+    concurrent one-shot failure on a not-yet-flipped run reports caveat-only
+    without the discovering case's draws, because pre-flip generation cases are
+    not stamped for capture and nothing reproduces to re-capture (the old
+    behavior relied on the declaration stamping every case from the start; if
+    values-less unconfirmed reports bite, the fix is stamping generation
+    executions unconditionally, a capture-cost trade not taken here). (DRM
+    directed.)
+
+71. **Evidence counts plain trials of the test case, not weighted trials of one
+    timeline.** `Evidence` is (fails, runs): every measurement replay of a stored
+    or candidate state is one Bernoulli trial of the test case under the standing
+    replay procedure (`for_probe` plus continuation), whatever timeline it
+    realizes, and a miss counts in full. Statistics are about the test
+    case, which can have many timelines; tracking how far a replay followed one
+    realized timeline patched a per-timeline estimand instead of fixing it. The
+    verbatim watermark (decision 22's weighting clause, decisions 45 and 57) is
+    superseded and deleted (`verbatim_weight`, `tracked_credit`,
+    `watermark_dump`), and with it the weighted/physical split: `nd_reproduce`
+    takes a per-timeline budget of `ceil(reuse_replay_budget()/n)` runs
+    with no separate physical cap, and its fresh tier records only failures
+    (a fresh generation is a rescue, not a trial of the stored state). The
+    gauntlet ledger stays keyed by serialized realized choices — the realized
+    run is the test case an accept would adopt — but records plain matches.
+    Plain counting is exactly the setting the deriving experiments modelled
+    (005A's DP is pure Bernoulli; 008's headline envelope is its w = 1.0
+    column), so the bar and gauntlet operating points hold without
+    recalibration. Residual: the on-engine measurements in 009a/009b/011/012
+    describe the old estimator, and divergence-heavy bodies now measure at the
+    lower rate a user replaying the stored state actually sees; re-measurement
+    is a candidate follow-up. (DRM directed.)

@@ -1556,16 +1556,12 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  up front, so the machine is fully constructed before any rule is
  requested.
 
- Creating a machine with `max_concurrency > 1` declares the run
- nondeterministic: thread scheduling is outside the engine's control, so
- nothing that assumes deterministic replay can be trusted. The engine
- switches the run into nondeterministic handling at the end of the first
- test case that makes such a creation — whatever the configured
- strictness, since the concurrency was asked for — and from then on
- failures face the same confirmation, shrinking, validated persistence,
- and caveated reporting as any other nondeterministic failure. This
- applies even to test cases whose drawn
- concurrency level is 1: the declared bound is what counts.
+ Concurrency alone does not mark the run nondeterministic: a properly
+ serialized concurrent machine can fail deterministically, so the engine
+ watches the run's observed behavior — verdict flips, replay misses —
+ exactly as it does for any other test, and switches into
+ nondeterministic handling (or aborts, under `error` strictness) only
+ when those observations fire (decision 70).
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /

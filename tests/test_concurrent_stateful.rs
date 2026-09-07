@@ -110,8 +110,9 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
     let text = lines.join("\n");
     assert!(
-        text.contains("note: nondeterministic failure"),
-        "the report must carry the confirmation caveat:\n{text}"
+        !text.contains("note:"),
+        "a concurrent failure that reproduces exactly is a plain \
+         deterministic failure, no caveat (decision 70):\n{text}"
     );
     assert!(
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
@@ -697,19 +698,20 @@ impl Noop {
     fn noop(&self, _: TestCase) {}
 }
 
-/// Flip the run into nondeterministic mode by running a trivial concurrent
-/// machine on an independent clone stream, leaving `tc` free for the test
-/// body's own draws.
-fn flip_nondeterministic(tc: &TestCase) {
+/// Run a trivial concurrent machine on an independent clone stream, leaving
+/// `tc` free for the test body's own draws. Since decision 70 this does not
+/// flip the run by itself: the bodies below go nondeterministic later, at
+/// their first replay miss.
+fn concurrent_noise(tc: &TestCase) {
     run_concurrent(Noop, tc.clone(), 2, 2);
 }
 
 #[test]
-fn an_unconfirmed_one_shot_failure_reports_its_discovering_case() {
+fn an_unconfirmed_one_shot_failure_reports_caveat_only() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
-            flip_nondeterministic(&tc);
+            concurrent_noise(&tc);
             let case = CASES.fetch_add(1, Ordering::SeqCst);
             let x: i64 = tc.draw(gs::integers());
             if case == 2 {
@@ -726,17 +728,7 @@ fn an_unconfirmed_one_shot_failure_reports_its_discovering_case() {
     });
     let payload = result.expect_err("the third case fails the run");
     assert_matches_regex(&panic_message(&payload), "boom on the third case");
-    let draw_lines = lines.iter().filter(|l| l.contains("let ")).count();
-    assert!(
-        draw_lines > 0,
-        "generation cases are stamped under nondeterministic handling, so \
-         the unconfirmed report carries the discovering case's draws: {lines:?}"
-    );
     let text = lines.join("\n");
-    assert!(
-        text.contains("panicked at"),
-        "the discovering case's diagnostic is printed:\n{text}"
-    );
     assert!(
         text.contains("note: unconfirmed failure: failed 0 of"),
         "a one-shot failure reports unconfirmed with its caveat:\n{text}"
@@ -752,7 +744,7 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     static CASES: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
         Hegel::new(|tc: TestCase| {
-            flip_nondeterministic(&tc);
+            concurrent_noise(&tc);
             let case = CASES.fetch_add(1, Ordering::SeqCst);
             let x: i64 = tc.draw(gs::integers());
             if case == 2 {
@@ -776,8 +768,8 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     );
     let diagnostics = lines.iter().filter(|l| l.contains("panicked at")).count();
     assert_eq!(
-        diagnostics, 2,
-        "the diagnostic prints live at discovery and again in the failure \
-         report, from the stamped discovering case's capture: {lines:?}"
+        diagnostics, 1,
+        "the diagnostic prints live at discovery; the caveat-only report \
+         has no reproducing capture to reprint (decision 70): {lines:?}"
     );
 }

@@ -314,9 +314,6 @@ impl DataSource for NativeDataSource {
             )));
         }
         self.with_ntc(|ntc| {
-            if max_concurrency > 1 {
-                ntc.family().set_concurrent_machine();
-            }
             NativeStateMachine::new(
                 ntc,
                 rule_groups,

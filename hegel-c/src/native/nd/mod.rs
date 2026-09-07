@@ -1,31 +1,28 @@
-//! Statistics for nondeterministic-test handling: the weighted evidence type
-//! every replay-counting decision shares, the discovery-confirmation bar,
+//! Statistics for nondeterministic-test handling: the evidence type every
+//! replay-counting decision shares, the discovery-confirmation bar,
 //! the shrink gauntlet, the boost schedule arithmetic, and the replay
 //! budgets. Everything here is pure arithmetic — no engine state, no
 //! executions — so each rule is tested directly against the exact-DP and
 //! simulation results that derived it (`notes/experiments/`, decisions
-//! 7, 11, 16, 17, 19, 22, 23, 54-56 in `notes/decisions.md`).
+//! 7, 11, 16, 17, 19, 23, 54-56, 71 in `notes/decisions.md`).
 
-/// Replay evidence for one proposition ("this timeline reproduces this
-/// origin"). Failures always count in full; a non-failure counts `weight`,
-/// less than 1.0 when the replay structurally diverged from the timeline it
-/// was probing — a diverged run is weak evidence of non-reproduction
-/// (decision 22). The physical run count is tracked separately for cost
-/// caps.
+/// Replay evidence for one proposition ("this test case reproduces this
+/// origin"). Every replay is one Bernoulli trial of the test case under the
+/// standing replay procedure — whatever timeline it realized — so failures
+/// and misses both count in full (decision 71: the statistics are about the
+/// test case, which can realize many timelines, not about tracking one
+/// realized timeline).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Evidence {
     fails: u64,
-    physical: u64,
-    weighted_misses: f64,
+    runs: u64,
 }
 
 impl Evidence {
-    pub(crate) fn record(&mut self, failed: bool, weight: f64) {
-        self.physical += 1;
+    pub(crate) fn record(&mut self, failed: bool) {
+        self.runs += 1;
         if failed {
             self.fails += 1;
-        } else {
-            self.weighted_misses += weight;
         }
     }
 
@@ -33,23 +30,18 @@ impl Evidence {
         self.fails
     }
 
-    /// Physical replay count, for cost accounting.
     pub(crate) fn runs(&self) -> u64 {
-        self.physical
-    }
-
-    fn weighted_total(&self) -> f64 {
-        self.fails as f64 + self.weighted_misses
+        self.runs
     }
 
     /// Wilson lower confidence bound on the failure rate.
     pub(crate) fn lower_bound(&self) -> f64 {
-        wilson_bound(self.fails as f64, self.weighted_total(), false)
+        wilson_bound(self.fails as f64, self.runs as f64, false)
     }
 
     /// Wilson upper confidence bound on the failure rate.
     pub(crate) fn upper_bound(&self) -> f64 {
-        wilson_bound(self.fails as f64, self.weighted_total(), true)
+        wilson_bound(self.fails as f64, self.runs as f64, true)
     }
 }
 
@@ -86,17 +78,17 @@ pub(crate) enum BarVerdict {
 /// to [`CONFIRM_CAP`] total, accepting early on the [`CONFIRM_MIN_FAILS`]th
 /// failure. Operating points (exact DP, experiment 005A): 0.6% false accept
 /// per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, ~15
-/// replays per rejected fluke, ~4.4 per p = 0.9 confirmation. The gate
-/// reads weighted misses, so diverged replays reject more slowly; the cap
-/// is physical cost and stays exact.
+/// replays per rejected fluke, ~4.4 per p = 0.9 confirmation. Since
+/// decision 71 the arithmetic runs on plain counts — exactly the Bernoulli
+/// setting the DP modelled.
 pub(crate) fn discovery_bar(evidence: &Evidence) -> BarVerdict {
     if evidence.fails >= CONFIRM_MIN_FAILS {
         return BarVerdict::Accept;
     }
-    if evidence.fails == 0 && evidence.weighted_misses >= GATE_RUNS as f64 {
+    if evidence.fails == 0 && evidence.runs >= GATE_RUNS {
         return BarVerdict::Reject;
     }
-    if evidence.fails + CONFIRM_CAP.saturating_sub(evidence.physical) < CONFIRM_MIN_FAILS {
+    if evidence.fails + CONFIRM_CAP.saturating_sub(evidence.runs) < CONFIRM_MIN_FAILS {
         return BarVerdict::Reject;
     }
     BarVerdict::Continue
@@ -150,7 +142,7 @@ pub(crate) enum GauntletVerdict {
 /// clears `max(gamma * anchor, GAUNTLET_FLOOR)`, with gamma
 /// [`GAUNTLET_GAMMA`] below [`RETENTION_HIGH_WATER`] and 1.0 at or above
 /// it; reject when the upper bound proves the threshold unreachable or the
-/// physical cap is spent, otherwise keep rerunning — short of the failure
+/// cap is spent, otherwise keep rerunning — short of the failure
 /// minimum the verdict is Continue, never Reject. Operating points: the
 /// exact-DP rows in experiment 008, pinned by
 /// `gauntlet_matches_the_008_operating_points`; worst-case false accept is
@@ -169,7 +161,7 @@ pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64) -> GauntletVerdict {
     if evidence.fails >= GAUNTLET_MIN_FAILS && evidence.lower_bound() >= threshold {
         return GauntletVerdict::Accept;
     }
-    if evidence.upper_bound() < threshold || evidence.physical >= GAUNTLET_CAP {
+    if evidence.upper_bound() < threshold || evidence.runs >= GAUNTLET_CAP {
         return GauntletVerdict::Reject;
     }
     GauntletVerdict::Continue
@@ -280,104 +272,6 @@ pub(crate) fn reuse_replay_budget() -> u64 {
     replay_budget(TARGET_FAILURE_RATE, REUSE_MISS_TOLERANCE)
 }
 
-/// The verbatim watermark (decisions 22, 45): the flat-length-weighted
-/// fraction of `stored` a replay tracked before first diverging, which is
-/// the weight of that replay's non-failure as evidence about `stored` — a
-/// diverged run says little about the timeline it abandoned. Each element
-/// counts its flattened length, and a diverged clone pair still earns
-/// credit for the tracked prefix inside it, so a long clone stream is not
-/// written off by one late fall-off. Linear, no floor; the physical caps
-/// bound the cost of heavily-diverged probing. An empty timeline is
-/// trivially fully tracked.
-pub(crate) fn verbatim_weight(
-    stored: &[crate::native::core::ChoiceValue],
-    realized: &[crate::native::core::ChoiceValue],
-) -> f64 {
-    use crate::native::core::ChoiceValueRef;
-    if stored.is_empty() {
-        return 1.0;
-    }
-    let credit = tracked_credit(
-        stored.iter().map(ChoiceValueRef::from),
-        realized.iter().map(ChoiceValueRef::from),
-    );
-    credit as f64 / crate::native::core::flattened_values_len(stored) as f64
-}
-
-/// Flat weight of the stored prefix that `realized` tracked: a matched
-/// element earns its flattened length, and the first mismatch ends the
-/// walk — earning `1 + tracked_credit(children)` when both sides are clone
-/// streams and nothing otherwise.
-fn tracked_credit<'s, 'r>(
-    stored: impl Iterator<Item = crate::native::core::ChoiceValueRef<'s>>,
-    realized: impl Iterator<Item = crate::native::core::ChoiceValueRef<'r>>,
-) -> usize {
-    use crate::native::core::ChoiceValueRef;
-    let mut credit = 0;
-    for (s, r) in stored.zip(realized) {
-        if s == r {
-            credit += match s {
-                ChoiceValueRef::Clone(c) => 1 + c.flat_len(),
-                _ => 1,
-            };
-            continue;
-        }
-        if let (ChoiceValueRef::Clone(cs), ChoiceValueRef::Clone(cr)) = (s, r) {
-            credit += 1 + tracked_credit(cs.values(), cr.values());
-        }
-        break;
-    }
-    credit
-}
-
-/// Dump hook for experiment 009a: when armed, every measurement replay
-/// (`test_runner::nd_replay_once`) records its stored and realized
-/// timelines, its evidence weight, and whether it reproduced the failure,
-/// for the harness to drain.
-#[cfg(feature = "__bench")]
-pub mod watermark_dump {
-    use alloc::vec::Vec;
-    use core::sync::atomic::{AtomicBool, Ordering};
-
-    use crate::native::core::ChoiceValue;
-    use crate::sys::sync::Mutex;
-
-    pub struct WatermarkSample {
-        pub stored: Vec<ChoiceValue>,
-        pub realized: Vec<ChoiceValue>,
-        pub weight: f64,
-        pub failed: bool,
-    }
-
-    static ARMED: AtomicBool = AtomicBool::new(false);
-    static SAMPLES: Mutex<Vec<WatermarkSample>> = Mutex::new(Vec::new());
-
-    pub fn arm() {
-        ARMED.store(true, Ordering::Relaxed);
-    }
-
-    pub fn drain() -> Vec<WatermarkSample> {
-        core::mem::take(&mut *SAMPLES.lock())
-    }
-
-    pub(crate) fn record(
-        stored: &[ChoiceValue],
-        realized: &[ChoiceValue],
-        weight: f64,
-        failed: bool,
-    ) {
-        if !ARMED.load(Ordering::Relaxed) {
-            return;
-        }
-        SAMPLES.lock().push(WatermarkSample {
-            stored: stored.to_vec(),
-            realized: realized.to_vec(),
-            weight,
-            failed,
-        });
-    }
-}
-
 /// Dump hook for experiment 011: when armed, every nondeterminism flip
 /// records its detection site, the run's call count, and the interesting
 /// map at flip time, and every reject-eviction records the evicted
@@ -393,7 +287,6 @@ pub mod seam_dump {
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub enum FlipSite {
-        Concurrency,
         CacheMismatch,
         FirstCheck,
         ShrinkVerify,
