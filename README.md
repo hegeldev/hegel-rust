@@ -52,3 +52,7 @@ assertion `left == right` failed
 ```
 
 Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself).
+
+## Known issues
+
+`cargo doc -p hegeltest` panics (`did not find features for ... NormalOrDev`) when `hegeltest` is only a dev-dependency of the workspace, which is the usual installation. This is a cargo bug ([rust-lang/cargo#11105](https://github.com/rust-lang/cargo/issues/11105)). Read the docs on [docs.rs](https://docs.rs/hegeltest) instead, or run `cargo doc` from a checkout of this repository.
