@@ -16,6 +16,8 @@
 
 To install: `cargo add --dev hegeltest`.
 
+The package is named `hegeltest` but the library is `hegel`. If you write a `path =` or `git =` dependency by hand, name the key `hegel`: `hegel = { path = "...", package = "hegeltest" }`. Writing `package = "hegeltest"` under the key `hegeltest` renames the library and breaks every `use hegel::...`.
+
 ## Quickstart
 
 Here's a quick example of how to write a Hegel test:
