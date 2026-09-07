@@ -100,6 +100,23 @@ header = """
  *   Concurrent operations on it return HEGEL_E_CONCURRENT_USE. To generate
  *   from several threads, hegel_test_case_clone the handle and give each
  *   thread its own clone.
+ *
+ * Forking
+ * -------
+ * libhegel is compatible with fork(2). No libhegel call starts a thread,
+ * retains a file descriptor, or holds a lock after it returns, so a
+ * process may fork between calls whenever forking is otherwise sound for
+ * it (in particular, no other thread may be inside libhegel at that
+ * moment).
+ *
+ * For per-test-case crash isolation, make every libhegel call in the
+ * parent and run each test case's body in a forked child that reports
+ * through its exit status, which the parent maps onto hegel_mark_complete
+ * (see examples/fork.c). The child inherits a private copy of all engine
+ * state, so any calls it does make are valid but invisible to the parent,
+ * and nothing it does can advance or corrupt the parent's run. Parent and
+ * children may share a database directory: writes go to pid-unique
+ * temporary files renamed into place.
  */"""
 include_guard = "HEGEL_H"
 pragma_once = false
