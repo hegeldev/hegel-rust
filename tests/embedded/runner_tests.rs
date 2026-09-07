@@ -245,6 +245,31 @@ fn test_register_profile_rejects_invalid_names() {
 }
 
 #[test]
+#[should_panic(expected = "reserved profile name \"default\"")]
+fn test_register_profile_rejects_reserved_names() {
+    Settings::register_profile("default", Settings::from_profile("default"));
+}
+
+#[test]
+fn test_try_from_profile_reports_failure_without_panicking() {
+    assert!(Settings::try_from_profile("default").is_ok());
+    let e = Settings::try_from_profile("no_such_profile").unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("unknown settings profile \"no_such_profile\""),
+        "got: {e}"
+    );
+    let dyn_err: &dyn std::error::Error = &e;
+    assert!(dyn_err.source().is_none());
+}
+
+#[test]
+#[should_panic(expected = "invalid profile name \"bad name\"")]
+fn test_set_default_profile_rejects_invalid_names() {
+    Settings::set_default_profile("bad name");
+}
+
+#[test]
 fn multiple_failures_with_print_blob_emit_per_failure_reproducer_lines() {
     use crate::generators as gs;
     let result = std::panic::catch_unwind(|| {

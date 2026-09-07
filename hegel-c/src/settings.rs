@@ -138,10 +138,11 @@ pub enum Verbosity {
 /// the `settings` parameter of `#[hegel::test]`.
 ///
 /// [`Settings::new`] returns the library's base defaults. Environment
-/// policy — the shipped `default`/`ci`/`antithesis` profiles, `hegel.toml`,
-/// and `HEGEL_DEFAULT_PROFILE` — lives in the profile system
-/// ([`crate::profiles`]); `hegel_settings_new` resolves the selected
-/// profile, so C-ABI callers get profile-aware defaults automatically.
+/// policy — the shipped `development`/`ci`/`antithesis` profiles,
+/// `hegel.toml`, and default-profile selection — lives in the profile
+/// system ([`crate::profiles`]); `hegel_settings_new` resolves the
+/// `selected` alias, so C-ABI callers get profile-aware defaults
+/// automatically.
 ///
 /// Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), every health
 /// check is off and cannot be re-enabled: Antithesis's thread pausing makes

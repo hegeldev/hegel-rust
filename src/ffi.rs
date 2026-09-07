@@ -132,10 +132,10 @@ pub(crate) struct SettingsHandle {
 impl SettingsHandle {
     /// Materialize a libhegel settings handle from the frontend settings,
     /// translating every field through the corresponding `hegel_settings_*`
-    /// setter. The handle starts from the engine's `default` profile rather
-    /// than the ambient one — every field is overwritten below, and starting
-    /// from a named profile keeps a broken `HEGEL_DEFAULT_PROFILE` from
-    /// failing runs whose settings were already resolved.
+    /// setter. The handle starts from the engine's immutable `default` root
+    /// rather than the selected profile — every field is overwritten below,
+    /// and the root keeps a broken default-profile setting from failing
+    /// runs whose settings were already resolved.
     pub(crate) fn build(settings: &Settings, database_key: Option<&str>) -> Self {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
@@ -240,12 +240,11 @@ impl Drop for SettingsHandle {
 }
 
 /// Materialize a frontend [`Settings`] from an engine-resolved profile: the
-/// one `name` names, or the automatically selected one for `None`. The
-/// engine owns profile resolution (shipped profiles, `hegel.toml`,
-/// `HEGEL_DEFAULT_PROFILE`, registrations), and this reads the resolved
-/// handle back field by field through the `hegel_settings_get_*` functions.
-/// The `Err` carries the engine's diagnostic (an unknown profile, a
-/// malformed `hegel.toml`).
+/// one `name` names, or the `selected` alias for `None`. The engine owns
+/// profile resolution (shipped profiles, `hegel.toml`, default-profile
+/// selection, registrations), and this reads the resolved handle back field
+/// by field through the `hegel_settings_get_*` functions. The `Err` carries
+/// the engine's diagnostic (an unknown profile, a malformed `hegel.toml`).
 pub(crate) fn settings_from_profile(name: Option<&str>) -> Result<Settings, String> {
     with_context(|ctx| {
         let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
@@ -361,6 +360,24 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
         print_blob,
         backend: backend_from_c(backend),
     }
+}
+
+/// Set (or with `None` clear) the process-wide default profile through the
+/// engine. The `Err` carries the engine's diagnostic (an invalid or
+/// reserved name).
+pub(crate) fn set_default_profile(name: Option<&str>) -> Result<(), String> {
+    with_context(|ctx| {
+        let c = name.map(cstring_lossy);
+        let ptr = c.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+        // SAFETY: ctx is this thread's live context, and the name pointer,
+        // when non-null, outlives the call.
+        let rc = unsafe { hegel_c::hegel_set_default_profile(ctx, ptr) };
+        if rc == hegel_result_t::HEGEL_E_INVALID_ARG {
+            return Err(last_error_string());
+        }
+        require_ok(rc);
+        Ok(())
+    })
 }
 
 /// Register `settings` as the named profile, process-wide, through the

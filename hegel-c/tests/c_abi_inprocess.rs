@@ -3144,12 +3144,67 @@ fn register_profile_validates_its_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid profile name"));
+        for reserved in ["default", "selected"] {
+            let name = CString::new(reserved).unwrap();
+            assert_eq!(
+                hegel_c::hegel_settings_register_profile(ctx, name.as_ptr(), s),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("reserved profile name"));
+        }
         let name = CString::new("c_abi_register_null_settings").unwrap();
         assert_eq!(
             hegel_c::hegel_settings_register_profile(ctx, name.as_ptr(), ptr::null()),
             HEGEL_E_INVALID_HANDLE
         );
         ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn set_default_profile_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let bad_utf8 = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, bad_utf8.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        let bad_name = CString::new("bad name").unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, bad_name.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invalid profile name"));
+        let alias = CString::new("selected").unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, alias.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("cannot name the \"selected\" alias"));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// The override target must be the `default` root: it resolves to settings
+/// no concurrently running test can distinguish from the ones it already
+/// sees, whatever the ambient environment, so tests running in parallel
+/// with the override briefly set cannot observe it.
+#[test]
+fn set_default_profile_overrides_the_selected_profile() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let name = CString::new("default").unwrap();
+        ok(hegel_c::hegel_set_default_profile(ctx, name.as_ptr()));
+        let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+        ok(hegel_settings_new(ctx, &mut s));
+        let view = read_settings(ctx, s);
+        assert!(!view.derandomize, "the override displaces CI detection");
+        assert!(!view.print_blob);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_c::hegel_set_default_profile(ctx, ptr::null()));
         ok(hegel_context_free(ctx));
     }
 }

@@ -1,13 +1,13 @@
 //! End-to-end settings profiles: `hegel.toml` discovery and deltas, the
-//! `--profile` flag on `#[hegel::main]` binaries, `HEGEL_DEFAULT_PROFILE`
-//! selection, and programmatic registration feeding
-//! `#[hegel::test(profile = "...")]`.
+//! `--profile` flag on `#[hegel::main]` binaries, default-profile
+//! selection, inheritance through the `selected` alias, and programmatic
+//! registration feeding `#[hegel::test(profile = "...")]`.
 //!
 //! The observable is `print_blob`: it has no CLI flag of its own, so whether
 //! a failing run prints the reproducer line shows which profile was in
 //! effect. `fixture_main_failing` has no compiled-in settings (selection
 //! tests); `fixture_main_profile` compiles in `print_blob = true`
-//! (replacement tests).
+//! (composition tests).
 
 mod common;
 
@@ -59,9 +59,10 @@ fn hegel_toml_profile_selected_via_default_profile_env() {
 }
 
 #[test]
-fn default_profile_does_not_print_the_reproducer_line() {
+fn the_default_root_does_not_print_the_reproducer_line() {
     let out = failing()
         .env("HEGEL_DEFAULT_PROFILE", "default")
+        .env("CI", "true")
         .expect_failure("got nonneg")
         .run();
     assert_no_marker(out);
@@ -79,6 +80,51 @@ fn bogus_default_profile_env_fails_the_run() {
 fn hegel_toml_delta_applies_on_top_of_the_shipped_ci_profile() {
     let out = failing()
         .with_file("hegel.toml", "[profiles.ci]\nprint_blob = false\n")
+        .env("CI", "true")
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
+}
+
+#[test]
+fn custom_profiles_inherit_the_ci_profile_on_ci() {
+    failing()
+        .with_file("hegel.toml", "[profiles.nightly]\ntest_cases = 5\n")
+        .env("HEGEL_DEFAULT_PROFILE", "nightly")
+        .env("CI", "true")
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
+}
+
+#[test]
+fn extending_the_default_root_opts_out_of_ci() {
+    let out = failing()
+        .with_file("hegel.toml", "[profiles.pinned]\nextends = \"default\"\n")
+        .env("HEGEL_DEFAULT_PROFILE", "pinned")
+        .env("CI", "true")
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
+}
+
+#[test]
+fn the_toml_default_entry_selects_the_default_profile() {
+    let out = failing()
+        .with_file(
+            "hegel.toml",
+            "default = \"quiet\"\n[profiles.quiet]\nprint_blob = false\n",
+        )
+        .env("CI", "true")
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
+}
+
+#[test]
+fn development_deltas_apply_over_the_environment_profile() {
+    let out = failing()
+        .with_file("hegel.toml", "[profiles.development]\nprint_blob = false\n")
+        .env("HEGEL_DEFAULT_PROFILE", "development")
         .env("CI", "true")
         .expect_failure("got nonneg")
         .run();
@@ -151,12 +197,11 @@ fn hegel_toml_is_discovered_from_a_subdirectory() {
 }
 
 #[test]
-fn profile_flag_replaces_the_compiled_in_settings() {
-    let out = fixture(MAIN_PROFILE)
+fn compiled_in_settings_apply_on_top_of_the_profile_flag() {
+    fixture(MAIN_PROFILE)
         .args(&["--profile", "default"])
-        .expect_failure("got nonneg")
+        .expect_failure(REPRODUCER_MARKER)
         .run();
-    assert_no_marker(out);
 }
 
 #[test]
@@ -164,6 +209,35 @@ fn compiled_in_settings_apply_on_top_of_the_selected_profile() {
     fixture(MAIN_PROFILE)
         .env("HEGEL_DEFAULT_PROFILE", "default")
         .expect_failure(REPRODUCER_MARKER)
+        .run();
+}
+
+#[test]
+fn profile_flag_wins_over_the_environment_and_detection() {
+    let out = failing()
+        .with_file("hegel.toml", BLOBBY_TOML)
+        .env("HEGEL_DEFAULT_PROFILE", "blobby")
+        .env("CI", "true")
+        .args(&["--profile", "default"])
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
+}
+
+#[test]
+fn profile_flag_position_does_not_matter() {
+    failing()
+        .with_file("hegel.toml", BLOBBY_TOML)
+        .args(&["--derandomize", "false", "--profile", "blobby"])
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
+}
+
+#[test]
+fn bogus_profile_flag_is_a_usage_error() {
+    failing()
+        .args(&["--profile", "nope"])
+        .expect_failure("unknown settings profile \"nope\"")
         .run();
 }
 

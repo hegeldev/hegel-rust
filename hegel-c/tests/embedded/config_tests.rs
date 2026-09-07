@@ -44,7 +44,7 @@ fn parses_every_key() {
             extends: Some("ci".to_owned()),
             test_cases: Some(10000),
             verbosity: Some(Verbosity::Verbose),
-            seed: Some(42),
+            seed: Some(Some(42)),
             derandomize: Some(true),
             database: Some(Database::Path("my/db".to_owned())),
             suppress_health_check: Some(vec![HealthCheck::TooSlow, HealthCheck::FilterTooMuch]),
@@ -88,9 +88,86 @@ fn parses_verbosity_and_backend_vocabularies() {
 }
 
 #[test]
-fn parses_database_disabled_keyword() {
+fn parses_database_disabled_and_default_keywords() {
     let delta = parse_one("[profiles.x]\ndatabase = \"disabled\"\n");
     assert_eq!(delta.database, Some(Database::Disabled));
+    let delta = parse_one("[profiles.x]\ndatabase = \"default\"\n");
+    assert_eq!(delta.database, Some(Database::Unset));
+}
+
+#[test]
+fn parses_seed_none() {
+    let delta = parse_one("[profiles.x]\nseed = \"none\"\n");
+    assert_eq!(delta.seed, Some(None));
+}
+
+#[test]
+fn rejects_seed_strings_other_than_none() {
+    assert_eq!(
+        parse_err("[profiles.x]\nseed = \"yes\"\n").message,
+        "`seed` expects an integer or \"none\", got \"yes\""
+    );
+}
+
+#[test]
+fn parses_a_top_level_default_entry() {
+    let config = parse("default = \"nightly\"\n[profiles.nightly]\ntest_cases = 5\n").unwrap();
+    assert_eq!(config.default.as_deref(), Some("nightly"));
+    assert_eq!(
+        parse("default = \"ci\"\n").unwrap().default.as_deref(),
+        Some("ci")
+    );
+}
+
+#[test]
+fn rejects_duplicate_default_entries() {
+    let e = parse_err("default = \"a\"\ndefault = \"b\"\n");
+    assert_eq!(e.line, 2);
+    assert_eq!(e.message, "duplicate key `default`");
+}
+
+#[test]
+fn rejects_a_default_entry_naming_the_selected_alias() {
+    assert_eq!(
+        parse_err("default = \"selected\"\n").message,
+        "`default` cannot name the \"selected\" alias it resolves"
+    );
+}
+
+#[test]
+fn rejects_invalid_default_entry_values() {
+    assert!(
+        parse_err("default = \"bad name\"\n")
+            .message
+            .starts_with("invalid profile name")
+    );
+    assert_eq!(
+        parse_err("default = 5\n").message,
+        "`default` expects a string, got an integer"
+    );
+}
+
+#[test]
+fn rejects_a_default_entry_after_a_section() {
+    let e = parse_err("[profiles.x]\ndefault = \"ci\"\n");
+    assert_eq!(e.line, 2);
+    assert_eq!(
+        e.message,
+        "`default` must appear before the first [profiles.<name>] header"
+    );
+}
+
+#[test]
+fn rejects_reserved_section_names() {
+    assert_eq!(
+        parse_err("[profiles.default]\n").message,
+        "\"default\" is the reserved base profile and cannot be modified; \
+         customize [profiles.development] instead"
+    );
+    assert_eq!(
+        parse_err("[profiles.selected]\n").message,
+        "\"selected\" is the alias for the default profile and cannot be defined"
+    );
 }
 
 #[test]
@@ -199,7 +276,8 @@ fn rejects_lines_that_are_neither_headers_nor_entries() {
 fn rejects_entries_before_any_section() {
     assert_eq!(
         parse_err("test_cases = 5\n").message,
-        "entry before any [profiles.<name>] header"
+        "only `default = \"<profile>\"` may appear before the \
+         first [profiles.<name>] header"
     );
 }
 
@@ -353,7 +431,7 @@ fn rejects_all_mixed_with_other_health_checks() {
 fn rejects_empty_database_strings() {
     assert_eq!(
         parse_err("[profiles.x]\ndatabase = \"\"\n").message,
-        "`database` expects a path or \"disabled\", got \"\""
+        "`database` expects a path, \"disabled\", or \"default\", got \"\""
     );
 }
 

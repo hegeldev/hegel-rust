@@ -387,3 +387,16 @@ fn ffi_register_profile_reports_engine_errors() {
     let e = register_profile("bad name", &Settings::from_profile("default")).unwrap_err();
     assert!(e.contains("invalid profile name"), "got: {e}");
 }
+
+#[test]
+fn ffi_set_default_profile_reports_engine_errors() {
+    let e = set_default_profile(Some("bad name")).unwrap_err();
+    assert!(e.contains("invalid profile name"), "got: {e}");
+}
+
+/// Clearing when no override is set is a no-op, so this cannot disturb
+/// tests running in parallel; setting a real override in-process could.
+#[test]
+fn ffi_set_default_profile_accepts_a_clear() {
+    set_default_profile(None).unwrap();
+}

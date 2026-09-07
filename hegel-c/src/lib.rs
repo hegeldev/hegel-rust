@@ -724,24 +724,32 @@ fn cstring_lossy(s: &str) -> CString {
 }
 
 /// Parameters:
-/// `out_settings`: Receives a handle initialized from the automatically
-///   selected settings profile.
+/// `out_settings`: Receives a handle initialized from the default settings
+///   profile.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when profile resolution
-/// fails: `HEGEL_DEFAULT_PROFILE` names an unknown profile, or a
+/// fails: a default-profile setting names an unknown profile, or a
 /// `hegel.toml` is malformed. Read the message with
 /// `hegel_context_last_error`.
 ///
-/// A profile is a named settings delta. Three ship with libhegel: `default`
-/// (the base defaults: 100 test cases, all phases enabled, normal
-/// verbosity, no seed, the disk database under `.hegel/`), `ci` (extends
-/// `default`: derandomization on, database disabled, reproduction lines
-/// printed), and `antithesis` (extends `default`: database disabled). The
-/// profile resolved here is named by the `HEGEL_DEFAULT_PROFILE`
-/// environment variable when set and non-empty; otherwise `antithesis` when
-/// running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`),
-/// `ci` when a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
-/// similar variables), and `default` elsewhere.
+/// A profile is a named settings delta. Two names are reserved: `default`
+/// is the immutable base (100 test cases, all phases enabled, normal
+/// verbosity, no seed, the disk database under `.hegel/`), and `selected`
+/// is an alias for the default profile: the strongest set of
+/// `hegel_set_default_profile`, the `HEGEL_DEFAULT_PROFILE` environment
+/// variable, and the top-level `default = "<profile>"` entry in
+/// `hegel.toml`, else the detected environment (`antithesis` inside
+/// Antithesis, detected via `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI
+/// server, detected via `CI`, `GITHUB_ACTIONS`, and similar variables),
+/// else `development`. This function resolves `selected`.
+///
+/// Three ordinary profiles ship with libhegel: `development` (the base
+/// defaults, unchanged — what local runs get), `ci` (derandomization on,
+/// database disabled, reproduction lines printed), and `antithesis`
+/// (database disabled). A profile without an explicit `extends` extends
+/// `selected`, skipping any candidate already in its chain, so a custom
+/// profile sits on `ci` when resolved on a CI server and on `development`
+/// locally. Extending or selecting `default` pins the plain base settings.
 ///
 /// Profiles are modified and defined in a `hegel.toml` found in the current
 /// directory or the nearest ancestor, and registered programmatically with
@@ -761,17 +769,19 @@ pub unsafe extern "C" fn hegel_settings_new(
 }
 
 /// Parameters:
-/// `name`: The profile to resolve: shipped (`default`, `ci`, `antithesis`),
-///   defined in `hegel.toml`, or registered with
-///   `hegel_settings_register_profile`.
+/// `name`: The profile to resolve: reserved (`default`, `selected`),
+///   shipped (`development`, `ci`, `antithesis`), defined in `hegel.toml`,
+///   or registered with `hegel_settings_register_profile`.
 /// `out_settings`: Receives a handle initialized from that profile.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
 /// or a `hegel.toml` is malformed. Read the message with
 /// `hegel_context_last_error`.
 ///
-/// Unlike `hegel_settings_new`, the `HEGEL_DEFAULT_PROFILE` environment
-/// variable plays no part: the named profile is resolved as-is.
+/// Selecting a profile by name does not change what the default profile is:
+/// the named profile still implicitly extends `selected` (see
+/// `hegel_settings_new`), so it layers over the environment's profile —
+/// except `default`, which is always the plain base settings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new_for_profile(
     ctx: *mut HegelContext,
@@ -1236,11 +1246,12 @@ pub unsafe extern "C" fn hegel_settings_set_print_blob(
 
 /// Parameters:
 /// `name`: The profile name to register: ASCII letters, digits, `-` and
-///   `_` only.
+///   `_` only. The reserved names `default` and `selected` are rejected.
 /// `settings`: The settings to snapshot. The caller keeps ownership; the
 ///   handle's database key is not part of the snapshot.
 ///
-/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid or reserved
+/// name.
 ///
 /// Registers a complete snapshot of `settings` as the profile `name`,
 /// process-wide, replacing any earlier registration of the same name.
@@ -1274,6 +1285,44 @@ pub unsafe extern "C" fn hegel_settings_register_profile(
         Ok(()) => HEGEL_OK,
         Err(e) => {
             set_last_error(ctx, &format!("hegel_settings_register_profile: {e}"));
+            HEGEL_E_INVALID_ARG
+        }
+    }
+}
+
+/// Parameters:
+/// `name`: The profile the `selected` alias should resolve to, or NULL to
+///   clear an earlier call. The name is not required to exist yet; naming
+///   the `selected` alias itself is rejected.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
+///
+/// Sets the default settings profile for the whole process, taking
+/// precedence over `HEGEL_DEFAULT_PROFILE`, the `default` entry in
+/// `hegel.toml`, and environment detection (see `hegel_settings_new`). Like
+/// registration it is not retroactive: settings handles already created
+/// keep their values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_set_default_profile(
+    ctx: *mut HegelContext,
+    name: *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let name = if name.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(name) }.to_str() {
+            Ok(name) => Some(name),
+            Err(_) => {
+                set_last_error(ctx, "hegel_set_default_profile: name is not valid UTF-8");
+                return HEGEL_E_INVALID_ARG;
+            }
+        }
+    };
+    match crate::profiles::set_default_profile(name) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => {
+            set_last_error(ctx, &format!("hegel_set_default_profile: {e}"));
             HEGEL_E_INVALID_ARG
         }
     }

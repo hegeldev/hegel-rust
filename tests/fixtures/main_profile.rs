@@ -1,6 +1,7 @@
 //! Fixture binary: a failing `#[hegel::main]` with compiled-in
 //! `print_blob = true`. Whether the reproducer line reaches stderr shows
-//! from outside whether `--profile` replaced the compiled-in settings.
+//! from outside whether the compiled-in settings applied on top of the
+//! selected profile.
 
 use hegel::TestCase;
 use hegel::generators as gs;

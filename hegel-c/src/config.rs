@@ -1,10 +1,11 @@
 //! `hegel.toml` discovery and parsing.
 //!
 //! The config file defines and modifies settings profiles
-//! ([`crate::profiles`]). The accepted format is a strict subset of TOML:
-//! `[profiles.<name>]` tables whose entries are basic strings, decimal
-//! integers, booleans, or single-line arrays of basic strings, plus `#`
-//! comments. Everything else — unknown keys, wrong value types, other
+//! ([`crate::profiles`]). The accepted format is a strict subset of TOML: an
+//! optional top-level `default = "<profile>"` entry naming the default
+//! profile, then `[profiles.<name>]` tables whose entries are basic strings,
+//! decimal integers, booleans, or single-line arrays of basic strings, plus
+//! `#` comments. Everything else — unknown keys, wrong value types, other
 //! tables, multi-line values — is a hard error carrying a line number:
 //! silent misconfiguration in a file that changes test behaviour is worse
 //! than strictness.
@@ -20,7 +21,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::profiles::{ProfileDelta, ProfileError, is_valid_name};
+use crate::profiles::{ProfileDelta, ProfileError, ROOT, SELECTED, is_valid_name};
 use crate::settings::{Backend, Database, HealthCheck, Phase, Verbosity};
 
 /// The config file's name, looked for in the current directory and every
@@ -31,11 +32,13 @@ pub(crate) const FILE_NAME: &str = "hegel.toml";
 /// discovery.
 pub(crate) const CONFIG_VAR: &str = "HEGEL_CONFIG";
 
-/// Parsed contents of a `hegel.toml`: the profile deltas it defines, in
-/// file order, and the path it was loaded from (`None` for a config that
-/// was parsed rather than loaded, or the empty default).
+/// Parsed contents of a `hegel.toml`: the default-profile entry, the
+/// profile deltas it defines in file order, and the path it was loaded from
+/// (`None` for a config that was parsed rather than loaded, or the empty
+/// default).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ConfigFile {
+    pub(crate) default: Option<String>,
     pub(crate) profiles: Vec<(String, ProfileDelta)>,
     pub(crate) path: Option<String>,
 }
@@ -99,10 +102,32 @@ pub(crate) fn parse(text: &str) -> Result<ConfigFile, ParseError> {
                 "expected `key = value` or a [profiles.<name>] header",
             ));
         };
-        let Some((_, delta)) = out.profiles.last_mut() else {
-            return Err(err(line_no, "entry before any [profiles.<name>] header"));
-        };
         let key = line[..eq].trim();
+        let Some((_, delta)) = out.profiles.last_mut() else {
+            if key != "default" {
+                return Err(err(
+                    line_no,
+                    "only `default = \"<profile>\"` may appear before the \
+                     first [profiles.<name>] header",
+                ));
+            }
+            if out.default.is_some() {
+                return Err(err(line_no, "duplicate key `default`"));
+            }
+            let value = parse_value(line[eq + 1..].trim(), line_no)?;
+            let name = expect_string(value, key, line_no)?;
+            if name == SELECTED {
+                return Err(err(
+                    line_no,
+                    format!("`default` cannot name the {SELECTED:?} alias it resolves"),
+                ));
+            }
+            if !is_valid_name(&name) {
+                return Err(invalid_name_err(&name, line_no));
+            }
+            out.default = Some(name);
+            continue;
+        };
         if keys.iter().any(|k| k == key) {
             return Err(err(line_no, format!("duplicate key `{key}`")));
         }
@@ -111,6 +136,13 @@ pub(crate) fn parse(text: &str) -> Result<ConfigFile, ParseError> {
         keys.push(key.to_string());
     }
     Ok(out)
+}
+
+fn invalid_name_err(name: &str, line_no: usize) -> ParseError {
+    err(
+        line_no,
+        format!("invalid profile name {name:?}: use only ASCII letters, digits, '-' and '_'"),
+    )
 }
 
 /// Parse a table header after its opening `[`, returning the profile name.
@@ -126,11 +158,23 @@ fn parse_header(rest: &str, line_no: usize) -> Result<&str, ParseError> {
     if !after.is_empty() && !after.starts_with('#') {
         return Err(err(line_no, "unexpected text after table header"));
     }
-    if !is_valid_name(name) {
+    if name == ROOT {
         return Err(err(
             line_no,
-            format!("invalid profile name {name:?}: use only ASCII letters, digits, '-' and '_'"),
+            format!(
+                "{ROOT:?} is the reserved base profile and cannot be modified; \
+                 customize [profiles.development] instead"
+            ),
         ));
+    }
+    if name == SELECTED {
+        return Err(err(
+            line_no,
+            format!("{SELECTED:?} is the alias for the default profile and cannot be defined"),
+        ));
+    }
+    if !is_valid_name(name) {
+        return Err(invalid_name_err(name, line_no));
     }
     Ok(name)
 }
@@ -278,15 +322,16 @@ fn assign(
     line_no: usize,
 ) -> Result<(), ParseError> {
     match key {
+        "default" => {
+            return Err(err(
+                line_no,
+                "`default` must appear before the first [profiles.<name>] header",
+            ));
+        }
         "extends" => {
             let name = expect_string(value, key, line_no)?;
             if !is_valid_name(&name) {
-                return Err(err(
-                    line_no,
-                    format!(
-                        "invalid profile name {name:?}: use only ASCII letters, digits, '-' and '_'"
-                    ),
-                ));
+                return Err(invalid_name_err(&name, line_no));
             }
             delta.extends = Some(name);
         }
@@ -294,7 +339,16 @@ fn assign(
             delta.test_cases = Some(expect_int(value, key, line_no, 1, u64::MAX as i128)? as u64);
         }
         "seed" => {
-            delta.seed = Some(expect_int(value, key, line_no, 0, u64::MAX as i128)? as u64);
+            delta.seed = Some(match value {
+                Value::Str(s) if s == "none" => None,
+                Value::Str(s) => {
+                    return Err(err(
+                        line_no,
+                        format!("`seed` expects an integer or \"none\", got {s:?}"),
+                    ));
+                }
+                other => Some(expect_int(other, key, line_no, 0, u64::MAX as i128)? as u64),
+            });
         }
         "derandomize" => delta.derandomize = Some(expect_bool(value, key, line_no)?),
         "report_multiple_failures" => {
@@ -338,13 +392,13 @@ fn assign(
             if s.is_empty() {
                 return Err(err(
                     line_no,
-                    "`database` expects a path or \"disabled\", got \"\"",
+                    "`database` expects a path, \"disabled\", or \"default\", got \"\"",
                 ));
             }
-            delta.database = Some(if s == "disabled" {
-                Database::Disabled
-            } else {
-                Database::Path(s)
+            delta.database = Some(match s.as_str() {
+                "disabled" => Database::Disabled,
+                "default" => Database::Unset,
+                _ => Database::Path(s),
             });
         }
         "suppress_health_check" => {
@@ -497,13 +551,21 @@ pub(crate) fn discover(
 /// of discovering one, and a file it names that cannot be read is a hard
 /// error: the variable exists to guarantee a config is loaded, so failing
 /// to load it must be loud.
+///
+/// The result is loaded once and cached for the life of the process, so
+/// every settings resolution sees the same config even if the file changes
+/// mid-run.
 pub(crate) fn load() -> Result<ConfigFile, ProfileError> {
-    load_from(
-        crate::sys::env_var(CONFIG_VAR),
-        crate::sys::cwd(),
-        crate::sys::fs::exists,
-        |path| crate::sys::fs::read(path).ok(),
-    )
+    static LOADED: crate::sys::sync::Lazy<Result<ConfigFile, ProfileError>> =
+        crate::sys::sync::Lazy::new(|| {
+            load_from(
+                crate::sys::env_var(CONFIG_VAR),
+                crate::sys::cwd(),
+                crate::sys::fs::exists,
+                |path| crate::sys::fs::read(path).ok(),
+            )
+        });
+    LOADED.clone()
 }
 
 /// [`load`] with the environment, directory, and filesystem reads injected.
