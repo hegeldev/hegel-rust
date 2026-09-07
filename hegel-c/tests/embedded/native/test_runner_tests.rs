@@ -61,6 +61,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
         vec!["rule".to_string()],
         vec![0],
         alloc::vec::Vec::new(),
+        alloc::vec::Vec::new(),
         2,
         2,
     ) {
@@ -644,6 +645,34 @@ fn run_main_reports_too_slow_at_call_site() {
         }
         other => panic!("expected RunError::HealthCheck, got {other:?}"),
     }
+}
+
+/// Regression for issue #78: a test that rejects its input before making
+/// any draw can never produce a valid case, so the run must report
+/// Unsatisfiable after one call instead of passing.
+#[test]
+fn run_main_reports_unsatisfiable_for_trivial_always_invalid_test() {
+    let mut calls = 0usize;
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        calls += 1;
+        ds.mark_complete(&TestCaseResult::Invalid);
+    };
+    let settings = Settings::new().test_cases(100).database(None);
+    let exploration = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    match exploration {
+        Err(crate::backend::RunError::Unsatisfiable(msg)) => {
+            assert!(msg.contains("Unsatisfiable"), "unexpected message: {msg}");
+            assert!(msg.contains("assume()"), "unexpected message: {msg}");
+        }
+        other => panic!("expected RunError::Unsatisfiable, got {other:?}"),
+    }
+    assert_eq!(calls, 1, "a trivial invalid test must stop after one call");
 }
 
 #[test]

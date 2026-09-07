@@ -5,7 +5,10 @@
 //! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
 //! and final state, and sampled in between — each invariant runs after any given rule with
 //! probability `1 / stateful_step_count`, so its expected cost per test case stays constant
-//! as the step count grows). Both take a [`TestCase`] parameter and borrow the state machine: rules
+//! as the step count grows). `#[invariant(always_run)]` opts an invariant out of the
+//! sampling: it runs after every rule, for invariants that must observe every intermediate
+//! state or that mutate state when checked.
+//! Both take a [`TestCase`] parameter and borrow the state machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
@@ -188,6 +191,34 @@ impl<M> Rule<M> {
         Rule {
             name: name.to_string(),
             apply,
+        }
+    }
+}
+
+/// An invariant of a [`StateMachine`], checked on the machine's initial and
+/// final state. In between it is sampled at join points, or checked at every
+/// one when `always_run` is set.
+pub struct Invariant<M: ?Sized> {
+    pub name: String,
+    pub always_run: bool,
+    pub apply: fn(&mut M, TestCase),
+}
+
+impl<M> Invariant<M> {
+    /// Create a sampled invariant with a name and an apply function.
+    pub fn new(name: &str, apply: fn(&mut M, TestCase)) -> Self {
+        Invariant {
+            name: name.to_string(),
+            always_run: false,
+            apply,
+        }
+    }
+
+    /// Create an invariant that runs after every rule.
+    pub fn new_always_run(name: &str, apply: fn(&mut M, TestCase)) -> Self {
+        Invariant {
+            always_run: true,
+            ..Invariant::new(name, apply)
         }
     }
 }
@@ -500,17 +531,30 @@ pub trait StateMachine {
     fn rules(&self) -> Vec<Rule<Self>>;
     /// Invariants: checked on the machine's initial and final state, and
     /// sampled after rules in between with probability
-    /// `1 / stateful_step_count` each.
-    fn invariants(&self) -> Vec<Rule<Self>>;
+    /// `1 / stateful_step_count` each — except invariants whose
+    /// [`always_run`](Invariant::always_run) flag is set, which run after
+    /// every rule.
+    fn invariants(&self) -> Vec<Invariant<Self>>;
+}
+
+/// Note which rule or invariant an unwind escaped from, so the failure
+/// report names it right before the panic diagnostic. Control unwinds (a
+/// rejected assumption, exhausted data) are not failures of the named
+/// method, so they get no trailer.
+fn note_panic_trailer(tc: &TestCase, e: &(dyn std::any::Any + Send), trailer: &str) {
+    if e.downcast_ref::<AssumeFailed>().is_none() && e.downcast_ref::<StopTest>().is_none() {
+        tc.note(trailer);
+    }
 }
 
 /// Run invariants at a join point. With a machine, each invariant runs only
-/// when the engine's sampling draw says to (see
-/// [`machine_should_check_invariant`]); with `None` — the guaranteed checks
-/// of the machine's initial and final state — every invariant runs.
+/// when the engine says to (see [`machine_should_check_invariant`]: always
+/// for an always-run invariant, per the sampling draw otherwise); with
+/// `None` — the guaranteed checks of the machine's initial and final state —
+/// every invariant runs.
 fn check_invariants<M: StateMachine>(
     m: &mut M,
-    invariants: &[Rule<M>],
+    invariants: &[Invariant<M>],
     tc: &TestCase,
     machine: Option<&StateMachineHandle>,
 ) {
@@ -521,7 +565,14 @@ fn check_invariants<M: StateMachine>(
             }
         }
         let inv_tc = tc.child(2); // nocov
-        (invariant.apply)(m, inv_tc); // nocov
+        if let Err(e) = catch_unwind(AssertUnwindSafe(|| (invariant.apply)(m, inv_tc))) {
+            note_panic_trailer(
+                tc,
+                e.as_ref(),
+                &format!("Invariant {} failed:", invariant.name),
+            );
+            resume_unwind(e);
+        }
     }
 }
 
@@ -564,9 +615,10 @@ fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_ind
 }
 
 /// Ask the engine whether invariant `invariant_index` should run at the
-/// current join point — a recorded draw that is true with probability
-/// `1 / stateful_step_count`, making an invariant's expected sampled runs
-/// per test case one regardless of step count.
+/// current join point — true unconditionally for an invariant registered
+/// always-run, otherwise a recorded draw that is true with probability
+/// `1 / stateful_step_count`, making a sampled invariant's expected sampled
+/// runs per test case one regardless of step count.
 fn machine_should_check_invariant(
     tc: &TestCase,
     machine: &StateMachineHandle,
@@ -587,7 +639,9 @@ fn machine_should_check_invariant(
 /// the machine's initial and final state; in between, each invariant runs at
 /// a join point only when the engine's sampling draw (probability
 /// `1 / stateful_step_count`) says to, keeping an invariant's expected cost
-/// per test case constant as the step count grows. One consequence of the
+/// per test case constant as the step count grows — except always-run
+/// invariants (`#[invariant(always_run)]`), which run at every join point.
+/// One consequence of the
 /// join-point timing: a sampled check can land after a rule that stopped on
 /// a violated assumption (rules are expected to reject before mutating the
 /// model, and nothing restores model state on rejection anyway).
@@ -597,14 +651,24 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
     let rule_groups = vec![0i64; rules.len()];
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
-    let machine = match tc
-        .with_ctc(|ctc| ctc.new_state_machine(&rule_names, &rule_groups, &invariant_names, 1, 1))
-    {
+    let invariant_always_check: Vec<bool> = invariants.iter().map(|r| r.always_run).collect();
+    let machine = match tc.with_ctc(|ctc| {
+        ctc.new_state_machine(
+            &rule_names,
+            &rule_groups,
+            &invariant_names,
+            &invariant_always_check,
+            1,
+            1,
+        )
+    }) {
         Ok((handle, _)) => handle,
         Err(rc) => raise_for_rc(rc),
     };
 
-    tc.note("Initial invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the initial state.");
+    }
     check_invariants(&mut m, &invariants, &tc, None);
 
     let mut steps_attempted: i64 = 0;
@@ -647,6 +711,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
                 // caller.
                 Err(e) => {
                     tc.note("}");
+                    note_panic_trailer(&tc, e.as_ref(), &format!("Rule {} failed:", rule.name));
                     tc.stop_span(false);
                     resume_unwind(e)
                 }
@@ -657,7 +722,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         check_invariants(&mut m, &invariants, &tc, Some(&machine));
     }
 
-    tc.note("Final invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the final state.");
+    }
     check_invariants(&mut m, &invariants, &tc, None);
 }
 
@@ -689,19 +756,30 @@ impl<M> ConcurrentRule<M> {
 }
 
 /// An invariant of a [`ConcurrentStateMachine`], checked on the main thread
-/// at every join point — between rounds of concurrent rule execution, while
-/// all worker threads are parked.
+/// at join points — between rounds of concurrent rule execution, while all
+/// worker threads are parked. It is sampled there, or checked at every join
+/// point when `always_run` is set.
 pub struct ConcurrentInvariant<M: ?Sized> {
     pub name: String,
+    pub always_run: bool,
     pub apply: fn(&M, TestCase),
 }
 
 impl<M> ConcurrentInvariant<M> {
-    /// Create a new invariant with a name and an apply function.
+    /// Create a sampled invariant with a name and an apply function.
     pub fn new(name: &str, apply: fn(&M, TestCase)) -> Self {
         ConcurrentInvariant {
             name: name.to_string(),
+            always_run: false,
             apply,
+        }
+    }
+
+    /// Create an invariant that runs at every join point.
+    pub fn new_always_run(name: &str, apply: fn(&M, TestCase)) -> Self {
+        ConcurrentInvariant {
+            always_run: true,
+            ..ConcurrentInvariant::new(name, apply)
         }
     }
 }
@@ -737,12 +815,14 @@ pub trait ConcurrentStateMachine {
     /// Invariants, run on the main thread while the worker threads are
     /// parked: checked on the machine's initial and final state, and
     /// sampled at the join points in between with probability
-    /// `1 / stateful_step_count` each.
+    /// `1 / stateful_step_count` each — except invariants whose
+    /// [`always_run`](ConcurrentInvariant::always_run) flag is set, which
+    /// run at every join point.
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>>;
 }
 
-/// Concurrent counterpart of [`check_invariants`]: sampled per invariant
-/// when given a machine, a guaranteed full sweep with `None`.
+/// Concurrent counterpart of [`check_invariants`]: engine-decided per
+/// invariant when given a machine, a guaranteed full sweep with `None`.
 fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
     m: &M,
     invariants: &[ConcurrentInvariant<M>],
@@ -756,7 +836,14 @@ fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
             }
         }
         let inv_tc = tc.child(2);
-        (invariant.apply)(m, inv_tc);
+        if let Err(e) = catch_unwind(AssertUnwindSafe(|| (invariant.apply)(m, inv_tc))) {
+            note_panic_trailer(
+                tc,
+                e.as_ref(),
+                &format!("Invariant {} failed:", invariant.name),
+            );
+            resume_unwind(e);
+        }
     }
 }
 
@@ -860,6 +947,9 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
                 }
                 event => {
                     tc.note("}");
+                    if matches!(event, WorkerEvent::Panicked { .. }) {
+                        tc.note(&format!("Rule {} failed:", rule.name));
+                    }
                     return event;
                 }
             },
@@ -915,8 +1005,9 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// group may overlap each other, and rules in different groups never
 /// overlap. Once every worker has finished its rules for the round, the
 /// main thread runs the invariants the engine's sampling draws select
-/// (probability `1 / stateful_step_count` each); every invariant runs in
-/// full on the machine's initial and final state.
+/// (probability `1 / stateful_step_count` each, and always-run invariants
+/// unconditionally); every invariant runs in full on the machine's initial
+/// and final state.
 ///
 /// The number of worker threads is drawn per test case, when the state
 /// machine is created, in `[min_concurrency, max_concurrency]` and weighted
@@ -982,6 +1073,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     let invariants = m.invariants();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
+    let invariant_always_check: Vec<bool> = invariants.iter().map(|r| r.always_run).collect();
     let mut group_names: Vec<&str> = Vec::new();
     let mut rule_groups: Vec<i64> = Vec::with_capacity(rules.len());
     for rule in &rules {
@@ -1000,6 +1092,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             &rule_names,
             &rule_groups,
             &invariant_names,
+            &invariant_always_check,
             min_concurrency,
             max_concurrency,
         )
@@ -1009,7 +1102,9 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     };
     tc.note(&format!("Concurrency level: {concurrency}"));
 
-    tc.note("Initial invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the initial state.");
+    }
     check_concurrent_invariants(&m, &invariants, &tc, None);
 
     let capture_backtraces = run_lifecycle::backtrace_capture_enabled();
@@ -1064,7 +1159,9 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             check_concurrent_invariants(m, &invariants, &tc, Some(machine));
         }
 
-        tc.note("Final invariant check.");
+        if !invariants.is_empty() {
+            tc.note("Checking invariants on the final state.");
+        }
         check_concurrent_invariants(m, &invariants, &tc, None);
     });
 }

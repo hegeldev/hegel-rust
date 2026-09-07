@@ -29,9 +29,10 @@ fn rewrite_method_draws(method: &mut syn::ImplItemFn) {
 struct MethodInfo {
     name: syn::Ident,
     attrs: Vec<Attribute>,
+    always_run: bool,
 }
 
-fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
+fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> {
     methods
         .iter()
         .map(|m| {
@@ -47,6 +48,11 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
                 .iter()
                 .filter(|a| FORWARDED.iter().any(|name| a.path().is_ident(name)))
                 .collect();
+            let constructor = match (invariants, m.always_run) {
+                (false, _) => quote! { ::hegel::stateful::Rule::new },
+                (true, false) => quote! { ::hegel::stateful::Invariant::new },
+                (true, true) => quote! { ::hegel::stateful::Invariant::new_always_run },
+            };
             // Register through a non-capturing closure rather than
             // `Self::#name` directly: `Rule.apply` is `fn(&mut M, TestCase)`,
             // and the method-call syntax inside the closure lets methods take
@@ -54,7 +60,7 @@ fn method_entries(methods: &[MethodInfo]) -> Vec<TokenStream> {
             // `&M`), as the `stateful` module docs promise for invariants.
             quote! {
                 #(#attrs)*
-                ::hegel::stateful::Rule::new(
+                #constructor(
                     #name_str,
                     |__hegel_machine: &mut Self, __hegel_tc: ::hegel::TestCase| {
                         __hegel_machine.#name(__hegel_tc)
@@ -97,10 +103,35 @@ fn rule_group(attr: &Attribute) -> syn::Result<RuleGroup> {
     }
 }
 
+/// Extract the `always_run` argument of an `#[invariant]` attribute, if any.
+fn invariant_always_run(attr: &Attribute) -> syn::Result<bool> {
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(false);
+    }
+    let mut always_run = false;
+    attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("always_run") {
+            always_run = true;
+            Ok(())
+        } else {
+            Err(meta.error("unsupported #[invariant] argument; expected `always_run`"))
+        }
+    })?;
+    if always_run {
+        Ok(true)
+    } else {
+        Err(syn::Error::new_spanned(
+            attr,
+            "#[invariant(...)] requires `always_run`",
+        ))
+    }
+}
+
 struct ConcurrentMethodInfo {
     name: syn::Ident,
     group: Option<RuleGroup>,
     attrs: Vec<Attribute>,
+    always_run: bool,
 }
 
 fn concurrent_method_entries(methods: &[ConcurrentMethodInfo]) -> Vec<TokenStream> {
@@ -131,15 +162,22 @@ fn concurrent_method_entries(methods: &[ConcurrentMethodInfo]) -> Vec<TokenStrea
                         )
                     }
                 }
-                None => quote! {
-                    #(#attrs)*
-                    ::hegel::stateful::ConcurrentInvariant::new(
-                        #name_str,
-                        |__hegel_machine: &Self, __hegel_tc: ::hegel::TestCase| {
-                            __hegel_machine.#name(__hegel_tc)
-                        },
-                    )
-                },
+                None => {
+                    let constructor = if m.always_run {
+                        quote! { ::hegel::stateful::ConcurrentInvariant::new_always_run }
+                    } else {
+                        quote! { ::hegel::stateful::ConcurrentInvariant::new }
+                    };
+                    quote! {
+                        #(#attrs)*
+                        #constructor(
+                            #name_str,
+                            |__hegel_machine: &Self, __hegel_tc: ::hegel::TestCase| {
+                                __hegel_machine.#name(__hegel_tc)
+                            },
+                        )
+                    }
+                }
             }
         })
         .collect()
@@ -152,10 +190,10 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
     for item in &mut block.items {
         if let ImplItem::Fn(method) = item {
             let rule_attr = method.attrs.iter().find(|a| is_rule(a)).cloned();
-            let has_invariant = method.attrs.iter().any(&is_invariant);
+            let invariant_attr = method.attrs.iter().find(|a| is_invariant(a)).cloned();
             method.attrs.retain(|a| !is_rule(a) && !is_invariant(a));
 
-            if rule_attr.is_some() || has_invariant {
+            if rule_attr.is_some() || invariant_attr.is_some() {
                 let takes_shared_self = method.sig.receiver().is_some_and(|receiver| {
                     matches!(&*receiver.ty, syn::Type::Reference(r) if r.mutability.is_none())
                 });
@@ -170,7 +208,7 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
                 }
             }
 
-            if rule_attr.is_some() || has_invariant {
+            if rule_attr.is_some() || invariant_attr.is_some() {
                 rewrite_method_draws(method);
             }
 
@@ -183,13 +221,19 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
                     name: method.sig.ident.clone(),
                     group: Some(group),
                     attrs: method.attrs.clone(),
+                    always_run: false,
                 });
             }
-            if has_invariant {
+            if let Some(attr) = invariant_attr {
+                let always_run = match invariant_always_run(&attr) {
+                    Ok(always_run) => always_run,
+                    Err(e) => return e.to_compile_error(),
+                };
                 invariants.push(ConcurrentMethodInfo {
                     name: method.sig.ident.clone(),
                     group: None,
                     attrs: method.attrs.clone(),
+                    always_run,
                 });
             }
         }
@@ -220,7 +264,8 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
     for item in &mut block.items {
         if let ImplItem::Fn(method) = item {
             let has_rule = method.attrs.iter().any(&is_rule);
-            let has_invariant = method.attrs.iter().any(&is_invariant);
+            let invariant_attr = method.attrs.iter().find(|a| is_invariant(a)).cloned();
+            let has_invariant = invariant_attr.is_some();
             method.attrs.retain(|a| !is_rule(a) && !is_invariant(a));
 
             // Rules and invariants are applied through a `&mut M` handle, so
@@ -246,23 +291,28 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
                 rewrite_method_draws(method);
             }
 
-            let info = || MethodInfo {
+            let info = |always_run| MethodInfo {
                 name: method.sig.ident.clone(),
                 attrs: method.attrs.clone(),
+                always_run,
             };
             if has_rule {
-                rules.push(info());
+                rules.push(info(false));
             }
-            if has_invariant {
-                invariants.push(info());
+            if let Some(attr) = invariant_attr {
+                let always_run = match invariant_always_run(&attr) {
+                    Ok(always_run) => always_run,
+                    Err(e) => return e.to_compile_error(),
+                };
+                invariants.push(info(always_run));
             }
         }
     }
 
     let block_type = &block.self_ty;
     let (impl_generics, _, where_clause) = block.generics.split_for_impl();
-    let rule_entries = method_entries(&rules);
-    let invariant_entries = method_entries(&invariants);
+    let rule_entries = method_entries(&rules, false);
+    let invariant_entries = method_entries(&invariants, true);
 
     quote! {
         #block
@@ -270,7 +320,7 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
             fn rules(&self) -> ::std::vec::Vec<::hegel::stateful::Rule<Self>> {
                 ::std::vec![ #( #rule_entries ),* ]
             }
-            fn invariants(&self) -> ::std::vec::Vec<::hegel::stateful::Rule<Self>> {
+            fn invariants(&self) -> ::std::vec::Vec<::hegel::stateful::Invariant<Self>> {
                 ::std::vec![ #( #invariant_entries ),* ]
             }
         }

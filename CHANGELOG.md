@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.40.0 - 2026-09-07
+
+This release adds `#[invariant(always_run)]` for stateful tests ([#449](https://github.com/hegeldev/hegel-rust/issues/449)). A plain `#[invariant]` is checked in full on the machine's initial and final state and sampled in between; an always-run invariant runs after every rule (at every join point, for concurrent machines) instead. Use it for invariants that must observe every intermediate state, including invariants that mutate state when checked:
+
+```rust
+#[invariant(always_run)]
+fn no_unobserved_writes(&mut self, _: TestCase) {
+    assert!(self.writes_since_last_check <= 1);
+    self.writes_since_last_check = 0;
+}
+```
+
+For hand-written `StateMachine` implementations this is a breaking change: `invariants()` now returns `Vec<Invariant<Self>>` instead of `Vec<Rule<Self>>` — construct entries with `Invariant::new` (sampled) or `Invariant::new_always_run`. `ConcurrentInvariant` gains the same `always_run` field and `new_always_run` constructor.
+
+## 0.39.9 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.6.
+
+## 0.39.8 - 2026-09-07
+
+This patch improves the failure reports of stateful tests. A failing `#[invariant]` now ends the report with `Invariant <name> failed:`, and a panicking `#[rule]` body with `Rule <name> failed:`, instead of leaving only the panic's file and line to identify the failing method. The `Initial invariant check.` line is reworded to `Checking invariants on the initial state.` (likewise for the final check) and no longer printed for machines with no invariants. ([#440](https://github.com/hegeldev/hegel-rust/issues/440))
+
+## 0.39.7 - 2026-09-07
+
+This patch adds `generators::btree_sets` and `generators::btree_maps` for generating `BTreeSet` and `BTreeMap` values, with the same `min_size`/`max_size` builders as `hashsets` and `hashmaps`. Both types also implement `DefaultGenerator`, so `gs::default::<BTreeMap<u8, u8>>()` and `#[derive(DefaultGenerator)]` on structs containing them now work.
+
+## 0.39.6 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.5.
+
 ## 0.39.5 - 2026-09-07
 
 This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.

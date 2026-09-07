@@ -4,8 +4,8 @@ use common::utils::{assert_matches_regex, capture_hegel_output};
 use hegel::generators as gs;
 use hegel::stateful::{ConcurrentPool, concurrent_pool, run_concurrent};
 use hegel::{HealthCheck, Hegel, Settings, TestCase, Verbosity};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     payload
@@ -44,6 +44,68 @@ fn test_concurrent_counter_passes(tc: TestCase) {
         value: AtomicI64::new(0),
     };
     run_concurrent(m, tc, 1, 1);
+}
+
+struct InvariantCounts {
+    rules_run: Arc<AtomicI64>,
+    sampled_runs: Arc<AtomicI64>,
+    always_runs: Arc<AtomicI64>,
+}
+
+#[hegel::concurrent_state_machine]
+impl InvariantCounts {
+    #[rule]
+    fn step(&self, _: TestCase) {
+        self.rules_run.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[invariant]
+    fn count_sampled(&self, _: TestCase) {
+        self.sampled_runs.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[invariant(always_run)]
+    fn count_always(&self, _: TestCase) {
+        self.always_runs.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn always_run_invariants_run_at_every_join_point() {
+    let rules_run = Arc::new(AtomicI64::new(0));
+    let sampled_runs = Arc::new(AtomicI64::new(0));
+    let always_runs = Arc::new(AtomicI64::new(0));
+    let rules_in = Arc::clone(&rules_run);
+    let sampled_in = Arc::clone(&sampled_runs);
+    let always_in = Arc::clone(&always_runs);
+    Hegel::new(move |tc: TestCase| {
+        let m = InvariantCounts {
+            rules_run: Arc::clone(&rules_in),
+            sampled_runs: Arc::clone(&sampled_in),
+            always_runs: Arc::clone(&always_in),
+        };
+        run_concurrent(m, tc, 1, 1);
+    })
+    .settings(
+        Settings::new()
+            .test_cases(20)
+            .stateful_step_count(50)
+            .database(None),
+    )
+    .run();
+    let rules_run = rules_run.load(Ordering::SeqCst);
+    let sampled_runs = sampled_runs.load(Ordering::SeqCst);
+    let always_runs = always_runs.load(Ordering::SeqCst);
+    assert!(
+        always_runs > rules_run,
+        "expected the always-run invariant ({always_runs} runs) to check every join point \
+         ({rules_run} rules) plus the initial and final states"
+    );
+    assert!(
+        sampled_runs < rules_run / 4,
+        "expected sampled invariant runs ({sampled_runs}) to stay far below \
+         rule runs ({rules_run})"
+    );
 }
 
 struct Grouped {
@@ -118,6 +180,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         "the join points must note the round's concurrency group:\n{text}"
     );
     assert_matches_regex(&text, r"\[worker \d+ \+\d+\.\d{3}ms\] Rule: boom");
+    assert_matches_regex(&text, r"\[worker \d+ \+\d+\.\d{3}ms\] Rule boom failed:");
     let worker = &regex::Regex::new(r"\[worker (\d+) \+\d+\.\d{3}ms\] Rule: boom")
         .unwrap()
         .captures(&text)
@@ -336,6 +399,41 @@ fn a_workers_usage_error_aborts_the_run_verbatim() {
     });
     let payload = result.expect_err("an invalid-argument control payload aborts the run");
     assert_matches_regex(&panic_message(&payload), "finite score");
+}
+
+struct BrokenModel {
+    value: AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl BrokenModel {
+    #[rule]
+    fn bump(&self, _: TestCase) {
+        self.value.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[invariant]
+    fn stays_zero(&self, _: TestCase) {
+        assert_eq!(self.value.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn a_concurrent_invariant_failure_names_the_invariant() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            let m = BrokenModel {
+                value: AtomicI64::new(0),
+            };
+            run_concurrent(m, tc, 1, 1);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    });
+    let payload = result.unwrap_err();
+    assert_matches_regex(&panic_message(&payload), "assertion");
+    let text = lines.join("\n");
+    assert!(text.contains("Invariant stays_zero failed:"), "{text}");
 }
 
 struct LateReject {

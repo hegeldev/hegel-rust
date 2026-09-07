@@ -346,6 +346,7 @@ fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) ->
             alloc::vec!["increment".to_string()],
             alloc::vec![0],
             Vec::new(),
+            Vec::new(),
             1,
             1,
         )

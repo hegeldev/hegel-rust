@@ -1292,7 +1292,7 @@ mod regex_tests {
 
     #[test]
     fn lookahead_with_nested_negative_lookaround() {
-        check_can_generate_examples(gs::from_regex(r"x(?!(?!a))y"));
+        assert_no_examples(gs::from_regex(r"x(?!(?!a))y"), |_: &String| true);
     }
 
     #[test]
@@ -1322,7 +1322,7 @@ mod regex_tests {
 
     #[test]
     fn lookahead_with_dotall_dot() {
-        check_can_generate_examples(gs::from_regex(r"(?s)x(?!.)y"));
+        assert_no_examples(gs::from_regex(r"(?s)x(?!.)y"), |_: &String| true);
     }
 
     #[test]

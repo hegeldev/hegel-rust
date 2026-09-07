@@ -202,9 +202,11 @@ pub struct NativeStateMachine {
     /// round counts and rejections refund only the worker's within-round
     /// budget.
     rounds_rejected: i64,
-    /// Number of registered invariants, bounding the indices
-    /// [`Self::should_check_invariant`] accepts.
-    num_invariants: usize,
+    /// Per registered invariant: whether [`Self::should_check_invariant`]
+    /// answers `true` unconditionally instead of sampling. The length is the
+    /// number of registered invariants, bounding the indices that method
+    /// accepts.
+    invariant_always_check: Vec<bool>,
     workers: Vec<WorkerState>,
 }
 
@@ -217,7 +219,7 @@ impl NativeStateMachine {
     pub fn new(
         ntc: &mut NativeTestCase,
         rule_groups: Vec<i64>,
-        num_invariants: usize,
+        invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<Self, EngineError> {
@@ -260,7 +262,7 @@ impl NativeStateMachine {
             current_group: 0,
             rounds_started: 0,
             rounds_rejected: 0,
-            num_invariants,
+            invariant_always_check,
             workers,
         })
     }
@@ -414,10 +416,12 @@ impl NativeStateMachine {
     }
 
     /// Decide whether the caller should run invariant `invariant_index` at
-    /// the current join point: a recorded boolean draw that is `true` with
+    /// the current join point. For an invariant registered with its
+    /// always-check flag set, the answer is `true` without consuming
+    /// entropy; otherwise it is a recorded boolean draw that is `true` with
     /// probability `1 / stateful_step_count`, so over a full-length test
-    /// case each invariant's expected number of sampled runs is one,
-    /// regardless of the step count. The caller owns the machine's
+    /// case each sampled invariant's expected number of sampled runs is
+    /// one, regardless of the step count. The caller owns the machine's
     /// guaranteed checks — its initial state and the final state after the
     /// last round — and runs those without consulting this draw.
     ///
@@ -428,14 +432,17 @@ impl NativeStateMachine {
         ntc: &mut NativeTestCase,
         invariant_index: i64,
     ) -> Result<bool, EngineError> {
-        let valid = usize::try_from(invariant_index)
+        let always = usize::try_from(invariant_index)
             .ok()
-            .filter(|&i| i < self.num_invariants);
-        if valid.is_none() {
+            .and_then(|i| self.invariant_always_check.get(i).copied());
+        let Some(always) = always else {
             return Err(EngineError::InvalidArgument(format!(
                 "invariant_index must be in [0, {}), got {invariant_index}",
-                self.num_invariants
+                self.invariant_always_check.len()
             )));
+        };
+        if always {
+            return Ok(true);
         }
         let p = 1.0 / ntc.family().stateful_step_count() as f64;
         ntc.weighted_precise(p, None)

@@ -1,10 +1,10 @@
 [package]
 name = "hegeltest-c"
-version = "0.36.4"
+version = "0.37.0"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT"
-description = "C shared library bindings for Hegel's native engine."
+description = "C-ABI bindings for Hegel's native engine."
 repository = "https://github.com/hegeldev/hegel-rust"
 homepage = "http://hegel.dev"
 readme = "README.md"

@@ -34,7 +34,9 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> StateMachineHandle {
     let rule_groups = vec![0i64; rules.len()];
     let (machine, level) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(rules, &rule_groups, &[], concurrency, concurrency))
+        .with_ctc(|ctc| {
+            ctc.new_state_machine(rules, &rule_groups, &[], &[], concurrency, concurrency)
+        })
         .unwrap();
     assert_eq!(level, concurrency);
     machine
@@ -63,6 +65,18 @@ fn panicked_event(message: &str, info: Option<PanicInfo>) -> WorkerEvent {
 fn resolve_round_unwind(events: Vec<WorkerEvent>, tc: &TestCase) -> Box<dyn std::any::Any + Send> {
     catch_unwind(AssertUnwindSafe(|| resolve_round(events, tc)))
         .expect_err("the round must classify as terminal")
+}
+
+#[test]
+fn note_panic_trailer_notes_real_panics_and_skips_control_unwinds() {
+    let (_run, tc, lines) = capturing_test_case();
+    let assume: Box<dyn std::any::Any + Send> = Box::new(AssumeFailed);
+    let stop: Box<dyn std::any::Any + Send> = Box::new(StopTest);
+    note_panic_trailer(&tc, assume.as_ref(), "unwanted");
+    note_panic_trailer(&tc, stop.as_ref(), "unwanted");
+    note_panic_trailer(&tc, string_panic("boom").as_ref(), "Invariant x failed:");
+    tc.emit_rendered_output();
+    assert_eq!(*lines.lock().unwrap(), vec!["Invariant x failed:"]);
 }
 
 #[test]
@@ -231,7 +245,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
 #[test]
 fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     run_lifecycle::init_panic_hook();
-    let (_run, tc, _lines) = capturing_test_case();
+    let (_run, tc, lines) = capturing_test_case();
     let m = AlwaysPanics;
     let rules = m.rules();
     let machine = register_machine(&tc, &["boom"], 1);
@@ -247,6 +261,14 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     assert_eq!(run_lifecycle::panic_message(&payload), "rule boom");
     let (_, _, location, _) = info.unwrap();
     assert!(location.contains("stateful_tests.rs"), "{location}");
+    tc.emit_rendered_output();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("Rule boom failed:"))
+    );
 }
 
 #[test]
@@ -279,7 +301,7 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
     let (machine, _) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], 1, 1))
+        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], &[], 1, 1))
         .unwrap();
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {
