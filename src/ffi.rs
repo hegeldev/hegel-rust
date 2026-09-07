@@ -1434,6 +1434,18 @@ impl RunResult {
         cstr_opt(p)
     }
 
+    /// The database directory the run persisted its failures to, or `None`
+    /// when nothing was persisted (the database is disabled, the run has no
+    /// database key, or the run was nondeterministic).
+    pub(crate) fn database_path(&self) -> Option<String> {
+        let mut p: *const c_char = ptr::null();
+        // SAFETY: self.raw is this snapshot's live pointer; &mut p is valid.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_result_database_path(ctx, self.raw, &mut p)
+        }));
+        cstr_opt(p)
+    }
+
     pub(crate) fn failure_count(&self) -> usize {
         let mut count = 0;
         // SAFETY: self.raw is this snapshot's live pointer; &mut count is valid.

@@ -126,26 +126,82 @@ fn format_backtrace_short_strips_through_filter() {
 }
 
 #[test]
-fn reproducer_line_none_when_print_blob_disabled() {
+fn reproducer_line_none_when_saved_and_print_blob_disabled() {
     let settings = Settings::new();
     assert!(!settings.print_blob);
-    assert!(reproducer_line(&settings, Some("AAEC")).is_none());
+    assert!(reproducer_line(&settings, Some("AAEC"), true, true).is_none());
+}
+
+#[test]
+fn reproducer_line_none_when_unsaved_but_quiet() {
+    let settings = Settings::new().verbosity(Verbosity::Quiet);
+    assert!(reproducer_line(&settings, Some("AAEC"), false, true).is_none());
 }
 
 #[test]
 fn reproducer_line_none_when_no_blob_attached() {
     let settings = Settings::new().print_blob(true);
-    assert!(reproducer_line(&settings, None).is_none());
+    assert!(reproducer_line(&settings, None, true, true).is_none());
 }
 
 #[test]
-fn reproducer_line_emits_attribute_when_enabled_and_present() {
+fn reproducer_line_emits_attribute_when_print_blob_enabled() {
     let settings = Settings::new().print_blob(true);
-    let line = reproducer_line(&settings, Some("AAEC")).unwrap();
+    let line = reproducer_line(&settings, Some("AAEC"), true, true).unwrap();
     assert!(
         line.contains("#[hegel::reproduce_failure(\"AAEC\")]"),
         "expected the reproducer attribute, got: {line}"
     );
+}
+
+#[test]
+fn reproducer_line_emits_attribute_when_unsaved() {
+    let settings = Settings::new();
+    let line = reproducer_line(&settings, Some("AAEC"), false, true).unwrap();
+    assert!(
+        line.contains("#[hegel::reproduce_failure(\"AAEC\")]"),
+        "expected the reproducer attribute, got: {line}"
+    );
+}
+
+#[test]
+fn reproducer_line_uses_builder_wording_without_database_key() {
+    let settings = Settings::new();
+    let line = reproducer_line(&settings, Some("AAEC"), false, false).unwrap();
+    assert!(
+        line.contains("Hegel::new(...).reproduce_failure(\"AAEC\")"),
+        "expected the builder wording, got: {line}"
+    );
+}
+
+#[test]
+fn saved_to_database_line_is_singular_for_one_failure() {
+    let line = saved_to_database_line(&Settings::new(), Some(".hegel/examples"), 1).unwrap();
+    assert!(
+        line.contains("The failing example was saved to '.hegel/examples'")
+            && line.contains("replay it"),
+        "unexpected wording: {line}"
+    );
+}
+
+#[test]
+fn saved_to_database_line_is_plural_for_several_failures() {
+    let line = saved_to_database_line(&Settings::new(), Some("my-db"), 2).unwrap();
+    assert!(
+        line.contains("The failing examples were saved to 'my-db'") && line.contains("replay them"),
+        "unexpected wording: {line}"
+    );
+}
+
+#[test]
+fn saved_to_database_line_none_when_quiet() {
+    let settings = Settings::new().verbosity(Verbosity::Quiet);
+    assert!(saved_to_database_line(&settings, Some("my-db"), 1).is_none());
+}
+
+#[test]
+fn saved_to_database_line_none_when_nothing_was_saved() {
+    assert!(saved_to_database_line(&Settings::new(), None, 1).is_none());
 }
 
 fn test_settings() -> Settings {

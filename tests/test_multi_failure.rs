@@ -199,9 +199,15 @@ fn test_multi_failure_report_groups_draws_with_their_diagnostics() {
             r"thread '[^']+' \(\d+\) panicked at tests[/\\]fixtures[/\\]two_bugs\.rs:\d+:\d+:\n",
             r"(?:big|small) branch: \d+\n",
             r"\n",
+            r"To reproduce this failure, call reproduce_failure on the test's builder:\n",
+            r"    Hegel::new\(\.\.\.\)\.reproduce_failure\(\S+\)\n",
+            r"\n",
             r"let draw_1 = \d+;\n",
             r"thread '[^']+' \(\d+\) panicked at tests[/\\]fixtures[/\\]two_bugs\.rs:\d+:\d+:\n",
-            r"(?:big|small) branch: \d+$",
+            r"(?:big|small) branch: \d+\n",
+            r"\n",
+            r"To reproduce this failure, call reproduce_failure on the test's builder:\n",
+            r"    Hegel::new\(\.\.\.\)\.reproduce_failure\(\S+\)$",
         ),
     );
 }

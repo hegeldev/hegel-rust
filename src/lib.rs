@@ -518,8 +518,9 @@ pub use hegel_macros::explicit_test_case;
 
 /// Replay a single failing example from a base64 *failure blob*.
 ///
-/// When a test fails on the native backend and the
-/// [`print_blob`](Settings::print_blob) setting is enabled, Hegel prints a
+/// When a test fails on the native backend without saving the failing
+/// example to the database (or with the
+/// [`print_blob`](Settings::print_blob) setting enabled), Hegel prints a
 /// reproducer line of the form:
 ///
 /// ```text

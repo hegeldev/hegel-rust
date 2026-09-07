@@ -640,6 +640,10 @@ pub struct HegelRunResult {
     /// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` and its failures carry no
     /// reproduce blob.
     nondeterministic: bool,
+    /// The database directory the run persisted its failures to, or `None`
+    /// when nothing was persisted. Read via
+    /// `hegel_run_result_database_path`.
+    database_path: Option<CString>,
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -677,6 +681,7 @@ impl From<TestRunResult> for HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
             nondeterministic: r.nondeterministic,
+            database_path: r.database_path.map(|p| cstring_lossy(&p)),
         }
     }
 }
@@ -689,6 +694,7 @@ impl HegelRunResult {
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
             nondeterministic: false,
+            database_path: None,
         }
     }
 
@@ -5048,6 +5054,39 @@ pub unsafe extern "C" fn hegel_run_result_error(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_error = r.error.as_ref().map(|e| e.as_ptr()).unwrap_or(ptr::null()) };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_path`: Receives the database directory the run persisted its
+///   failures to, or NULL when nothing was persisted — the database is
+///   disabled, the run has no database key, or the run was
+///   nondeterministic. Owned by the run result and valid until
+///   `hegel_run_result_free`.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_database_path(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_path: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_database_path") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_path.is_null() {
+        set_last_error(ctx, "hegel_run_result_database_path: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_path = r
+            .database_path
+            .as_ref()
+            .map(|p| p.as_ptr())
+            .unwrap_or(ptr::null())
+    };
     HEGEL_OK
 }
 
