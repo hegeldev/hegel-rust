@@ -434,18 +434,56 @@ fn render_diagnostic(
 /// The copy-pasteable reproduce failure text to append after a failure's diagnostic,
 /// or `None` when nothing should be printed.
 ///
-/// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
-/// enabled *and* the failure carries a reproduce blob. A replayed
-/// counterexample always has one; a blobless failure prints nothing.
-fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<String> {
-    if !settings.print_blob {
+/// Printed when [`Settings::print_blob`](crate::Settings::print_blob) is
+/// enabled, and also (unless quiet) when the failure was not saved to the
+/// database, where the blob is the only reproduction pointer. Requires a
+/// reproduce blob, which a replayed counterexample always has. `attribute`
+/// selects the phrasing: the `#[hegel::reproduce_failure]` attribute for a
+/// macro-defined test (one with a database key), the builder method
+/// otherwise.
+fn reproducer_line(
+    settings: &Settings,
+    reproduce_blob: Option<&str>,
+    saved: bool,
+    attribute: bool,
+) -> Option<String> {
+    let quiet = settings.verbosity == Verbosity::Quiet;
+    if !settings.print_blob && (saved || quiet) {
         return None;
     }
     let blob = reproduce_blob?;
-    Some(format!(
-        "\nTo reproduce this failure, add the attribute below \
-         #[hegel::test]:\n    #[hegel::reproduce_failure(\"{blob}\")]"
-    ))
+    Some(if attribute {
+        format!(
+            "\nTo reproduce this failure, add the attribute below \
+             #[hegel::test]:\n    #[hegel::reproduce_failure(\"{blob}\")]"
+        )
+    } else {
+        format!(
+            "\nTo reproduce this failure, call reproduce_failure on the \
+             test's builder:\n    Hegel::new(...).reproduce_failure(\"{blob}\")"
+        )
+    })
+}
+
+/// The run-level line pointing at the saved counterexample(s), or `None`
+/// when nothing was saved (the [`reproducer_line`] is the pointer then) or
+/// the run is quiet.
+fn saved_to_database_line(
+    settings: &Settings,
+    database_path: Option<&str>,
+    count: usize,
+) -> Option<String> {
+    if settings.verbosity == Verbosity::Quiet {
+        return None;
+    }
+    let path = database_path?;
+    Some(if count > 1 {
+        format!(
+            "The failing examples were saved to '{path}'. Rerunning this test will replay them."
+        )
+    } else {
+        format!("The failing example was saved to '{path}'. Rerunning this test will replay it.")
+    })
 }
 
 /// The run's failure candidate: everything captured at discovery time from
@@ -580,6 +618,7 @@ pub(crate) fn drive<F>(
         }
         RunStatus::HEGEL_RUN_STATUS_FAILED => {
             let count = result.failure_count();
+            let database_path = result.database_path();
             let multiple = count > 1;
             if multiple && !quiet {
                 output.line(&format!(
@@ -607,10 +646,19 @@ pub(crate) fn drive<F>(
                 if let Some(diagnostic) = diagnostic {
                     output.block(&diagnostic);
                 }
-                if let Some(line) = reproducer_line(settings, Some(blob.as_str())) {
+                if let Some(line) = reproducer_line(
+                    settings,
+                    Some(blob.as_str()),
+                    database_path.is_some(),
+                    database_key.is_some(),
+                ) {
                     output.block(&format!("{line}\n"));
                 }
                 last_payload = payload;
+            }
+
+            if let Some(line) = saved_to_database_line(settings, database_path.as_deref(), count) {
+                output.block(&format!("\n{line}\n"));
             }
 
             if multiple {

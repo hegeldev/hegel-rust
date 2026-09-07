@@ -72,6 +72,19 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
 }
 
 #[test]
+fn database_directory_resolves_each_database_setting() {
+    assert_eq!(
+        database_directory(&Database::Unset),
+        Some(".hegel/examples")
+    );
+    assert_eq!(
+        database_directory(&Database::Path("my-db".to_string())),
+        Some("my-db")
+    );
+    assert_eq!(database_directory(&Database::Disabled), None);
+}
+
+#[test]
 fn too_slow_check_reports_when_under_threshold_and_unsuppressed() {
     let msg = too_slow_check(1, Duration::from_secs(60), Duration::from_secs(30), false);
     assert!(msg.is_some(), "expected too_slow_check to report a failure");

@@ -2400,6 +2400,20 @@ hegel_result_t hegel_run_result_error(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `out_path`: Receives the database directory the run persisted its
+   failures to, or NULL when nothing was persisted — the database is
+   disabled, the run has no database key, or the run was
+   nondeterministic. Owned by the run result and valid until
+   `hegel_run_result_free`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_run_result_database_path(hegel_context_t *ctx,
+                                              const hegel_run_result_t *r,
+                                              const char **out_path);
+
+/*
+ Parameters:
  `out_count`: Receives the number of distinct failures, by origin, that
    the run surfaced.
 

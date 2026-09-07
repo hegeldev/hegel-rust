@@ -22,11 +22,11 @@ use hegel_c::{
     hegel_new_collection, hegel_new_pool, hegel_new_recursion, hegel_new_state_machine,
     hegel_next_test_case, hegel_pool_add, hegel_pool_free, hegel_pool_generate,
     hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free, hegel_recursion_leaf,
-    hegel_recursion_retry, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_phases,
+    hegel_recursion_retry, hegel_run_free, hegel_run_result, hegel_run_result_database_path,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
     hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
@@ -97,6 +97,15 @@ unsafe fn repro_blob_of(ctx: *mut HegelContext, f: *const HegelFailure) -> *cons
 unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *const c_char {
     let mut p: *const c_char = ptr::null();
     assert_eq!(unsafe { hegel_run_result_error(ctx, r, &mut p) }, HEGEL_OK);
+    p
+}
+
+unsafe fn database_path_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *const c_char {
+    let mut p: *const c_char = ptr::null();
+    assert_eq!(
+        unsafe { hegel_run_result_database_path(ctx, r, &mut p) },
+        HEGEL_OK
+    );
     p
 }
 
@@ -198,6 +207,10 @@ fn null_handles_are_rejected_without_crashing() {
         let mut p: *const c_char = ptr::null();
         assert_eq!(
             hegel_run_result_error(ctx, ptr::null(), &mut p),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_run_result_database_path(ctx, ptr::null(), &mut p),
             HEGEL_E_INVALID_HANDLE
         );
         let mut n = 0usize;
@@ -393,6 +406,10 @@ fn out_parameters_are_rejected_when_null() {
         );
         assert_eq!(
             hegel_run_result_error(ctx, res, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_run_result_database_path(ctx, res, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
@@ -1096,6 +1113,7 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         let res = result(ctx, run);
         assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
         assert!(run_error_of(ctx, res).is_null());
+        assert!(database_path_of(ctx, res).is_null());
         let count = failure_count_of(ctx, res);
         assert!(
             count >= 1,
@@ -1124,6 +1142,52 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
         assert!(origin.contains("Panic at <unknown>"), "got {origin:?}");
         let _ = repro_blob_of(ctx, f);
         ok(hegel_failure_free(ctx, f));
+        ok(hegel_run_result_free(ctx, res));
+
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A failing run with a database and a database key reports the database
+/// directory its counterexamples were persisted to.
+#[test]
+fn failed_run_with_database_reports_database_path() {
+    let db_dir = tempfile::TempDir::new().unwrap();
+    let db_path = CString::new(db_dir.path().to_str().unwrap()).unwrap();
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        ok(hegel_settings_set_database(ctx, s, db_path.as_ptr()));
+        ok(hegel_settings_set_database_key(
+            ctx,
+            s,
+            c"failed_run_with_database_reports_database_path".as_ptr(),
+        ));
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
+                c"bug".as_ptr(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
+        let reported = std::ffi::CStr::from_ptr(database_path_of(ctx, res))
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(reported, db_dir.path().to_str().unwrap());
         ok(hegel_run_result_free(ctx, res));
 
         ok(hegel_run_free(ctx, run));

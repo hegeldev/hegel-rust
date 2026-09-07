@@ -261,8 +261,12 @@ impl Settings {
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
     /// counterexample when a test fails. Defaults to `false`.
     ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
+    /// By default the line is printed only when the failing example was not
+    /// saved to the database (and the run is not quiet). A saved failure is
+    /// pointed at with its database path instead, since rerunning the test
+    /// replays it. Enabling this prints the line unconditionally. The
+    /// reproduce blob is always *attached* to the failure either way. Has
+    /// effect only on the native backend.
     pub fn print_blob(mut self, print_blob: bool) -> Self {
         self.print_blob = print_blob;
         self

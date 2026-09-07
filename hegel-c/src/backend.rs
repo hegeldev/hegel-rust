@@ -425,6 +425,10 @@ pub struct TestRunResult {
     /// reproduce blob — there is no final replay — so the caller should
     /// report them from whatever it captured at discovery time.
     pub nondeterministic: bool,
+    /// The database directory this run persisted its failures to, or `None`
+    /// when nothing was persisted (the database is disabled, the run has no
+    /// database key, or the run was nondeterministic).
+    pub database_path: Option<String>,
 }
 
 #[cfg(test)]

@@ -616,9 +616,15 @@ impl<'a> Engine<'a> {
                 }
             })
             .collect();
+        let database_path = if nondeterministic || database_key.is_none() {
+            None
+        } else {
+            database_directory(&settings.database).map(str::to_string)
+        };
         Ok(TestRunResult {
             failures,
             nondeterministic,
+            database_path,
         })
     }
 }
@@ -1007,11 +1013,8 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
-        let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
-            Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
-            Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
-            Database::Disabled => None,
-        };
+        let db: Option<Box<dyn TestCaseDatabase>> = database_directory(&settings.database)
+            .map(|path| Box::new(DirectoryTestCaseDatabase::new(path)) as _);
         Ok(Engine {
             settings,
             database_key,
@@ -1411,6 +1414,16 @@ impl<'a> Engine<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// The directory the failure database lives in, resolving [`Database::Unset`]
+/// to the default location, or `None` when the database is disabled.
+fn database_directory(database: &Database) -> Option<&str> {
+    match database {
+        Database::Path(path) => Some(path),
+        Database::Unset => Some(".hegel/examples"),
+        Database::Disabled => None,
     }
 }
 
