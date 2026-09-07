@@ -564,3 +564,126 @@ fn unbalanced_groups_in_a_child_region_panic_at_finish() {
     child.end_group(")");
     doc.finish();
 }
+
+#[test]
+fn ranges_print_as_range_expressions() {
+    assert_eq!(render(&(1..5), 79), "1..5");
+    assert_eq!(render(&(-3i8..=7), 79), "-3..=7");
+    assert_eq!(render(&(2..), 79), "2..");
+    assert_eq!(render(&(..9), 79), "..9");
+    assert_eq!(render(&(..=9), 79), "..=9");
+    assert_eq!(render(&(..), 79), "..");
+    assert_eq!(
+        render(&("a".to_string().."b".to_string()), 79),
+        "\"a\".to_string()..\"b\".to_string()"
+    );
+}
+
+#[test]
+fn bounds_print_as_variant_expressions() {
+    use std::ops::Bound;
+    assert_eq!(render(&Bound::Included(4), 79), "Bound::Included(4)");
+    assert_eq!(render(&Bound::Excluded(4), 79), "Bound::Excluded(4)");
+    assert_eq!(render(&Bound::<i32>::Unbounded, 79), "Bound::Unbounded");
+}
+
+#[test]
+fn sequence_collections_print_as_from_expressions() {
+    use std::collections::{BinaryHeap, LinkedList, VecDeque};
+    assert_eq!(
+        render(&VecDeque::from([1, 2]), 79),
+        "VecDeque::from([1, 2])"
+    );
+    assert_eq!(
+        render(&LinkedList::from([1, 2]), 79),
+        "LinkedList::from([1, 2])"
+    );
+    assert_eq!(render(&BinaryHeap::from([3]), 79), "BinaryHeap::from([3])");
+}
+
+#[test]
+fn non_zero_integers_print_as_constructor_expressions() {
+    use std::num::{NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI128, NonZeroIsize};
+    use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize};
+    assert_eq!(
+        render(&NonZeroU8::new(5).unwrap(), 79),
+        "NonZeroU8::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroI8::new(-5).unwrap(), 79),
+        "NonZeroI8::new(-5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroU16::new(5).unwrap(), 79),
+        "NonZeroU16::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroI16::new(5).unwrap(), 79),
+        "NonZeroI16::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroU32::new(5).unwrap(), 79),
+        "NonZeroU32::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroI32::new(5).unwrap(), 79),
+        "NonZeroI32::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroU64::new(5).unwrap(), 79),
+        "NonZeroU64::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroI64::new(5).unwrap(), 79),
+        "NonZeroI64::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroU128::new(5).unwrap(), 79),
+        "NonZeroU128::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroI128::new(5).unwrap(), 79),
+        "NonZeroI128::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroUsize::new(5).unwrap(), 79),
+        "NonZeroUsize::new(5).unwrap()"
+    );
+    assert_eq!(
+        render(&NonZeroIsize::new(5).unwrap(), 79),
+        "NonZeroIsize::new(5).unwrap()"
+    );
+}
+
+#[test]
+fn cows_print_their_variant() {
+    use std::borrow::Cow;
+    let borrowed: Cow<'_, str> = Cow::Borrowed("hi");
+    assert_eq!(render(&borrowed, 79), "Cow::Borrowed(\"hi\")");
+    let owned: Cow<'_, str> = Cow::Owned("hi".to_string());
+    assert_eq!(render(&owned, 79), "Cow::Owned(\"hi\".to_string())");
+    let list: Cow<'_, [i32]> = Cow::Owned(vec![1, 2]);
+    assert_eq!(render(&list, 79), "Cow::Owned(vec![1, 2])");
+}
+
+#[test]
+fn utf8_paths_print_as_constructor_expressions() {
+    use std::path::{Path, PathBuf};
+    assert_eq!(
+        render(&PathBuf::from("/tmp/x y"), 79),
+        "PathBuf::from(\"/tmp/x y\")"
+    );
+    assert_eq!(render(Path::new("a\nb"), 79), "Path::new(\"a\\nb\")");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_paths_print_a_byte_constructor() {
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+    let path = PathBuf::from(std::ffi::OsString::from_vec(vec![0x66, 0xFF]));
+    assert_eq!(
+        render(&path, 79),
+        "PathBuf::from(OsString::from_vec(vec![102, 255]))"
+    );
+}

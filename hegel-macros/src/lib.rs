@@ -10,6 +10,7 @@ mod rewrite_draws;
 mod standalone_function;
 mod stateful;
 mod struct_gen;
+mod test_helper;
 mod utils;
 
 use proc_macro::TokenStream;
@@ -49,6 +50,11 @@ pub fn main(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn standalone_function(attr: TokenStream, item: TokenStream) -> TokenStream {
     standalone_function::expand_standalone_function(attr.into(), item.into()).into()
+}
+
+#[proc_macro_attribute]
+pub fn test_helper(attr: TokenStream, item: TokenStream) -> TokenStream {
+    test_helper::expand_test_helper(attr.into(), item.into()).into()
 }
 
 #[proc_macro_attribute]

@@ -1,9 +1,176 @@
-//! Pretty-printing of generated values.
+//! Pretty-printing of generated values: how a failing test reports what it
+//! drew, and how to make your own types and generators take part.
+//!
+//! When a test fails, Hegel replays the minimal failing example and prints
+//! every drawn value as a `let` binding:
+//!
+//! ```text
+//! let records = vec![Record {
+//!          name: "000".to_string(),
+//!          tags: None,
+//!          scores: HashMap::from([("0".to_string(), 0)]) }];
+//! ```
+//!
+//! The goal is output you can paste into an ordinary example-based test:
+//! valid Rust expressions (`"000".to_string()` rather than `Debug`'s
+//! `"000"`, `f64::NAN` rather than `NaN`), wrapped and indented like source
+//! code. This page explains the machinery behind that report and what to do
+//! when the compiler tells you a draw is not printable.
+//!
+//! # Printing is the generator's job
+//!
+//! A value often cannot print itself. There is no `Debug` for a drawn
+//! closure, and the useful representation of a `HegelRandom` (the `rand`
+//! integration's fake PRNG) is the sequence of values it hands out *after*
+//! it is drawn. The process that constructed a value can always describe it,
+//! so in Hegel printing is a capability of the generator, not the value.
+//! That capability is the
+//! [`PrintableGenerator`](crate::PrintableGenerator) trait: a
+//! [`Generator`](crate::Generator) draws silently through `do_draw`, and a
+//! `PrintableGenerator` can also draw-and-describe through
+//! `do_draw_and_print`. [`TestCase::draw`](crate::TestCase::draw) accepts
+//! only printable generators, so that the failure report can say what was
+//! drawn; [`TestCase::draw_silent`](crate::TestCase::draw_silent) accepts
+//! any generator and reports nothing.
+//!
+//! Sometimes you do need to print values. For example,
+//! [`just`](crate::generators::just) and
+//! [`sampled_from`](crate::generators::sampled_from)
+//! can generate arbitrary values that you need to print, and if you have
+//! a generator with no obvious way to print its construction you might
+//! still want to print its output. For this, we have an additional trait
+//! [`PrettyPrintable`] — the protocol a value uses to describe its own
+//! representation. This is implemented for the primitives and the common
+//! standard-library types: strings, the sequence and map collections,
+//! `Option`/`Result`, tuples, smart pointers, ranges, paths, durations, IP
+//! addresses, and more ([`PrettyPrintable`]'s rustdoc lists every
+//! implementor), and you can also derive it for your own types. So a
+//! draw only fails to compile when a type the library
+//! does not know about enters the picture, and the fix depends on whose
+//! type it is.
+//!
+//! # Making your own type printable
+//!
+//! For a type you own, implement [`PrettyPrintable`] once and every
+//! generator of it (through `map`, composites, boxing, containers of it, …)
+//! becomes printable:
+//!
+//! - `#[derive(hegel::PrettyPrintable)]` prints in Rust-expression syntax,
+//!   field by field. A field whose type cannot implement [`PrettyPrintable`]
+//!   — a foreign type, say — can opt into its `Debug` representation with
+//!   `#[pretty(debug)]`. See [the derive's
+//!   documentation](derive@crate::PrettyPrintable).
+//! - [`pretty_print_as_debug!`](crate::pretty_print_as_debug) implements
+//!   the trait via the type's existing `Debug` representation, re-laid-out
+//!   through the layout engine.
+//! - A hand-written impl gives full control. Print in Rust-expression
+//!   syntax where possible, using the group machinery so large values wrap
+//!   (see [`PrettyPrinter`], and [`print_debug_repr`] to embed a `Debug`
+//!   representation).
+//!
+//! # Printing a foreign type
+//!
+//! The orphan rule keeps other crates' types out of [`PrettyPrintable`], so
+//! for those, make the *generator* printable at the point you build it:
+//!
+//! - [`print_as_debug`](crate::Generator::print_as_debug) — print drawn
+//!   values by their `Debug` representation. The usual choice, but check
+//!   the output once: a type whose `Debug` is opaque (a tagged pointer, a
+//!   bit-packed struct) produces a report you cannot decode, and
+//!   `print_with` is the fix.
+//! - [`print_with`](crate::Generator::print_with) — print a custom
+//!   representation from a closure taking the value and the printer:
+//!   `.print_with(|value, printer| printer.text(&format!("make({value:?})")))`.
+//! - [`print_as_value`](crate::Generator::print_as_value) — print values by
+//!   their [`PrettyPrintable`] impl, for generators (hand-written ones, say)
+//!   that don't track printability themselves.
+//! - [`TestCase::draw_silent`](crate::TestCase::draw_silent) — draw without
+//!   reporting the value, when it isn't worth reporting.
+//!
+//! Annotate only the draws the compiler rejects: `.print_as_debug()` on an
+//! already-printable draw only degrades the report from Rust-expression
+//! syntax to `Debug` syntax.
+//!
+//! # What is already printable
+//!
+//! Most tests never think about any of this, because printability is the
+//! default throughout the generator library:
+//!
+//! - Every leaf generator prints: integers, floats, booleans, strings and
+//!   regexes, bytes, characters, dates and times, UUIDs, IP addresses,
+//!   emails, URLs, durations.
+//! - Structural combinators print whenever their components do:
+//!   collections, tuples, [`optional`](crate::generators::optional),
+//!   [`one_of!`](crate::one_of), `flat_map`,
+//!   [`recursive`](crate::generators::recursive).
+//! - Value-producing combinators print whenever the produced type
+//!   implements [`PrettyPrintable`]: `map`, `filter`,
+//!   [`just`](crate::generators::just),
+//!   [`sampled_from`](crate::generators::sampled_from),
+//!   [`boxed`](crate::Generator::boxed), and
+//!   [`#[hegel::composite]`](crate::composite) functions. These print the
+//!   finished value, not the draws that built it: a composite's inner
+//!   draws never appear in the report, only its return value. NB: If you
+//!   have a generator with custom printing and you box it with `boxed`,
+//!   you will throw away that printing. Use
+//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable)
+//!   if you want to preserve that.
+//! - `#[derive(DefaultGenerator)]` generators print field by field as they
+//!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
+//!
+//! # Helpers and type erasure
+//!
+//! Printability lives in the generator's concrete type, so anything that
+//! erases the type can erase printability with it — and the compile error
+//! then appears at the draw sites, far from the erasing line. There are two
+//! forms to watch for:
+//!
+//! - A helper declared `-> impl Generator<T>` is only ever a silent
+//!   generator to its callers, no matter what it returns — a printing
+//!   adapter added inside the helper changes nothing. Declare
+//!   generator-returning helpers `-> impl PrintableGenerator<T>`.
+//! - [`Generator::boxed`](crate::Generator::boxed) keeps only value
+//!   printing: the boxed generator prints drawn values by their
+//!   [`PrettyPrintable`] impl, so boxing preserves printability for
+//!   printable value types but drops a printing strategy carried by the
+//!   erased generator (a `print_with` closure, say). To keep the
+//!   generator's own printing through the erasure, make the generator
+//!   printable *first* and box with
+//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable) —
+//!   `.print_as_debug().boxed_printable()` is the usual recipe for a
+//!   non-printable value type. `boxed_printable` exists only on generators
+//!   that are already printable; calling it on a plain generator is an
+//!   error.
+//!
+//! The adapter methods come from the [`Generator`](crate::Generator) trait
+//! and `boxed_printable` from [`PrintableGenerator`](crate::PrintableGenerator),
+//! so both need to be in scope. `use hegel::prelude::*;` imports both (see
+//! [`prelude`](crate::prelude)).
+//!
+//! # Draw names
+//!
+//! The `let records = …` name above is the binding's own name:
+//! `#[hegel::test]` (and `#[state_machine]` rule bodies) rewrite
+//! `let x = tc.draw(..)` so the report names the draw `x`. The rewrite only
+//! sees draws written directly in that body — a draw inside a helper
+//! function falls back to the anonymous `draw_1`, `draw_2`, …. Mark such a
+//! helper [`#[hegel::test_helper]`](macro@crate::test_helper) to apply the
+//! same rewrite to its body (names gain a per-call counter: `x_1`, `x_2`, …),
+//! or name a single draw with
+//! [`TestCase::draw_named`](crate::TestCase::draw_named).
+//!
+//! # The layout engine
+//!
+//! Everything above renders through a shared layout engine, which you meet
+//! directly when writing a [`PrettyPrintable`] or
+//! [`PrintableGenerator`](crate::PrintableGenerator) implementation.
 //!
 //! [`Document`] owns one pretty-printed document: its builder methods
 //! choose the layout options, [`Document::printer`] exposes the surface to
 //! write through, and [`Document::finish`] consumes it to render exactly
-//! once at the end.
+//! once at the end. In a test run the document belongs to the test case,
+//! and user code only ever writes. Rendering happens after the test body
+//! finishes.
 //!
 //! [`PrettyPrinter`] is that write surface, wrapping libhegel's layout
 //! engine (an Oppen-style pretty-printer ported from Hypothesis's
@@ -16,12 +183,13 @@
 //! breakable renders as its separator — or breaks as a whole, outermost
 //! groups first.
 //!
-//! [`PrettyPrintable`] is the protocol a value uses to describe its own
-//! representation, in Rust-expression syntax wherever possible. It is
-//! implemented for the standard types the generator library produces,
-//! derivable for user types with `#[derive(PrettyPrintable)]`, and
-//! available for any `Debug` type — without writing an implementation —
-//! through [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
+//! Because printing happens *during* the draw, the printer is more than an
+//! append-only stream: a combinator that may reject a draw (a `filter`
+//! retry, a duplicate collection element) prints each attempt into a
+//! speculative region ([`PrettyPrinter::speculate`]) and commits only the
+//! accepted one, and cloning a printer opens a child region that later
+//! (even from another thread) fills in at the point where the clone was
+//! made. Hand-written implementations can use the same mechanisms.
 
 use crate::ffi::{PrinterCallError, PrinterHandle};
 use std::cell::Cell;
@@ -674,13 +842,39 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no printed representation",
     label = "`{Self}` does not implement `PrettyPrintable`",
-    note = "for your own type, add `#[derive(PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
-    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(..)` prints a custom representation",
-    note = "or draw without reporting the value via `tc.draw_silent(..)`"
+    note = "for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
+    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`",
+    note = "the `hegel::pretty` module docs walk through the whole printing system"
 )]
 pub trait PrettyPrintable {
     /// Print this value's representation to `printer`.
     fn pretty_print(&self, printer: &mut PrettyPrinter);
+}
+
+/// The per-field obligation of `#[derive(PrettyPrintable)]`, split from
+/// [`PrettyPrintable`] so that a field whose type is not printable produces
+/// a diagnostic about the derive — pointing at the field, suggesting
+/// `#[pretty(debug)]` — instead of [`PrettyPrintable`]'s draw-site advice.
+/// Implemented for every [`PrettyPrintable`] type; only derive-generated
+/// code should ever name it.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no printed representation, so this field cannot derive `PrettyPrintable`",
+    label = "`{Self}` does not implement `PrettyPrintable`",
+    note = "`#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`",
+    note = "to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`",
+    note = "or make the field's type printable: `#[derive(hegel::PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type"
+)]
+pub trait PrettyPrintableField {
+    #[doc(hidden)]
+    fn pretty_print_field(&self, printer: &mut PrettyPrinter);
+}
+
+impl<T: PrettyPrintable + ?Sized> PrettyPrintableField for T {
+    fn pretty_print_field(&self, printer: &mut PrettyPrinter) {
+        self.pretty_print(printer);
+    }
 }
 
 /// Implement [`PrettyPrintable`] for one or more local `Debug` types by
@@ -899,6 +1093,26 @@ impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
     }
 }
 
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::VecDeque<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "VecDeque::from([", "])", self.iter());
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::collections::LinkedList<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "LinkedList::from([", "])", self.iter());
+    }
+}
+
+/// Elements print in the heap's arbitrary iteration order, like the hash
+/// collections; the constructed heap is equal as a heap.
+impl<T: PrettyPrintable + Ord> PrettyPrintable for std::collections::BinaryHeap<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_seq(printer, "BinaryHeap::from([", "])", self.iter());
+    }
+}
+
 impl<T: PrettyPrintable> PrettyPrintable for std::collections::HashSet<T> {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_seq(printer, "HashSet::from([", "])", self.iter());
@@ -943,6 +1157,161 @@ impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collection
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         pretty_map(printer, "BTreeMap::from([", self.iter());
     }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::Range<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start.pretty_print(printer);
+        printer.text("..");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeInclusive<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start().pretty_print(printer);
+        printer.text("..=");
+        self.end().pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeFrom<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        self.start.pretty_print(printer);
+        printer.text("..");
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeTo<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeToInclusive<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..=");
+        self.end.pretty_print(printer);
+    }
+}
+
+impl PrettyPrintable for std::ops::RangeFull {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text("..");
+    }
+}
+
+impl<T: PrettyPrintable> PrettyPrintable for std::ops::Bound<T> {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::ops::Bound::Unbounded => printer.text("Bound::Unbounded"),
+            std::ops::Bound::Included(value) => {
+                printer.begin_group(16, "Bound::Included(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+            std::ops::Bound::Excluded(value) => {
+                printer.begin_group(16, "Bound::Excluded(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+macro_rules! pretty_non_zero {
+    ($($t:ty, $name:literal);+) => {$(
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                printer.text(&format!(concat!($name, "::new({}).unwrap()"), self.get()));
+            }
+        }
+    )+};
+}
+
+pretty_non_zero!(
+    std::num::NonZeroI8, "NonZeroI8";
+    std::num::NonZeroI16, "NonZeroI16";
+    std::num::NonZeroI32, "NonZeroI32";
+    std::num::NonZeroI64, "NonZeroI64";
+    std::num::NonZeroI128, "NonZeroI128";
+    std::num::NonZeroIsize, "NonZeroIsize";
+    std::num::NonZeroU8, "NonZeroU8";
+    std::num::NonZeroU16, "NonZeroU16";
+    std::num::NonZeroU32, "NonZeroU32";
+    std::num::NonZeroU64, "NonZeroU64";
+    std::num::NonZeroU128, "NonZeroU128";
+    std::num::NonZeroUsize, "NonZeroUsize"
+);
+
+impl<T> PrettyPrintable for std::borrow::Cow<'_, T>
+where
+    T: ToOwned + PrettyPrintable + ?Sized,
+    T::Owned: PrettyPrintable,
+{
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        match self {
+            std::borrow::Cow::Borrowed(value) => {
+                printer.begin_group(14, "Cow::Borrowed(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+            std::borrow::Cow::Owned(value) => {
+                printer.begin_group(11, "Cow::Owned(");
+                value.pretty_print(printer);
+                printer.end_group(")");
+            }
+        }
+    }
+}
+
+/// Prints `Path::new("…")` for valid UTF-8. A non-UTF-8 path has no string
+/// literal, so it prints an `OsString` byte (Unix) or wide (Windows)
+/// constructor, and its `Debug` representation on platforms with neither
+/// accessor.
+impl PrettyPrintable for std::path::Path {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_path(self, "Path::new(", printer);
+    }
+}
+
+/// Prints `PathBuf::from("…")`; non-UTF-8 handling as for [`std::path::Path`].
+impl PrettyPrintable for std::path::PathBuf {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        pretty_path(self, "PathBuf::from(", printer);
+    }
+}
+
+fn pretty_path(path: &std::path::Path, open: &str, printer: &mut PrettyPrinter) {
+    printer.begin_group(open.chars().count(), open);
+    match path.to_str() {
+        Some(utf8) => printer.text(&format!("{utf8:?}")),
+        None => pretty_non_utf8_os_str(path.as_os_str(), printer),
+    }
+    printer.end_group(")");
+}
+
+#[cfg(unix)]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    use std::os::unix::ffi::OsStrExt;
+    printer.begin_group(19, "OsString::from_vec(");
+    os.as_bytes().to_vec().pretty_print(printer);
+    printer.end_group(")");
+}
+
+#[cfg(windows)]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = os.encode_wide().collect();
+    printer.begin_group(21, "OsString::from_wide(&");
+    wide.as_slice().pretty_print(printer);
+    printer.end_group(")");
+}
+
+#[cfg(not(any(unix, windows)))]
+fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
+    print_debug_repr(&format!("{os:?}"), printer);
 }
 
 impl<T: PrettyPrintable> PrettyPrintable for Option<T> {

@@ -1,0 +1,5 @@
+error: #[hegel::test_helper] functions must take a parameter of type `&hegel::TestCase`.
+ --> tests/ui/test_helper_no_test_case_param.rs:5:1
+  |
+5 | fn helper(len: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

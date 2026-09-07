@@ -486,9 +486,32 @@ impl TestCase {
     /// generator printable with
     /// [`print_as_value`](crate::generators::Generator::print_as_value),
     /// [`print_as_debug`](crate::generators::Generator::print_as_debug), or
-    /// [`print_with`](crate::generators::Generator::print_with).
+    /// [`print_with`](crate::generators::Generator::print_with). The
+    /// [`pretty`](crate::pretty) module docs explain the printing system and
+    /// how to make your own types printable.
     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
         self.__draw_named(generator, "draw", true)
+    }
+
+    /// Draw a value from a generator, reporting it under `name`.
+    ///
+    /// Like [`draw`](Self::draw), but the failing-example line prints as
+    /// `let name_N = value;`, numbered per call under that name. Use it in
+    /// helper functions: `#[hegel::test]` captures binding names only for
+    /// `draw` calls written directly in the test (or rule) body, so a draw
+    /// inside a helper otherwise reports as the anonymous `draw_N`. To name
+    /// every draw in a helper after its binding instead, mark the helper
+    /// [`#[hegel::test_helper]`](macro@crate::test_helper).
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// fn draw_index(tc: &hegel::TestCase, len: usize) -> usize {
+    ///     tc.draw_named("index", gs::integers::<usize>().max_value(len - 1))
+    /// }
+    /// ```
+    pub fn draw_named<T>(&self, name: &str, generator: impl PrintableGenerator<T>) -> T {
+        self.__draw_named(generator, name, true)
     }
 
     /// Draw a value from a generator with a specific name for output.

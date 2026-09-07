@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.39.4 - 2026-09-04
+
+This patch improves shrinking for collections whose elements each cost
+more than eight choices to generate. Previously such an element could
+only be deleted a few choices at a time, so shrunk counterexamples kept
+collection elements with no effect on the failure.
+
+## 0.39.3 - 2026-09-04
+
+This patch improves the shrinking of stateful test failures: shrunk rule
+sequences no longer keep redundant steps, such as inserts whose effect a
+later step overwrites
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)). Previously a
+step could only be deleted as a short run of individual choices, so machines
+with several invariants or draw-heavy rules shrank to sequences padded with
+no-op steps.
+
+## 0.39.2 - 2026-09-04
+
+This patch fixes shrinking and the `LargeInitialTestCase` health check for stateful tests.
+
+## 0.39.1 - 2026-09-04
+
+This patch improves the ergonomics of draw-time printing:
+
+- `BoxedGenerator<T>` is now a `PrintableGenerator` whenever `T` implements `PrettyPrintable`, printing drawn values by their own representation. A `.boxed()` in a generator definition no longer forces printing annotations onto every downstream draw site. `.boxed_printable()` remains the way to keep a custom printing strategy through the erasure.
+- `PrettyPrintable` is implemented for more standard-library types: the range types and `Bound`, `VecDeque`, `LinkedList`, `BinaryHeap`, the `NonZero` integers, `Cow`, and `Path`/`PathBuf`. The `chrono`, `jiff`, and `serde_json` integrations add impls for `Month`, `Days`, `Months`, `IsoWeek`, `TimeZone`, `AmbiguousOffset`, and `Map<String, Value>`. Every generator `gs::default()` returns can now be passed to `tc.draw` (several, such as `PathBuf`'s, could previously only be drawn silently).
+- Generators defined with `derive_generator!` implement `PrintableGenerator` whenever every field type is `PrettyPrintable`, printing `Name { field: value }` expressions.
+- Draws in helper functions no longer have to print as the anonymous `draw_1`, `draw_2`, …. Marking the helper `#[hegel::test_helper]` names its draws after their bindings, the same rewrite `#[hegel::test]` applies to a test body, and the new `TestCase::draw_named` reports a single draw under an explicit name.
+- The new `hegel::prelude` module exports the traits and entry points most tests need, so one `use hegel::prelude::*;` covers them.
+- `#[derive(PrettyPrintable)]` on a type with a non-printable field now reports an error pointing at that field, stating that every field must be `PrettyPrintable` and suggesting `#[pretty(debug)]`, instead of draw-site advice attached to the derive. Draw-site printability errors now lead with the once-per-type fix (implementing `PrettyPrintable`) and explain how `-> impl Generator<..>` return types and `.boxed()` interact with printability.
+- The `hegel::pretty` module docs now explain the whole printing system: what is printable out of the box, how to make your own types printable, the escape hatches for foreign types, type erasure, and draw naming.
+
 ## 0.39.0 - 2026-09-03
 
 This release removes the `antithesis` cargo feature. The Antithesis integration is now always compiled in and activates automatically when the `ANTITHESIS_OUTPUT_DIR` environment variable is set, so running inside Antithesis no longer requires a feature flag and no longer fails when the flag is missing. Remove `features = ["antithesis"]` from your `hegeltest` dependency; Cargo rejects unknown features, so builds that still name it will not compile until it is removed.

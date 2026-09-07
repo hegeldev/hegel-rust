@@ -1,5 +1,8 @@
-use crate::native::HashMap;
+use core::hash::BuildHasher;
+
+use crate::native::{HashMap, HashSet};
 use alloc::vec::Vec;
+use rustc_hash::FxBuildHasher;
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue};
@@ -346,6 +349,83 @@ impl<'a> Shrinker<'a> {
         let epoch = self.improvements;
         Ok(self.consider(&attempt).await? && self.improvements > epoch)
     }
+
+    /// Try deleting the region from the start of one occurrence of a
+    /// repeated n-gram of choice values to the start of the next.
+    ///
+    /// A repeated n-gram is evidence that two positions play the same role
+    /// (e.g. the heads of consecutive collection elements), so the region
+    /// between them is likely to be a deletable unit even when it is far
+    /// wider than any window `delete_chunks` proposes. Value shrinking
+    /// creates the repeats: once sibling elements have minimized to the
+    /// same values, this pass can delete whole elements of any width.
+    ///
+    /// Adjacent occurrences (distance 1) are skipped: runs of a repeated
+    /// value would propose only single-node deletions, which
+    /// `delete_chunks` already covers.
+    pub(super) async fn delete_between_repeats(&mut self) -> ShrinkResult<()> {
+        let fingerprints: Vec<u64> = self.current_nodes.iter().map(node_fingerprint).collect();
+        let len = fingerprints.len();
+        let mut proposals: Vec<(usize, usize)> = Vec::new();
+        let mut seen: HashSet<(usize, usize)> = HashSet::default();
+        for n in [4usize, 3, 2, 1] {
+            if n > len {
+                continue;
+            }
+            let mut last_at: HashMap<u64, usize> = HashMap::default();
+            for i in 0..=(len - n) {
+                let gram = FxBuildHasher.hash_one(&fingerprints[i..i + n]);
+                if let Some(&prev) = last_at.get(&gram) {
+                    if i - prev >= 2
+                        && grams_match(
+                            &self.current_nodes[prev..prev + n],
+                            &self.current_nodes[i..i + n],
+                        )
+                        && seen.insert((prev, i))
+                    {
+                        proposals.push((prev, i));
+                    }
+                }
+                last_at.insert(gram, i);
+            }
+        }
+        proposals.sort_unstable_by(|a, b| b.cmp(a));
+        for (start, end) in proposals {
+            if end > self.current_nodes.len() {
+                continue;
+            }
+            let mut attempt = self.current_nodes[..start].to_vec();
+            attempt.extend_from_slice(&self.current_nodes[end..]);
+            self.consider(&attempt).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether two windows repeat each other for [`Shrinker::delete_between_repeats`]:
+/// pairwise node equality, except that any two clone nodes match regardless
+/// of payload.
+fn grams_match(a: &[ChoiceNode], b: &[ChoiceNode]) -> bool {
+    a.iter().zip(b).all(|(x, y)| {
+        matches!(
+            (&x.data, &y.data),
+            (ChoiceData::Clone(_), ChoiceData::Clone(_))
+        ) || x == y
+    })
+}
+
+/// Hash of a node's kind tag and value, ignoring constraints. Collisions and
+/// constraint mismatches are filtered by [`grams_match`]. Clone nodes all
+/// share one fingerprint.
+fn node_fingerprint(node: &ChoiceNode) -> u64 {
+    match &node.data {
+        ChoiceData::Integer(_, v) => FxBuildHasher.hash_one((1u8, v)),
+        ChoiceData::Boolean(_, v) => FxBuildHasher.hash_one((2u8, v)),
+        ChoiceData::Float(_, v) => FxBuildHasher.hash_one((3u8, v.to_bits())),
+        ChoiceData::Bytes(_, v) => FxBuildHasher.hash_one((4u8, v)),
+        ChoiceData::String(_, v) => FxBuildHasher.hash_one((5u8, v)),
+        ChoiceData::Clone(_) => FxBuildHasher.hash_one(6u8),
+    }
 }
 
 #[cfg(test)]
@@ -355,3 +435,7 @@ mod minimize_individual_choices_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_node_program_tests.rs"]
 mod node_program_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_delete_between_repeats_tests.rs"]
+mod delete_between_repeats_tests;

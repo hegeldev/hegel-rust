@@ -11,10 +11,13 @@ use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
 
-/// Probability that the per-round stop decision in
-/// [`NativeStateMachine::next_group`] halts a stateful test case, when the
-/// engine is free to choose (2^-16).
-const P_STOP: f64 = 1.0 / 65536.0;
+/// Probability that the per-round continue decision in
+/// [`NativeStateMachine::next_group`] keeps a stateful test case running,
+/// when the engine is free to choose (1 - 2^-16). Drawn as a *continue*
+/// probability so that the simplest boolean stops the machine: the
+/// simplest test case runs a single round, and the shrinker truncates the
+/// round sequence at any boundary by simplifying that boundary's draw.
+const P_CONTINUE: f64 = 1.0 - 1.0 / 65536.0;
 
 /// Multiplier bounding attempts against successful work: on rounds
 /// (relative to `stateful_step_count`) so a sequential machine whose rules
@@ -273,9 +276,11 @@ impl NativeStateMachine {
     /// current group's caller-supplied id, or `None` once the test case has
     /// run enough rounds.
     ///
-    /// Each call first makes a per-round stop decision: a boolean draw with
-    /// probability [`P_STOP`] of halting, recorded in the choice sequence
-    /// so the shrinker can truncate the round sequence at any boundary.
+    /// Each call first makes a per-round continue decision: a boolean draw
+    /// with probability [`P_CONTINUE`] of running another round, recorded
+    /// in the choice sequence so the shrinker can truncate the round
+    /// sequence at any boundary. The simplest value stops, so the simplest
+    /// test case runs exactly one round however large the step count.
     /// Every test case runs at least one round and at most
     /// `stateful_step_count` counted rounds — at concurrency 1 a round
     /// whose rule was rejected ([`Self::rule_rejected`]) does not count,
@@ -296,13 +301,13 @@ impl NativeStateMachine {
             step_count.saturating_mul(ATTEMPT_MULTIPLIER)
         };
         let forced = if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
-            Some(true)
-        } else if self.rounds_started == 0 {
             Some(false)
+        } else if self.rounds_started == 0 {
+            Some(true)
         } else {
             None
         };
-        if ntc.weighted_precise(P_STOP, forced)? {
+        if !ntc.weighted_precise(P_CONTINUE, forced)? {
             return Ok(None);
         }
         let group = if self.groups.len() == 1 {
@@ -327,7 +332,7 @@ impl NativeStateMachine {
     /// the next join point.
     ///
     /// At concurrency 1 every round is exactly one rule, so a join point
-    /// follows each rule and the per-round stop decision in
+    /// follows each rule and the per-round continue decision in
     /// [`Self::next_group`] carries the whole step budget. At higher
     /// concurrency each worker runs between zero and [`MAX_ROUND_RULES`]
     /// rules per round, distributed uniformly: every call makes a

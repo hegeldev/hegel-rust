@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.36.3 - 2026-09-04
+
+This patch adds a new shrink pass that is able to delete regions of the test case where it would previously have got stuck.
+You should see improvements in cases where there were previously redundant elements that were "obviously" deletable but that the shrinker was for some reason struggling with.
+
+## 0.36.2 - 2026-09-04
+
+This patch adds a shrink pass that deletes whole spans. The existing
+deletion passes only try windows of up to eight choices, so a stateful step
+whose rule draws and sampled invariant checks together cost more than that
+could never be deleted, and shrunk rule sequences kept redundant steps
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)).
+
+## 0.36.1 - 2026-09-04
+
+This patch inverts the per-round decision drawn by `hegel_state_machine_next_group`. We were using a stop signal where we should have been using a continue signal.
+
 ## 0.36.0 - 2026-09-02
 
 This release changes `hegel_time_t` from microsecond to nanosecond resolution. The `microsecond` field (in `[0, 999999]`) is now `nanosecond` (in `[0, 999999999]`). `hegel_generate_time` and `hegel_generate_datetime` now also draw whole nanoseconds.
