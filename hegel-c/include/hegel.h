@@ -1431,7 +1431,11 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  testing, sequential or concurrent: `num_rules` rules — each assigned to
  a concurrency group by `rule_groups`, an array of group ids parallel to
  `rule_names` — and `num_invariants` invariants, with names as
- NUL-terminated UTF-8, plus concurrency bounds. Group ids are arbitrary
+ NUL-terminated UTF-8, plus concurrency bounds. `invariant_always_check`
+ is an array of `num_invariants` flags parallel to `invariant_names`
+ (NULL for all-false): `hegel_state_machine_should_check_invariant`
+ answers true unconditionally for a flagged invariant and samples the
+ rest. Group ids are arbitrary
  (any value except `HEGEL_STATE_MACHINE_DONE`, which
  `hegel_state_machine_next_group` reserves as its termination sentinel):
  the machine has one concurrency group per distinct value of
@@ -1504,6 +1508,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        const int64_t *rule_groups,
                                        size_t num_rules,
                                        const char *const *invariant_names,
+                                       const bool *invariant_always_check,
                                        size_t num_invariants,
                                        int64_t min_concurrency,
                                        int64_t max_concurrency,
@@ -1606,10 +1611,12 @@ hegel_result_t hegel_state_machine_rule_rejected(hegel_context_t *ctx,
 
 /*
  Decide whether the caller should run invariant `invariant_index` at the
- current join point, writing the decision into `*out_should_check`: a
+ current join point, writing the decision into `*out_should_check`: true
+ unconditionally (consuming no entropy) for an invariant whose
+ `invariant_always_check` flag was set at creation, otherwise a
  recorded boolean draw that is true with probability
- `1 / stateful_step_count`, so each invariant's expected number of
- sampled runs over a full-length test case is one, regardless of the
+ `1 / stateful_step_count`, so each sampled invariant's expected number
+ of sampled runs over a full-length test case is one, regardless of the
  step count. The caller owns the machine's guaranteed invariant checks —
  its initial state, and its final state once
  `hegel_state_machine_next_group` signals termination — and should run

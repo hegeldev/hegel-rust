@@ -34,7 +34,9 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> StateMachineHandle {
     let rule_groups = vec![0i64; rules.len()];
     let (machine, level) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(rules, &rule_groups, &[], concurrency, concurrency))
+        .with_ctc(|ctc| {
+            ctc.new_state_machine(rules, &rule_groups, &[], &[], concurrency, concurrency)
+        })
         .unwrap();
     assert_eq!(level, concurrency);
     machine
@@ -279,7 +281,7 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
     let (machine, _) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], 1, 1))
+        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], &[], 1, 1))
         .unwrap();
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {

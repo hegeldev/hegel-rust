@@ -116,7 +116,15 @@ fn sequential_machine(
     invariant_names: Vec<String>,
 ) -> Result<NativeStateMachine, DataSourceError> {
     let rule_groups = vec![0; rule_names.len()];
-    ds.new_state_machine(rule_names, rule_groups, invariant_names, 1, 1)
+    let invariant_always_check = vec![false; invariant_names.len()];
+    ds.new_state_machine(
+        rule_names,
+        rule_groups,
+        invariant_names,
+        invariant_always_check,
+        1,
+        1,
+    )
 }
 
 #[test]
@@ -135,12 +143,27 @@ fn new_state_machine_with_no_rules_is_invalid_argument_without_aborting() {
 #[test]
 fn new_state_machine_with_non_parallel_rule_groups_is_invalid_argument() {
     let (ds, _handle) = random_source();
-    let err = match ds.new_state_machine(vec!["a".into()], vec![0, 0], vec![], 1, 1) {
+    let err = match ds.new_state_machine(vec!["a".into()], vec![0, 0], vec![], vec![], 1, 1) {
         Err(e) => e,
         Ok(_) => panic!("expected an InvalidArgument error"),
     };
     assert!(matches!(err, DataSourceError::InvalidArgument(_)));
     assert!(err.to_string().contains("parallel"));
+}
+
+#[test]
+fn new_state_machine_with_non_parallel_invariant_flags_is_invalid_argument() {
+    let (ds, _handle) = random_source();
+    let err =
+        match ds.new_state_machine(vec!["a".into()], vec![0], vec!["inv".into()], vec![], 1, 1) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an InvalidArgument error"),
+        };
+    assert!(matches!(err, DataSourceError::InvalidArgument(_)));
+    assert!(
+        err.to_string()
+            .contains("invariant_always_check must be parallel to invariant_names")
+    );
 }
 
 #[test]
@@ -150,6 +173,7 @@ fn new_state_machine_infers_the_groups_from_the_distinct_ids() {
         .new_state_machine(
             vec!["a".into(), "b".into(), "c".into()],
             vec![-5, 40, -5],
+            vec![],
             vec![],
             1,
             1,
@@ -167,7 +191,7 @@ fn new_state_machine_infers_the_groups_from_the_distinct_ids() {
 fn new_state_machine_with_bad_concurrency_bounds_is_invalid_argument() {
     let (ds, _handle) = random_source();
     for (min, max) in [(0, 1), (-1, -1), (3, 2)] {
-        let err = match ds.new_state_machine(vec!["a".into()], vec![0], vec![], min, max) {
+        let err = match ds.new_state_machine(vec!["a".into()], vec![0], vec![], vec![], min, max) {
             Err(e) => e,
             Ok(_) => panic!("expected an InvalidArgument error"),
         };
@@ -446,6 +470,7 @@ fn state_machines_are_shared_across_cloned_streams() {
         .new_state_machine(
             vec!["a".into(), "b".into(), "c".into()],
             vec![0, 0, 0],
+            vec![],
             vec![],
             2,
             2,

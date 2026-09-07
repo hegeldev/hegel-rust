@@ -61,6 +61,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
         vec!["rule".to_string()],
         vec![0],
         alloc::vec::Vec::new(),
+        alloc::vec::Vec::new(),
         2,
         2,
     ) {
