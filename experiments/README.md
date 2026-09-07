@@ -5,6 +5,10 @@ alongside their write-ups in `notes/experiments/`. They are not workspace
 members and are not maintained: each was built against the commit noted
 below, and later API changes are expected to have broken some of them.
 
+- `target-sim`: experiment 013 (ND targeting constants); pure simulation
+  with no engine dependency, so it stays runnable — `cargo run --release`
+  reproduces `results.txt` from the seed printed in its header.
+
 - `shrink-sim`, `nd-shrink`, `replay-semantics`, `nd-lifecycle`,
   `nd-boost`, `confirm-bar`, `fixate-cost`: built against `a1d1b6d2`.
   `fixate-cost` and `replay-semantics` no longer build — their `__bench`

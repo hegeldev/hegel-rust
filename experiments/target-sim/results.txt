@@ -1,0 +1,68 @@
+target-sim: score targeting policies under nondeterministic scores
+base seed: 0x5eed2026 (1592598566); trial i uses seed base+i; 200 trials/cell
+L-heavy: score = x + 5*T, T ~ Student-t(df=2) via exact inverse CDF T = (2u-1)/sqrt(2u(1-u))
+median = sorted[k/2] (upper middle); refdrift = r_final - true_median(x0), the
+reference-honesty gauge on L-flat (tracks the moved position elsewhere)
+
+Adoption gate (exact binomial, no simulation): minimum beats m_k with Wilson
+LCB(m_k/k, z=1.96) > 0.5, and P(Bin(k, q) >= m_k):
+   k   m_k   q=0.45   q=0.50   q=0.55   q=0.60   q=0.75   q=0.90
+  10     9   0.0045   0.0107   0.0233   0.0464   0.2440   0.7361
+  20    15   0.0064   0.0207   0.0553   0.1256   0.6172   0.9887
+  30    21   0.0050   0.0214   0.0694   0.1763   0.8034   0.9995
+
+OLD policy: single-run hill climb on max-ever score, 600 runs/trial
+curse_bias = s_best - true_mean(x_best); frozen = zero accepted steps in the
+final 50% of the budget while gradient remained above x_best (rate over trials);
+the climb ends when neither direction's first probe succeeds twice in a row
+land      miss    x_fin   truemean  curse_bias   frozen   steps    runs
+L-lin      0.0     18.2       18.2         8.4    0.920     2.8    10.9
+L-flat     0.0      1.2        0.0         8.1    0.000     1.7     9.7
+L-heavy    0.0      9.2        9.2        35.8    0.940     2.3    10.2
+L-disc     0.0      0.6        5.1         3.0    1.000     1.4     9.2
+L-gap      0.0     18.2       23.3         8.4    0.920     2.8    10.9
+L-lin      0.3      6.0        6.0         6.4    0.970     2.2    10.3
+L-flat     0.3      1.3        0.0         6.4    0.000     1.8     9.8
+
+NEW policy: HOLDOUT sweep (RACES = 4, miss = 0.0)
+land       H   R  miss    x_fin   prog_mu  prog_med  adopts  refdrift   rep/tr   rep/ad  dead
+L-lin     10   4   0.0    100.0     100.0     100.0    2.06    101.81      790      384     0
+L-lin     20   4   0.0     99.9      99.9     100.0    2.34    101.28      952      407     0
+L-lin     30   4   0.0     99.9      99.9     100.0    2.38    100.71     1105      463     0
+L-flat    10   4   0.0      4.0       0.0       0.0    0.32      1.53      779     2472     0
+L-flat    20   4   0.0      6.5       0.0       0.0    0.51      1.30      965     1911     0
+L-flat    30   4   0.0      8.6       0.0       0.0    0.53      1.14     1130     2132     0
+L-heavy   10   4   0.0     99.7      99.7     100.0    2.17    101.39      831      382     0
+L-heavy   20   4   0.0     99.9      99.9     100.0    2.23    100.99      969      436     0
+L-heavy   30   4   0.0     99.9      99.9     100.0    2.21    100.95     1121      507     0
+L-disc    10   4   0.0     80.2       8.0       6.4    1.50      9.44     1289      857     0
+L-disc    20   4   0.0     98.1       9.8      10.0    2.00     10.48     1183      592     0
+L-disc    30   4   0.0     98.6       9.9      10.0    2.00     10.16     1273      636     0
+L-gap     10   4   0.0    100.0     130.0     130.0    2.06    131.81      790      384     0
+L-gap     20   4   0.0     99.9     129.9     130.0    2.34    131.28      952      407     0
+L-gap     30   4   0.0     99.9     129.9     130.0    2.38    130.71     1105      463     0
+
+NEW policy: RACES sweep (HOLDOUT = 20, miss = 0.0)
+land       H   R  miss    x_fin   prog_mu  prog_med  adopts  refdrift   rep/tr   rep/ad  dead
+L-lin     20   2   0.0     99.9      99.9     100.0    2.19    100.72      538      246     0
+L-lin     20   4   0.0     99.9      99.9     100.0    2.34    101.28      952      407     0
+L-lin     20   8   0.0     99.9      99.9     100.0    2.40    101.28     1782      742     0
+L-flat    20   2   0.0      4.0       0.0       0.0    0.33      1.05      461     1397     0
+L-flat    20   4   0.0      6.5       0.0       0.0    0.51      1.30      965     1911     0
+L-flat    20   8   0.0      9.2       0.0       0.0    0.67      1.53     2020     3014     0
+L-heavy   20   2   0.0     99.8      99.8     100.0    2.12    100.87      554      261     0
+L-heavy   20   4   0.0     99.9      99.9     100.0    2.23    100.99      969      436     0
+L-heavy   20   8   0.0     99.9      99.9     100.0    2.33    101.14     1795      770     0
+L-disc    20   2   0.0     96.5       9.7      10.0    1.95     10.38      639      328     0
+L-disc    20   4   0.0     98.1       9.8      10.0    2.00     10.48     1183      592     0
+L-disc    20   8   0.0     98.1       9.8      10.0    2.06     10.61     2263     1099     0
+L-gap     20   2   0.0     99.9     129.9     130.0    2.19    130.72      538      246     0
+L-gap     20   4   0.0     99.9     129.9     130.0    2.34    131.28      952      407     0
+L-gap     20   8   0.0     99.9     129.9     130.0    2.40    131.28     1782      742     0
+
+NEW policy: miss_rate sweep (HOLDOUT = 20, RACES = 4)
+land       H   R  miss    x_fin   prog_mu  prog_med  adopts  refdrift   rep/tr   rep/ad  dead
+L-lin     20   4   0.0     99.9      99.9     100.0    2.34    101.28      952      407     0
+L-lin     20   4   0.3     99.5      99.5     100.0    2.15     98.98     1167      542     0
+L-flat    20   4   0.0      6.5       0.0       0.0    0.51      1.30      965     1911     0
+L-flat    20   4   0.3      0.0       0.0       0.0    0.00     -0.11      827        -     0
