@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.1 - 2026-09-07
+
+This patch suppresses `TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Calls to `hegel_settings_set_suppress_health_check` still replace the default.
+
 ## 0.37.0 - 2026-09-07
 
 This release changes `hegel_new_state_machine`: it takes a new
