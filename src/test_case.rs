@@ -5,7 +5,6 @@ use crate::control::{
 use crate::ffi::CTestCase;
 use crate::generators::{Generator, PrintableGenerator};
 use crate::pretty::PrettyPrinter;
-use crate::runner::Mode;
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -101,7 +100,6 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
 }
 
 pub(crate) struct TestCaseGlobalData {
-    mode: Mode,
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
     /// verbose output is on, and for every non-final case of a run already
@@ -111,13 +109,6 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
-    /// Draw-name bookkeeping shared between every clone of a `TestCase`,
-    /// behind a blocking, non-reentrant mutex. The backend handle is no longer
-    /// shared here — each `TestCase` instance owns its own libhegel handle (so
-    /// clones can be driven concurrently) — so this lock only serialises the
-    /// frontend's own draw-name accounting, never backend traffic. No method
-    /// holds it while calling back into `TestCase`.
-    draw_state: Mutex<DrawState>,
     /// When this test case started, shared by every clone so the
     /// `[worker N +X.XXXms]` offsets stamped on concurrent workers' output
     /// lines are comparable across workers.
@@ -127,27 +118,31 @@ pub(crate) struct TestCaseGlobalData {
 /// The width drawn-value documents are laid out to.
 const PRINTER_MAX_WIDTH: u64 = crate::pretty::DEFAULT_MAX_WIDTH;
 
-/// Marks a printed draw as in progress: `span_depth` is raised for the
+/// Marks a printed draw as in progress: `printing_depth` is raised for the
 /// duration of the enclosing `draw_and_print` call so that a `tc.note()` or
 /// nested `tc.draw` made by a hand-written generator body behaves exactly as
 /// it does inside a combinator span — the note buffers, the nested draw
 /// stays silent — instead of re-entering the printer lock the enclosing draw
-/// already holds. Restored on drop so an unwinding draw (a failed
-/// assumption, a budget stop) leaves the depth balanced.
+/// already holds. Dropping the scope restores the depth and flushes the
+/// buffered notes, so they land right after their draw's line even when the
+/// draw unwinds (a failed assumption, a budget stop). This scope is the only
+/// thing that defers a note: outside it, notes and draw lines write to the
+/// instance's print region directly, in call order.
 struct PrintingDrawScope<'a> {
     tc: &'a TestCase,
 }
 
 impl<'a> PrintingDrawScope<'a> {
     fn new(tc: &'a TestCase) -> Self {
-        tc.local.borrow_mut().span_depth += 1;
+        tc.local.borrow_mut().printing_depth += 1;
         PrintingDrawScope { tc }
     }
 }
 
 impl Drop for PrintingDrawScope<'_> {
     fn drop(&mut self) {
-        self.tc.local.borrow_mut().span_depth -= 1;
+        self.tc.local.borrow_mut().printing_depth -= 1;
+        self.tc.flush_pending_notes();
     }
 }
 
@@ -163,6 +158,7 @@ fn emit_note_line(printer: &mut PrettyPrinter, prefix: &str, indent: usize, mess
     printer.hard_break();
 }
 
+#[derive(Default)]
 pub(crate) struct DrawState {
     named_draw_counts: HashMap<String, usize>,
     named_draw_repeatable: HashMap<String, bool>,
@@ -171,7 +167,13 @@ pub(crate) struct DrawState {
 
 #[derive(Clone)]
 pub(crate) struct TestCaseLocalData {
+    /// Engine spans currently open on this instance (`start_span` without a
+    /// matching `stop_span`). It silences nested named draws and never
+    /// defers notes, which is `printing_depth`'s job.
     span_depth: usize,
+    /// Printed draws currently in progress on this instance (see
+    /// [`PrintingDrawScope`]).
+    printing_depth: usize,
     indent: usize,
     on_draw: OutputSink,
 }
@@ -274,16 +276,23 @@ pub struct TestCase {
     /// clones write concurrently, and the document assembles deterministically
     /// by anchor position.
     printer: RefCell<Option<PrettyPrinter>>,
-    /// Notes recorded while a draw was printing (`span_depth > 0`, e.g. from
-    /// inside a composite body). Emitting them inline would splice text into
-    /// the middle of the draw's `let … = …;` line, so they are buffered here
-    /// and flushed — in order — once the enclosing draw completes. Shared
-    /// with [`child`](TestCase::child) instances — a composite body's `tc`
-    /// notes into the same buffer its enclosing draw flushes — but fresh for
-    /// every [`clone`](TestCase::clone), whose notes belong to its own
-    /// region. The mutex is never contended: children live on their
-    /// parent's thread.
-    pending_notes: Arc<Mutex<Vec<(String, usize, String)>>>,
+    /// Notes recorded while this instance was printing a draw
+    /// (`printing_depth > 0`, e.g. from inside a composite body). Emitting
+    /// them inline would splice text into the middle of the draw's
+    /// `let … = …;` line, so they are buffered here and flushed, in order,
+    /// by the [`PrintingDrawScope`] that deferred them once the draw's line
+    /// is done. A note can only buffer during a printed draw on this same
+    /// instance, so the buffer is instance-local and no other instance can
+    /// flush this one's notes into its own region out of order.
+    pending_notes: RefCell<Vec<(String, usize, String)>>,
+    /// Draw-name bookkeeping for this instance's naming scope, behind a
+    /// blocking, non-reentrant mutex that only serialises the frontend's own
+    /// accounting (no method holds it while calling back into `TestCase`).
+    /// Shared with [`clone`](TestCase::clone) instances (a clone draws for
+    /// the same test body, so its names live in the same scope) but fresh
+    /// for every [`child`](TestCase::child), which opens a new scope: a
+    /// stateful rule's names are scoped to that one invocation.
+    draw_state: Arc<Mutex<DrawState>>,
 }
 
 impl Clone for TestCase {
@@ -293,7 +302,8 @@ impl Clone for TestCase {
             local: RefCell::new(self.local.borrow().clone()),
             handle: Arc::new(self.handle.clone_handle()),
             printer: RefCell::new(None),
-            pending_notes: Arc::new(Mutex::new(Vec::new())),
+            pending_notes: RefCell::new(Vec::new()),
+            draw_state: Arc::clone(&self.draw_state),
         }
     }
 }
@@ -418,12 +428,7 @@ impl TestCase {
     /// output destination ([`RunOutput::sink`]) — passed in rather than read
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.
-    pub(crate) fn new(
-        handle: Arc<CTestCase>,
-        emit: bool,
-        mode: Mode,
-        sink: Option<OutputSink>,
-    ) -> Self {
+    pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, sink: Option<OutputSink>) -> Self {
         let on_draw: OutputSink = if emit {
             sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)))
         } else {
@@ -431,33 +436,29 @@ impl TestCase {
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData {
-                mode,
                 emit,
-                draw_state: Mutex::new(DrawState {
-                    named_draw_counts: HashMap::new(),
-                    named_draw_repeatable: HashMap::new(),
-                    allocated_display_names: HashSet::new(),
-                }),
                 case_start: std::time::Instant::now(),
             }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
+                printing_depth: 0,
                 indent: 0,
                 on_draw,
             }),
             handle,
             printer: RefCell::new(None),
-            pending_notes: Arc::new(Mutex::new(Vec::new())),
+            pending_notes: RefCell::new(Vec::new()),
+            draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
     }
 
-    /// Acquire the shared draw-name bookkeeping for the duration of `f`.
+    /// Acquire this scope's draw-name bookkeeping for the duration of `f`.
     ///
     /// Held briefly around draw-state updates, never around whole user-visible
     /// operations. The mutex is non-reentrant, so `f` must not call any other
     /// method that also acquires it.
     pub(crate) fn with_draw_state<R>(&self, f: impl FnOnce(&mut DrawState) -> R) -> R {
-        let mut guard = self.global.draw_state.lock();
+        let mut guard = self.draw_state.lock();
         f(&mut guard)
     }
 
@@ -485,9 +486,32 @@ impl TestCase {
     /// generator printable with
     /// [`print_as_value`](crate::generators::Generator::print_as_value),
     /// [`print_as_debug`](crate::generators::Generator::print_as_debug), or
-    /// [`print_with`](crate::generators::Generator::print_with).
+    /// [`print_with`](crate::generators::Generator::print_with). The
+    /// [`pretty`](crate::pretty) module docs explain the printing system and
+    /// how to make your own types printable.
     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
         self.__draw_named(generator, "draw", true)
+    }
+
+    /// Draw a value from a generator, reporting it under `name`.
+    ///
+    /// Like [`draw`](Self::draw), but the failing-example line prints as
+    /// `let name_N = value;`, numbered per call under that name. Use it in
+    /// helper functions: `#[hegel::test]` captures binding names only for
+    /// `draw` calls written directly in the test (or rule) body, so a draw
+    /// inside a helper otherwise reports as the anonymous `draw_N`. To name
+    /// every draw in a helper after its binding instead, mark the helper
+    /// [`#[hegel::test_helper]`](macro@crate::test_helper).
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// fn draw_index(tc: &hegel::TestCase, len: usize) -> usize {
+    ///     tc.draw_named("index", gs::integers::<usize>().max_value(len - 1))
+    /// }
+    /// ```
+    pub fn draw_named<T>(&self, name: &str, generator: impl PrintableGenerator<T>) -> T {
+        self.__draw_named(generator, name, true)
     }
 
     /// Draw a value from a generator with a specific name for output.
@@ -509,7 +533,11 @@ impl TestCase {
         name: &str,
         repeatable: bool,
     ) -> T {
-        if self.local.borrow().span_depth > 0 {
+        let mid_draw = {
+            let local = self.local.borrow();
+            local.span_depth > 0 || local.printing_depth > 0
+        };
+        if mid_draw {
             return generator.do_draw(self);
         }
         let Some(display_name) = self.allocate_display_name(name, repeatable) else {
@@ -517,25 +545,21 @@ impl TestCase {
         };
         let indent = self.local.borrow().indent;
         let prefix = self.worker_line_prefix();
-        let value = {
-            let _printing = PrintingDrawScope::new(self);
-            self.with_printer(|printer| {
-                let mut speculation = printer.speculate();
-                let printer = speculation.printer();
-                printer.text(&prefix);
-                printer.text(&" ".repeat(indent));
-                printer.shift_indent(indent as isize);
-                printer.text(&format!("let {display_name} = "));
-                let value = self.draw_and_print(&generator, printer);
-                printer.text(";");
-                printer.shift_indent(-(indent as isize));
-                printer.hard_break();
-                speculation.commit();
-                value
-            })
-        };
-        self.flush_pending_notes();
-        value
+        let _printing = PrintingDrawScope::new(self);
+        self.with_printer(|printer| {
+            let mut speculation = printer.speculate();
+            let printer = speculation.printer();
+            printer.text(&prefix);
+            printer.text(&" ".repeat(indent));
+            printer.shift_indent(indent as isize);
+            printer.text(&format!("let {display_name} = "));
+            let value = self.draw_and_print(&generator, printer);
+            printer.text(";");
+            printer.shift_indent(-(indent as isize));
+            printer.hard_break();
+            speculation.commit();
+            value
+        })
     }
 
     /// Draw a value from a generator without recording it in the output.
@@ -635,12 +659,12 @@ impl TestCase {
         }
         let (indent, mid_draw) = {
             let local = self.local.borrow();
-            (local.indent, local.span_depth > 0)
+            (local.indent, local.printing_depth > 0)
         };
         let prefix = self.worker_line_prefix();
         if mid_draw {
             self.pending_notes
-                .lock()
+                .borrow_mut()
                 .push((prefix, indent, message.to_string()));
         } else {
             self.with_printer(|printer| emit_note_line(printer, &prefix, indent, message));
@@ -691,6 +715,70 @@ impl TestCase {
         }
     }
 
+    /// Record an event for the end-of-run statistics report.
+    ///
+    /// With statistics enabled
+    /// ([`Settings::show_statistics`](crate::Settings::show_statistics), or
+    /// the `HEGEL_STATISTICS` environment variable), the end of the run
+    /// reports, per label, the fraction of generation-phase test cases in
+    /// which the label was recorded at least once — a quick check that the
+    /// interesting situations in a test actually occur. With statistics
+    /// off, events cost almost nothing and report nothing.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let xs: Vec<u8> = tc.draw(gs::vecs(gs::integers()));
+    ///     if xs.is_empty() {
+    ///         tc.event("empty input");
+    ///     }
+    /// }
+    /// ```
+    pub fn event(&self, label: impl AsRef<str>) {
+        self.record_event(|ctc| ctc.event(label.as_ref()));
+    }
+
+    /// Record a numeric observation under `label` for the end-of-run
+    /// statistics report.
+    ///
+    /// With statistics enabled
+    /// ([`Settings::show_statistics`](crate::Settings::show_statistics), or
+    /// the `HEGEL_STATISTICS` environment variable), the end of the run
+    /// reports, per label, a summary of the observed distribution — count,
+    /// min, median, mean, p90, max — over generation-phase test cases, so a test
+    /// can check the sizes or shapes it actually exercises. Unlike
+    /// [`target`](Self::target), a label may be observed any number of
+    /// times per test case, and the observations do not steer generation.
+    ///
+    /// `value` must be finite.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let xs: Vec<u8> = tc.draw(gs::vecs(gs::integers()));
+    ///     tc.event_value("input length", xs.len() as f64);
+    /// }
+    /// ```
+    pub fn event_value(&self, label: impl AsRef<str>, value: f64) {
+        self.record_event(|ctc| ctc.event_value(label.as_ref(), value));
+    }
+
+    /// Shared body of [`event`](Self::event) and
+    /// [`event_value`](Self::event_value).
+    fn record_event(&self, record: impl FnOnce(&CTestCase) -> Result<(), hegel_c::hegel_result_t>) {
+        if let Err(rc) = self.with_ctc(record) {
+            raise_for_rc(rc);
+        }
+    }
+
     /// Run `body` in a loop that should runs "logically infinitely" or until
     /// error. Roughly equivalent to a `loop` but with better interaction with
     /// the test runner: This loop will never exit until the test case completes.
@@ -714,32 +802,6 @@ impl TestCase {
     /// }
     /// ```
     pub fn repeat<F: FnMut()>(&self, mut body: F) -> ! {
-        if self.global.mode == Mode::SingleTestCase {
-            self.repeat_single_test_case(&mut body);
-        }
-        self.repeat_property_test(&mut body);
-    }
-
-    fn repeat_single_test_case(&self, body: &mut dyn FnMut()) -> ! {
-        let mut iteration: u64 = 0;
-        loop {
-            iteration += 1;
-            self.note(&format!("// Repetition #{}", iteration));
-
-            let prev_indent = self.local.borrow().indent;
-            self.local.borrow_mut().indent = prev_indent + 2;
-            let result = catch_unwind(AssertUnwindSafe(&mut *body));
-            self.local.borrow_mut().indent = prev_indent;
-
-            match result {
-                Ok(()) => {}
-                Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {}
-                Err(e) => resume_unwind(e),
-            }
-        }
-    }
-
-    fn repeat_property_test(&self, body: &mut dyn FnMut()) -> ! {
         use crate::generators::{booleans, integers};
 
         let max_safe_min_size = usize::try_from(1u64 << 40).unwrap_or(usize::MAX / 2);
@@ -754,7 +816,7 @@ impl TestCase {
 
             let prev_indent = self.local.borrow().indent;
             self.local.borrow_mut().indent = prev_indent + 2;
-            let result = catch_unwind(AssertUnwindSafe(&mut *body));
+            let result = catch_unwind(AssertUnwindSafe(&mut body));
             self.local.borrow_mut().indent = prev_indent;
 
             match result {
@@ -783,12 +845,14 @@ impl TestCase {
             global: self.global.clone(),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
+                printing_depth: 0,
                 indent: local.indent + extra_indent,
                 on_draw: local.on_draw.clone(),
             }),
             handle: Arc::clone(&self.handle),
             printer: RefCell::new(None),
-            pending_notes: Arc::clone(&self.pending_notes),
+            pending_notes: RefCell::new(Vec::new()),
+            draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
     }
 
@@ -822,7 +886,7 @@ impl TestCase {
     /// Emit any notes recorded while a draw was in progress on this
     /// instance.
     fn flush_pending_notes(&self) {
-        let notes = std::mem::take(&mut *self.pending_notes.lock());
+        let notes = std::mem::take(&mut *self.pending_notes.borrow_mut());
         if notes.is_empty() {
             return;
         }
@@ -844,7 +908,6 @@ impl TestCase {
         if !self.global.emit {
             return;
         }
-        self.flush_pending_notes();
         let output = self.with_printer(|printer| printer.try_value());
         let local = self.local.borrow();
         match output {
@@ -1181,7 +1244,7 @@ pub mod labels {
 mod tests;
 
 /// The conventional full ranges for the structured draws: years 1..=9999
-/// (what Hypothesis's `dates()` spans) and the whole microsecond-resolution
+/// (what Hypothesis's `dates()` spans) and the whole nanosecond-resolution
 /// day.
 pub(crate) mod full_ranges {
     pub(crate) const MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
@@ -1198,13 +1261,13 @@ pub(crate) mod full_ranges {
         hour: 0,
         minute: 0,
         second: 0,
-        microsecond: 0,
+        nanosecond: 0,
     };
-    pub(crate) const LAST_MICROSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
+    pub(crate) const LAST_NANOSECOND: hegel_c::hegel_time_t = hegel_c::hegel_time_t {
         hour: 23,
         minute: 59,
         second: 59,
-        microsecond: 999_999,
+        nanosecond: 999_999_999,
     };
     pub(crate) const MIN_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
         date: MIN_DATE,
@@ -1212,6 +1275,6 @@ pub(crate) mod full_ranges {
     };
     pub(crate) const MAX_DATETIME: hegel_c::hegel_datetime_t = hegel_c::hegel_datetime_t {
         date: MAX_DATE,
-        time: LAST_MICROSECOND,
+        time: LAST_NANOSECOND,
     };
 }

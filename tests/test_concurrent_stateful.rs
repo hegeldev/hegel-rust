@@ -124,7 +124,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         .unwrap()[1];
     assert_matches_regex(
         &text,
-        &format!(r"\[worker {worker} \+\d+\.\d{{3}}ms\]   let draw_\d"),
+        &format!(r"\[worker {worker} \+\d+\.\d{{3}}ms\]   let x = "),
     );
     assert!(
         text.contains("test_concurrent_stateful.rs"),

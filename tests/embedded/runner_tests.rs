@@ -120,6 +120,23 @@ fn test_env_override_database_empty_is_ignored() {
 }
 
 #[test]
+fn test_env_override_statistics_enables_reporting() {
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "1".to_string()));
+    assert!(s.show_statistics);
+}
+
+#[test]
+fn test_env_override_statistics_zero_and_empty_are_ignored() {
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "0".to_string()));
+    assert!(!s.show_statistics);
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(String::new));
+    assert!(!s.show_statistics);
+}
+
+#[test]
 fn test_is_in_ci_from_detects_presence_and_value_variables() {
     assert!(!is_in_ci_from(|_| None));
     assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
@@ -237,6 +254,20 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
+#[test]
+fn hegel_single_test_case_runs_exactly_one_case() {
+    use crate::generators as gs;
+    let mut count = 0;
+    Hegel::new(|tc: TestCase| {
+        tc.draw(gs::booleans());
+        count += 1;
+    })
+    .settings(Settings::new().test_cases(50).verbosity(Verbosity::Quiet))
+    .__single_test_case()
+    .run();
+    assert_eq!(count, 1);
+}
+
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
@@ -266,7 +297,6 @@ mod reproduce {
                 c_tc,
                 &mut test_fn,
                 false,
-                Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
                 None,

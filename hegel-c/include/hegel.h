@@ -209,11 +209,7 @@ typedef enum {
      whatever it captured while running the discovering test case (the
      engine stamps every case of such a run nondeterministic up front,
      see `hegel_test_case_is_nondeterministic`, precisely so the caller
-     captures each case's output as it runs). Only full test runs report
-     this status; a failing single-test-case run reports
-     `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-     machine, since the caller reports such a case from its own execution
-     anyway.
+     captures each case's output as it runs).
      */
     HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 } hegel_run_status_t;
@@ -447,24 +443,6 @@ typedef enum {
      */
     HEGEL_LABEL_RECURSIVE = 35,
 } hegel_label_t;
-
-/*
- How the engine should treat the run: a full property-test loop or a
- single test case. Set via `hegel_settings_set_mode`.
- */
-typedef enum {
-    /*
-     libhegel drives a full generate / shrink / replay loop until the
-     test-case budget or the choice tree is exhausted. The default.
-     */
-    HEGEL_MODE_TEST_RUN = 0,
-    /*
-     libhegel produces exactly one test case and stops, with no shrinking.
-     Useful for replaying a stored counterexample or running an
-     exploratory probe.
-     */
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-} hegel_mode_t;
 
 /*
  Which source of randomness the engine draws from. Set via
@@ -814,13 +792,13 @@ typedef struct {
 
 /*
  A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
- `[0, 59]`, `microsecond` in `[0, 999999]`.
+ `[0, 59]`, `nanosecond` in `[0, 999999999]`.
  */
 typedef struct {
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
-    uint32_t microsecond;
+    uint32_t nanosecond;
 } hegel_time_t;
 
 /*
@@ -886,6 +864,12 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
  similar variables) the defaults change: the database is disabled and
  derandomization is enabled. Override either with the explicit setters.
+
+ When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
+ the database is disabled and every health check is skipped. The database
+ can still be enabled with `hegel_settings_set_database`; the health
+ checks cannot be re-enabled, since Antithesis's thread pausing would trip
+ wall-clock checks such as `TooSlow` spuriously.
  */
 hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
 
@@ -899,22 +883,13 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
 /*
  Parameters:
- `mode`: A full run loop or a single test case with no shrinking. See
-   `hegel_mode_t`.
+ `backend`: A `hegel_backend_t` value selecting the source of
+   randomness.
 
  Returns `HEGEL_OK`.
 
  The enum-valued setters take `uint32_t` rather than the enum type so
  that an out-of-range value is an error instead of undefined behavior.
- */
-hegel_result_t hegel_settings_set_mode(hegel_context_t *ctx, hegel_settings_t *s, uint32_t mode);
-
-/*
- Parameters:
- `backend`: A `hegel_backend_t` value selecting the source of
-   randomness.
-
- Returns `HEGEL_OK`.
 
  Once an explicit backend has been set on a handle there is no way to
  change it within a run.
@@ -993,6 +968,20 @@ hegel_result_t hegel_settings_set_derandomize(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_report_multiple_failures(hegel_context_t *ctx,
                                                            hegel_settings_t *s,
                                                            bool yes);
+
+/*
+ Parameters:
+ `yes`: When `true`, libhegel prints a statistics block on the run's
+   output at the end of the run: for each label recorded with
+   `hegel_event`, the fraction of generation-phase test cases it
+   occurred in, and for each label recorded with `hegel_event_value`, a
+   distribution summary of the observed values. Defaults to off.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
+                                                  hegel_settings_t *s,
+                                                  bool yes);
 
 /*
  Parameters:
@@ -1490,8 +1479,8 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  carry no reproduce blob. A notice explaining this is printed once, on
  the run's output, unless verbosity is quiet. This applies even to test
  cases whose drawn concurrency level is 1: the declared bound is what
- counts. Standalone test cases — single-test-case runs and
- `hegel_test_case_from_blob` replays — are never rejected.
+ counts. Standalone test cases — `hegel_test_case_from_blob` replays —
+ are never rejected.
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /
@@ -1539,9 +1528,7 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
  `hegel_state_machine_next_rule` stream is exhausted — including before the
  first rule is requested. This applies to sequential machines too: the
  frontend must advance the group when the rule stream is exhausted, even
- though there is only a single group. In single-test-case mode (steps
- unbounded, e.g. under Antithesis) `*out_group_id` is never set to
- `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
+ though there is only a single group.
 
  `state_machine` must be a handle returned by `hegel_new_state_machine`
  on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
@@ -1905,7 +1892,7 @@ hegel_result_t hegel_generate_date(hegel_context_t *ctx,
 /*
  Parameters:
  `min_value` / `max_value`: Inclusive bounds. Pass all-zeros and
-   `{23, 59, 59, 999999}` for the full day.
+   `{23, 59, 59, 999999999}` for the full day.
 
  Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
 
@@ -1981,6 +1968,44 @@ hegel_result_t hegel_target(hegel_context_t *ctx,
                             hegel_test_case_t *tc,
                             double value,
                             const char *label);
+
+/*
+ Record an event for the current test case, for the end-of-run
+ statistics report: the report shows, per label, the fraction of
+ generation-phase test cases in which the label was recorded at least
+ once. The report prints only when the `show_statistics` setting is on
+ (`hegel_settings_set_show_statistics`); without it events cost almost
+ nothing and report nothing.
+
+ Parameters:
+ `label`: Non-NULL, valid UTF-8.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+ label.
+ */
+hegel_result_t hegel_event(hegel_context_t *ctx, hegel_test_case_t *tc, const char *label);
+
+/*
+ Record a numeric observation under `label` for the current test case,
+ for the end-of-run statistics report: the report shows, per label, a
+ summary of the observed distribution (count, min, median, mean, p90,
+ max) over generation-phase test cases. The report prints only when the
+ `show_statistics` setting is on
+ (`hegel_settings_set_show_statistics`); without it observations cost
+ almost nothing and report nothing.
+
+ Parameters:
+ `value`: The observation. Must be finite.
+ `label`: Non-NULL, valid UTF-8. Unlike `hegel_target`, a label may be
+   observed any number of times per test case.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+ label or a non-finite value.
+ */
+hegel_result_t hegel_event_value(hegel_context_t *ctx,
+                                 hegel_test_case_t *tc,
+                                 double value,
+                                 const char *label);
 
 /*
  Create a printer-options handle with every option at its default

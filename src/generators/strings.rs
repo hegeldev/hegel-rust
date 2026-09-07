@@ -613,16 +613,15 @@ pub(crate) fn format_date(d: hegel_c::hegel_date_t) -> String {
     format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
 }
 
-/// Format a drawn time as `HH:MM:SS` or `HH:MM:SS.ffffff`, matching
-/// `st.times().isoformat()`: the fractional part is present iff
-/// `microsecond != 0`.
+/// Format a drawn time as `HH:MM:SS` or `HH:MM:SS.fffffffff`. The fractional part is
+/// present iff `nanosecond != 0`.
 pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
-    if t.microsecond == 0 {
+    if t.nanosecond == 0 {
         format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second)
     } else {
         format!(
-            "{:02}:{:02}:{:02}.{:06}",
-            t.hour, t.minute, t.second, t.microsecond
+            "{:02}:{:02}:{:02}.{:09}",
+            t.hour, t.minute, t.second, t.nanosecond
         )
     }
 }
@@ -647,19 +646,18 @@ pub fn date_strings() -> DateStringGenerator {
     DateStringGenerator
 }
 
-/// Generator for time strings in `HH:MM:SS[.ffffff]` format. Created by
+/// Generator for time strings in `HH:MM:SS[.fffffffff]` format. Created by
 /// [`time_strings()`].
 pub struct TimeStringGenerator;
 
 impl Generator<String> for TimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND))
+        format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_NANOSECOND))
     }
 }
 
-/// Generate time `String`s in `HH:MM:SS` format, matching Python's
-/// `time.isoformat()`: a fractional `.ffffff` part (microseconds) is
-/// appended iff it is non-zero.
+/// Generate time `String`s in `HH:MM:SS` format. A fractional `.fffffffff`
+/// part (nanoseconds) is appended iff it is non-zero.
 ///
 /// This generator is not configurable. For typed time values with
 /// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
@@ -678,8 +676,8 @@ impl Generator<String> for DateTimeStringGenerator {
     }
 }
 
-/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.ffffff]`,
-/// years 1–9999), matching Python's `datetime.isoformat()`.
+/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.fffffffff]`,
+/// years 1–9999).
 ///
 /// This generator is not configurable. For typed datetime values with
 /// configurable bounds, see [`extras::chrono`](crate::extras::chrono)

@@ -183,6 +183,15 @@
 //! When set and non-empty, it takes precedence over any value configured in
 //! source, including explicit `test_cases` attributes.
 //!
+//! To see what a test actually generates, record events with
+//! [`TestCase::event`] and [`TestCase::event_value`] and enable the
+//! end-of-run statistics report with the `HEGEL_STATISTICS` environment
+//! variable (or [`Settings::show_statistics`]):
+//!
+//! ```bash
+//! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
+//! ```
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
@@ -224,6 +233,10 @@
 //! ## Learning more
 //!
 //! - Browse the [`generators`] module for the full list of available generators.
+//! - `use hegel::prelude::*;` brings in the imports these examples spell out
+//!   (see [`prelude`]).
+//! - Read the [`pretty`] module docs for how a failing test reports the values
+//!   it drew, and how to make your own types printable.
 //! - See [`Settings`] for more configuration settings to customise how your test runs.
 
 #![forbid(future_incompatible)]
@@ -252,6 +265,30 @@ pub use generators::Generator;
 pub use generators::PrintableGenerator;
 pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
+
+/// The imports nearly every hegel test wants in scope.
+///
+/// ```no_run
+/// use hegel::prelude::*;
+///
+/// #[hegel::test]
+/// fn doubling_preserves_parity(tc: TestCase) {
+///     let n = tc.draw(gs::integers::<i32>().max_value(1000));
+///     assert_eq!((n * 2) % 2, 0);
+/// }
+/// ```
+///
+/// Brings in the [`Generator`] and [`PrintableGenerator`] traits (so
+/// combinator and boxing methods resolve), the [`PrettyPrintable`] and
+/// [`DefaultGenerator`](generators::DefaultGenerator) traits and their
+/// derive macros, [`TestCase`], and the [`generators`] module both under
+/// its own name and its conventional alias `gs`.
+pub mod prelude {
+    pub use crate::DefaultGenerator;
+    pub use crate::generators;
+    pub use crate::generators::{self as gs, DefaultGenerator, Generator, PrintableGenerator};
+    pub use crate::{PrettyPrintable, TestCase};
+}
 
 #[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
@@ -628,6 +665,35 @@ pub use hegel_macros::concurrent_state_machine;
 /// ```
 pub use hegel_macros::test;
 
+/// Name the draws in a helper function after their bindings.
+///
+/// [`#[hegel::test]`](macro@test) and `#[state_machine]` rules rewrite
+/// `let x = tc.draw(..)` so the failure report names the draw `x`, but only
+/// for draws written directly in that body — a draw inside a helper function
+/// reports as the anonymous `draw_1`, `draw_2`, …. This attribute applies the
+/// same rewrite to the helper's body. Because a helper can run any number of
+/// times per test, its names always carry a counter suffix: `x_1`, `x_2`, ….
+///
+/// The attribute works on free functions and methods, and finds the test
+/// case by type: exactly one parameter must be a [`TestCase`] (by reference
+/// or value).
+///
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// #[hegel::test_helper]
+/// fn draw_index(tc: &TestCase, len: usize) -> usize {
+///     let index = tc.draw(gs::integers::<usize>().max_value(len - 1));
+///     index
+/// }
+/// ```
+///
+/// A failing test that calls `draw_index` twice reports `let index_1 = …;`
+/// and `let index_2 = …;`. To name a single draw without the attribute, use
+/// [`TestCase::draw_named`].
+pub use hegel_macros::test_helper;
+
 /// Turn a function into a standalone Hegel binary entry point.
 ///
 /// The function must take exactly one parameter of type [`TestCase`]. Behaves
@@ -636,15 +702,23 @@ pub use hegel_macros::test;
 /// producing a `#[test]` it produces a plain function body that parses CLI
 /// arguments and runs a [`Hegel`] driver.
 ///
+/// Each invocation of the binary runs exactly one test case: invalid cases
+/// (a failed [`assume`](TestCase::assume)) are retried until one valid case
+/// has run, and a failure is shrunk, reported, and persisted to the failure
+/// database as usual, so a failure found by one invocation is replayed by
+/// the next. The test-case count is the one thing that cannot be changed:
+/// `test_cases` is rejected as an attribute arg, `--test-cases` is not
+/// accepted on the command line, and `HEGEL_TEST_CASES` has no effect.
+///
 /// Supported CLI flags (with defaults taken from the attribute args):
-/// `--test-cases`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
-/// `--suppress-health-check`, `-h` / `--help`.
+/// `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `--backend`, `-h` / `--help`.
 ///
 /// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;
 ///
-/// #[hegel::main(test_cases = 500)]
+/// #[hegel::main]
 /// fn main(tc: TestCase) {
 ///     let n: i32 = tc.draw(gs::integers());
 ///     assert_eq!(n + 0, n);
@@ -683,4 +757,4 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{Backend, HealthCheck, Hegel, Mode, Phase, Settings, Verbosity};
+pub use runner::{Backend, HealthCheck, Hegel, Phase, Settings, Verbosity};

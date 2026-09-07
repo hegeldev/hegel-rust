@@ -291,6 +291,14 @@ pub trait DataSource: Send + Sync {
     /// non-finite or the label has already been observed this test case.
     fn target_observation(&self, score: f64, label: &str) -> Result<(), DataSourceError>;
 
+    /// Record an event observation for the current test case: a bare event
+    /// (`value` is `None`), reported as the fraction of test cases it
+    /// occurred in, or a numeric observation, reported as a distribution
+    /// summary. Shown at the end of the run when the `show_statistics`
+    /// setting is on. Errors with `InvalidArgument` if a numeric
+    /// observation is non-finite.
+    fn event_observation(&self, label: &str, value: Option<f64>) -> Result<(), DataSourceError>;
+
     /// Whether this test case belongs to a run already known to be
     /// nondeterministic.
     fn is_nondeterministic(&self) -> bool;
@@ -321,9 +329,9 @@ pub struct Failure {
     pub origin: String,
     /// A base64 "failure blob" encoding the minimal counterexample's choice
     /// sequence. `Some` for an interesting counterexample surfaced by a full
-    /// run (the shrunk choices are available); `None` for a single-test-case
-    /// run, which has no shrunk choice sequence to encode. The client replays
-    /// it via `hegel_test_case_from_blob`; paste into
+    /// run (the shrunk choices are available); `None` for a nondeterministic
+    /// run, which has no replayable choice sequence to encode. The client
+    /// replays it via `hegel_test_case_from_blob`; paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
 }

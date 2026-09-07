@@ -31,14 +31,14 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/run_lifecycle.rs` — Cross-cutting per-test-case lifecycle: panic hook, `catch_unwind` wrapping, translating panics into `TestCaseResult`, and the final re-raise
 - `src/backend.rs` — The result types the lifecycle speaks (`TestCaseResult`, `Failure`)
 - `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, the `Collection` helper, and the span `labels` module
-- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Mode`, `Backend`, `Verbosity`
+- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Backend`, `Verbosity`
 - `src/cli.rs` — CLI argument parsing for standalone `#[hegel::main]` binaries
 - `src/generators/` — All first-party generator implementations (the `Generator` trait lives in `generators.rs`)
 - `src/extras/` — Feature-gated third-party integrations (`chrono`, `jiff`, `serde_json`, `rand`)
 - `src/stateful.rs` — Stateful (model-based) testing via `#[state_machine]`
 - `src/explicit_test_case.rs` — Explicit test-case support (`#[explicit_test_case]`)
 - `src/control.rs` — Control-flow unwind payloads (`AssumeFailed`, `StopTest`) and their handling
-- `src/antithesis.rs` — Antithesis integration
+- `src/antithesis.rs` — Antithesis integration (always compiled in; activates when `ANTITHESIS_OUTPUT_DIR` is set)
 - `hegel-macros/` — Proc-macro crate (sub-crate with its own `Cargo.toml`)
 
 ### `hegel-c` — the engine, built as `libhegel`
@@ -52,7 +52,6 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 ### Feature Flags (root crate)
 
 - **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules
-- **`antithesis`**: Antithesis SDK integration (Linux-only; `compile_error!` on Windows)
 - **`__bench`**: internal, re-exports engine internals for `benches/`; not part of the public API
 
 ## Architecture

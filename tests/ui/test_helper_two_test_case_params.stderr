@@ -1,0 +1,5 @@
+error: #[hegel::test_helper] functions must take exactly one `TestCase` parameter.
+ --> tests/ui/test_helper_two_test_case_params.rs:5:34
+  |
+5 | fn helper(_tc: &hegel::TestCase, _other: &hegel::TestCase) -> bool {
+  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^

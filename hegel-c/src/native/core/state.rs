@@ -887,9 +887,9 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
 }
 
 /// Full-precision weighted boolean: `true` with probability `p`, faithful to
-/// probabilities far below [`weighted_boolean_sample`]'s 1/256 quantization
-/// floor (which would turn e.g. a stateful stop signal's `p = 2^-16` into
-/// `1/256`).
+/// probabilities within 2^-16 of 0 or 1, beyond [`weighted_boolean_sample`]'s
+/// 1/256 quantization (which would turn e.g. the stateful continue signal's
+/// `p = 1 - 2^-16` into `1 - 1/256`).
 ///
 /// Delegates to [`RngExt::random_bool`], which scales `p` to a 64-bit
 /// threshold and compares it against a fresh `u64` — spending 8 bytes of
@@ -1385,13 +1385,12 @@ pub struct FamilyCore {
     /// `tc.target()` observations, keyed by label. Family-wide so the
     /// once-per-test-case label uniqueness holds across clones.
     pub(crate) target_observations: Mutex<HashMap<String, f64>>,
-    /// When set, state machines draw no step cap and never report their
-    /// rule sequence as done. Set for single-test-case runs, which explore
-    /// one unbounded test case instead of many capped ones.
-    state_machine_steps_unbounded: AtomicBool,
+    /// `tc.event()` / `tc.event_value()` observations, in recording order:
+    /// the label plus the numeric observation for `event_value`. Family-wide
+    /// so clone-stream events land on the same test case.
+    pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
     /// Target number of rounds a stateful test case runs. Bounds the
-    /// per-round stop decision in [`NativeStateMachine::next_group`];
-    /// ignored when [`Self::state_machine_steps_unbounded`] is set.
+    /// per-round stop decision in [`NativeStateMachine::next_group`].
     /// Defaults to 50, overridden per run from the `stateful_step_count`
     /// setting.
     stateful_step_count: AtomicI64,
@@ -1411,8 +1410,8 @@ pub struct FamilyCore {
     /// Every later case is stamped as nondeterministic up front, so its
     /// whole execution — including draws made before the machine is
     /// created — can be emitted for the failure report. Defaults to false
-    /// (allow), which standalone handles (single-test-case runs, blob
-    /// replays, embeddings driving the engine directly) keep.
+    /// (allow), which standalone handles (blob replays, embeddings driving
+    /// the engine directly) keep.
     reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
@@ -1432,7 +1431,7 @@ impl FamilyCore {
             total_draws: AtomicUsize::new(0),
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
-            state_machine_steps_unbounded: AtomicBool::new(false),
+            events: Mutex::new(Vec::new()),
             stateful_step_count: AtomicI64::new(50),
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
@@ -1481,17 +1480,6 @@ impl FamilyCore {
             .get()
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Make every state machine of this family run without a step cap.
-    pub(crate) fn set_state_machine_steps_unbounded(&self) {
-        self.state_machine_steps_unbounded
-            .store(true, Ordering::Relaxed);
-    }
-
-    /// Whether state machines of this family run without a step cap.
-    pub(crate) fn state_machine_steps_unbounded(&self) -> bool {
-        self.state_machine_steps_unbounded.load(Ordering::Relaxed)
     }
 
     /// Set the target number of steps a stateful test case runs.
@@ -1618,6 +1606,7 @@ pub struct NativeTestCase {
 }
 
 impl NativeTestCase {
+    #[cfg(test)]
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
         Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
     }
@@ -2375,8 +2364,8 @@ impl NativeTestCase {
 
     /// Like [`Self::weighted`], but samples with the full-precision
     /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
-    /// sampler's 1/256 floor (e.g. a stateful stop signal at `p = 2^-16`) are
-    /// honored. Routed here from `generate_boolean`.
+    /// sampler's 1/256 quantization (e.g. the stateful continue signal at
+    /// `p = 1 - 2^-16`) are honored. Routed here from `generate_boolean`.
     pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         self.weighted_with(p, forced, weighted_boolean_sample_precise)
     }

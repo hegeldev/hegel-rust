@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.36.4 - 2026-09-07
+
+This patch changes the defaults `hegel_settings_new` picks when running inside Antithesis. The failure database is disabled and every health check is skipped. The notice that a concurrent state machine has made the run nondeterministic is also no longer printed inside Antithesis.
+
+## 0.36.3 - 2026-09-04
+
+This patch adds a new shrink pass that is able to delete regions of the test case where it would previously have got stuck.
+You should see improvements in cases where there were previously redundant elements that were "obviously" deletable but that the shrinker was for some reason struggling with.
+
+## 0.36.2 - 2026-09-04
+
+This patch adds a shrink pass that deletes whole spans. The existing
+deletion passes only try windows of up to eight choices, so a stateful step
+whose rule draws and sampled invariant checks together cost more than that
+could never be deleted, and shrunk rule sequences kept redundant steps
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)).
+
+## 0.36.1 - 2026-09-04
+
+This patch inverts the per-round decision drawn by `hegel_state_machine_next_group`. We were using a stop signal where we should have been using a continue signal.
+
+## 0.36.0 - 2026-09-02
+
+This release changes `hegel_time_t` from microsecond to nanosecond resolution. The `microsecond` field (in `[0, 999999]`) is now `nanosecond` (in `[0, 999999999]`). `hegel_generate_time` and `hegel_generate_datetime` now also draw whole nanoseconds.
+
+## 0.35.0 - 2026-09-02
+
+This release removes single-test-case mode from the C ABI: the `hegel_mode_t` enum and `hegel_settings_set_mode` are gone, and every run drives the full property-test loop. Frontends that want one test case per invocation should set the test-case budget to 1 with `hegel_settings_set_test_cases` instead. To make that budget useful, a run with a one-case budget now skips the simplest-example probe that opens the generate phase. The single case is randomly generated, at the cost of the `LargeInitialTestCase` health check not running for such runs.
+
+Along with the mode, this release removes the machinery that silently unbounded state machines in single-test-case runs. State machines now always bound their rounds by the `stateful_step_count` setting.
+
+## 0.34.1 - 2026-09-02
+
+This patch adds event statistics: `hegel_event` and `hegel_event_value` record labelled observations on the current test case, and with the new `hegel_settings_set_show_statistics` setting the engine prints a statistics block on the run's output at the end of the run — per label, the fraction of generation-phase test cases the event occurred in, and a distribution summary of numeric observations.
+
 ## 0.34.0 - 2026-09-01
 
 This release adds `hegel_state_machine_should_check_invariant`: the engine-side sampling decision for stateful invariant checks, a recorded boolean draw that is true with probability 1/`stateful_step_count`. Frontends call it per invariant at each join point and run their guaranteed initial and final checks unconditionally.

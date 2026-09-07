@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.39.5 - 2026-09-07
+
+This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.
+
+## 0.39.4 - 2026-09-04
+
+This patch improves shrinking for collections whose elements each cost
+more than eight choices to generate. Previously such an element could
+only be deleted a few choices at a time, so shrunk counterexamples kept
+collection elements with no effect on the failure.
+
+## 0.39.3 - 2026-09-04
+
+This patch improves the shrinking of stateful test failures: shrunk rule
+sequences no longer keep redundant steps, such as inserts whose effect a
+later step overwrites
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)). Previously a
+step could only be deleted as a short run of individual choices, so machines
+with several invariants or draw-heavy rules shrank to sequences padded with
+no-op steps.
+
+## 0.39.2 - 2026-09-04
+
+This patch fixes shrinking and the `LargeInitialTestCase` health check for stateful tests.
+
+## 0.39.1 - 2026-09-04
+
+This patch improves the ergonomics of draw-time printing:
+
+- `BoxedGenerator<T>` is now a `PrintableGenerator` whenever `T` implements `PrettyPrintable`, printing drawn values by their own representation. A `.boxed()` in a generator definition no longer forces printing annotations onto every downstream draw site. `.boxed_printable()` remains the way to keep a custom printing strategy through the erasure.
+- `PrettyPrintable` is implemented for more standard-library types: the range types and `Bound`, `VecDeque`, `LinkedList`, `BinaryHeap`, the `NonZero` integers, `Cow`, and `Path`/`PathBuf`. The `chrono`, `jiff`, and `serde_json` integrations add impls for `Month`, `Days`, `Months`, `IsoWeek`, `TimeZone`, `AmbiguousOffset`, and `Map<String, Value>`. Every generator `gs::default()` returns can now be passed to `tc.draw` (several, such as `PathBuf`'s, could previously only be drawn silently).
+- Generators defined with `derive_generator!` implement `PrintableGenerator` whenever every field type is `PrettyPrintable`, printing `Name { field: value }` expressions.
+- Draws in helper functions no longer have to print as the anonymous `draw_1`, `draw_2`, …. Marking the helper `#[hegel::test_helper]` names its draws after their bindings, the same rewrite `#[hegel::test]` applies to a test body, and the new `TestCase::draw_named` reports a single draw under an explicit name.
+- The new `hegel::prelude` module exports the traits and entry points most tests need, so one `use hegel::prelude::*;` covers them.
+- `#[derive(PrettyPrintable)]` on a type with a non-printable field now reports an error pointing at that field, stating that every field must be `PrettyPrintable` and suggesting `#[pretty(debug)]`, instead of draw-site advice attached to the derive. Draw-site printability errors now lead with the once-per-type fix (implementing `PrettyPrintable`) and explain how `-> impl Generator<..>` return types and `.boxed()` interact with printability.
+- The `hegel::pretty` module docs now explain the whole printing system: what is printable out of the box, how to make your own types printable, the escape hatches for foreign types, type erasure, and draw naming.
+
+## 0.39.0 - 2026-09-03
+
+This release removes the `antithesis` cargo feature. The Antithesis integration is now always compiled in and activates automatically when the `ANTITHESIS_OUTPUT_DIR` environment variable is set, so running inside Antithesis no longer requires a feature flag and no longer fails when the flag is missing. Remove `features = ["antithesis"]` from your `hegeltest` dependency; Cargo rejects unknown features, so builds that still name it will not compile until it is removed.
+
+## 0.38.1 - 2026-09-03
+
+This patch fixes the ordering of step labels in stateful counterexamples. Each label used to print after the draws its rule made, so reading a failing sequence meant shifting every label back by one. Notes are also no longer deferred while an engine span is open, only while a drawn value is mid-print, so a note can never trail the output of a later draw.
+
+Each step now prints as a block, with the rule's draws and notes scoped to it:
+
+```
+Step 1: add {
+  let n = 1;
+}
+```
+
+`#[rule]` and `#[invariant]` bodies now rewrite `tc.draw` calls the way `#[hegel::test]` bodies do, so a rule's draws print under their variable names (`let n = 1;` instead of `let draw_1 = 1;`) and `tc.target` calls get per-expression labels. Draw names are scoped to the rule invocation: a name drawn once per rule prints bare in every step, and only names drawn repeatedly within one invocation get a numeric suffix.
+
+## 0.38.0 - 2026-09-02
+
+This release makes generated times and datetimes nanosecond resolution instead of microsecond.
+
+`extras::jiff::times()` now generates every `jiff::civil::Time`. A range whose bounds are between two consecutive microseconds is no longer an error.
+
+## 0.37.0 - 2026-09-02
+
+This release removes `Mode::SingleTestCase` and, with it, the ways it silently changed test semantics: state machines no longer run rules forever in any configuration (they are always bounded by `stateful_step_count`), and `tc.repeat(...)` always uses the engine-driven loop protocol. The `Mode` enum, `Settings::mode`, and the `--single-test-case` CLI flag are gone.
+
+Instead, `#[hegel::main]` binaries now always run exactly one test case per invocation. The run otherwise behaves like any property test: invalid test cases (a failed `assume()`) are retried until one valid case has run, health checks apply, and failures are shrunk, reported, and persisted to the failure database, so a failure found by one invocation is replayed by the next. The test-case count is the one thing that cannot be changed — the `test_cases` attribute argument is rejected at compile time, the `--test-cases` CLI flag has been removed, and `HEGEL_TEST_CASES` has no effect on these binaries.
+
+## 0.36.1 - 2026-09-02
+
+This patch adds event statistics. `tc.event(label)` records that a labelled situation occurred in the current test case, and `tc.event_value(label, value)` records a numeric observation; with statistics enabled — `Settings::show_statistics(true)`, or the `HEGEL_STATISTICS` environment variable — the end of the run reports, per label, the fraction of generation-phase test cases each event occurred in and a distribution summary (count, min, median, mean, p90, max) of each numeric observation. Use it to check that the situations a test is meant to exercise actually occur, and at the sizes you expect.
+
+## 0.36.0 - 2026-09-02
+
+This release removes the 12-component limit on `one_of!`: it now accepts any number of generators. Components stay unboxed, and the result is a `PrintableGenerator` exactly when every component is one.
+
+`one_of!` now builds the same `OneOfGenerator` the vec-based `one_of` function returns, holding a `OneOfCons`/`OneOfLast` chain of its components and dispatching through the new `Alternatives` and `PrintableAlternatives` traits, instead of one of twelve fixed-arity generator types. This breaks code that named those types:
+
+- `OneOf1Generator` through `OneOf12Generator` are gone. To name the type of a `one_of!` result, write the chain out (e.g. `OneOfGenerator<'static, T, OneOfCons<G1, OneOfLast<G2>>>`), or box the components and store a `OneOfGenerator<'static, T>`.
+- `OneOfGenerator`'s third type parameter is now the alternatives store rather than the boxed element type: `OneOfGenerator<'a, T, BoxedGenerator<'a, T>>` becomes `OneOfGenerator<'a, T, Vec<BoxedGenerator<'a, T>>>`. The default `OneOfGenerator<'a, T>` form is unchanged.
+
 ## 0.35.0 - 2026-09-01
 
 This release changes when stateful invariants run. `#[invariant]` methods previously ran after every rule; they now run in full on the machine's initial and final state, and are sampled in between — after any given rule, each invariant runs with probability 1/`stateful_step_count`. This keeps an invariant's expected cost per test case constant as the step count grows, and a violation that persists to the end of a test case is still always caught; what is given up is observing most intermediate states, so a violation a later rule *undoes* is only caught when a sampled check lands inside the window. This applies to both sequential and concurrent state machines.

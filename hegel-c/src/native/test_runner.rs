@@ -62,6 +62,10 @@ pub struct RunResult {
     /// for folding into the choice tree. Empty on a result reconstructed from
     /// the tree (the events are already recorded there).
     pub span_events: Vec<(usize, SpanEvent)>,
+    /// `tc.event()` / `tc.event_value()` observations from this execution,
+    /// in recording order. Empty for tests that record no events and on a
+    /// result reconstructed from the tree.
+    pub events: Vec<(String, Option<f64>)>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -123,28 +127,6 @@ pub(crate) async fn explore(
         core::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
     )
     .await
-}
-
-/// Run one test case (used by `Mode::SingleTestCase`) and return its
-/// failure, if any.
-///
-/// A single test case is not a property-test run — there is no exploration,
-/// shrinking, or replay — so it bypasses [`explore`] entirely; the one case
-/// offered through the exchange is its own report.
-pub(crate) async fn run_single_case(
-    settings: &Settings,
-    database_key: Option<&str>,
-    exchange: &CaseExchange,
-) -> Result<Option<Failure>, RunError> {
-    let mut rng = create_rng(settings, database_key)?;
-    let ntc = NativeTestCase::new_random(rng.spawn())?;
-    ntc.family().set_state_machine_steps_unbounded();
-    let (data_source, handle) = NativeDataSource::new(ntc);
-    exchange.offer(Box::new(data_source)).await;
-    match NativeDataSource::take_outcome(&handle)? {
-        TestCaseResult::Interesting(failure) => Ok(Some(failure)),
-        _ => Ok(None),
-    }
 }
 
 /// The full multi-test-case engine: database replay, generation, and
@@ -286,11 +268,17 @@ impl<'a> Engine<'a> {
         if actually_generate {
             log_phase("Generate", "Start");
         }
+        self.collect_statistics = true;
 
+        // The simplest-example probe counts against the test-case budget, so
+        // a one-case budget skips it: the whole budget goes to the randomly
+        // generated case, instead of every run executing only the
+        // deterministic simplest case.
         if settings.phases.contains(&Phase::Generate)
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
+            && max_test_cases > 1
         {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
@@ -302,9 +290,7 @@ impl<'a> Engine<'a> {
                 run.status == Status::EarlyStop,
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
-                settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::LargeInitialTestCase),
+                settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
                 return Err(RunError::HealthCheck(msg));
             }
@@ -381,9 +367,7 @@ impl<'a> Engine<'a> {
                     if run.status == Status::Invalid
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
-                        && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
+                        && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
                     {
                         return Err(RunError::HealthCheck(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
@@ -398,9 +382,7 @@ impl<'a> Engine<'a> {
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
                         self.overrun_test_cases,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TestCasesTooLarge),
+                        settings.health_check_suppressed(HealthCheck::TestCasesTooLarge),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -409,9 +391,7 @@ impl<'a> Engine<'a> {
                         self.valid_test_cases,
                         self.total_test_time,
                         too_slow_threshold,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TooSlow),
+                        settings.health_check_suppressed(HealthCheck::TooSlow),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -445,9 +425,7 @@ impl<'a> Engine<'a> {
             && self.valid_test_cases == 0
             && self.interesting.is_empty()
             && !self.test_is_trivial
-            && !settings
-                .suppress_health_check
-                .contains(&HealthCheck::FilterTooMuch)
+            && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
             && self.invalid_test_cases > 0
         {
             return Err(RunError::HealthCheck(format!(
@@ -463,6 +441,7 @@ impl<'a> Engine<'a> {
         if actually_generate {
             log_phase("Generate", "End");
         }
+        self.collect_statistics = false;
 
         if !self.interesting.is_empty() && !replay_aligned && shrink_phase && !self.nondeterministic
         {
@@ -619,6 +598,12 @@ impl<'a> Engine<'a> {
             }
         }
 
+        if settings.show_statistics {
+            for line in self.statistics.render() {
+                output.line(&line);
+            }
+        }
+
         let nondeterministic = self.nondeterministic;
         let failures = origins_sorted
             .into_iter()
@@ -761,7 +746,9 @@ pub(crate) fn flaky_diagnostic() -> String {
 /// into nondeterministic mode (see [`Engine::nondeterministic`]).
 /// Informational rather than a warning: the concurrency was asked for
 /// explicitly, but the user should learn why their failure is reported
-/// unshrunk and without a reproduce blob.
+/// unshrunk and without a reproduce blob. Not printed inside Antithesis,
+/// which is deterministic and does its own reproduction, so none of the
+/// caveats apply there.
 pub(crate) fn concurrent_machine_notice() -> &'static str {
     "Concurrent state machine detected: this run is nondeterministic, so failures \
      are reported from the execution that discovered them, without shrinking, \
@@ -957,6 +944,13 @@ pub(crate) struct Engine<'a> {
     /// several distinct bugs surface each one.
     pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
     pub(crate) targeting: crate::native::targeting::TargetingState,
+    /// Event statistics for the end-of-run report, folded in by
+    /// [`Self::record_run`] while [`Self::collect_statistics`] is set.
+    pub(crate) statistics: crate::native::events::RunStatistics,
+    /// Set for the duration of the generation phase, the only phase whose
+    /// cases feed [`Self::statistics`]: shrinking replays the same target
+    /// over and over and would swamp the reported distributions.
+    pub(crate) collect_statistics: bool,
     pub(crate) calls: u64,
     pub(crate) valid_test_cases: u64,
     pub(crate) invalid_test_cases: u64,
@@ -999,6 +993,8 @@ impl<'a> Engine<'a> {
             tree_root: crate::native::data_tree::DataTreeNode::default(),
             interesting: HashMap::default(),
             targeting: crate::native::targeting::TargetingState::new(),
+            statistics: crate::native::events::RunStatistics::default(),
+            collect_statistics: false,
             calls: 0,
             valid_test_cases: 0,
             invalid_test_cases: 0,
@@ -1043,7 +1039,7 @@ impl<'a> Engine<'a> {
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.nondeterministic && family.concurrent_machine() {
             self.nondeterministic = true;
-            if self.settings.verbosity != Verbosity::Quiet {
+            if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
                 self.settings.output.line(concurrent_machine_notice());
             }
         }
@@ -1081,6 +1077,9 @@ impl<'a> Engine<'a> {
         if run.status >= Status::Valid && !run.target_observations.is_empty() {
             let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             self.targeting.record(&choices, &run.target_observations);
+        }
+        if self.collect_statistics && matches!(run.status, Status::Valid | Status::Interesting) {
+            self.statistics.record_case(&run.events);
         }
         match run.status {
             Status::Valid => self.valid_test_cases += 1,
@@ -1126,6 +1125,7 @@ impl<'a> Engine<'a> {
         let spans = NativeDataSource::take_spans(&handle);
         let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
+        let events = NativeDataSource::take_events(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
@@ -1142,6 +1142,7 @@ impl<'a> Engine<'a> {
             origin,
             target_observations,
             span_events,
+            events,
         })
     }
 
@@ -1183,6 +1184,7 @@ impl<'a> Engine<'a> {
                     origin: out.origin,
                     target_observations: out.target_observations,
                     span_events: Vec::new(),
+                    events: Vec::new(),
                 });
             }
         }

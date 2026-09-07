@@ -100,6 +100,63 @@ impl PrettyPrintable for Zoned {
         printer.text(&format!("{:?}.parse::<Zoned>().unwrap()", self.to_string()));
     }
 }
+
+/// Prints the constructor for the time zone's representation: `TimeZone::UTC`,
+/// `TimeZone::unknown()`, `TimeZone::get("…").unwrap()` for an IANA zone, or
+/// `TimeZone::fixed(…)`. A zone with none of those representations (an
+/// unnamed TZif or POSIX zone) prints its `Debug` output.
+impl PrettyPrintable for jiff::tz::TimeZone {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        if self.is_unknown() {
+            printer.text("TimeZone::unknown()");
+        } else if let Some(name) = self.iana_name() {
+            if name == "UTC" {
+                printer.text("TimeZone::UTC");
+            } else {
+                printer.text(&format!("TimeZone::get({name:?}).unwrap()"));
+            }
+        } else if let Ok(offset) = self.to_fixed_offset() {
+            printer.begin_group(16, "TimeZone::fixed(");
+            offset.pretty_print(printer);
+            printer.end_group(")");
+        } else {
+            crate::pretty::print_debug_repr(&format!("{self:?}"), printer);
+        }
+    }
+}
+
+impl PrettyPrintable for jiff::tz::AmbiguousOffset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        use jiff::tz::AmbiguousOffset;
+        match self {
+            AmbiguousOffset::Unambiguous { offset } => {
+                printer.begin_group(4, "AmbiguousOffset::Unambiguous {");
+                printer.breakable(" ");
+                printer.text("offset: ");
+                offset.pretty_print(printer);
+                printer.end_group(" }");
+            }
+            AmbiguousOffset::Gap { before, after } => {
+                pretty_before_after("AmbiguousOffset::Gap {", before, after, printer);
+            }
+            AmbiguousOffset::Fold { before, after } => {
+                pretty_before_after("AmbiguousOffset::Fold {", before, after, printer);
+            }
+        }
+    }
+}
+
+fn pretty_before_after(open: &str, before: &Offset, after: &Offset, printer: &mut PrettyPrinter) {
+    printer.begin_group(4, open);
+    printer.breakable(" ");
+    printer.text("before: ");
+    before.pretty_print(printer);
+    printer.text(",");
+    printer.breakable(" ");
+    printer.text("after: ");
+    after.pretty_print(printer);
+    printer.end_group(" }");
+}
 use crate::test_case::invalid_argument;
 
 /// Convert a [`Date`] to the engine's date struct. Every jiff `Date` fits:
@@ -176,20 +233,12 @@ pub fn dates() -> DateGenerator {
     }
 }
 
-/// Total nanoseconds from midnight for a [`Time`].
-fn time_total_nanos(t: Time) -> i64 {
-    (i64::from(t.hour()) * 3_600 + i64::from(t.minute()) * 60 + i64::from(t.second()))
-        * 1_000_000_000
-        + i64::from(t.subsec_nanosecond())
-}
-
-/// Convert whole microseconds from midnight to the engine's time struct.
-fn hegel_time(total_micros: i64) -> hegel_c::hegel_time_t {
+fn hegel_time(t: Time) -> hegel_c::hegel_time_t {
     hegel_c::hegel_time_t {
-        hour: (total_micros / 3_600_000_000) as u8,
-        minute: (total_micros / 60_000_000 % 60) as u8,
-        second: (total_micros / 1_000_000 % 60) as u8,
-        microsecond: (total_micros % 1_000_000) as u32,
+        hour: t.hour() as u8,
+        minute: t.minute() as u8,
+        second: t.second() as u8,
+        nanosecond: t.subsec_nanosecond() as u32,
     }
 }
 
@@ -218,24 +267,12 @@ impl Generator<Time> for TimeGenerator {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        // Generated times are whole microseconds, so round the bounds
-        // inward: min up, max down (totals are non-negative). That can empty
-        // an in-order range whose bounds sit between two consecutive
-        // microseconds.
-        let min_micros = (time_total_nanos(self.min_value) + 999) / 1_000;
-        let max_micros = time_total_nanos(self.max_value) / 1_000;
-        if min_micros > max_micros {
-            invalid_argument!(
-                "times() generates whole-microsecond values, and no whole microsecond \
-                 lies between min_value and max_value"
-            );
-        }
-        let t = tc.generate_time(hegel_time(min_micros), hegel_time(max_micros));
+        let t = tc.generate_time(hegel_time(self.min_value), hegel_time(self.max_value));
         Time::new(
             t.hour as i8,
             t.minute as i8,
             t.second as i8,
-            (t.microsecond * 1000) as i32,
+            t.nanosecond as i32,
         )
         .unwrap()
     }
@@ -248,11 +285,6 @@ impl PrintableGenerator<Time> for TimeGenerator {
 }
 
 /// Generate [`jiff::civil::Time`] values.
-///
-/// Generated times have whole-microsecond precision (`subsec_nanosecond()`
-/// is always a multiple of 1000). Bounds may carry sub-microsecond
-/// components; they are honoured by rounding inward to the enclosed
-/// microsecond range.
 ///
 /// See [`TimeGenerator`] for builder methods.
 ///

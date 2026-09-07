@@ -77,6 +77,10 @@ impl NativeDataSource {
         handle.lock().family().target_observations.lock().clone()
     }
 
+    pub fn take_events(handle: &NativeTestCaseHandle) -> Vec<(String, Option<f64>)> {
+        handle.lock().family().events.lock().clone()
+    }
+
     /// The test case's outcome, reconstructed from its family's write-once
     /// conclusion. Whoever concluded the family first — a draw that overran
     /// or hit a terminal assume, or the body via `mark_complete` — set the
@@ -415,6 +419,21 @@ impl DataSource for NativeDataSource {
             )));
         }
         observations.insert(label.to_string(), score);
+        Ok(())
+    }
+
+    fn event_observation(&self, label: &str, value: Option<f64>) -> Result<(), DataSourceError> {
+        if let Some(v) = value {
+            if !v.is_finite() {
+                return Err(DataSourceError::InvalidArgument(format!(
+                    "tc.event_value({label:?}, {v}) requires a finite value; \
+                     got non-finite value"
+                )));
+            }
+        }
+        let family = Arc::clone(self.inner.lock().family());
+        let mut events = family.events.lock();
+        events.push((label.to_string(), value));
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 //! Fixture binary: a bare `#[hegel::main]` (no attribute arguments) drawing a
-//! single boolean. Drivers use it for `--help`, `--seed`, `--verbosity`, and
-//! `--single-test-case` CLI handling.
+//! single boolean. Drivers use it for `--help`, `--seed`, and `--verbosity`
+//! CLI handling.
 
 use hegel::TestCase;
 use hegel::generators as gs;

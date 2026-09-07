@@ -625,7 +625,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
                 "state_machine_next_rule returned out-of-range rule index {rule_index}"
             );
             let rule = &rules[rule_index as usize];
-            tc.note(&format!("Step {}: {}", steps_attempted + 1, rule.name));
+            tc.note(&format!("Step {}: {} {{", steps_attempted + 1, rule.name));
 
             let rule_tc = tc.child(2);
             let thunk = || (rule.apply)(&mut m, rule_tc);
@@ -633,17 +633,20 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
 
             steps_attempted += 1;
             match result {
-                Ok(()) => {}
+                Ok(()) => tc.note("}"),
                 Err(e) if e.downcast_ref::<AssumeFailed>().is_some() => {
                     machine_rule_rejected(&tc, &machine, 0);
                     round_rejected = true;
-                    tc.note("Rule stopped early due to violated assumption.");
+                    tc.child(2)
+                        .note("Rule stopped early due to violated assumption.");
+                    tc.note("}");
                 }
                 // Everything else — including StopTest, so an out-of-data
                 // case is reported as an overrun instead of returning
                 // normally with a half-applied rule — unwinds through the
                 // caller.
                 Err(e) => {
+                    tc.note("}");
                     tc.stop_span(false);
                     resume_unwind(e)
                 }
@@ -837,22 +840,28 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
         };
 
         let rule = &rules[rule_index as usize];
-        tc.note(&format!("Rule: {}", rule.name));
+        tc.note(&format!("Rule: {} {{", rule.name));
         let rule_tc = tc.child(2);
         let result = catch_unwind(AssertUnwindSafe(|| (rule.apply)(m, rule_tc)));
         match result {
-            Ok(()) => {}
+            Ok(()) => tc.note("}"),
             Err(e) => match classify_worker_unwind(e) {
                 WorkerEvent::Invalid => {
                     let rejected = catch_unwind(AssertUnwindSafe(|| {
                         machine_rule_rejected(tc, machine, worker as i64);
                     }));
                     if let Err(e) = rejected {
+                        tc.note("}");
                         return classify_worker_unwind(e);
                     }
-                    tc.note("Rule stopped early due to violated assumption.");
+                    tc.child(2)
+                        .note("Rule stopped early due to violated assumption.");
+                    tc.note("}");
                 }
-                event => return event,
+                event => {
+                    tc.note("}");
+                    return event;
+                }
             },
         }
     }

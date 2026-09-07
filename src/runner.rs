@@ -65,18 +65,6 @@ pub enum Phase {
     Shrink,
 }
 
-/// Controls the test execution mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Mode {
-    /// Run a full test (multiple test cases with shrinking). This is the default.
-    TestRun,
-    /// Run a single test case with no shrinking or replay. Useful for
-    /// Antithesis workloads and other contexts where you want pure data
-    /// generation without property-testing overhead.
-    SingleTestCase,
-}
-
 /// Selects the source of randomness the engine draws from.
 ///
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
@@ -125,9 +113,15 @@ pub enum Verbosity {
 ///
 /// In CI environments (detected automatically), the database is disabled
 /// and tests are derandomized by default.
+///
+/// Inside [Antithesis](https://antithesis.com/) (detected via
+/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
+/// by default: Antithesis owns reproduction, and its thread pausing would
+/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. The
+/// database can still be enabled explicitly with [`Settings::database`];
+/// health checks stay off.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
@@ -137,6 +131,7 @@ pub struct Settings {
     pub(crate) suppress_health_check: Vec<HealthCheck>,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
+    pub(crate) show_statistics: bool,
     pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
@@ -145,14 +140,14 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically.
+    /// Create settings with defaults. Detects CI environments automatically;
+    /// Antithesis detection happens in the engine.
     pub fn new() -> Self {
         Self::for_ci(is_in_ci())
     }
 
     fn for_ci(in_ci: bool) -> Self {
         Self {
-            mode: Mode::TestRun,
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
@@ -172,15 +167,10 @@ impl Settings {
                 Phase::Shrink,
             ],
             report_multiple_failures: false,
+            show_statistics: false,
             print_blob: false,
             backend: None,
         }
-    }
-
-    /// Set the execution mode. Defaults to [`Mode::TestRun`].
-    pub fn mode(mut self, mode: Mode) -> Self {
-        self.mode = mode;
-        self
     }
 
     /// Select the randomness backend.
@@ -301,6 +291,21 @@ impl Settings {
         self.phases.contains(&phase)
     }
 
+    /// Print event statistics at the end of the run (default: off): for
+    /// each label recorded with [`TestCase::event`](crate::TestCase::event),
+    /// the fraction of generation-phase test cases it occurred in, and for
+    /// each label recorded with
+    /// [`TestCase::event_value`](crate::TestCase::event_value), a summary of
+    /// the observed distribution.
+    ///
+    /// The `HEGEL_STATISTICS` environment variable, when set to anything
+    /// but `"0"` or the empty string, turns this on at runtime without
+    /// editing source.
+    pub fn show_statistics(mut self, show_statistics: bool) -> Self {
+        self.show_statistics = show_statistics;
+        self
+    }
+
     /// Apply environment-variable overrides to these settings. Called once
     /// per run, after all builder configuration, so the environment wins
     /// over values set in source.
@@ -324,6 +329,11 @@ impl Settings {
                 } else {
                     Database::Path(value)
                 };
+            }
+        }
+        if let Some(value) = env("HEGEL_STATISTICS") {
+            if !value.is_empty() && value != "0" {
+                self.show_statistics = true;
             }
         }
         self
@@ -402,6 +412,7 @@ pub struct Hegel<F> {
     test_location: Option<TestLocation>,
     settings: Settings,
     reproduce_failure: Option<String>,
+    single_test_case: bool,
 }
 
 impl<F> Hegel<F>
@@ -416,6 +427,7 @@ where
             settings: Settings::new(),
             test_location: None,
             reproduce_failure: None,
+            single_test_case: false,
         }
     }
 
@@ -428,6 +440,15 @@ where
     #[doc(hidden)]
     pub fn __database_key(mut self, key: String) -> Self {
         self.database_key = Some(key);
+        self
+    }
+
+    /// Run exactly one test case, the behavior of `#[hegel::main]` binaries.
+    /// Applied after the environment overrides in [`run`](Self::run), so
+    /// `HEGEL_TEST_CASES` cannot undo it.
+    #[doc(hidden)]
+    pub fn __single_test_case(mut self) -> Self {
+        self.single_test_case = true;
         self
     }
 
@@ -461,7 +482,10 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        let settings = self.settings.with_env_overrides();
+        let mut settings = self.settings.with_env_overrides();
+        if self.single_test_case {
+            settings.test_cases = 1;
+        }
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,

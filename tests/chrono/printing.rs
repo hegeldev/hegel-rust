@@ -78,3 +78,27 @@ fn chrono_values_print_as_constructor_expressions() {
          .and_local_timezone(FixedOffset::east_opt(0).unwrap()).unwrap()"
     );
 }
+
+#[test]
+fn month_days_months_and_iso_weeks_print_as_constructor_expressions() {
+    use chrono::{Datelike, Days, Month, Months, NaiveDate};
+    assert_eq!(render(&Month::January), "Month::January");
+    assert_eq!(render(&Days::new(5)), "Days::new(5)");
+    assert_eq!(render(&Months::new(7)), "Months::new(7)");
+    let week = NaiveDate::from_ymd_opt(2020, 2, 29).unwrap().iso_week();
+    assert_eq!(
+        render(&week),
+        "NaiveDate::from_isoywd_opt(2020, 9, Weekday::Mon).unwrap().iso_week()"
+    );
+}
+
+#[test]
+fn every_chrono_default_generator_is_drawable() {
+    use chrono::{Days, IsoWeek, Month, Months, Weekday};
+    use hegel::generators as gs;
+    printed_draw_lines(gs::default::<Weekday>());
+    printed_draw_lines(gs::default::<Month>());
+    printed_draw_lines(gs::default::<Days>());
+    printed_draw_lines(gs::default::<Months>());
+    printed_draw_lines(gs::default::<IsoWeek>());
+}

@@ -80,7 +80,7 @@ use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
-use crate::settings::{Backend, HealthCheck, Mode, Output, Phase, Settings, Verbosity};
+use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call. See "Calling convention" in the header
 /// preamble.
@@ -156,21 +156,6 @@ pub enum hegel_status_t {
     HEGEL_STATUS_INTERESTING = 3,
 }
 
-/// How the engine should treat the run: a full property-test loop or a
-/// single test case. Set via `hegel_settings_set_mode`.
-#[repr(C)]
-#[derive(Copy, Clone)]
-#[allow(non_camel_case_types)]
-pub enum hegel_mode_t {
-    /// libhegel drives a full generate / shrink / replay loop until the
-    /// test-case budget or the choice tree is exhausted. The default.
-    HEGEL_MODE_TEST_RUN = 0,
-    /// libhegel produces exactly one test case and stops, with no shrinking.
-    /// Useful for replaying a stored counterexample or running an
-    /// exploratory probe.
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
-}
-
 /// Which source of randomness the engine draws from. Set via
 /// `hegel_settings_set_backend`.
 #[repr(C)]
@@ -211,11 +196,7 @@ pub enum hegel_run_status_t {
     /// whatever it captured while running the discovering test case (the
     /// engine stamps every case of such a run nondeterministic up front,
     /// see `hegel_test_case_is_nondeterministic`, precisely so the caller
-    /// captures each case's output as it runs). Only full test runs report
-    /// this status; a failing single-test-case run reports
-    /// `HEGEL_RUN_STATUS_FAILED` even when the case created a concurrent
-    /// machine, since the caller reports such a case from its own execution
-    /// anyway.
+    /// captures each case's output as it runs).
     HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 }
 
@@ -675,7 +656,7 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence, or `None` when the engine produced no blob (a
-    /// single-test-case run, or a nondeterministic run). Read via
+    /// nondeterministic run). Read via
     /// `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
 }
@@ -750,6 +731,12 @@ fn cstring_lossy(s: &str) -> CString {
 /// When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
 /// similar variables) the defaults change: the database is disabled and
 /// derandomization is enabled. Override either with the explicit setters.
+///
+/// When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
+/// the database is disabled and every health check is skipped. The database
+/// can still be enabled with `hegel_settings_set_database`; the health
+/// checks cannot be re-enabled, since Antithesis's thread pausing would trip
+/// wall-clock checks such as `TooSlow` spuriously.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,
@@ -801,44 +788,13 @@ unsafe fn settings_mut<'a>(
 }
 
 /// Parameters:
-/// `mode`: A full run loop or a single test case with no shrinking. See
-///   `hegel_mode_t`.
+/// `backend`: A `hegel_backend_t` value selecting the source of
+///   randomness.
 ///
 /// Returns `HEGEL_OK`.
 ///
 /// The enum-valued setters take `uint32_t` rather than the enum type so
 /// that an out-of-range value is an error instead of undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_mode(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    mode: u32,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_mode") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    let m = match mode {
-        x if x == hegel_mode_t::HEGEL_MODE_TEST_RUN as u32 => Mode::TestRun,
-        x if x == hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32 => Mode::SingleTestCase,
-        _ => {
-            set_last_error(
-                ctx,
-                &format!("hegel_settings_set_mode: unknown mode {mode}"),
-            );
-            return HEGEL_E_INVALID_ARG;
-        }
-    };
-    handle.inner = handle.inner.clone().mode(m);
-    HEGEL_OK
-}
-
-/// Parameters:
-/// `backend`: A `hegel_backend_t` value selecting the source of
-///   randomness.
-///
-/// Returns `HEGEL_OK`.
 ///
 /// Once an explicit backend has been set on a handle there is no way to
 /// change it within a run.
@@ -1024,6 +980,29 @@ pub unsafe extern "C" fn hegel_settings_set_report_multiple_failures(
             Err(rc) => return rc,
         };
     handle.inner = handle.inner.clone().report_multiple_failures(yes);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `yes`: When `true`, libhegel prints a statistics block on the run's
+///   output at the end of the run: for each label recorded with
+///   `hegel_event`, the fraction of generation-phase test cases it
+///   occurred in, and for each label recorded with `hegel_event_value`, a
+///   distribution summary of the observed values. Defaults to off.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_show_statistics(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_show_statistics") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().show_statistics(yes);
     HEGEL_OK
 }
 
@@ -2555,8 +2534,8 @@ unsafe fn state_machine_ref<'a>(
 /// carry no reproduce blob. A notice explaining this is printed once, on
 /// the run's output, unless verbosity is quiet. This applies even to test
 /// cases whose drawn concurrency level is 1: the declared bound is what
-/// counts. Standalone test cases — single-test-case runs and
-/// `hegel_test_case_from_blob` replays — are never rejected.
+/// counts. Standalone test cases — `hegel_test_case_from_blob` replays —
+/// are never rejected.
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /
@@ -2689,9 +2668,7 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
 /// `hegel_state_machine_next_rule` stream is exhausted — including before the
 /// first rule is requested. This applies to sequential machines too: the
 /// frontend must advance the group when the rule stream is exhausted, even
-/// though there is only a single group. In single-test-case mode (steps
-/// unbounded, e.g. under Antithesis) `*out_group_id` is never set to
-/// `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
+/// though there is only a single group.
 ///
 /// `state_machine` must be a handle returned by `hegel_new_state_machine`
 /// on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
@@ -3634,7 +3611,7 @@ pub struct hegel_date_t {
 }
 
 /// A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
-/// `[0, 59]`, `microsecond` in `[0, 999999]`.
+/// `[0, 59]`, `nanosecond` in `[0, 999999999]`.
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -3642,7 +3619,7 @@ pub struct hegel_time_t {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
-    pub microsecond: u32,
+    pub nanosecond: u32,
 }
 
 /// A drawn naive datetime (a date plus a time of day, no timezone).
@@ -3667,7 +3644,7 @@ fn rust_time(t: &hegel_time_t) -> crate::native::draws::special::Time {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3691,7 +3668,7 @@ fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3729,7 +3706,7 @@ pub unsafe extern "C" fn hegel_generate_date(
 
 /// Parameters:
 /// `min_value` / `max_value`: Inclusive bounds. Pass all-zeros and
-///   `{23, 59, 59, 999999}` for the full day.
+///   `{23, 59, 59, 999999999}` for the full day.
 ///
 /// Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
 ///
@@ -3905,6 +3882,82 @@ pub unsafe extern "C" fn hegel_target(
         }
     };
     match tc.stream.target_observation(value, label) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Record an event for the current test case, for the end-of-run
+/// statistics report: the report shows, per label, the fraction of
+/// generation-phase test cases in which the label was recorded at least
+/// once. The report prints only when the `show_statistics` setting is on
+/// (`hegel_settings_set_show_statistics`); without it events cost almost
+/// nothing and report nothing.
+///
+/// Parameters:
+/// `label`: Non-NULL, valid UTF-8.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+/// label.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_event(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    label: *const c_char,
+) -> hegel_result_t {
+    unsafe { event_observation(ctx, tc, "hegel_event", label, None) }
+}
+
+/// Record a numeric observation under `label` for the current test case,
+/// for the end-of-run statistics report: the report shows, per label, a
+/// summary of the observed distribution (count, min, median, mean, p90,
+/// max) over generation-phase test cases. The report prints only when the
+/// `show_statistics` setting is on
+/// (`hegel_settings_set_show_statistics`); without it observations cost
+/// almost nothing and report nothing.
+///
+/// Parameters:
+/// `value`: The observation. Must be finite.
+/// `label`: Non-NULL, valid UTF-8. Unlike `hegel_target`, a label may be
+///   observed any number of times per test case.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
+/// label or a non-finite value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_event_value(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    value: f64,
+    label: *const c_char,
+) -> hegel_result_t {
+    unsafe { event_observation(ctx, tc, "hegel_event_value", label, Some(value)) }
+}
+
+/// Shared body of `hegel_event` and `hegel_event_value`.
+unsafe fn event_observation(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    fn_name: &str,
+    label: *const c_char,
+    value: Option<f64>,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, fn_name, tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    if label.is_null() {
+        set_last_error(ctx, &format!("{fn_name}: label is null"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    let label = match unsafe { CStr::from_ptr(label) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error(ctx, &format!("{fn_name}: label is not valid UTF-8"));
+            return HEGEL_E_INVALID_ARG;
+        }
+    };
+    match tc.stream.event_observation(label, value) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }

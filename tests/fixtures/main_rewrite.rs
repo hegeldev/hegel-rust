@@ -4,7 +4,7 @@
 use hegel::TestCase;
 use hegel::generators as gs;
 
-#[hegel::main(test_cases = 1)]
+#[hegel::main]
 fn main(tc: TestCase) {
     let my_var: i32 = tc.draw(gs::integers());
     panic!("boom {}", my_var);

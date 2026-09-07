@@ -44,9 +44,8 @@ pub(crate) fn run_native(
 /// Run the native test runner, offering each test case's raw data source to
 /// the driver through `exchange`.
 ///
-/// Dispatches on [`Mode`](crate::settings::Mode) and runs the whole
-/// exploration. Suspends only at the offers, so it can be driven with a
-/// no-op waker (see [`crate::exchange`]).
+/// Runs the whole exploration. Suspends only at the offers, so it can be
+/// driven with a no-op waker (see [`crate::exchange`]).
 ///
 /// The engine only *explores* — database replay, generation, and shrinking —
 /// and every test case is non-final. Each returned
@@ -61,15 +60,6 @@ pub(crate) async fn run_native_async(
     database_key: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
-    if settings.mode == crate::settings::Mode::SingleTestCase {
-        let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, exchange).await?;
-        return Ok(TestRunResult {
-            failures: failure.into_iter().collect(),
-            nondeterministic: false,
-        });
-    }
-
     crate::native::test_runner::explore(settings, database_key, exchange).await
 }
 
