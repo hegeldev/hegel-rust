@@ -578,20 +578,30 @@ where
 
     pub fn run(self) {
         let condition = self.condition;
-        Hegel::new(move |tc| {
-            let value = tc.draw_silent(&self.generator);
-            assert!(
-                !condition(&value),
-                "Found value that does not match predicate"
-            );
-        })
-        .settings(
-            Settings::new()
-                .test_cases(self.test_cases)
-                .database(None)
-                .suppress_health_check([HealthCheck::FilterTooMuch]),
-        )
-        .run();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Hegel::new(move |tc| {
+                let value = tc.draw_silent(&self.generator);
+                assert!(
+                    !condition(&value),
+                    "Found value that does not match predicate"
+                );
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(self.test_cases)
+                    .database(None)
+                    .suppress_health_check([HealthCheck::FilterTooMuch]),
+            )
+            .run();
+        }));
+        if let Err(payload) = result {
+            let is_unsatisfiable = payload
+                .downcast_ref::<String>()
+                .is_some_and(|s| s.starts_with("Unsatisfiable"));
+            if !is_unsatisfiable {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }
 

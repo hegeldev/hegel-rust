@@ -180,6 +180,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         "the join points must note the round's concurrency group:\n{text}"
     );
     assert_matches_regex(&text, r"\[worker \d+ \+\d+\.\d{3}ms\] Rule: boom");
+    assert_matches_regex(&text, r"\[worker \d+ \+\d+\.\d{3}ms\] Rule boom failed:");
     let worker = &regex::Regex::new(r"\[worker (\d+) \+\d+\.\d{3}ms\] Rule: boom")
         .unwrap()
         .captures(&text)
@@ -398,6 +399,41 @@ fn a_workers_usage_error_aborts_the_run_verbatim() {
     });
     let payload = result.expect_err("an invalid-argument control payload aborts the run");
     assert_matches_regex(&panic_message(&payload), "finite score");
+}
+
+struct BrokenModel {
+    value: AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl BrokenModel {
+    #[rule]
+    fn bump(&self, _: TestCase) {
+        self.value.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[invariant]
+    fn stays_zero(&self, _: TestCase) {
+        assert_eq!(self.value.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn a_concurrent_invariant_failure_names_the_invariant() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            let m = BrokenModel {
+                value: AtomicI64::new(0),
+            };
+            run_concurrent(m, tc, 1, 1);
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    });
+    let payload = result.unwrap_err();
+    assert_matches_regex(&panic_message(&payload), "assertion");
+    let text = lines.join("\n");
+    assert!(text.contains("Invariant stays_zero failed:"), "{text}");
 }
 
 struct LateReject {

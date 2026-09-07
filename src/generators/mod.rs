@@ -27,8 +27,8 @@ pub use crate::test_case::{Collection, TestCase, labels};
 #[doc(inline)]
 pub use crate::tuples;
 pub use collections::{
-    ArrayGenerator, HashMapGenerator, HashSetGenerator, VecGenerator, arrays, hashmaps, hashsets,
-    vecs,
+    ArrayGenerator, BTreeMapGenerator, BTreeSetGenerator, HashMapGenerator, HashSetGenerator,
+    VecGenerator, arrays, btree_maps, btree_sets, hashmaps, hashsets, vecs,
 };
 #[doc(hidden)]
 pub use combinators::one_of_from_alternatives;

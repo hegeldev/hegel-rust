@@ -68,6 +68,18 @@ fn resolve_round_unwind(events: Vec<WorkerEvent>, tc: &TestCase) -> Box<dyn std:
 }
 
 #[test]
+fn note_panic_trailer_notes_real_panics_and_skips_control_unwinds() {
+    let (_run, tc, lines) = capturing_test_case();
+    let assume: Box<dyn std::any::Any + Send> = Box::new(AssumeFailed);
+    let stop: Box<dyn std::any::Any + Send> = Box::new(StopTest);
+    note_panic_trailer(&tc, assume.as_ref(), "unwanted");
+    note_panic_trailer(&tc, stop.as_ref(), "unwanted");
+    note_panic_trailer(&tc, string_panic("boom").as_ref(), "Invariant x failed:");
+    tc.emit_rendered_output();
+    assert_eq!(*lines.lock().unwrap(), vec!["Invariant x failed:"]);
+}
+
+#[test]
 fn resolve_round_with_all_workers_done_returns_normally() {
     let (_run, tc, lines) = capturing_test_case();
     resolve_round(vec![WorkerEvent::RoundDone, WorkerEvent::RoundDone], &tc);
@@ -233,7 +245,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
 #[test]
 fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     run_lifecycle::init_panic_hook();
-    let (_run, tc, _lines) = capturing_test_case();
+    let (_run, tc, lines) = capturing_test_case();
     let m = AlwaysPanics;
     let rules = m.rules();
     let machine = register_machine(&tc, &["boom"], 1);
@@ -249,6 +261,14 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     assert_eq!(run_lifecycle::panic_message(&payload), "rule boom");
     let (_, _, location, _) = info.unwrap();
     assert!(location.contains("stateful_tests.rs"), "{location}");
+    tc.emit_rendered_output();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("Rule boom failed:"))
+    );
 }
 
 #[test]

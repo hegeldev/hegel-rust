@@ -537,6 +537,16 @@ pub trait StateMachine {
     fn invariants(&self) -> Vec<Invariant<Self>>;
 }
 
+/// Note which rule or invariant an unwind escaped from, so the failure
+/// report names it right before the panic diagnostic. Control unwinds (a
+/// rejected assumption, exhausted data) are not failures of the named
+/// method, so they get no trailer.
+fn note_panic_trailer(tc: &TestCase, e: &(dyn std::any::Any + Send), trailer: &str) {
+    if e.downcast_ref::<AssumeFailed>().is_none() && e.downcast_ref::<StopTest>().is_none() {
+        tc.note(trailer);
+    }
+}
+
 /// Run invariants at a join point. With a machine, each invariant runs only
 /// when the engine says to (see [`machine_should_check_invariant`]: always
 /// for an always-run invariant, per the sampling draw otherwise); with
@@ -555,7 +565,14 @@ fn check_invariants<M: StateMachine>(
             }
         }
         let inv_tc = tc.child(2); // nocov
-        (invariant.apply)(m, inv_tc); // nocov
+        if let Err(e) = catch_unwind(AssertUnwindSafe(|| (invariant.apply)(m, inv_tc))) {
+            note_panic_trailer(
+                tc,
+                e.as_ref(),
+                &format!("Invariant {} failed:", invariant.name),
+            );
+            resume_unwind(e);
+        }
     }
 }
 
@@ -649,7 +666,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         Err(rc) => raise_for_rc(rc),
     };
 
-    tc.note("Initial invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the initial state.");
+    }
     check_invariants(&mut m, &invariants, &tc, None);
 
     let mut steps_attempted: i64 = 0;
@@ -692,6 +711,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
                 // caller.
                 Err(e) => {
                     tc.note("}");
+                    note_panic_trailer(&tc, e.as_ref(), &format!("Rule {} failed:", rule.name));
                     tc.stop_span(false);
                     resume_unwind(e)
                 }
@@ -702,7 +722,9 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
         check_invariants(&mut m, &invariants, &tc, Some(&machine));
     }
 
-    tc.note("Final invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the final state.");
+    }
     check_invariants(&mut m, &invariants, &tc, None);
 }
 
@@ -814,7 +836,14 @@ fn check_concurrent_invariants<M: ConcurrentStateMachine + ?Sized>(
             }
         }
         let inv_tc = tc.child(2);
-        (invariant.apply)(m, inv_tc);
+        if let Err(e) = catch_unwind(AssertUnwindSafe(|| (invariant.apply)(m, inv_tc))) {
+            note_panic_trailer(
+                tc,
+                e.as_ref(),
+                &format!("Invariant {} failed:", invariant.name),
+            );
+            resume_unwind(e);
+        }
     }
 }
 
@@ -918,6 +947,9 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
                 }
                 event => {
                     tc.note("}");
+                    if matches!(event, WorkerEvent::Panicked { .. }) {
+                        tc.note(&format!("Rule {} failed:", rule.name));
+                    }
                     return event;
                 }
             },
@@ -1070,7 +1102,9 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     };
     tc.note(&format!("Concurrency level: {concurrency}"));
 
-    tc.note("Initial invariant check.");
+    if !invariants.is_empty() {
+        tc.note("Checking invariants on the initial state.");
+    }
     check_concurrent_invariants(&m, &invariants, &tc, None);
 
     let capture_backtraces = run_lifecycle::backtrace_capture_enabled();
@@ -1125,7 +1159,9 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             check_concurrent_invariants(m, &invariants, &tc, Some(machine));
         }
 
-        tc.note("Final invariant check.");
+        if !invariants.is_empty() {
+            tc.note("Checking invariants on the final state.");
+        }
         check_concurrent_invariants(m, &invariants, &tc, None);
     });
 }

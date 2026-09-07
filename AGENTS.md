@@ -54,6 +54,8 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules
 - **`__bench`**: internal, re-exports engine internals for `benches/`; not part of the public API
 
+The `__` prefix marks a feature as internal. The coverage run enables every root-crate feature except internal ones, computed from `cargo metadata` by `public_features()` in `scripts/check-coverage.py`, so a new feature needs no coverage wiring.
+
 ## Architecture
 
 ### How It Works

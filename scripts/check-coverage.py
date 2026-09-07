@@ -459,6 +459,33 @@ def _ensure_smoke_cdylib() -> None:
     os.environ["HEGEL_C_LIB_DIR"] = str((Path("target") / "debug").resolve())
 
 
+def public_features() -> str:
+    """Every root-crate feature except `default` and internal `__*` ones.
+
+    The `__` prefix marks internal features. `__bench` gates bench-only
+    code that would report as permanently uncovered.
+    """
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        print("ERROR: cargo metadata failed", file=sys.stderr)
+        sys.exit(1)
+    metadata = json.loads(result.stdout)
+    root_manifest = Path(metadata["workspace_root"]) / "Cargo.toml"
+    package = next(
+        p for p in metadata["packages"] if Path(p["manifest_path"]) == root_manifest
+    )
+    features = sorted(
+        f for f in package["features"] if f != "default" and not f.startswith("__")
+    )
+    return ",".join(features)
+
+
 def run_coverage() -> Path:
     """Run coverage analysis and generate LCOV report.
 
@@ -504,7 +531,7 @@ def run_coverage() -> Path:
         cargo_args=[
             "--workspace",
             "--features",
-            "rand,chrono,jiff,serde_json,serde_json_raw_value",
+            public_features(),
             # proc-macro compile-time execution isn't runtime coverage; keep
             # hegel-macros out of the report rather than count it as uncovered.
             "--ignore-filename-regex",

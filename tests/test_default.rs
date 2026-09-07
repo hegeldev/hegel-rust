@@ -80,6 +80,30 @@ fn test_default_hashset() {
 }
 
 #[test]
+fn test_default_btree_map() {
+    check_can_generate_examples(gs::default::<std::collections::BTreeMap<u8, u8>>());
+    check_can_generate_examples(gs::default::<std::collections::BTreeMap<String, bool>>());
+}
+
+#[test]
+fn test_default_btree_set() {
+    check_can_generate_examples(gs::default::<std::collections::BTreeSet<i32>>());
+    check_can_generate_examples(gs::default::<std::collections::BTreeSet<String>>());
+}
+
+#[test]
+fn test_default_derive_with_btree_fields() {
+    #[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
+    struct HasBTrees {
+        #[allow(dead_code)]
+        map: std::collections::BTreeMap<u8, u8>,
+        #[allow(dead_code)]
+        set: std::collections::BTreeSet<i32>,
+    }
+    check_can_generate_examples(gs::default::<HasBTrees>());
+}
+
+#[test]
 fn test_default_pathbuf() {
     check_can_generate_examples(gs::default::<PathBuf>());
 
