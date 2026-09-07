@@ -161,6 +161,18 @@ fn bool_node(value: bool) -> ChoiceNode {
     ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
+fn int_node(value: i128) -> ChoiceNode {
+    ChoiceNode::integer(
+        crate::native::core::choices::IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(value),
+        false,
+    )
+}
+
 #[test]
 fn cached_test_function_serves_tree_known_path_without_executing() {
     with_counting_ctx(
@@ -1464,5 +1476,333 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
     assert_eq!(
         choices[1],
         ChoiceValue::Integer(crate::native::bignum::BigInt::from(0))
+    );
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DbOp {
+    Save(Vec<u8>, Vec<u8>),
+    Delete(Vec<u8>, Vec<u8>),
+    Move(Vec<u8>, Vec<u8>, Vec<u8>),
+}
+
+/// In-memory [`TestCaseDatabase`] recording every mutating call, so tests
+/// can assert on operation ordering as well as final contents.
+#[derive(Clone, Default)]
+struct LoggingDatabase(std::sync::Arc<LoggingState>);
+
+#[derive(Default)]
+struct LoggingState {
+    ops: std::sync::Mutex<Vec<DbOp>>,
+    entries: std::sync::Mutex<std::collections::HashMap<Vec<u8>, Vec<Vec<u8>>>>,
+}
+
+impl LoggingDatabase {
+    fn ops(&self) -> Vec<DbOp> {
+        self.0.ops.lock().unwrap().clone()
+    }
+}
+
+impl TestCaseDatabase for LoggingDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        self.0
+            .entries
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Save(key.to_vec(), value.to_vec()));
+        let mut entries = self.0.entries.lock().unwrap();
+        let values = entries.entry(key.to_vec()).or_default();
+        if !values.contains(&value.to_vec()) {
+            values.push(value.to_vec());
+        }
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Delete(key.to_vec(), value.to_vec()));
+        if let Some(values) = self.0.entries.lock().unwrap().get_mut(key) {
+            values.retain(|v| v != value);
+        }
+    }
+
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Move(src.to_vec(), dst.to_vec(), value.to_vec()));
+        let mut entries = self.0.entries.lock().unwrap();
+        if let Some(values) = entries.get_mut(src) {
+            values.retain(|v| v != value);
+        }
+        let values = entries.entry(dst.to_vec()).or_default();
+        if !values.contains(&value.to_vec()) {
+            values.push(value.to_vec());
+        }
+    }
+}
+
+#[test]
+fn persister_saves_new_bytes_before_deleting_superseded() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: bug", &[int_node(5)]);
+    persister.record("Panic: bug", &[int_node(3)]);
+
+    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]);
+    let ops = db.ops();
+    let saved_new = ops
+        .iter()
+        .position(|op| *op == DbOp::Save(b"k".to_vec(), new.clone()))
+        .unwrap();
+    let removed_old = ops
+        .iter()
+        .position(|op| {
+            matches!(op, DbOp::Delete(key, v) | DbOp::Move(key, _, v)
+                if key.as_slice() == b"k" && *v == old)
+        })
+        .unwrap();
+    assert!(
+        saved_new < removed_old,
+        "the superseding save must land before the superseded bytes leave the primary key"
+    );
+}
+
+#[test]
+fn persister_deletes_superseded_same_run_saves() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: bug", &[int_node(5)]);
+    persister.record("Panic: bug", &[int_node(3)]);
+
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))])]
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a superseded same-run save is deleted, not demoted"
+    );
+}
+
+#[test]
+fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(1005)),
+        ChoiceValue::Boolean(true),
+    ]);
+    db.save(b"k", &run_start);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(n) if n >= 1000 => boom("big bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(
+            1000
+        ))])]
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert_eq!(
+        db.fetch(&secondary),
+        vec![run_start],
+        "only the run-start primary entry demotes; same-run saves delete"
+    );
+}
+
+#[test]
+fn secondary_corpus_cap_evicts_shortlex_largest() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]);
+    for n in 0..55 {
+        db.save(&secondary, &entry(n));
+    }
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Generate])
+            .test_cases(5)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let mut kept = db.fetch(&secondary);
+    kept.sort_by(|a, b| shortlex(a, b));
+    let expected: Vec<Vec<u8>> = (0..50).map(entry).collect();
+    assert_eq!(
+        kept, expected,
+        "eviction removes exactly the shortlex-largest overflow"
+    );
+}
+
+#[test]
+fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let misaligned = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(95)),
+        ChoiceValue::Integer(BigInt::from(3)),
+    ]);
+    db.save(b"k", &run_start);
+    db.save(b"k", &misaligned);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = match rint(&*ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .database(Some(path))
+        .phases([Phase::Reuse, Phase::Shrink])
+        .verbosity(Verbosity::Quiet);
+    let result = run_main_sync(
+        &settings,
+        Some("k"),
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).contains(&run_start),
+        "the superseded run-start entry demotes instead of deleting"
+    );
+}
+
+#[test]
+fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: a", &[int_node(90)]);
+    persister.record("Panic: b", &[int_node(90)]);
+    assert_eq!(db.fetch(b"k").len(), 1);
+
+    persister.record("Panic: a", &[int_node(50)]);
+
+    let shared = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let smaller = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    let primary = db.fetch(b"k");
+    assert!(
+        primary.contains(&shared),
+        "the shared entry survives the other origin's supersession"
+    );
+    assert!(primary.contains(&smaller));
+    assert_eq!(primary.len(), 2);
+}
+
+#[test]
+fn shrink_phase_drain_stops_at_entries_above_the_largest_surviving_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(90)),
+        ChoiceValue::Boolean(true),
+    ]);
+    db.save(b"k", &run_start);
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let small = serialize_choices(&[ChoiceValue::Integer(BigInt::from(10))]);
+    let large = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(80)),
+        ChoiceValue::Integer(BigInt::from(4)),
+    ]);
+    db.save(&secondary, &small);
+    db.save(&secondary, &large);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let kept = db.fetch(&secondary);
+    assert!(
+        !kept.contains(&small),
+        "an entry at or below the surviving failure is replayed and drained"
+    );
+    assert!(
+        kept.contains(&large),
+        "an entry shortlex above the surviving failure survives the drain"
+    );
+    assert!(kept.contains(&run_start));
+}
+
+#[test]
+fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let settings = Settings::new().database(Some(path));
+    let exchange = CaseExchange::new();
+    let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
+    ctx.persister.record("Panic: bug", &[int_node(90)]);
+    ctx.interesting
+        .insert("Panic: bug".to_string(), vec![int_node(50)]);
+    ctx.reconcile_database();
+
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))])]
+    );
+    let secondary = crate::native::data_tree::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a same-run leftover is deleted, not demoted"
     );
 }

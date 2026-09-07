@@ -105,6 +105,10 @@ const HEALTH_CHECK_MAX_VALID: u64 = 10;
 /// Hypothesis's `max_overrun_draws`.
 const MAX_OVERRUN_DRAWS: u64 = 20;
 
+/// Cap on secondary-corpus entries per database key: end-of-run
+/// reconciliation evicts the shortlex-largest above it.
+const SECONDARY_CORPUS_CAP: usize = 50;
+
 /// Run the exploration half of a test run — database replay, generation, and
 /// shrinking — and return a [`TestRunResult`] with one [`Failure`] per
 /// distinct bug, each carrying the origin the engine grouped on and (unless
@@ -570,27 +574,7 @@ impl<'a> Engine<'a> {
             output.line("Skipping shrink: reused aligned database replay");
         }
 
-        if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), database_key) {
-            let key_bytes = key.as_bytes();
-            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-            let new_entries: crate::native::HashSet<Vec<u8>> = self
-                .interesting
-                .values()
-                .map(|nodes| {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                    serialize_choices(&choices)
-                })
-                .collect();
-            let primary_now = db.fetch(key_bytes);
-            for old in primary_now {
-                if !new_entries.contains(&old) {
-                    db.move_value(key_bytes, &secondary_key, &old);
-                }
-            }
-            for new_bytes in &new_entries {
-                db.save(key_bytes, new_bytes);
-            }
-        }
+        self.reconcile_database();
 
         if verbosity == Verbosity::Debug {
             output.line(&format!(
@@ -866,37 +850,56 @@ fn update_interesting(
 }
 
 /// Incremental database-save bookkeeping. Every time a new interesting
-/// result is found (or an existing one is shortlex-improved), the
-/// realised choice sequence is saved to the primary key and the
-/// displaced previous entry is moved to the secondary key.
+/// result is found (or an existing one is shortlex-improved), the realised
+/// choice sequence is saved to the primary key, then the bytes it
+/// supersedes are deleted. Saving before deleting keeps the primary key
+/// carrying the most recent validated incumbent at every instant, so a
+/// Ctrl-C / SIGTERM mid-shrink loses nothing.
 ///
-/// Persisting incrementally — rather than only at the end of `run_main` — is
-/// what guarantees that a failure survives a Ctrl-C / SIGTERM mid-shrink:
-/// the moment the runner discovers the failure (and at every subsequent
-/// improvement), the bytes are on disk.
+/// A superseded same-run save is deleted, never demoted: it never ended a
+/// run as anyone's best example, so it earned no cross-run staleness
+/// strike. A run-start primary entry (in `preexisting`) *did* end a run as
+/// someone's best example, so superseding it demotes it to the secondary
+/// key even when a reuse replay re-saved its bytes this run; end-of-run
+/// reconciliation demotes the rest, using `saved_this_run` to tell
+/// run-start entries from same-run leftovers. Bytes another origin's last
+/// save still points at are never removed: entries are content-addressed,
+/// so two origins can share one entry.
 struct Persister<'a> {
     db: Option<Box<dyn TestCaseDatabase>>,
     database_key: Option<&'a str>,
     /// For each origin we've saved at least once, the choice-node sequence
-    /// of the most recent save. Used to (a) decide whether a new result is
-    /// shortlex-smaller and therefore worth saving, and (b) compute the
-    /// bytes to downgrade when it is.
-    last_saved: HashMap<String, Vec<ChoiceNode>>,
+    /// of the most recent save and the exact bytes written. Used to (a)
+    /// decide whether a new result is shortlex-smaller and therefore worth
+    /// saving, and (b) know the bytes to delete when it is.
+    last_saved: HashMap<String, (Vec<ChoiceNode>, Vec<u8>)>,
+    /// Every byte string saved this run, so end-of-run reconciliation can
+    /// delete superseded same-run leftovers instead of demoting them.
+    saved_this_run: crate::native::HashSet<Vec<u8>>,
+    /// The primary key's entries at run start: superseding one demotes it
+    /// instead of deleting it, whether mid-run or at reconciliation.
+    preexisting: crate::native::HashSet<Vec<u8>>,
 }
 
 impl<'a> Persister<'a> {
     fn new(db: Option<Box<dyn TestCaseDatabase>>, database_key: Option<&'a str>) -> Self {
+        let preexisting = match (db.as_deref(), database_key) {
+            (Some(db), Some(key)) => db.fetch(key.as_bytes()).into_iter().collect(),
+            _ => crate::native::HashSet::default(),
+        };
         Persister {
             db,
             database_key,
             last_saved: HashMap::default(),
+            saved_this_run: crate::native::HashSet::default(),
+            preexisting,
         }
     }
 
     /// Record an interesting result for `origin`. If this is the first
     /// sighting, or shortlex-precedes the previous save, the new bytes are
     /// written to the primary key and any previously-saved bytes for this
-    /// origin are downgraded to the secondary key.
+    /// origin are then deleted (or demoted, for a run-start entry).
     fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
         let Some(db) = self.db.as_deref() else { return };
         let Some(key) = self.database_key else { return };
@@ -906,20 +909,33 @@ impl<'a> Persister<'a> {
 
         let needs_save = match self.last_saved.get(origin) {
             None => true,
-            Some(prev) => sort_key(nodes) < sort_key(prev),
+            Some((prev, _)) => sort_key(nodes) < sort_key(prev),
         };
         if !needs_save {
             return;
         }
 
-        if let Some(prev) = self.last_saved.get(origin) {
-            let prev_choices: Vec<ChoiceValue> = prev.iter().map(|n| n.value()).collect();
-            let prev_bytes = serialize_choices(&prev_choices);
-            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
-            db.move_value(key_bytes, &secondary_key, &prev_bytes);
-        }
         db.save(key_bytes, &new_bytes);
-        self.last_saved.insert(origin.to_string(), nodes.to_vec());
+        if let Some((_, prev_bytes)) = self.last_saved.get(origin) {
+            if *prev_bytes != new_bytes {
+                let shared = self
+                    .last_saved
+                    .iter()
+                    .any(|(o, (_, bytes))| o != origin && bytes == prev_bytes);
+                if !shared {
+                    if self.preexisting.contains(prev_bytes) {
+                        let secondary_key =
+                            crate::native::data_tree::sub_key(key_bytes, b"secondary");
+                        db.move_value(key_bytes, &secondary_key, prev_bytes);
+                    } else {
+                        db.delete(key_bytes, prev_bytes);
+                    }
+                }
+            }
+        }
+        self.saved_this_run.insert(new_bytes.clone());
+        self.last_saved
+            .insert(origin.to_string(), (nodes.to_vec(), new_bytes));
     }
 }
 
@@ -1022,6 +1038,50 @@ impl<'a> Engine<'a> {
 
     fn db(&self) -> Option<&dyn TestCaseDatabase> {
         self.persister.db.as_deref()
+    }
+
+    /// End-of-run database reconciliation: save every surviving failure's
+    /// bytes, then dispatch each displaced primary entry by provenance —
+    /// same-run leftovers are deleted, run-start entries demote to the
+    /// secondary key — and evict the shortlex-largest secondary entries
+    /// above [`SECONDARY_CORPUS_CAP`].
+    fn reconcile_database(&self) {
+        if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), self.database_key)
+        {
+            let key_bytes = key.as_bytes();
+            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            let new_entries: crate::native::HashSet<Vec<u8>> = self
+                .interesting
+                .values()
+                .map(|nodes| {
+                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+                    serialize_choices(&choices)
+                })
+                .collect();
+            let primary_now = db.fetch(key_bytes);
+            for new_bytes in &new_entries {
+                db.save(key_bytes, new_bytes);
+            }
+            for old in primary_now {
+                if new_entries.contains(&old) {
+                    continue;
+                }
+                if self.persister.saved_this_run.contains(&old)
+                    && !self.persister.preexisting.contains(&old)
+                {
+                    db.delete(key_bytes, &old);
+                } else {
+                    db.move_value(key_bytes, &secondary_key, &old);
+                }
+            }
+            let mut secondary_now = db.fetch(&secondary_key);
+            if secondary_now.len() > SECONDARY_CORPUS_CAP {
+                secondary_now.sort_by(|a, b| shortlex(a, b));
+                for evicted in &secondary_now[SECONDARY_CORPUS_CAP..] {
+                    db.delete(&secondary_key, evicted);
+                }
+            }
+        }
     }
 
     /// Spawn an independent RNG from the engine's, for components (probes,
