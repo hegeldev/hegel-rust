@@ -72,10 +72,11 @@ fn snapshot_step_labels_precede_their_rules_draws() {
         hegel::stateful::run(Accumulator { total: 0 }, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
+    Checking invariants on the initial state.
     Step 1: add {
       let n = 3;
     }
+    Invariant small failed:
     ");
 }
 
@@ -97,11 +98,11 @@ fn snapshot_multiple_draws_stay_under_one_step_label() {
         hegel::stateful::run(TwoDraws, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
     Step 1: pair {
       let x = 0;
       let y = 5;
     }
+    Rule pair failed:
     ");
 }
 
@@ -128,13 +129,14 @@ fn snapshot_drawless_steps_and_invariant_notes() {
         hegel::stateful::run(DrawlessSteps { count: 0 }, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
+    Checking invariants on the initial state.
     Step 1: bump {
     }
     Step 2: bump {
     }
     Step 3: bump {
     }
+    Invariant below_three failed:
     ");
 }
 
@@ -162,7 +164,7 @@ fn snapshot_draw_names_reset_in_each_steps_scope() {
         hegel::stateful::run(SlowAccumulator { total: 0 }, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
+    Checking invariants on the initial state.
     Step 1: add_one {
       let n = 1;
     }
@@ -172,6 +174,7 @@ fn snapshot_draw_names_reset_in_each_steps_scope() {
     Step 3: add_one {
       let n = 1;
     }
+    Invariant small failed:
     ");
 }
 
@@ -193,11 +196,35 @@ fn snapshot_notes_inside_rules_follow_their_draws() {
         hegel::stateful::run(NotesInsideRules, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
     Step 1: noted {
       let flag = true;
       flag was true
     }
+    Rule noted failed:
+    ");
+}
+
+struct BrokenFromTheStart;
+
+#[hegel::state_machine]
+impl BrokenFromTheStart {
+    #[rule]
+    fn noop(&mut self, _tc: TestCase) {}
+
+    #[invariant]
+    fn never_holds(&self, _tc: TestCase) {
+        panic!("fails before any steps");
+    }
+}
+
+#[test]
+fn snapshot_initial_state_invariant_failures_are_named() {
+    let output = capture_stateful_output(|tc: TestCase| {
+        hegel::stateful::run(BrokenFromTheStart, tc);
+    });
+    insta::assert_snapshot!(output, @"
+    Checking invariants on the initial state.
+    Invariant never_holds failed:
     ");
 }
 
@@ -231,10 +258,11 @@ fn snapshot_test_helper_draws_are_named_inside_steps() {
         hegel::stateful::run(HelperMethodMachine { total: 0 }, tc);
     });
     insta::assert_snapshot!(output, @"
-    Initial invariant check.
+    Checking invariants on the initial state.
     Step 1: add {
       let negate_1 = false;
       let amount_1 = 3;
     }
+    Invariant small failed:
     ");
 }
