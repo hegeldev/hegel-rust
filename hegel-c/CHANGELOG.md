@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.37.0 - 2026-09-07
+
+This release changes `hegel_new_state_machine`: it takes a new
+`invariant_always_check` argument, an array of per-invariant flags parallel to
+`invariant_names` (NULL for all false).
+`hegel_state_machine_should_check_invariant` answers true unconditionally for
+a flagged invariant, consuming no entropy, and samples the rest as before.
+
 ## 0.36.6 - 2026-09-07
 
 A test that rejects its input via `assume()` without drawing any data can never produce a valid case. The engine now stops after one call and fails the run with `Unsatisfiable`, instead of passing. Over the C ABI this surfaces as an ordinary error result; no signatures or status values change.
