@@ -642,7 +642,10 @@ fn run_main_reports_too_slow_at_call_site() {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let settings = Settings::new().test_cases(100).database(None);
+    let settings = Settings::new()
+        .test_cases(100)
+        .database(None)
+        .suppress_health_check([]);
     let exploration = run_main_sync(
         &settings,
         None,
