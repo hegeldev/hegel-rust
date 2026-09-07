@@ -308,3 +308,25 @@ fn try_replace_with_deletion_returns_false_when_the_deficit_reaches_idx() {
     .unwrap();
     assert!(!deleted);
 }
+
+#[test]
+fn bind_deletion_survives_an_adopted_candidate_shorter_than_the_probe_index() {
+    let initial = vec![int_node(80), int_node(1)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let values: Vec<i128> = nodes.iter().map(int_value).collect();
+                match values.as_slice() {
+                    [40, 1] => (false, nodes[..1].to_vec(), Spans::new()),
+                    [40] => (true, Vec::new(), Spans::new()),
+                    _ => (false, nodes.to_vec(), Spans::new()),
+                }
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.bind_deletion()).unwrap();
+    assert!(shrinker.current_nodes.is_empty());
+}
