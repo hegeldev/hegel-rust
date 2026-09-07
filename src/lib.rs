@@ -209,8 +209,9 @@
 //! ```
 //!
 //! A profile layers over whichever profile the environment selects, so on
-//! CI `nightly` resolves as `nightly` → `ci` → `development`, unless it
-//! pins a parent with `extends`. Select one for a test with
+//! CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` →
+//! `development`, unless it pins a parent with `extends`. Select one for a
+//! test with
 //! `#[hegel::test(profile = "nightly")]`, or as the suite-wide default with
 //! a `default = "nightly"` entry at the top of `hegel.toml` or the
 //! `HEGEL_DEFAULT_PROFILE` environment variable:

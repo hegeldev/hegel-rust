@@ -710,10 +710,12 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  Three ordinary profiles ship with libhegel: `development` (the base
  defaults, unchanged — what local runs get), `ci` (derandomization on,
  database disabled, reproduction lines printed), and `antithesis`
- (database disabled). A profile without an explicit `extends` extends
- `selected`, skipping any candidate already in its chain, so a custom
- profile sits on `ci` when resolved on a CI server and on `development`
- locally. Extending or selecting `default` pins the plain base settings.
+ (database disabled). A custom profile without an explicit `extends`
+ extends `selected`, skipping any candidate already in its chain, so it
+ sits on `ci` when resolved on a CI server and on `development` locally.
+ The shipped profiles themselves extend `default` and never layer over
+ one another. Extending or selecting `default` pins the plain base
+ settings.
 
  Profiles are modified and defined in a `hegel.toml` found in the current
  directory or the nearest ancestor, and registered programmatically with

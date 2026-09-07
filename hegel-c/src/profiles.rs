@@ -9,19 +9,21 @@
 //! - `selected`: an alias for the default profile. Its candidates, in
 //!   order, are the named default (the strongest set of the process
 //!   override ([`set_default_profile`]), `HEGEL_DEFAULT_PROFILE`, and the
-//!   `default` entry in `hegel.toml`), the detected environment
-//!   (`antithesis` inside Antithesis, else `ci` on a CI server), and
-//!   `development`. The alias resolves to the first candidate not already
+//!   `default` entry in `hegel.toml`) and the environment's profile
+//!   (`antithesis` inside Antithesis, else `ci` on a CI server, else
+//!   `development`). The alias resolves to the first candidate not already
 //!   part of the chain being resolved, falling back to `default`.
-//!   Resolving no name at all resolves `selected`, and a profile without
-//!   `extends` extends `selected`, so custom profiles pick up the
-//!   environment's behaviour wherever they sit.
+//!   Resolving no name at all resolves `selected`, and a custom profile
+//!   without `extends` extends `selected`, so it picks up the environment's
+//!   behaviour wherever it sits. The shipped profiles themselves extend
+//!   `default` unless a `hegel.toml` section says otherwise: they are
+//!   siblings, never layers over one another, and a delta shared between
+//!   them must be a profile they name with `extends`.
 //!
 //! Three ordinary profiles ship with the library and can be customized in
 //! `hegel.toml` or replaced by registration like any other:
 //!
-//! - `development`: an empty delta and the final alias candidate: the
-//!   profile local runs get, and the layer every other environment sits on.
+//! - `development`: an empty delta, the environment profile of local runs.
 //! - `ci`: `derandomize = true`, the database disabled, and
 //!   `print_blob = true`.
 //! - `antithesis`: the database disabled. Health checks and the urandom
@@ -52,13 +54,13 @@ pub(crate) const ROOT: &str = "default";
 /// The reserved name of the alias for the default profile.
 pub(crate) const SELECTED: &str = "selected";
 
-/// The final alias candidate: the shipped profile local runs get.
+/// The environment profile when nothing is detected: what local runs get.
 const FALLBACK: &str = "development";
 
 /// A named set of settings overrides: every profile-settable field, each
-/// optional. Unset fields inherit from the parent profile (`extends`, or
-/// the `selected` alias when absent); resolution bottoms out at
-/// [`Settings::base`].
+/// optional. Unset fields inherit from the parent profile: `extends`, or
+/// when absent the `selected` alias for custom profiles and the `default`
+/// root for shipped ones. Resolution bottoms out at [`Settings::base`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ProfileDelta {
     /// The profile this one layers over. Only meaningful for profiles
@@ -341,7 +343,9 @@ pub(crate) struct Candidates {
     overridden: Option<String>,
     env: Option<String>,
     toml: Option<String>,
-    detected: Option<&'static str>,
+    /// The environment's profile: `antithesis` or `ci` by detection, else
+    /// `development`.
+    environment: &'static str,
 }
 
 impl Candidates {
@@ -354,12 +358,12 @@ impl Candidates {
             overridden,
             env: env(DEFAULT_PROFILE_VAR).filter(|v| !v.is_empty()),
             toml: config.default.clone(),
-            detected: if crate::antithesis_detect::antithesis_env_var_set_from(&env) {
-                Some("antithesis")
+            environment: if crate::antithesis_detect::antithesis_env_var_set_from(&env) {
+                "antithesis"
             } else if crate::settings::is_in_ci_from(&env) {
-                Some("ci")
+                "ci"
             } else {
-                None
+                FALLBACK
             },
         }
     }
@@ -372,7 +376,7 @@ impl Candidates {
             overridden: None,
             env: None,
             toml: self.toml.clone(),
-            detected: self.detected,
+            environment: self.environment,
         }
     }
 
@@ -395,24 +399,20 @@ impl Candidates {
         Ok(None)
     }
 
-    /// The name the `selected` alias resolves to within `chain`: the first
-    /// of the named default ([`Candidates::named_default`]), the detected
-    /// environment profile, and `development` that is not already in the
-    /// chain, falling back to the `default` root. The source accompanying
-    /// the name feeds unknown-profile diagnostics.
+    /// The name the `selected` alias resolves to within `chain`: the named
+    /// default ([`Candidates::named_default`]) if not already in the chain,
+    /// else the environment's profile if not already in the chain, else the
+    /// `default` root. The environment profiles never layer over one
+    /// another, so every chain roots in the base settings. The source
+    /// accompanying the name feeds unknown-profile diagnostics.
     fn resolve(&self, chain: &[&str]) -> Result<(&str, Option<&'static str>), ProfileError> {
         if let Some((name, source)) = self.named_default()? {
             if !chain.contains(&name) {
                 return Ok((name, Some(source)));
             }
         }
-        if let Some(name) = self.detected {
-            if !chain.contains(&name) {
-                return Ok((name, None));
-            }
-        }
-        if !chain.contains(&FALLBACK) {
-            return Ok((FALLBACK, None));
+        if !chain.contains(&self.environment) {
+            return Ok((self.environment, None));
         }
         Ok((ROOT, None))
     }
@@ -501,7 +501,7 @@ fn delta_chain<'a>(
                 arrival = Arrival::Extends(current);
                 current = parent;
             }
-            None => current = SELECTED,
+            None => current = if ship.is_some() { ROOT } else { SELECTED },
         }
     }
 }

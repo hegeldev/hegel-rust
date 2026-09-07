@@ -129,8 +129,7 @@ pub enum Verbosity {
 ///
 /// Three ordinary profiles ship with Hegel:
 ///
-/// - `development`: the base defaults, unchanged. What local runs get, and
-///   the layer every other profile ultimately sits on.
+/// - `development`: the base defaults, unchanged. What local runs get.
 /// - `ci`: [`derandomize`](Settings::derandomize) on, the database
 ///   disabled, and [`print_blob`](Settings::print_blob) on.
 /// - `antithesis`: the database disabled.
@@ -140,11 +139,13 @@ pub enum Verbosity {
 /// `#[hegel::test(profile = "nightly")]`; that selects the profile without
 /// changing what the default profile is.
 ///
-/// A profile without an explicit `extends` extends `selected`, skipping
-/// any candidate already in its chain. So a custom profile layers over
-/// `ci` when resolved on a CI server and over `development` locally, and
-/// on CI a run of `nightly` resolves `nightly` → `ci` → `development` →
-/// base defaults, wherever `nightly` was selected from.
+/// A custom profile without an explicit `extends` extends `selected`, so
+/// it layers over `ci` when resolved on a CI server and over `development`
+/// locally: on CI a run of `nightly` resolves `nightly` → `ci` → base
+/// defaults, wherever `nightly` was selected from. The shipped profiles
+/// themselves extend `default` and never layer over one another, so a
+/// delta meant for all environments goes in a profile of its own that the
+/// others name with `extends`.
 ///
 /// Profiles are modified and defined in a `hegel.toml` found in the current
 /// directory or the nearest ancestor — typically the package or workspace

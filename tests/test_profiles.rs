@@ -121,9 +121,17 @@ fn the_toml_default_entry_selects_the_default_profile() {
 }
 
 #[test]
-fn development_deltas_apply_over_the_environment_profile() {
+fn development_deltas_apply_when_development_is_selected() {
+    failing()
+        .with_file("hegel.toml", "[profiles.development]\nprint_blob = true\n")
+        .env("HEGEL_DEFAULT_PROFILE", "development")
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
+}
+
+#[test]
+fn selecting_development_on_ci_escapes_the_ci_profile() {
     let out = failing()
-        .with_file("hegel.toml", "[profiles.development]\nprint_blob = false\n")
         .env("HEGEL_DEFAULT_PROFILE", "development")
         .env("CI", "true")
         .expect_failure("got nonneg")

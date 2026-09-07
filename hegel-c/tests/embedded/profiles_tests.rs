@@ -16,13 +16,13 @@ fn no_candidates() -> Candidates {
         overridden: None,
         env: None,
         toml: None,
-        detected: None,
+        environment: FALLBACK,
     }
 }
 
 fn detected(name: &'static str) -> Candidates {
     Candidates {
-        detected: Some(name),
+        environment: name,
         ..no_candidates()
     }
 }
@@ -159,12 +159,14 @@ fn config_deltas_merge_onto_shipped_profiles() {
 }
 
 #[test]
-fn development_is_the_layer_under_every_shipped_profile() {
+fn shipped_profiles_root_in_the_base_defaults_not_development() {
     let config = config_of("[profiles.development]\ntest_cases = 200\nderandomize = false\n");
     let s = resolve_named("ci", &config);
-    assert_eq!(s.test_cases, 200);
-    assert!(s.derandomize, "ci's own delta beats the inherited value");
+    assert_eq!(s.test_cases, 100, "development is a sibling, not a layer");
+    assert!(s.derandomize);
     let s = resolve_named("antithesis", &config);
+    assert_eq!(s.test_cases, 100);
+    let s = resolve_named("development", &config);
     assert_eq!(s.test_cases, 200);
 }
 
@@ -174,7 +176,10 @@ fn config_profiles_extend_the_selected_alias_implicitly() {
         "[profiles.development]\ntest_cases = 200\n[profiles.nightly]\nshow_statistics = true\n",
     );
     let s = resolve_named("nightly", &config);
-    assert_eq!(s.test_cases, 200);
+    assert_eq!(
+        s.test_cases, 200,
+        "locally the implicit parent is development"
+    );
     assert!(s.show_statistics);
     let s = resolve(
         "nightly",
@@ -186,7 +191,10 @@ fn config_profiles_extend_the_selected_alias_implicitly() {
     .unwrap();
     assert!(s.derandomize, "on CI the implicit parent is ci");
     assert!(s.print_blob);
-    assert_eq!(s.test_cases, 200, "development sits under ci in the chain");
+    assert_eq!(
+        s.test_cases, 100,
+        "development is not part of the chain on CI"
+    );
 }
 
 #[test]
@@ -435,11 +443,20 @@ fn config_deltas_merge_onto_registered_profiles() {
 }
 
 #[test]
-fn registered_profiles_replace_shipped_ones_as_the_base() {
+fn registered_profiles_replace_shipped_ones() {
     let registry = vec![(
         "development".to_owned(),
         ProfileDelta::snapshot(&Settings::base(false).test_cases(3)),
     )];
+    let s = resolve(
+        "development",
+        &no_config(),
+        &registry,
+        &Settings::base(false),
+        &no_candidates(),
+    )
+    .unwrap();
+    assert_eq!(s.test_cases, 3);
     let s = resolve(
         "ci",
         &no_config(),
@@ -448,10 +465,7 @@ fn registered_profiles_replace_shipped_ones_as_the_base() {
         &no_candidates(),
     )
     .unwrap();
-    assert_eq!(
-        s.test_cases, 3,
-        "ci chains through the registered development"
-    );
+    assert_eq!(s.test_cases, 100, "ci does not chain through development");
     assert!(s.derandomize);
 }
 
@@ -582,7 +596,7 @@ fn the_strongest_named_default_displaces_the_weaker_ones() {
         overridden: Some("a".to_owned()),
         env: Some("b".to_owned()),
         toml: Some("c".to_owned()),
-        detected: Some("ci"),
+        environment: "ci",
     };
     assert_eq!(
         candidates.resolve(&[]).unwrap(),
@@ -591,7 +605,7 @@ fn the_strongest_named_default_displaces_the_weaker_ones() {
     assert_eq!(
         candidates.resolve(&["a"]).unwrap(),
         ("ci", None),
-        "a visited named default falls through to detection, never to a weaker setting"
+        "a visited named default falls through to the environment, never to a weaker setting"
     );
     let candidates = Candidates {
         env: Some("b".to_owned()),
@@ -613,15 +627,19 @@ fn the_strongest_named_default_displaces_the_weaker_ones() {
 }
 
 #[test]
-fn the_alias_falls_back_through_detection_to_development_and_the_root() {
+fn the_alias_falls_back_from_the_environment_to_the_root() {
     let candidates = detected("ci");
     assert_eq!(candidates.resolve(&[]).unwrap(), ("ci", None));
-    assert_eq!(candidates.resolve(&["ci"]).unwrap(), ("development", None));
     assert_eq!(
-        candidates.resolve(&["ci", "development"]).unwrap(),
-        ("default", None)
+        candidates.resolve(&["ci"]).unwrap(),
+        ("default", None),
+        "the environment profiles never layer over one another"
     );
     assert_eq!(no_candidates().resolve(&[]).unwrap(), ("development", None));
+    assert_eq!(
+        no_candidates().resolve(&["development"]).unwrap(),
+        ("default", None)
+    );
 }
 
 #[test]
