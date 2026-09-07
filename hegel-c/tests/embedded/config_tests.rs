@@ -432,6 +432,7 @@ fn discover_skips_files_that_exist_but_cannot_be_read() {
 #[test]
 fn load_from_maps_parse_errors_onto_the_path() {
     let e = load_from(
+        None,
         Some("/a".to_owned()),
         |p| p == "/a/hegel.toml",
         |_| Some(b"[profiles.x]\nboom = 1\n".to_vec()),
@@ -450,6 +451,7 @@ fn load_from_maps_parse_errors_onto_the_path() {
 #[test]
 fn load_from_rejects_invalid_utf8() {
     let e = load_from(
+        None,
         Some("/a".to_owned()),
         |p| p == "/a/hegel.toml",
         |_| Some(vec![0xff, 0xfe]),
@@ -468,7 +470,67 @@ fn load_from_rejects_invalid_utf8() {
 #[test]
 fn load_from_without_a_file_is_an_empty_config() {
     assert_eq!(
-        load_from(Some("/a".to_owned()), |_| false, |_| None),
+        load_from(None, Some("/a".to_owned()), |_| false, |_| None),
+        Ok(ConfigFile::default())
+    );
+}
+
+#[test]
+fn load_from_records_the_loaded_path() {
+    let config = load_from(
+        None,
+        Some("/a".to_owned()),
+        |p| p == "/a/hegel.toml",
+        |_| Some(b"[profiles.x]\ntest_cases = 5\n".to_vec()),
+    )
+    .unwrap();
+    assert_eq!(config.path.as_deref(), Some("/a/hegel.toml"));
+}
+
+#[test]
+fn config_var_names_the_file_directly() {
+    let config = load_from(
+        Some("/elsewhere/alt.toml".to_owned()),
+        Some("/a".to_owned()),
+        |_| panic!("discovery must be skipped"),
+        |path| {
+            assert_eq!(path, "/elsewhere/alt.toml");
+            Some(b"[profiles.x]\ntest_cases = 5\n".to_vec())
+        },
+    )
+    .unwrap();
+    assert_eq!(config.path.as_deref(), Some("/elsewhere/alt.toml"));
+    assert_eq!(config.profiles.len(), 1);
+}
+
+#[test]
+fn config_var_naming_an_unreadable_file_is_an_error() {
+    let e = load_from(
+        Some("/elsewhere/alt.toml".to_owned()),
+        Some("/a".to_owned()),
+        |_| false,
+        |_| None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e,
+        ProfileError::Config {
+            path: "/elsewhere/alt.toml".to_owned(),
+            line: 0,
+            message: "cannot read the file named by HEGEL_CONFIG".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn an_empty_config_var_falls_back_to_discovery() {
+    assert_eq!(
+        load_from(
+            Some(String::new()),
+            Some("/a".to_owned()),
+            |_| false,
+            |_| { None }
+        ),
         Ok(ConfigFile::default())
     );
 }

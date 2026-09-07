@@ -172,6 +172,11 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    /// The path of the `hegel.toml` these settings were resolved against,
+    /// `None` when no config file was loaded. A diagnostic stamped by
+    /// profile resolution and logged at run start under `Debug` verbosity,
+    /// not a setting: no profile or builder touches it.
+    pub(crate) config_path: Option<String>,
 }
 
 impl Settings {
@@ -210,6 +215,7 @@ impl Settings {
             show_statistics: false,
             print_blob: false,
             backend: None,
+            config_path: None,
         }
     }
 

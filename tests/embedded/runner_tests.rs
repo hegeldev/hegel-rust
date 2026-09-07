@@ -185,6 +185,7 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
         child.env_remove(name);
     }
     child.env_remove("HEGEL_DEFAULT_PROFILE");
+    child.env_remove("HEGEL_CONFIG");
     child.env_remove("ANTITHESIS_OUTPUT_DIR");
     let output = child.output().unwrap();
     assert!(

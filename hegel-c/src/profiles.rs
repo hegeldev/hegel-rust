@@ -383,7 +383,9 @@ fn settings_for_from(
         None => selected_name(&env),
     };
     let base = Settings::base(crate::antithesis_detect::antithesis_env_var_set_from(&env));
-    resolve(&selected, config, registry, &base)
+    let mut settings = resolve(&selected, config, registry, &base)?;
+    settings.config_path = config.path.clone();
+    Ok(settings)
 }
 
 #[cfg(test)]

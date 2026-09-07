@@ -184,6 +184,13 @@ impl<'a> Engine<'a> {
             }
         };
 
+        if matches!(verbosity, Verbosity::Debug) {
+            match &settings.config_path {
+                Some(path) => output.line(&format!("loaded config: {path}")),
+                None => output.line("no config file loaded"),
+            }
+        }
+
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
         let target_phase = settings.phases.contains(&Phase::Target);
         let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);

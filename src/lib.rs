@@ -217,7 +217,8 @@
 //! ```
 //!
 //! See [`Settings`] for what each shipped profile sets, the selection
-//! order, every `hegel.toml` key, and programmatic registration with
+//! order, every `hegel.toml` key, the `HEGEL_CONFIG` variable for naming
+//! the config file directly, and programmatic registration with
 //! [`Settings::register_profile`].
 //!
 //! ## Threading

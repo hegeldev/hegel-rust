@@ -28,6 +28,7 @@ const BLOBBY_TOML: &str = "[profiles.blobby]\nprint_blob = true\n";
 fn failing() -> Cmd {
     fixture(MAIN_FAILING)
         .env_remove("HEGEL_DEFAULT_PROFILE")
+        .env_remove("HEGEL_CONFIG")
         .env_remove("ANTITHESIS_OUTPUT_DIR")
 }
 
@@ -90,6 +91,53 @@ fn malformed_hegel_toml_fails_with_file_and_line() {
         .with_file("hegel.toml", "[profiles.broken]\nwat = true\n")
         .expect_failure(r"hegel\.toml:2")
         .run();
+}
+
+#[test]
+fn hegel_config_env_names_the_config_file_directly() {
+    failing()
+        .with_file("configs/alt.toml", BLOBBY_TOML)
+        .env("HEGEL_CONFIG", "configs/alt.toml")
+        .args(&["--profile", "blobby"])
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
+}
+
+#[test]
+fn hegel_config_env_naming_a_missing_file_fails_the_run() {
+    failing()
+        .env("HEGEL_CONFIG", "nope/missing.toml")
+        .expect_failure("cannot read the file named by HEGEL_CONFIG")
+        .run();
+}
+
+#[test]
+fn debug_verbosity_logs_the_loaded_config() {
+    let out = failing()
+        .with_file("hegel.toml", BLOBBY_TOML)
+        .env("HEGEL_DEFAULT_PROFILE", "default")
+        .args(&["--verbosity", "debug"])
+        .expect_failure("got nonneg")
+        .run();
+    assert!(
+        out.stderr.contains("loaded config: ") && out.stderr.contains("hegel.toml"),
+        "expected the loaded config path in debug output:\n{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn debug_verbosity_logs_the_absence_of_a_config() {
+    let out = failing()
+        .env("HEGEL_DEFAULT_PROFILE", "default")
+        .args(&["--verbosity", "debug"])
+        .expect_failure("got nonneg")
+        .run();
+    assert!(
+        out.stderr.contains("no config file loaded"),
+        "expected the no-config note in debug output:\n{}",
+        out.stderr
+    );
 }
 
 #[test]

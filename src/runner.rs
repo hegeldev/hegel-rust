@@ -133,10 +133,15 @@ pub enum Verbosity {
 ///
 /// Profiles are modified and defined in a `hegel.toml` found in the current
 /// directory or the nearest ancestor — typically the package or workspace
-/// root, since cargo runs tests from the package directory. Entries merge
-/// onto the shipped profile of the same name; new profiles extend `default`
-/// unless they name another profile with `extends`. Values use the same
-/// vocabulary as the corresponding builder methods and CLI flags:
+/// root, since cargo runs tests from the package directory. When the test
+/// process runs outside the source tree (a Bazel sandbox, say), set
+/// `HEGEL_CONFIG` to the file's path to load it directly. A set
+/// `HEGEL_CONFIG` that cannot be read is an error rather than an ignored
+/// config. Under [`Verbosity::Debug`] each run logs which config file was
+/// loaded, if any. Entries merge onto the shipped profile of the same name;
+/// new profiles extend `default` unless they name another profile with
+/// `extends`. Values use the same vocabulary as the corresponding builder
+/// methods and CLI flags:
 ///
 /// ```toml
 /// [profiles.default]

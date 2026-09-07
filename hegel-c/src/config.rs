@@ -12,7 +12,9 @@
 //! The file is discovered by checking the current directory and then each
 //! ancestor up to the filesystem root, first hit wins — the same shape as
 //! cargo's config discovery, so a `hegel.toml` at either the package or the
-//! workspace root is found from wherever the test process runs.
+//! workspace root is found from wherever the test process runs. Setting
+//! `HEGEL_CONFIG` to a path bypasses discovery entirely, for environments
+//! that relocate the test process outside the source tree.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -25,11 +27,17 @@ use crate::settings::{Backend, Database, HealthCheck, Phase, Verbosity};
 /// ancestor.
 pub(crate) const FILE_NAME: &str = "hegel.toml";
 
+/// When set and non-empty, the path of the config file to load, replacing
+/// discovery.
+pub(crate) const CONFIG_VAR: &str = "HEGEL_CONFIG";
+
 /// Parsed contents of a `hegel.toml`: the profile deltas it defines, in
-/// file order.
+/// file order, and the path it was loaded from (`None` for a config that
+/// was parsed rather than loaded, or the empty default).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ConfigFile {
     pub(crate) profiles: Vec<(String, ProfileDelta)>,
+    pub(crate) path: Option<String>,
 }
 
 /// A parse failure at a 1-based line of the file.
@@ -485,22 +493,43 @@ pub(crate) fn discover(
 }
 
 /// Discover and parse `hegel.toml`. No file found is `Ok` with an empty
-/// config.
+/// config. A set, non-empty `HEGEL_CONFIG` names the file directly instead
+/// of discovering one, and a file it names that cannot be read is a hard
+/// error: the variable exists to guarantee a config is loaded, so failing
+/// to load it must be loud.
 pub(crate) fn load() -> Result<ConfigFile, ProfileError> {
-    load_from(crate::sys::cwd(), crate::sys::fs::exists, |path| {
-        crate::sys::fs::read(path).ok()
-    })
+    load_from(
+        crate::sys::env_var(CONFIG_VAR),
+        crate::sys::cwd(),
+        crate::sys::fs::exists,
+        |path| crate::sys::fs::read(path).ok(),
+    )
 }
 
-/// [`load`] with the directory and filesystem reads injected.
+/// [`load`] with the environment, directory, and filesystem reads injected.
 pub(crate) fn load_from(
+    config_var: Option<String>,
     cwd: Option<String>,
     exists: impl Fn(&str) -> bool,
     read: impl Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<ConfigFile, ProfileError> {
+    if let Some(path) = config_var.filter(|p| !p.is_empty()) {
+        let Some(bytes) = read(&path) else {
+            return Err(ProfileError::Config {
+                path,
+                line: 0,
+                message: format!("cannot read the file named by {CONFIG_VAR}"),
+            });
+        };
+        return parse_bytes(path, bytes);
+    }
     let Some((path, bytes)) = discover(cwd, exists, read) else {
         return Ok(ConfigFile::default());
     };
+    parse_bytes(path, bytes)
+}
+
+fn parse_bytes(path: String, bytes: Vec<u8>) -> Result<ConfigFile, ProfileError> {
     let Ok(text) = String::from_utf8(bytes) else {
         return Err(ProfileError::Config {
             path,
@@ -508,11 +537,17 @@ pub(crate) fn load_from(
             message: "file is not valid UTF-8".to_string(),
         });
     };
-    parse(&text).map_err(|e| ProfileError::Config {
-        path,
-        line: e.line,
-        message: e.message,
-    })
+    match parse(&text) {
+        Ok(mut config) => {
+            config.path = Some(path);
+            Ok(config)
+        }
+        Err(e) => Err(ProfileError::Config {
+            path,
+            line: e.line,
+            message: e.message,
+        }),
+    }
 }
 
 #[cfg(test)]

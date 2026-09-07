@@ -385,6 +385,16 @@ fn settings_for_from_resolves_the_selected_profile() {
 }
 
 #[test]
+fn settings_for_from_stamps_the_loaded_config_path() {
+    let mut config = config_of("[profiles.x]\ntest_cases = 5\n");
+    config.path = Some("/a/hegel.toml".to_owned());
+    let s = settings_for_from(Some("x"), &config, &[], env_of(&[])).unwrap();
+    assert_eq!(s.config_path.as_deref(), Some("/a/hegel.toml"));
+    let s = settings_for_from(Some("default"), &no_config(), &[], env_of(&[])).unwrap();
+    assert_eq!(s.config_path, None);
+}
+
+#[test]
 fn settings_for_from_rejects_an_unknown_default_profile_variable() {
     let env = env_of(&[("HEGEL_DEFAULT_PROFILE", "bogus")]);
     assert_eq!(

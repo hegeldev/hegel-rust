@@ -1727,6 +1727,35 @@ fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
 }
 
 #[test]
+fn debug_runs_log_the_loaded_config_path() {
+    use std::sync::{Arc, Mutex};
+    for (path, expected) in [
+        (Some("/a/hegel.toml"), "loaded config: /a/hegel.toml"),
+        (None, "no config file loaded"),
+    ] {
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&lines);
+        let mut settings = Settings::new()
+            .database(None)
+            .test_cases(2)
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            }));
+        settings.config_path = path.map(String::from);
+        reuse_run(settings, "k", |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        })
+        .unwrap();
+        assert!(
+            lines.lock().unwrap().iter().any(|l| l == expected),
+            "missing {expected:?}"
+        );
+    }
+}
+
+#[test]
 fn a_concurrent_machine_prints_no_nondeterminism_notice_in_antithesis() {
     use std::sync::{Arc, Mutex};
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
