@@ -1,6 +1,6 @@
 # Shrinking under nondeterminism
 
-The shrinker's search machinery — passes, scheduling, sort keys — is unchanged from
+The shrinker's search machinery (passes, scheduling, sort keys) is unchanged from
 the deterministic engine. What nondeterminism changes is the probe: under ND handling
 (the sticky `nd_active` flag, see [detection](detection.md)) a single run is no longer
 a verdict, so the engine's `EngineShrinkProbe` replaces one-run judgements with a
@@ -12,17 +12,17 @@ incumbent's reproduction rate, the anchor. Origin admission is
 ## The retention rule
 
 Decision 2 is the branch's contract for shrinking: shrinking must not lower the
-reported example's failure probability, and should raise it when possible — if
+reported example's failure probability, and should raise it when possible. If
 the search reaches a deterministically-failing region, it stays there. The guarantee
-is statistical, not absolute. Three mechanisms compose:
+is statistical rather than absolute. Three mechanisms compose:
 
 - **Candidate pricing.** A candidate displaces the incumbent only when its cumulative
   evidence's Wilson lower bound clears `max(gamma * anchor, GAUNTLET_FLOOR)` — it must
   demonstrate reproduction at no less than 0.8 times the incumbent's validated bound,
   and at the full bound once the anchor sits at or above the retention high-water.
 - **The monotone anchor.** The anchor estimates the incumbent's reproduction rate
-  under the engine's own pinned-replay procedure, rises only at validated events — a
-  bar accept, an adopted gauntlet first-accept, a boost holdout pass — and never
+  under the engine's own pinned-replay procedure, rises only at validated events (a
+  bar accept, an adopted gauntlet first-accept, a boost holdout pass), and never
   falls. Post-accept re-measurement of the standing incumbent never feeds it
   (decisions 19, 46). Anchor decay was tried and rejected: it made stopping
   incoherent, missing 51–75% of reachable reductions (experiment 001, decision 19).
@@ -46,8 +46,8 @@ probe is a fresh sample.
 
 `consider` returns true without executing on an equal sort key, false without
 executing on a larger one, and refuses candidates that change a forced node's value.
-Otherwise it executes and adopts the run's *actual* nodes — early exit and punning can
-differ from the proposal — iff the run is interesting and strictly smaller. `probe`
+Otherwise it executes and adopts the run's *actual* nodes (early exit and punning can
+differ from the proposal) iff the run is interesting and strictly smaller. `probe`
 applies the same accept rule to random-continuation runs, and `replace` is `consider`
 after per-index substitution. All adoption funnels through `accept_improvement`, which
 is where the probe's `candidate_adopted` hook fires (see the gauntlet below).
@@ -55,10 +55,10 @@ is where the probe's `candidate_adopted` hook fires (see the gauntlet below).
 The pass roster in `shrink_inner` runs span-structural passes first
 (`remove_discarded`, `try_trivial_spans`, `pass_to_descendant`, `reorder_spans`), then
 node programs and deletion, then per-kind value minimisation, ending with
-`shrink_clone_streams` and `mutate_and_shrink` — the only pass marked stochastic.
+`shrink_clone_streams` and `mutate_and_shrink`, the only pass marked stochastic.
 Deterministic passes fixate after one non-improving step, and stochastic passes get
-`STOCHASTIC_MAX_FAILURES` = 6 consecutive retries (an inherited budget, not a derived
-one). Between iterations passes re-sort by reorder key: deleted nodes first, then
+`STOCHASTIC_MAX_FAILURES` = 6 consecutive retries (an inherited budget rather than a
+derived one). Between iterations passes re-sort by reorder key: deleted nodes first, then
 shape changes, then useless. Before the fixate loop, `initial_coarse_reduction`
 (`shrinker/coarse.rs`) runs once from `shrink_origin`: it re-randomises small integer
 nodes (`value <= 10`, `min_value == 0`) that look like `one_of` branch selectors,
@@ -66,15 +66,15 @@ probing whether zeroing changes downstream shape and, when it does, trying each 
 branch value with up to three random continuations.
 
 `mutate_and_shrink` (`shrinker/mutation.rs`) skips targets over `MAX_MUTATE_NODES` =
-32 nodes, offsets each node's index by ±1..=5, and gives a mutation whose observing
-replay realises a branch switch — same length, different kind past the mutated
-position (`replay_observing_divergence`) — `DIVERGENT_RANDOM_ATTEMPTS` = 32 random
+32 nodes and offsets each node's index by ±1..=5. A mutation whose observing replay
+realises a branch switch (same length, different kind past the mutated position, per
+`replay_observing_divergence`) gets `DIVERGENT_RANDOM_ATTEMPTS` = 32 random
 continuations plus two-position variants at `RANDOM_ATTEMPTS` = 3 each.
 
 ## Budgets: logical calls, physical deadline
 
 Decision 7 splits the budget in two. `calls` counts one per `consider`/`probe`
-invocation — a logical candidate — and bounds the search: `max_improvements` defaults
+invocation (a logical candidate) and bounds the search: `max_improvements` defaults
 to `MAX_SHRINKS` = 500, and a stall guard silently drops candidates once
 `calls - calls_at_last_shrink` reaches `max_stall` (also 500, grown on each accept and
 inside pass loops). A gauntleted candidate may physically rerun many times to bound
@@ -92,8 +92,8 @@ The shrink phase loops over pending origins in sorted order, calling `shrink_ori
 starting run and an anchor. The admission mechanics belong to
 [the lifecycle](lifecycle.md):
 
-1. **Deterministic verify.** While not under ND handling, one exact replay of the
-   incumbent. Reproducing at the same origin makes that run the shrink start with
+1. **Deterministic verify.** While not under ND handling, the engine does one exact
+   replay of the incumbent. Reproducing at the same origin makes that run the shrink start with
    anchor 0.0 and no gauntlet. A miss aborts as `Flaky` under `error` strictness.
    Otherwise it flips the run and falls into the ND arms, since a flipped verify is
    never taken as a deterministic verify (decision 38).
@@ -103,11 +103,11 @@ starting run and an anchor. The admission mechanics belong to
    rule only, and any failure promotes the origin to confirmed with the batch's lower
    bound as anchor (decision 47). A zero-fail batch skips shrinking, though the
    origin is still reported.
-4. **Unconfirmed with history** backtracks first, and **unconfirmed without history**
-   faces the full discovery bar. Rejects evict per the lifecycle's rules.
+4. **Unconfirmed.** An origin with history backtracks first, and one without faces
+   the full discovery bar. Rejects evict per the lifecycle's rules.
 
-If the run flips mid-shrink — the shrink started non-gauntleted and `nd_handling()`
-is now true — the origin's pre-shrink nodes are restored and it is not marked shrunk:
+If the run flips mid-shrink (the shrink started non-gauntleted and `nd_handling()`
+is now true), the origin's pre-shrink nodes are restored and it is not marked shrunk:
 the outer loop re-enters `shrink_origin` for it under ND handling, where it faces
 backtrack or the bar and then a gauntleted shrink (decision 38, amended by decision 66
 when history exists). This terminates because `nd_active` never clears within a run.
@@ -124,23 +124,23 @@ When `shrink_origin` runs under ND handling it constructs `EngineShrinkProbe` wi
 `gauntlet: true`. The probe carries the target origin, the anchor, a sweep mode, and
 two pieces of cross-candidate state:
 
-- `ledger` — cumulative `Evidence` per candidate, keyed by **serialised realised
-  choices**, not the proposal: a candidate that punned into another realisation merges
-  evidence with it, because the realised timeline is what the evidence is about. The
+- `ledger`: cumulative `Evidence` per candidate, keyed by the serialized realized
+  choices, not the proposal. A candidate that punned into another realisation merges
+  evidence with it, because the realized timeline is what the evidence is about. The
   ledger persists for the whole shrink of one origin, so pass repetitions add power to
   retried rejects rather than starting over (decision 7's reject-retry requirement).
-- `raised` — realised timelines whose first adoption already raised the anchor.
+- `raised`: realized timelines whose first adoption already raised the anchor.
   Later accepts of the same timeline must not keep raising it, or the incumbent
   prices fresh candidates out (decisions 19, 46).
 
 Per candidate, `EngineShrinkProbe::run` executes the proposal once through
 `cached_test_function` and records `(matched, weight 1.0)` into the ledger. Under
 `nd_active` the execution cache never serves, so every replay runs the body
-(experiment 002; see [detection](detection.md)). In Fast sweep, a miss whose ledger is
+(experiment 002, see [detection](detection.md)). In Fast sweep, a miss whose ledger is
 not already a conclusive accept rejects immediately: rejects are charged one run
 (decision 7). The exemption for ledgers holding a conclusive accept protects the
 timelines a nested clone shrink's final splice re-proposes. Otherwise the probe loops
-on `nd::gauntlet(evidence, anchor)`. On Continue it reruns the realised timeline via
+on `nd::gauntlet(evidence, anchor)`. On Continue it reruns the realized timeline via
 `nd_replay_once`, a continuation-tolerant measurement replay whose non-failures count
 their verbatim-watermark weight (decisions 22 and 45, part of
 [the lifecycle's](lifecycle.md) Evidence machinery), and records the result. On Reject
@@ -149,7 +149,7 @@ it returns false. On Accept it keeps replaying until the ledger holds
 biased by the stopping rule (decision 54), then stashes a `PendingAccept` and returns
 true.
 
-The arithmetic (`nd::gauntlet`, `hegel-c/src/native/nd/mod.rs`): the threshold is
+`nd::gauntlet` (`hegel-c/src/native/nd/mod.rs`) does the arithmetic: the threshold is
 `max(gamma * anchor, GAUNTLET_FLOOR)`, with gamma = `GAUNTLET_GAMMA` below the
 retention high-water and 1.0 at or above it. Accept requires `GAUNTLET_MIN_FAILS`
 failures *and* a Wilson lower bound at or over the threshold. Short of four failures
@@ -161,32 +161,32 @@ threshold unreachable or at `GAUNTLET_CAP` physical runs.
 | `GAUNTLET_GAMMA` | 0.8 | experiment 001's gamma sweep (the size-vs-reliability dial); ledger shape from decision 7 |
 | `GAUNTLET_CAP` | 30 | experiment 001's P3 policy cap, carried into the engine by experiment 003 |
 | `GAUNTLET_MIN_FAILS` | 4 | decision 54 (experiment 008, finding S1) |
-| `GAUNTLET_FLOOR` | 0.05 | decision 54 — derived: 0.05 < LCB(4/30) = 0.0531, the min-fails boundary at the cap, so the floor costs no power |
-| `ANCHOR_SEED_RUNS` | 20 | decision 54 — the largest seed whose all-fail LCB (0.839) a candidate can still match within `GAUNTLET_CAP`; 40-run seeding stalls shrinking |
+| `GAUNTLET_FLOOR` | 0.05 | decision 54, derived from the min-fails boundary at the cap: 0.05 < LCB(4/30) = 0.0531, so the floor costs no power |
+| `ANCHOR_SEED_RUNS` | 20 | decision 54: the largest seed whose all-fail LCB (0.839) a candidate can still match within `GAUNTLET_CAP` (40-run seeding stalls shrinking) |
 | `RETENTION_HIGH_WATER` | 0.8 | decision 55 (experiment 008, finding S6) |
-| z (Wilson) | 1.96 | retained by decision 54; the exact-DP operating points are the specification, z is a tuning constant |
+| z (Wilson) | 1.96 | retained by decision 54 (the exact-DP operating points are the specification, z is a tuning constant) |
 
 The min-fails rule exists because a fresh ledger's single failure has Wilson lower
-bound 0.2065, so without it every threshold below that accepts on the recruiting run —
-experiment 008 measured 33% target-regime bug loss from that degeneration.
+bound 0.2065, so without it every threshold below that accepts on the recruiting run.
+Experiment 008 measured 33% target-regime bug loss from that degeneration.
 The recalibrated worst-case false accept is 4.0e-4 per proposal against a p = 0.02
 fluke (target 1e-3), pinned by the test `gauntlet_matches_the_008_operating_points`.
 
-**Accept is not adoption** (decision 36). A gauntlet accept only stashes a
+A gauntlet accept is not adoption (decision 36): it only stashes a
 `PendingAccept`. The state moves in `candidate_adopted`, called solely from
-`Shrinker::accept_improvement`. An accept the shrinker discards — a punned
-realisation, a sort-key-larger mutation probe result — moves nothing. On adoption, the
-first accept per realised timeline raises the anchor to the accept's 20-run lower
+`Shrinker::accept_improvement`. An accept the shrinker discards (a punned
+realisation, a mutation probe result with a larger sort key) moves nothing. On
+adoption, the first accept per realized timeline raises the anchor to the accept's 20-run lower
 bound if higher, both in the probe and in the lifecycle (`raise_anchor`, itself
-monotone), and the new incumbent is persisted (`record_nd_incumbent`; see
+monotone), and the new incumbent is persisted via `record_nd_incumbent` (see
 [persistence](persistence.md) for the save-then-delete discipline). Every acceptance
 path therefore gates on the same validated-accept event: a gauntlet accept plus
 adoption.
 
 The high-water arm has a priced residual: at gamma 1.0 on constant p = 0.9 bodies the
 gauntlet can burn on the order of a million replays per episode, nearly every genuine
-reduction rejecting at the run cap — measured by experiment 012 and escalated as a
-follow-up outside the seam accounting (decision 67).
+reduction rejecting at the run cap. Experiment 012 measured this, and decision 67
+escalated it as a follow-up outside the seam accounting.
 
 ## Sweep modes and confirmed-dry stopping
 
@@ -213,18 +213,18 @@ guard latched and fake a fixed point. It restores the probe's previous mode when
 sweep ends, so a nested clone shrink's sweeps leave the enclosing shrink's mode
 intact.
 
-The boundary of this design is decision 17: checkpoint/rollback inside the shrink
-loop was rejected outright — rollback-on-uncertainty poisons stable landscapes
-(missed reductions 9% to 52%), rollback-on-proof never fires. Confirmed-dry is the
+The boundary of this design is decision 17. Checkpoint/rollback inside the shrink
+loop was rejected outright: rollback-on-uncertainty poisons stable landscapes
+(missed reductions 9% to 52%), and rollback-on-proof never fires. Confirmed-dry is the
 accepted alternative on the stopping side. The backtrack over origin history
-([final replay](final-replay.md)) is detection-triggered and bar-gated, not a
+([final replay](final-replay.md)) is detection-triggered and bar-gated rather than a
 rollback.
 
 ## Boost
 
 Boost runs inside `shrink_origin`, after admission and before the shrink, only when
 the run is under ND handling and the anchor sits below `BOOST_RELIABILITY_FLOOR` =
-0.30 — LCB(10/20), the 20-run-batch image of decision 28's "true rate below 0.5"
+0.30 — LCB(10/20), decision 28's "true rate below 0.5" translated to a 20-run batch
 (decision 56: the literal 0.5 over-triggered on 59% of true-0.7 incumbents).
 
 It is decision 2's "raise it when possible" arm: a successive-halving race over up to
@@ -233,16 +233,16 @@ topped up with prefix-cut mutants (replay a random-length prefix of the incumben
 with a small random continuation, the same shape as the replay splices in
 [persistence](persistence.md)). Rounds score raw failure rate with replays per round
 doubling from 2, keeping the top half. The winner faces a `BOOST_HOLDOUT` = 20
-holdout of `nd_replay_once` measurements — in-race rates are selection-biased upward —
+holdout of `nd_replay_once` measurements (in-race rates are selection-biased upward)
 and replaces the shrink start and anchor only when the holdout produced a failing
 witness and its lower bound beats the anchor (`nd_boost`,
 `hegel-c/src/native/test_runner.rs`).
 
-Measured (experiment 006A): on a deterministic-core landscape boost turns 27/30 runs
+Experiment 006A measured the effect: on a deterministic-core landscape boost turns 27/30 runs
 landing deterministic finals into 30/30 at +14% cost. On the coreless rising
 landscape it trades size for reliability (p 0.26 to 0.42, length 3 to 5, +46%), and
 on constant noise the holdout gate correctly refuses. The monotone anchor alone finds
-deterministic cores in 90% of runs — boost is the guarantee on top. There is no
+deterministic cores in 90% of runs, and boost is the guarantee on top. There is no
 public setting, and entry logs one Debug line (decisions 28 and 56, gates G2/G7).
 
 ## Clone shrink
@@ -251,9 +251,9 @@ public setting, and entry logs one Debug line (decisions 28 and 56, gates G2/G7)
 stream inside each clone node of the current best sequence. The nested probe,
 `NestedCloneProbe`, splices each `Full` candidate into the parent sequence at the
 clone's position (`splice_child`) and embeds `Probe` prefixes as a `Clone` value in
-the outer values, then reads the realised child stream back out of the parent run's
+the outer values, then reads the realized child stream back out of the parent run's
 node at that index. It forwards both `set_sweep_mode` and `candidate_adopted` to the
-outer probe — a wrapping probe that fails to forward silently exempts the inner probe
+outer probe: a wrapping probe that fails to forward them silently exempts the inner probe
 from sweep modes and swallows its accepts. The nested shrink shares the outer
 deadline. When it finishes, the final child is spliced into the parent and passed
 through `consider`. That final splice re-proposes a timeline whose ledger already
@@ -270,10 +270,10 @@ in-flight climb at the flip. Pre-flip observations stay in the map, unused.
 
 Span mutation stays on. `try_span_mutation` runs from the generation loop regardless
 of `nd_active`, making up to `SPAN_MUTATION_ATTEMPTS` = 5 probes per eligible run
-through `cached_test_function` — under ND handling the cache never serves, so each
-probe executes. Same-label spans are what it exploits, which is one reason every
+through `cached_test_function`. Under ND handling the cache never serves, so each
+probe executes. It exploits same-label spans, which is one reason every
 engine draw emits a kind-specific span. Its interesting finds land in the engine's
 `interesting` map subject
 to the same admission rules as any raw sighting: under ND they may fill a vacant
 origin, never displace an occupied one, and face the discovery bar before anything
-consumes them (decisions 20, 24; see [the lifecycle](lifecycle.md)).
+consumes them (decisions 20 and 24, detailed in [the lifecycle](lifecycle.md)).

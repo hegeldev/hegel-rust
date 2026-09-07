@@ -38,16 +38,16 @@ the pooled review instead.
 While `nd_handling()` is false, the incumbent replays once, exactly
 (`for_choices`, no RNG, no continuation), stamped for capture. Under `error`
 strictness a cache mismatch detected inside the replay propagates as the
-usual abort instead of being swallowed into a flip.
+usual abort instead of being converted into a flip.
 
 A replay that reproduces at the same origin with the run still deterministic
-pushes its origin onto `replayed` and the loop continues. This is the entire
-final replay for a deterministic run: n origins, n executions.
+pushes its origin onto `replayed` and the loop continues. For a
+deterministic run the entire final replay is n executions, one per origin.
 
 The cache-mismatch channel can also fire inside a *successful* replay. The
 replay reproduced, but the run flipped while it ran: `replayed` re-enters the
-queue and the current origin falls straight through to the pooled review — a
-single reproduction is no longer the standard of evidence.
+queue and the current origin falls straight through to the pooled review,
+because a single reproduction is no longer enough evidence.
 
 A miss aborts with `RunError::Flaky` under `error` strictness, preserving the
 pre-branch behaviour for suites that use determinism as a lint (decision 30). Otherwise the
@@ -79,7 +79,7 @@ nd_reproduce(Some(origin), timelines,
 ```
 
 `nd_reproduce` (test_runner.rs) is the replay-until-failure primitive shared
-with database reuse and blob replay (decision 25; see
+with database reuse and blob replay (decision 25, see
 [persistence](persistence.md)). Three tiers run in order, stopping at the
 first run that concludes interesting at this origin, and evidence accumulates
 across all of them:
@@ -87,19 +87,20 @@ across all of them:
 1. **Per-timeline first-fit.** Each timeline replays until its weighted
    evidence reaches the per-timeline budget, physically capped at
    `ceil(2 × budget)` runs. Each replay is `nd_replay_once`: `for_probe`
-   with a spawned RNG and a continuation budget of `len + max(4, len/8)` —
+   with a spawned RNG and a continuation budget of `len + max(4, len/8)`,
    the stored timeline plus `max(4, len/8)` fresh draws past it
    (experiment 004). A miss weighs its
    verbatim watermark, so a heavily diverged replay consumes little of the
    weighted budget and the physical cap bounds its cost (the weighting is
    [the lifecycle chapter's](lifecycle.md) subject).
 2. **Positional splices.** With at least two timelines,
-   `REPRODUCE_SPLICES` = 10 crossovers: a random ordered pair, a random cut
-   at most the shorter length, the left prefix glued to the right suffix.
+   `REPRODUCE_SPLICES` = 10 crossovers: each picks a random ordered pair and
+   a random cut at most the shorter length, then glues the left prefix to the
+   right suffix.
    Experiment 006 measured splices rescuing 65–100% of full-pool misses.
 3. **Fresh generations.** `FINAL_REPLAY_FRESH` = 4 new random cases, a
    chosen constant rather than a derived one (decision 53). Their misses
-   carry weight 0.0 — they say nothing about the stored timelines. Only the
+   carry weight 0.0 because they say nothing about the stored timelines. Only the
    final replay has this tier. Reuse and blob replay pass zero, because a
    fresh case could fail for an unrelated reason (decision 33). Here the
    origin is pinned, so a fresh failure counts only at the same origin.
@@ -111,8 +112,8 @@ across all of them:
 `ceil(ln 0.05 / ln 0.9)` = 29 (hegel-c/src/native/nd/mod.rs): the smallest
 count at which a bug failing at the target rate p = 0.1 escapes with
 probability at most 5% (decisions 11, 16). The pooled review divides it
-evenly across the pool — per-timeline weighted budget 29/n, physical cap
-`ceil(58/n)`:
+evenly across the pool, giving each timeline a weighted budget of 29/n and a
+physical cap of `ceil(58/n)`:
 
 | Pool size n | Weighted budget per timeline | Physical cap per timeline | Dry worst case (timelines + splices + fresh) |
 |---|---|---|---|
@@ -127,21 +128,21 @@ executions, and the worst case is paid only for a dry review.
 
 `batch` is the accumulated evidence's physical (fails, runs).
 
-For a still-unconfirmed origin, any failure confirms: anchor = the evidence's
-Wilson lower bound, no witness (the shrinker is done with this origin), pool
-= the replayed timelines, history dropped. This is the one confirmation path
-with no bar — the review holds a stamped failing execution, which is exactly
-the material a report needs.
+For a still-unconfirmed origin, any failure confirms: the anchor is the
+evidence's Wilson lower bound, there is no witness (the shrinker is done with
+this origin), the pool is the replayed timelines, and history is dropped.
+This is the one confirmation path with no bar, because the review holds a
+stamped failing execution, which is exactly the material a report needs.
 
-A dry review of an unconfirmed origin observes it (defensively — it may never
-have reached the lifecycle), then backtracks when history is non-empty. On
+A dry review of an unconfirmed origin observes it (defensively, since it may
+never have reached the lifecycle), then backtracks when history is non-empty. On
 `Restored`, the restored nodes become the incumbent, re-shrunk when
 `reshrink`, and the origin is pushed back onto `pending`: the restored
 incumbent goes through the pooled review again. On `Exhausted`, the
 backtrack's (fails, runs) fold into the reject evidence. The rejection evicts
 an unconfirmed origin from the interesting map, and it can then reach the
-report only through the caveat-only fallback (decisions 24, 35; wording in
-[the lifecycle chapter](lifecycle.md)).
+report only through the caveat-only fallback (decisions 24 and 35, with the
+wording in [the lifecycle chapter](lifecycle.md)).
 
 For a confirmed or trusted origin, `record_final_replay(batch)` folds the
 evidence into the origin's report counts, kept apart from confirmation and
@@ -158,8 +159,8 @@ through rediscovery on the next run (decision 35).
 
 `OriginHistory` (test_runner.rs) retains every pre-flip interesting execution
 per origin: raw sightings and accepts alike, in execution order, deduplicated
-by serialized nodes, unbounded — gate G24 found that a recency bound evicts
-exactly the entries an early slip-in needs. The `accept` flag marks entries
+by serialized nodes. The history is unbounded because gate G24 found that a
+recency bound evicts exactly the entries an early slip-in needs. The `accept` flag marks entries
 that became the incumbent when recorded, a founding sighting or a shortlex
 displacement in `update_interesting`. Accepts strictly shrink, so the accept
 entries form a shortlex-sorted segment. Recording happens in `record_run`'s
@@ -171,8 +172,8 @@ segment sorted: no post-restore accept is ever recorded.
 
 A never-confirmed origin with non-empty history that misses its pre-shrink
 verify (see [shrinking](shrinking.md)) or its final replay backtracks
-(`Engine::backtrack`, test_runner.rs; decisions 65/66, gate G25). The walk
-hunts the reproduction boundary — the newest history entry that still
+(`Engine::backtrack` in test_runner.rs, decisions 65/66, gate G25). The walk
+hunts the reproduction boundary, the newest history entry that still
 reproduces.
 
 The scan probes with single continuation-tolerant `nd_replay_once` calls: the
@@ -180,14 +181,15 @@ accept segment at geometric offsets back from the newest (1, 2, 4, …), plus
 the oldest accept, plus the newest accept itself when only one accept exists,
 then every raw sighting once. The whole scan draws on a budget of
 `BACKTRACK_SCAN_REPLAYS` = `nd::CONFIRM_CAP` = 40 replays. A raw-heavy
-history spends the cap on raws — the cap is the budget there, not headroom.
+history spends the cap on raws, so there the cap acts as the budget rather
+than headroom.
 Binary refinement then searches the accept segment between the newest
 reproducing probe and its nearest newer non-reproducing one.
 
 The candidate is the refined accept, or failing that the shortlex-smallest
-reproducing raw sighting. With no reproducing probe at all, one second pass
-walks the entries newest-first on the remaining budget, re-probing earlier
-misses, stopping at the first failure. If nothing has reproduced after that, the walk returns
+reproducing raw sighting. With no reproducing probe at all, a single second
+pass walks the entries newest-first on the remaining budget, re-probing
+earlier misses, stopping at the first failure. If nothing has reproduced after that, the walk returns
 `Backtrack::Exhausted` with the accumulated (fails, runs).
 
 The candidate faces the full discovery bar via `nd_evidence_batch`, up to
@@ -196,13 +198,13 @@ the bar at roughly its true reproduction rate, each attempt holds 45%
 target-regime power, and three compose to ~83%. A reject marks the candidate
 non-reproducing and resumes the loop, which picks an older candidate next.
 
-A cleared bar confirms the origin (anchor = the batch's lower bound, witness
-from the batch, pool = the candidate plus the batch's captured
-timelines plus the scan's other reproducing entries) and drops history. The
-restored incumbent supersedes the barred shrunk save through
-`Persister::supersede_nd`: a forced write, since the restore is
-shortlex-larger than what the monotone `needs_save` gate would accept,
-ordered save-then-delete for crash safety (decision 44; see
+A cleared bar confirms the origin and drops history: the anchor is the
+batch's lower bound, the witness comes from the batch, and the pool is the
+candidate plus the batch's captured timelines plus the scan's other
+reproducing entries. The restored incumbent supersedes the barred shrunk save
+through `Persister::supersede_nd`. The write is forced, since the restore is
+shortlex-larger than what the monotone `needs_save` gate would accept, and
+ordered save-then-delete for crash safety (decision 44, see
 [persistence](persistence.md)).
 
 Scan errors bias old, which decision 2 makes safe: a too-old restore

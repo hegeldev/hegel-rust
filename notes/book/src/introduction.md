@@ -2,8 +2,8 @@
 
 This book explains the `DRMacIver/nondeterminism` branch of hegel-rust: what it
 built, and how it got there. The branch teaches Hegel's engine to handle tests
-whose behaviour is not a deterministic function of their choice sequence —
-tests with hidden state, real concurrency, or environmental dependence — and to
+whose behaviour is not a deterministic function of their choice sequence
+(tests with hidden state, real concurrency, or environmental dependence), and to
 keep finding, shrinking, reporting, and reproducing bugs in them instead of
 giving up.
 
@@ -23,7 +23,7 @@ false starts and lessons collected along the way.
 The branch is an artefact, per `notes/README.md`: it was taken to production
 grade in place, and the final implementation will be extracted from it later
 (decision 26). This book is a synthesis for that extraction and for anyone who
-needs to understand the branch whole. The primary sources remain authoritative:
+needs to understand the branch as a whole. The primary sources remain authoritative:
 `notes/design.md` for the as-built design, `notes/decisions.md` for the
 append-only decision log, `notes/research/` for the maps and critiques,
 `notes/experiments/` for the experiment write-ups, and the git history for the

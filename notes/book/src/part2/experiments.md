@@ -5,7 +5,7 @@ The branch's constants and mechanisms trace to twelve numbered experiments.
 `notes/experiments/NNN-name/notes.md` whose spec was written before the run and whose results and
 lessons were appended after. A result that changed the design updated `design.md`, and reversals
 were logged in `decisions.md`. The code harnesses live in `/experiments` at the repository root,
-frozen after use: standalone crates outside the workspace, unmaintained, some no longer
+frozen after use as standalone crates outside the workspace, unmaintained and some no longer
 building.
 
 The program ran in three eras. Experiments 001–006 (all closed 2026-09-02) were a designed
@@ -42,17 +42,18 @@ anchor", also never ran.
 gamma, stopping rules, budgets), and settle whether checkpointing adds anything and how
 pass-repetition compares to per-candidate-N cost.
 
-**Method.** Pure simulation, no engine. A test case is a `Vec<u64>` of atoms 0..=100, an atom at
-or above 50 is a bug atom, and every "execution" is one Bernoulli draw from the landscape's true
-failure probability. Starts are length 20 with at least three bug atoms, sort key shortlex, 200
-seeds per (policy, landscape) cell. Landscapes: L1 rising-with-size, L2 deterministic-core, L3
-constant 0.5, L4 noise-floor (bug 0.9, bugless 0.02). Policies: P0 naive single-run accepts, P1
-per-candidate-N (fails-within-10), P2 fixed gauntlet (five consecutive failures), P3 ledger
-gauntlet (single-run rejects with evidence retained, sequential Wilson accepts at
-LCB >= gamma x anchor, monotone anchor), P4 = P3 plus checkpoint/rollback.
+**Method.** The harness is pure simulation, with no engine. A test case is a `Vec<u64>` of atoms
+0..=100, an atom at or above 50 is a bug atom, and every "execution" is one Bernoulli draw from
+the landscape's true failure probability. Starts are length 20 with at least three bug atoms,
+the sort key is shortlex, and each (policy, landscape) cell ran 200 seeds. The landscapes are L1
+rising-with-size, L2 deterministic-core, L3 constant 0.5, and L4 noise-floor (bug 0.9, bugless
+0.02). The policies are P0 naive single-run accepts, P1 per-candidate-N (fails-within-10), P2 a
+fixed gauntlet (five consecutive failures), P3 a ledger gauntlet (single-run rejects with
+evidence retained, sequential Wilson accepts at LCB >= gamma x anchor, monotone anchor), and
+P4 = P3 plus checkpoint/rollback.
 
 **Results.** P0 loses the bug on L4 in 34% of trials. P1 loses it in 100%, reporting the empty
-test case at p = 0.02: accept-on-any-failure-within-10 gives a bugless candidate an 18%
+test case at p = 0.02: accepting on any failure within 10 gives a bugless candidate an 18%
 acceptance chance per proposal, and each noise accept ratchets the sort key down irreversibly.
 P3 keeps the bug in 100% of trials on every landscape at roughly 1.5–2x naive cost, except where
 the never-lower-p constraint binds (L1: ~2.6k median executions, ~20x naive). P2's fixed
@@ -79,16 +80,17 @@ every bar-seeded threshold in the low-to-mid regime) and recalibrated it (decisi
 **Question.** Where does the resampling seam go in `cached_test_function`, and what does one
 fixate iteration cost with tree dedup off on a ~50-node target?
 
-**Method.** In-engine. The seam was located by reading `test_runner.rs`. The cost was measured
-by recording one interesting case whose body draws N booleans (N in {10, 50, 200, 1000}) and
+**Method.** The experiment ran in-engine. The seam was located by reading `test_runner.rs`, and
+the cost was measured by recording one interesting case whose body draws N booleans (N in
+{10, 50, 200, 1000}) and
 replaying it 10,000 times with tree-serving on versus off, engine overhead only.
 
 **Results.** `Engine::cached_test_function` was the only place the choice tree served a recorded
 conclusion instead of executing. So "the tree never serves conclusions under ND handling" is one
 boolean, `Engine::serve_replays`, and flipping it converts every replay consumer to resample
 semantics without touching recording. Cost was linear on both sides: ~25–100 ns/node served
-versus ~100–300 ns/node executed (50 draws: 1,918 vs 5,899 ns/replay; 1000 draws: 24,624 vs
-104,439 ns). At the 50-node target a full 30-run gauntlet adds ~120 us of engine time per
+versus ~100–300 ns/node executed (1,918 vs 5,899 ns/replay at 50 draws, and 24,624 vs
+104,439 ns at 1000). At the 50-node target a full 30-run gauntlet adds ~120 us of engine time per
 candidate, and any body worth ND treatment costs orders of magnitude more per run, so no
 result-cache substitute is needed under ND handling and budgets follow body cost and statistics
 rather than engine throughput.
@@ -102,18 +104,19 @@ tree-serving's one real win is recoverable with a flat cache.
 **Question.** Do gauntlet plus ledger tame drift on real synthetic flaky tests, with the
 statistics running in the actual shrinker rather than 001's simulation?
 
-**Method.** In-engine, gated on a new `Settings::nd_experiment`, three modes: Baseline (the
-untouched engine), Resample (002's seam flipped, single-run accepts: 001's P0 transplanted), and
-Gauntlet (Resample plus 001's P3 in `EngineShrinkProbe`, the ledger keyed on serialised realised
-choices). Bodies draw n in 0..=20 then n atoms in 0..=100, failing via a hidden per-trial PRNG
-at 001's L1/L3/L4 rates on real choice sequences. 100 seeds at a 500-case budget per cell.
+**Method.** The experiment ran in-engine, gated on a new `Settings::nd_experiment`, with three
+modes: Baseline (the untouched engine), Resample (002's seam flipped, single-run accepts: 001's
+P0 transplanted), and Gauntlet (Resample plus 001's P3 in `EngineShrinkProbe`, the ledger keyed
+on serialized realized choices). Bodies draw n in 0..=20 then n atoms in 0..=100, failing via a
+hidden per-trial PRNG at 001's L1/L3/L4 rates on real choice sequences. Each cell ran 100 seeds
+at a 500-case budget.
 
-**Two leaks.** Both were predicted by the design and demonstrated live. First, raw
+**Two leaks.** Both were predicted by the design and demonstrated live. The first was raw
 `update_interesting` displacement: with post-discovery generation running, a 20/20-confirmed
 discovery was displaced by p = 0.02 noise flukes before shrinking started in ~80% of L4 trials,
 and the gauntlet then anchored on the fluke and shrank garbage. Under ND handling a raw
 interesting run may fill a vacant origin but never displace an occupied one (decision 20).
-Second, discovery-time confirmation is a prerequisite, not a nicety: first-interesting on L4 is
+The second was that discovery-time confirmation is a prerequisite: first-interesting on L4 is
 a noise fluke about 2:1 over genuine bugs, a population the old Flaky abort had been filtering
 by accident. The scaffold's flat 2-in-20 confirmation batch was adopted as explicitly
 provisional (decision 21).
@@ -122,9 +125,9 @@ provisional (decision 21).
 100% everywhere. L4 bug kept: Baseline 69/71 of completed runs, Resample 3/100 (final p median
 0.02, empty counterexamples), Gauntlet 99/100 (median 0.90). On L1 Resample teleports to p 0.26
 while Gauntlet holds a 0.50 median at length 6, costing 13,556 median executions. On L3/L4 the
-gauntlet pays only +18–43% over resampling. The lessons recorded: naive resampling is not a
-viable intermediate mode ("if ND mode ships anything, it ships the gauntlet"), and discovery
-plus the post-discovery generation window are part of the statistical surface.
+gauntlet pays only +18–43% over resampling. The lessons recorded were that naive resampling is
+not a viable intermediate mode ("if ND mode ships anything, it ships the gauntlet") and that
+discovery plus the post-discovery generation window are part of the statistical surface.
 
 **Later revised.** The flat 2-in-20 bar was confirmed unsafe and replaced by 005A (decision 23).
 The gauntlet parameterisation was re-derived by experiment 008 (decision 54), which measured the
@@ -137,21 +140,22 @@ structural divergence) on bodies whose structure changes run to run? It is the c
 003, with a deterministic verdict and flaky structure, and feeds the deferred
 per-position-anchoring question (decision 14).
 
-**Method.** An in-engine replay primitive, harness-orchestrated. Bodies draw integer atoms
+**Method.** The harness orchestrates an in-engine replay primitive. Bodies draw integer atoms
 0..=100, and hidden per-execution coins change draw structure but never the verdict, which fails
-deterministically iff at least three atoms are 90 or above: late-coin (B1), step-coins (B2),
-kind-flip (B3), stable-prefix (B4), het-shift (B5, heterogeneous draws plus shifts, the
-adversarial case), and a deterministic control. Per trial (40 per body): discover a failing
-timeline T0, build a pool per capture-at-confirmation, then 50 cold attempts per strategy — T0
-replay at extend {0, 4, 16, 64}, pool first-fit at caps K in {1, 2, 5, 10, 20}, and a
-fresh-generation control.
+deterministically iff at least three atoms are 90 or above. The bodies are late-coin (B1),
+step-coins (B2), kind-flip (B3), stable-prefix (B4), het-shift (B5, heterogeneous draws plus
+shifts, the adversarial case), and a deterministic control. Each trial (40 per body) discovers a
+failing timeline T0, builds a pool per capture-at-confirmation, and then makes 50 cold attempts
+per strategy: T0 replay at extend {0, 4, 16, 64}, pool first-fit at caps K in {1, 2, 5, 10, 20},
+and a fresh-generation control.
 
 **Results.** Extend 4 captures the entire single-timeline benefit (B1 78% at extend 0 to 100%,
-B2 53 to 85, B4 61 to 98, and extend 64 adds nothing anywhere): bare replay's losses are
-end-of-sequence overruns, not value loss. B3 sticks at 66% (~0.85^3) regardless of extend and B5
-craters at 19–28%, so positional punning holds exactly when constraints are homogeneous. The
-pool is the recovery mechanism — K=5 takes B3 from 68 to 99% and B5 from 28 to 65%, K=10 reaches
-the plateau (B5 72%), K=20 adds nothing, worst-case cost 3.2 replays per attempt. Prefix sharing
+B2 53 to 85, B4 61 to 98, and extend 64 adds nothing anywhere), so bare replay's losses come
+from end-of-sequence overruns rather than value loss. B3 sticks at 66% (~0.85^3) regardless of
+extend and B5 craters at 19–28%, so positional punning holds exactly when constraints are
+homogeneous. The pool is the recovery mechanism: K=5 takes B3 from 68 to 99% and B5 from 28 to
+65%, K=10 reaches the plateau (B5 72%), and K=20 adds nothing, at a worst-case cost of 3.2
+replays per attempt. Prefix sharing
 is anticorrelated with pool need (pair-LCP 0.32 on B3 and 0.48 on B5, against 0.93–0.98 on the
 bodies K=1 already handles), so a merged trie would compress the timelines that don't need
 pooling and fail on the ones that do. The verbatim watermark understates value survival (B3's
@@ -168,23 +172,24 @@ reproduction ceiling (decision 58).
 
 ## 005: lifecycle
 
-**Question.** Confirmation, capture-at-confirmation, persistence gating, unified reporting — the
-failure lifecycle end to end. Part A discharges decision 21's assignment: derive the
+**Question.** Exercise the failure lifecycle end to end: confirmation, capture-at-confirmation,
+persistence gating, and unified reporting. Part A discharges decision 21's assignment: derive the
 discovery-confirmation rule from the noise-floor caution.
 
 ### 005A: the confirmation bar
 
-**Method.** Exact dynamic programming over (runs, fails) states, no simulation noise: noise at
-p = 0.02, target at p = 0.1, Wilson z = 1.96. Rules compared: flat k-of-B, Wald SPRT, a Wilson
-accept/reject pair, and two-stage gates. The loss function is asymmetric by the recycling
-argument: a false accept is sticky (it occupies the origin, anchors the gauntlet on garbage, and
-the displacement gate then protects it) while a false reject recycles through rediscovery, so
-P(accept | noise) is minimised hard and per-discovery power traded away.
+**Method.** The analysis is exact dynamic programming over (runs, fails) states with no
+simulation noise, at noise p = 0.02, target p = 0.1, and Wilson z = 1.96. The rules compared
+were flat k-of-B, Wald SPRT, a Wilson accept/reject pair, and two-stage gates. The loss function
+is asymmetric by the recycling argument: a false accept is sticky (it occupies the origin,
+anchors the gauntlet on garbage, and the displacement gate then protects it) while a false
+reject recycles through rediscovery, so P(accept | noise) is minimised hard and per-discovery
+power traded away.
 
 **Results.** The scaffold's flat 2/20 is 6.0% false accept per fluke (26.6% run-level at five
 exposures), confirmed unsafe. The Wilson pair is 26.1% (wrong shape), and SPRT buys power only
 by spending 51.9 expected replays per p = 0.02 fluke, a bad trade given recycling. The winner
-was gate 1/10 then 4/40 — reject on zero failures in ten replays, otherwise continue to 40
+was gate 1/10 then 4/40: reject on zero failures in ten replays, otherwise continue to 40
 total, accepting early on the fourth failure. Its operating point is 0.6% false accept per
 fluke, 45% per-discovery power at p = 0.1 compounding past 95% by the fifth discovery, 15
 replays per rejected fluke, and 4.4 for a p = 0.9 bug. The 1/10 gate alone dismisses 82% of
@@ -195,18 +200,19 @@ and `CONFIRM_CAP = 40` (hegel-c/src/native/nd/mod.rs).
 
 **Method.** The scaffold gained the 005A bar, capture-at-confirmation feeding a per-origin pool
 (cap 10 per decision 22), persistence of the shrunk incumbent plus pool entries as additional
-primary database entries, budgeted reuse, and caveated reporting per decision 3. Two-run
-harness: run 1 discovers, confirms, shrinks, and persists into a fresh in-memory database copied
-into run 2, which measures cross-run reproduction. Bodies: 003's L1/L3/L4 plus step-coins (S2),
-het-shift (S5), and a pure-noise body N0 with no real bug. 30 seeds per body at budgets of 300
-and 1000 cases.
+primary database entries, budgeted reuse, and caveated reporting per decision 3. The
+harness is two runs: run 1 discovers, confirms, shrinks, and persists into a fresh in-memory
+database copied into run 2, which measures cross-run reproduction. The bodies are 003's L1/L3/L4
+plus step-coins (S2), het-shift (S5), and a pure-noise body N0 with no real bug, at 30 seeds per
+body and budgets of 300 and 1000 cases.
 
-**Results.** L1/L3/L4 and S2 at 300 cases: 30/30 confirmed, 30/30 reproduced in run 2 (2–4
-executions for outcome-ND bodies; S2 re-shrinks at 1,950 median). S5 at 300: 20/30 confirmed
-(discovery starvation, not confirmation failure), all 20 reproduced at 8,285 median executions
-because structural misalignment forces a re-shrink, and 29/30 at 1000. N0: 0/30 confirmed at
-both budgets, every run failing caveated, nothing persisted, zero false confirms. There were
-zero run errors and 139/139 cross-run reproductions across both budgets.
+**Results.** L1/L3/L4 and S2 at 300 cases confirmed 30/30 and reproduced 30/30 in run 2 (2–4
+executions for outcome-ND bodies, with S2 re-shrinking at 1,950 median). S5 at 300 confirmed
+20/30 (discovery starvation rather than confirmation failure), all 20 reproduced at 8,285 median
+executions because structural misalignment forces a re-shrink, and 29/30 at 1000. N0 confirmed
+0/30 at both budgets, every run failed caveated, nothing was persisted, and there were zero
+false confirms. There were zero run errors and 139/139 cross-run reproductions across both
+budgets.
 
 **Consequence.** Confirmation is a property of origin admission, not one execution path: the
 first cut hooked it on the generation run's own status, and on pure noise 26/30 runs "confirmed"
@@ -214,7 +220,7 @@ a fluke through a witness-only fallback. The fix sweeps every unconfirmed intere
 after each generation iteration (decision 24). Reused entries are trusted on reproduction, since
 re-running the bar would drop real p ~ 0.1 bugs ~55% of the time. Cross-run cost splits exactly
 on structure, pricing the deferred `replay_aligned` question. Small budgets starve narrow
-structural bugs of discoveries, not confirmations.
+structural bugs of discoveries rather than confirmations.
 
 **Later revised.** Decision 47 replaced blanket reuse-trust with an evidence batch at shrink
 time. Decision 64 added the first-interesting check on every generation-discovered origin, and
@@ -226,28 +232,30 @@ experiment 012 closed the residual never-flip escape.
 steadier incumbents at acceptable cost, and does donor splicing recover the ~27% replay residue
 whole-timeline pools plateau under?
 
-**Method.** 006A, in-engine behind `Settings::nd_boost`: after confirmation and before
+**Method.** 006A ran in-engine behind `Settings::nd_boost`: after confirmation and before
 shrinking, successive halving over 16 candidates (incumbent, pool entries, probe mutants) for
 128 replays total, plus a 10-run holdout on the winner because in-race rates are
-selection-biased upward. Bodies D1 deterministic-core, L1 rising, L3 constant control, 30 seeds
-per cell. 006B, in the 004 harness: whenever all K=10 pool entries missed a cold attempt, up to
-ten positional splices of random pool pairs, deliberately a cheap lower bound on span-anchored
-grafting.
+selection-biased upward. The bodies were D1 deterministic-core, L1 rising, and L3 constant
+control, at 30 seeds per cell. 006B ran in the 004 harness: whenever all K=10 pool entries
+missed a cold attempt, it tried up to ten positional splices of random pool pairs, deliberately
+a cheap lower bound on span-anchored grafting.
 
-**Results, boost.** D1: gauntlet alone lands deterministic finals in 27/30 runs, boost makes it
-30/30 at +14% cost (1,792 to 2,044 median executions). L1: p median 0.26 to 0.42 at length 3 to
-5, +46% cost — a size-for-reliability trade with no core to find. L3: unchanged, +12%, where the
-holdout gate correctly refuses to raise the anchor on noise. The monotone anchor does most of
-boost's job where a deterministic core exists, so boost is a guarantee rather than a discovery
-mechanism, and the coreless trade is reporting policy.
+**Results, boost.** On D1 the gauntlet alone lands deterministic finals in 27/30 runs, and boost
+makes it 30/30 at +14% cost (1,792 to 2,044 median executions). On L1 boost moves the p median
+from 0.26 to 0.42 at length 3 to 5, at +46% cost, a size-for-reliability trade with no core to
+find. L3 is unchanged at +12% cost, where the holdout gate correctly refuses to raise the anchor
+on noise. The monotone anchor does most of boost's job where a deterministic core exists, so
+boost is a guarantee rather than a discovery mechanism, and the coreless trade is reporting
+policy.
 
-**Results, grafting.** B2: 26/31 misses rescued (84%, 4.8 splice replays per rescue); B3: 15/15
-(100%, 1.6); B5: 350/541 (65%, 6.3), lifting B5's overall reproduction from 72% to ~90%. The
-residue needs recombination, not per-position anchoring, a trie, or live re-execution anchoring:
-replay-until-failure becomes pool first-fit, then splices, then fresh generation (decision 25).
+**Results, grafting.** Splicing rescued 26/31 B2 misses (84%, 4.8 splice replays per rescue),
+15/15 on B3 (100%, 1.6), and 350/541 on B5 (65%, 6.3), lifting B5's overall reproduction from
+72% to ~90%. The residue needs recombination rather than per-position anchoring, a trie, or live
+re-execution anchoring: replay-until-failure becomes pool first-fit, then splices, then fresh
+generation (decision 25).
 The boost mutant generator and the splice construction turned out to be the same shape.
 
-**Later revised.** Decision 52 corrected `REPRODUCE_SPLICES` to 10 — decision 25's "~6
+**Later revised.** Decision 52 corrected `REPRODUCE_SPLICES` to 10, after decision 25's "~6
 replays/miss" cost figure had been mistranscribed as the splice cap. Decision 28's boost floor
 of 0.5 was re-derived by experiment 008 as `BOOST_RELIABILITY_FLOOR = 0.30` in 20-run-batch LCB
 units (decision 56).
@@ -259,22 +267,24 @@ units (decision 56).
 serialisation format is needed?
 
 **Method.** A standalone frontend binary (`experiments/concurrent-replay/`, driven by its
-`drive.py`), one process per run, a fresh temp database per trial, 20 trials per workload. Two
-workloads: **racy**, a `#[hegel::concurrent_state_machine]` counter with a load/yield/store
-increment losing updates under `run_concurrent(m, tc, 2, 4)`; and **clone**, a plain body
-drawing an integer through `tc.clone()` and failing only every third call — deterministic
-choices, flaky outcome, isolating round-trip fidelity from scheduling noise. Each trial:
-discovery run, database-reuse run, three blob replays via `Hegel::reproduce_failure`.
+`drive.py`) runs one process per run, with a fresh temp database per trial and 20 trials per
+workload. The two workloads are *racy*, a `#[hegel::concurrent_state_machine]` counter with a
+load/yield/store increment losing updates under `run_concurrent(m, tc, 2, 4)`, and *clone*, a
+plain body drawing an integer through `tc.clone()` and failing only every third call, whose
+deterministic choices and flaky outcome isolate round-trip fidelity from scheduling noise. Each
+trial is a discovery run, a database-reuse run, and three blob replays via
+`Hegel::reproduce_failure`.
 
-**Results.** Both workloads at ceiling: 20/20 discovery (medians 0.61 s racy, 0.02 s clone),
-20/20 database reuse, 60/60 blob replays, every failure reporting the confirmed caveat and a v2
-blob. Getting there required routing blob replay through the replay primitive: before the fix,
+**Results.** Both workloads ran at ceiling: 20/20 discovery (medians 0.61 s racy, 0.02 s clone),
+20/20 database reuse, and 60/60 blob replays, with every failure reporting the confirmed caveat
+and a v2 blob. Getting there required routing blob replay through the replay primitive: before
+the fix,
 `reproduce_failure` on the racy blob reproduced 4/30, because the frontend used
 `hegel_test_case_from_blob` (incumbent-only, single attempt) and the shrunk minimal schedule
 fires its race only ~13% of the time in a fresh process. `hegel_run_start_blob` replays the blob
 as a run (ND blobs through `nd_reproduce` with no fresh tier, since a fresh case could fail for
 an unrelated reason) and reproduced 30/30 (decision 33). Clone serialisation stays values-only:
-the only consumer of realised prefix nodes is `resolve_choice`'s is-simplest check, which
+the only consumer of realized prefix nodes is `resolve_choice`'s is-simplest check, which
 verbatim replay never consults (decision 32). Whole-timeline pool replay at ceiling with splices
 as rescue closed decision 14 (no per-position or per-stream anchoring), and splices structurally
 cannot tear a clone record, pinned by
@@ -294,10 +304,10 @@ restore the 003 numbers, at what constants and cost?
 **Method.** `/experiments/shrink-sim` extended with an exact model of the shipped rules from
 `hegel-c/src/native/nd/mod.rs` at 9c800e8e, a factorial over anchor seeding x accept rule x
 floor x gamma x miss weight {1.0, 0.2, 0}, and an exact-DP module using the 005A method.
-Landscapes: 001's L1–L5 plus L4b noise-floor-lo (bug p = 0.1 over 0.02 background, the
+The landscapes were 001's L1–L5 plus L4b noise-floor-lo (bug p = 0.1 over 0.02 background, the
 decision-16 target regime), D1 (006's deterministic core), and D2 (the core with the flaky
-region at 0.7, finding S6's displacement case). N = 500 headline, 200 factorial, 10,000 seeding
-cells, byte-identical outputs, ~40 s CPU.
+region at 0.7, finding S6's displacement case). N was 500 for headline cells, 200 for the
+factorial, and 10,000 for seeding, with byte-identical outputs and ~40 s of CPU.
 
 **H1 result.** The shipped policy is degenerate at or below anchor 0.258: a fresh ledger's single
 failure has Wilson LCB(1/1) = 0.2065, so any threshold at or below it accepts every candidate on
@@ -310,20 +320,21 @@ which lost 34% on L4. Findings S1/S2 confirmed.
 
 - `GAUNTLET_MIN_FAILS = 4`. The L4b accept-rule ladder (bug kept / cost vs shipped): shipped
   51%/1.00x, m2 73%/1.37x, m3 97%/2.60x, m4 100%/3.01x, m3-recruit-excluded 98%/3.39x. m = 4
-  costs 1.00x on L1/L3/L4/D1; its entire 3x cost and its entire value live in the target regime.
+  costs 1.00x on L1/L3/L4/D1, so its entire 3x cost and its entire value live in the target
+  regime.
 - `GAUNTLET_FLOOR = 0.05`, now derived: 0.05 < LCB(4/30) = 0.0531, the min-fails acceptance
   boundary at the 30-run cap, so the floor costs zero power at m = 4 (at 0.08, power falls to
-  0.618 of the ceiling). False accept at the floor: 4.0e-4 unconditional per proposal, 0.5% per shrink at the
-  measured exposure of 13 candidates. Resolves finding S4.
+  0.618 of the ceiling). False accept at the floor is 4.0e-4 unconditional per proposal and 0.5%
+  per shrink at the measured exposure of 13 candidates. Resolves finding S4.
 - `ANCHOR_SEED_RUNS = 20` at both seeding sites. 40-run seeding is structurally excluded:
   LCB(40/40) = 0.912 exceeds the cap-reachable LCB(30/30) = 0.887, so under gamma = 1 no
   candidate can match a deterministic incumbent and those cells stall outright.
-- `RETENTION_HIGH_WATER = 0.8`, gamma 1.0 at or above it: a zero-miss detector, not a tuning
-  dial — with 20-run seeding only LCB(20/20) = 0.839 reaches 0.8. It converts D2's 33%
+- `RETENTION_HIGH_WATER = 0.8`, gamma 1.0 at or above it: a zero-miss detector rather than a
+  tuning dial, since with 20-run seeding only LCB(20/20) = 0.839 reaches 0.8. It converts D2's 33%
   displacement of deterministic incumbents to zero, at +26% L1 cost (missing the gate-G6 letter
   by six points, accepted as decision 2's intended behaviour).
 - `BOOST_RELIABILITY_FLOOR = 0.30` in extended-20 LCB units, the boundary image
-  LCB(10/20) ≈ 0.299 of "true rate below 0.5" through the honest estimator; decision 28's
+  LCB(10/20) ≈ 0.299 of "true rate below 0.5" through the honest estimator. Decision 28's
   literal 0.5 triggered on 59% of true-0.7 incumbents versus 5% at 0.30.
 - The recruiting run stays counted (exclusion's 7x fresh-ledger DP advantage does not survive
   ledger retention across retries, and m4 dominates it outright) and z stays 1.96. The DP rows
@@ -331,7 +342,7 @@ which lost 34% on L4. Findings S1/S2 confirmed.
 
 Composition mattered: extension without min-fails is worse than shipped (51% versus 67% L4b
 retention), because honest 20-run ledgers stop the anchor ratcheting to 0.2065 flukes while the
-accept rule stays degenerate — neither piece works alone. The chosen rule's drift envelope has
+accept rule stays degenerate, so neither piece works alone. The chosen rule's drift envelope has
 L1 final-p median 0.82, L4b 100% kept at 2,831 median executions, and 100% bug kept on every
 landscape. The weighting columns showed w = 0.2 preserves every headline at +60% L1 cost but
 w = 0 breaks min-fails itself (L4b 89%, D2 39%), so the constants were marked PRELIMINARY until
@@ -351,32 +362,33 @@ constants.
 
 ## 009a: off-ceiling watermark measurement
 
-**Question.** What does the flat-length clone-descending verbatim watermark (decision 45) record
-on genuinely racy bodies off 007's ceiling: (H1) do miss weights recover from the W1 degeneracy
-or stay near zero; (H2) the resulting bar and gauntlet operating points, and which 008 weighting
-column the distribution selects; (H3) do off-ceiling database reuse and blob replay hold the
-decision 11/31 design points?
+**Question.** What the flat-length clone-descending verbatim watermark (decision 45) records on
+genuinely racy bodies off 007's ceiling: (H1) whether miss weights recover from the W1 degeneracy
+or stay near zero, (H2) the resulting bar and gauntlet operating points and which 008 weighting
+column the distribution selects, and (H3) whether off-ceiling database reuse and blob replay hold
+the decision 11/31 design points.
 
 **Method.** The frozen `/experiments/watermark` crate drives the real engine through the
-`hegeltest` frontend, with a `__bench` hook (`nd::watermark_dump`) recording (stored, realised,
-weight, failed) at every measurement replay; the pre-decision-45 scalar-prefix weighting is
+`hegeltest` frontend, with a `__bench` hook (`nd::watermark_dump`) recording (stored, realized,
+weight, failed) at every measurement replay. The pre-decision-45 scalar-prefix weighting is
 recomputed offline from the same pairs. Two bodies with hidden seeded schedules stand in for
 thread interleaving, failing at rate p independent of drawn values, with structural divergence
-injected at disjoint value ranges: **clone** (one clone stream, retry draw at 0.15/round) and
-**machine** (two worker clone streams shaped like `run_concurrent`). Cells: {clone, machine} x
-p in {0.1, 0.3, 0.9}, 200 episodes each, an episode being a discovery run and, when confirmed, a
-reuse-only run plus one `reproduce_failure`. Bar and gauntlet numbers are empirical replays of
-the `nd::discovery_bar` and `nd::gauntlet` arithmetic over resampled weights.
+injected at disjoint value ranges: *clone* (one clone stream, retry draw at 0.15/round) and
+*machine* (two worker clone streams shaped like `run_concurrent`). The cells are
+{clone, machine} x p in {0.1, 0.3, 0.9} at 200 episodes each, an episode being a discovery run
+and, when confirmed, a reuse-only run plus one `reproduce_failure`. Bar and gauntlet numbers are
+empirical replays of the `nd::discovery_bar` and `nd::gauntlet` arithmetic over resampled
+weights.
 
 **Results, H1.** The new watermark's W50 is 0.400/0.444/0.429 (clone at p = 0.1/0.3/0.9) and
 0.278/0.294/0.333 (machine), with the share at weight zero exactly 0.000 everywhere. The old
 weighting on the same pairs put W50 at 0.000 in every cell with 78–97% of misses at exactly
-zero — 008's w = 0 breakage column in practice. The measured distribution sits strictly between
-008's w = 0.2 and w = 1.0 columns, both of which preserve every 008 headline, so the phase-12
-constants froze and the w = 0 escalation path was ruled out.
+zero, which is 008's w = 0 breakage column in practice. The measured distribution sits strictly
+between 008's w = 0.2 and w = 1.0 columns, both of which preserve every 008 headline, so the
+phase-12 constants froze and the w = 0 escalation path was ruled out.
 
 **Results, H2.** Fluke rejection cost falls from 37-always to a median of 20–21 (clone) and
-26–27 (machine) physical replays — machine misses the <= 20 letter because the cost is
+26–27 (machine) physical replays. Machine misses the <= 20 letter because the cost is
 10/mean-weight, a body property, accepted in decision 57. The escalation signal did not fire
 (median confirmed anchor at true p = 0.1: 0.106 clone, 0.130 machine, against the <= 0.2 line),
 so decision-14 machinery stayed closed. Where a threshold exists (p = 0.9 anchors) gauntlet
@@ -384,8 +396,9 @@ rejects go from 30-always-cap with no proofs to 96–100% proof-rejects at media
 anchors the shipped m = 1 rule still accepts every fluke on its recruiting failure, owned by
 phase 12.
 
-**Results, H3.** Database reuse 98.5–100% and blob replay 98–100% at p in {0.1, 0.3} — no flag
-fires, decision 31 stands. The one dip: clone blob replay 90% at p = 0.9. Instrumented, 23/200
+**Results, H3.** Database reuse held 98.5–100% and blob replay 98–100% at p in {0.1, 0.3}, so no
+flag fires and decision 31 stands. The one dip was clone blob replay at 90% at p = 0.9.
+Instrumented, 23/200
 episodes never flipped into ND handling (at p = 0.9 the verify replay almost always reproduces),
 emitted v1 exact-choice blobs, and those reproduced at 3/23 (13%) while all 177 v2 blobs
 reproduced. Database reuse held 99% on the same episodes because the reuse path allows
@@ -397,33 +410,33 @@ recording the v1-blob fragility under gate G20's seam family, and the never-flip
 decision 59 (`V1_BLOB_REPLAYS = 4`) and experiment 012's criteria. The first full run also
 crashed the engine (`try_replace_with_deletion` indexed `current_nodes` with a stale index after
 an accepted mid-pass candidate), fixed with a bounds guard and pinned red-green by
-`bind_deletion_survives_an_adopted_candidate_shorter_than_the_probe_index` — the one production
+`bind_deletion_survives_an_adopted_candidate_shorter_than_the_probe_index`, the one production
 change phase 11 made.
 
 ## 009b: composed-rules re-verification
 
 **Question.** Do 009a's operating points hold once the composed rules (min-fails 4, 20-run
-seeding at both sites, the derived floor, gamma 1.0 at or above the retention high-water) replace the
-shipped arithmetic, and what does false accept measure at q = 0.02? The in-engine half of 009b
-is the spot check appended to the 008 notes.
+seeding at both sites, the derived floor, gamma 1.0 at or above the retention high-water)
+replace the shipped arithmetic, and what does false accept measure at q = 0.02? The in-engine
+half of 009b is the spot check appended to the 008 notes.
 
 **Method.** `/experiments/watermark` gained a `composed` subcommand (009a's code path
 untouched), re-running the 009a episode protocol with the same bodies, cells, and seeds against
 the engine at the phase-12 commit, then replaying the composed arithmetic over re-measured
 weights, plus a false-accept replay at q = 0.02. About two hours, byte-identical.
 
-**Results.** Reported and with-blob counts match 009a exactly — those are decided at or before
-the first bar accept, which phase 12 does not touch. The in-engine cost of phase 12 is
+**Results.** Reported and with-blob counts match 009a exactly, because those are decided at or
+before the first bar accept, which phase 12 does not touch. The in-engine cost of phase 12 is
 1.56–2.08x measurement replays at p <= 0.3 and 4.01–6.03x at p = 0.9, fail-heavy top-ups against
 near-deterministic evidence, matching 008's prediction of where cost concentrates. The
-escalation signal stays quiet (anchors 0.108/0.131 at true p = 0.1).
+escalation signal again does not fire (anchors 0.108/0.131 at true p = 0.1).
 
-At p = 0.9 the extension replaces stopping-rule-pinned 0.510 anchors with 0.764/0.779 — below
-the 0.8 high-water, so genuinely racy p = 0.9 bodies keep gamma 0.8 and only zero-miss evidence
-crosses to gamma 1.0, as decision 55 intends. Fluke rejection cost is clone 21–22 and machine
-27–28, the same body-property arithmetic decision 57 accepted. The gauntlet at p = 0.9 anchors
-reaches 100% proof-rejects at median 10–13, passing the <= 15 and > 50%-proof targets. At low
-anchors, m = 4's new fluke rejects ride the 30-run cap with proof share zero, which is
+At p = 0.9 the extension replaces the stopping rule's pinned 0.510 anchors with 0.764/0.779,
+below the 0.8 high-water, so genuinely racy p = 0.9 bodies keep gamma 0.8 and only zero-miss
+evidence crosses to gamma 1.0, as decision 55 intends. Fluke rejection cost is clone 21–22 and
+machine 27–28, the same body-property arithmetic decision 57 accepted. The gauntlet at p = 0.9
+anchors reaches 100% proof-rejects at median 10–13, passing the <= 15 and > 50%-proof targets.
+At low anchors, m = 4's new fluke rejects ride the 30-run cap with proof share zero, which is
 arithmetic rather than defect: 008's DP already priced E[runs | fail] = 29.9 there, and what the
 30 replays buy against 009a's accept-share of 1.00 is that the fluke is not accepted. False
 accept measures 3.7e-4 (clone) and 4.0e-4 (machine) per proposal at p = 0.1 anchors, at or under
@@ -434,19 +447,19 @@ validates decisions 54–58 as composed.
 ## 010: what the data tree buys
 
 **Question.** Test the hypothesis "on real workloads the data tree is rarely buying us anything
-and is significant overhead" — the first move of gate G20's option (d). Ran on main at 770970b8
-(the production engine, no ND-branch machinery), local branch `claude/experiment-010-tree-value`,
-harness commit 19a47940. The harness patches main's engine, so it is not frozen under
-`/experiments`.
+and is significant overhead", the first move of gate G20's option (d). It ran on main at 770970b8
+(the production engine, with no ND-branch machinery), on local branch
+`claude/experiment-010-tree-value`, harness commit 19a47940. The harness patches main's engine,
+so it is not frozen under `/experiments`.
 
-**Method.** An environment knob, `HEGEL_EXPERIMENT_NO_TREE=1`, disables the tree's four roles
-(recording, which also carries mismatch detection; serving from `cached_test_function`;
-novel-prefix generation; exhaustion), with default-off verified as a zero-behaviour change. A
+**Method.** An environment knob, `HEGEL_EXPERIMENT_NO_TREE=1`, disables the tree's four roles of
+recording (which also carries mismatch detection), serving from `cached_test_function`,
+novel-prefix generation, and exhaustion, with default-off verified as a zero-behaviour change. A
 stats knob dumps per-run counters including duplicate executions by an order-sensitive value
 fingerprint. Eight workloads run from tiny boolean spaces through filtered, shrinking, stateful,
 and regex bodies, 20 fixed seeds per cell, tree-on versus tree-off, database disabled.
 
-**Results** (per-run means; executions are body executions):
+**Results** (per-run means, with executions counting body executions):
 
 | cell | execs tree | execs no-tree | serves/run | dups/run (no-tree) | wall tree (ms) | wall no-tree |
 | --- | --: | --: | --: | --: | --: | --: |
@@ -470,13 +483,13 @@ for 0 serves).
 **Consequence.** The recommendation (serving replaced by a flat fingerprint cache, exhaustion by
 a duplicate-counter stop, novel prefix dropped, recording dropped with the mismatch check
 re-homed on the cache) was adopted as the tree's removal (decision 60: the execution cache, with
-the shrink-heavy count guard holding at 1510 versus 1661, and one recorded regression —
-chain-only recursive generators lose novelty forcing, P(depth >= 10) 0.30 to 0.14), the
-duplicate stop scoped to the all-invalid grind (decision 61), kind drift re-homed on a
+the shrink-heavy count guard holding at 1510 versus 1661, and one recorded regression, where
+chain-only recursive generators lose novelty forcing and P(depth >= 10) falls from 0.30 to
+0.14), the duplicate stop scoped to the all-invalid grind (decision 61), kind drift re-homed on a
 within-run ledger under `error` strictness only (decision 62), and three frontend test
-casualties resolved without engine changes (decision 63). Caveats recorded: near-free bodies
-price engine overhead only, easy bugs leave novel-prefix value on rare bugs unmeasured, and one
-stateful machine shape was tested.
+casualties resolved without engine changes (decision 63). The caveats recorded were that
+near-free bodies price engine overhead only, that easy bugs leave novel-prefix value on rare
+bugs unmeasured, and that one stateful machine shape was tested.
 
 ## 011: instrumented seam spot check
 
@@ -485,20 +498,21 @@ correct fluke rejections versus power misses) on the pre-change engine, then acc
 the seam-plan engine against the letters table in `seam-plan.md`. The table's letters are the
 contract.
 
-**Method.** The frozen `/experiments/gauntlet-calibration` crate, amended with a sequential
+**Method.** The frozen `/experiments/gauntlet-calibration` crate was amended with a sequential
 `seam` subcommand consuming the engine's `__bench` seam dump (`nd::seam_dump`): every flip's
 detection site, call index, and interesting map, and every reject-eviction's evicted incumbent
 mapped back to landscape p, with a D0 deterministic control and blob-kind counts added. The 008
-subcommands still reproduce the 008 output, so the amendment did not perturb the engine. 100
-seeds per cell at a 500-case budget: the baseline half at ad3ff0c1 (the dump commit, phase 14,
-before any seam fix), the comparison half at 532be034 plus the phase-16 coverage/docs commit.
+subcommands still reproduce the 008 output, so the amendment did not perturb the engine. Each
+cell ran 100 seeds at a 500-case budget, the baseline half at ad3ff0c1 (the dump commit, phase
+14, before any seam fix) and the comparison half at 532be034 plus the phase-16 coverage/docs
+commit.
 
 **Baseline.** This half produced the decomposition that justified the plan. L4b's 49%
 caveat-only is 6 correct fluke rejections plus 43 power misses: the bar correctly targets
 genuine p = 0.1 incumbents and rejects them at its 45%-per-attempt power with no recycle, so
 mechanism 2 is 88% of the loss and the backtrack's many-attempts design aims at exactly this.
-L4's 15% is the opposite: 15/15 correct fluke rejections. L1's incumbent-p at flip is 0.26 at
-every percentile — displacement has already walked the incumbent to the minimal-bug floor before
+L4's 15% is the opposite: 15/15 are correct fluke rejections. L1's incumbent-p at flip is 0.26
+at every percentile: displacement has already walked the incumbent to the minimal-bug floor before
 any detector fires (flip call median 1004), so everything the workflow must recover exists only
 pre-flip. The tree's kind-mismatch flip channel fired zero times in 600 trials, the number
 decisions 62 and 64 both cite. Never-flipped runs emit v1 blobs (L4 66, L3 22, L1 5). The D0
@@ -507,31 +521,33 @@ control measured 528 median executions.
 **Comparison against the letters.** L3, L4, L4b, and D0 pass everywhere: caveat-only falls from
 49% and 15% to zero, bug kept is 100/100, and aborted and no-bug are zero in every cell, so the
 duplicate stop does not interfere. L1 passes every letter except executions and was escalated:
-final-p median 0.34 to 0.74 against the >= 0.50 letter, but median executions 17,583 = 1.54x
-against the <= 1.5x letter (17,139), a 2.6% overshoot with p90 improved (47,296 vs 52,267). The
-mechanism on both sides of the trade is the early flip (median call 1004 to 136): displacement
+the final-p median rises from 0.34 to 0.74 against the >= 0.50 letter, but median executions are
+17,583 = 1.54x against the <= 1.5x letter (17,139), a 2.6% overshoot with p90 improved
+(47,296 vs 52,267). The mechanism on both sides of the trade is the early flip (median call 1004
+to 136): displacement
 stops walking the incumbent down, and the whole shrink runs gauntleted. D2 was escalated at
 68/100 deterministic finals against the 100/100 letter: 30 of 80 flipped trials flip before any
 core-bearing sighting exists, and after the flip decision 20's displacement freeze plus the
 shrinker's value-lowering lattice cannot reach the core from a three-bug-atom incumbent. None
-that held the core lost it, and the baseline's 100/100 was fake — 0/100 flips, free
+that held the core lost it, and the baseline's 100/100 was fake, with 0/100 flips and free
 displacement. The new engine reports a confirmed p = 0.7 example with a v2 blob instead of the
-prettier deterministic core: priced honesty, but a letter miss as written.
+prettier deterministic core, which is honest reporting at a priced cost but still a miss against
+the letter as written.
 
 **Consequence.** Both misses were escalated to DRM with their decompositions and accepted,
-closing gate G20. The L1 letters price one of decision 67's two residuals — pre-flip single-run
-trust inside a checked origin's shrink; the other, the never-flip share that passes an honest
+closing gate G20. The L1 letters price one of decision 67's two residuals, pre-flip single-run
+trust inside a checked origin's shrink. The other, the never-flip share that passes an honest
 check, is priced by experiment 012. The baseline half also fed decisions 62 and 64 (the 0-in-600
 tree-channel measurement).
 
 ## 012: detection-escape recheck
 
 **Question.** Do the phase-16 first-interesting check and the phase-14 v1 continuation fix close
-009a's never-flip corner? Criteria: clone p = 0.9 never-flip at most 1/200 (the first check's
-escape probability is (p·s)^4, ~3e-4 at the top of 009a's estimate); blob reproduction at least
-199/200 on both bodies at p = 0.9 (baselines 180 and 191); the p <= 0.3 cells hold 009a's
->= 98% reuse and blob rates; and the deterministic control records zero flips and exactly
-k x origins measurement replays.
+009a's never-flip corner? The criteria were clone p = 0.9 never-flip at most 1/200 (the first
+check's escape probability is (p·s)^4, ~3e-4 at the top of 009a's estimate), blob reproduction at
+least 199/200 on both bodies at p = 0.9 (baselines 180 and 191), the p <= 0.3 cells holding
+009a's >= 98% reuse and blob rates, and the deterministic control recording zero flips and
+exactly k x origins measurement replays.
 
 **Method.** A new frozen crate, `/experiments/detection-escape`, clones
 `/experiments/watermark`'s episode protocol on the post-seam engine (5d3aadc3), bodies verbatim
@@ -549,12 +565,12 @@ schedule almost surely perturbs structure within four exact replays. The control
 four measurement replays per episode (`FIRST_CHECK_REPLAYS = 4`), so the first check is a
 deterministic run's whole ND cost.
 
-**The surprise finding** was a gauntlet cost lottery at high p, escalated rather than fixed. The
+The surprise finding was a gauntlet cost lottery at high p, escalated rather than fixed. The
 ND cells' measurement-replay counts run 240k–3.8M per 100-case episode. A probe decomposition of
 clone p = 0.9 episode 0 (1,198,879 replays) found all but one are `nd_replay_once` calls from
 the gauntlet's evidence loop, spread over 42,125 distinct candidate timelines at a median of 29
-replays each. The mechanism: above `RETENTION_HIGH_WATER = 0.8` gamma is 1.0, the anchor ratchet
-converges to roughly the all-fails cap-length bound (~0.88 at p = 0.9), and from there only
+replays each. The mechanism is that above `RETENTION_HIGH_WATER = 0.8` gamma is 1.0, the anchor
+ratchet converges to roughly the all-fails cap-length bound (~0.88 at p = 0.9), and from there only
 another all-fails batch can accept (probability 0.9^30 ≈ 4%), so nearly every genuine shrink
 step rejects at the 30-run cap and is re-proposed later. Shrinking still reaches correct minima
 (the blob column proves it), but 011's L4 cell on the same constant p = 0.9 sat at 1,774 median
@@ -569,20 +585,20 @@ was escalated to DRM. Decision 67 records it as a follow-up outside G20's loss a
 000-plan.md's closing entry (2026-09-02, "All six experiments done") records what the
 implementation inherited from the original sequence:
 
-- **Statistics** (001, 005A): gauntlet accepts at LCB >= max(0.8 x anchor, 0.05); a monotone
-  anchor never fed by pinned-regime evidence; confirmed-dry stopping; no checkpointing; no
-  decay; discovery bar = gate 1/10 then 4/40 (decision 23).
-- **Mechanism** (002, 003, 005B): `serve_replays` is the whole resampling seam; confirmation
-  gates origin admission on every path (decisions 20, 21, 24); the lifecycle runs end to end
+- **Statistics** (001, 005A): the gauntlet accepts at LCB >= max(0.8 x anchor, 0.05) against a
+  monotone anchor never fed by pinned-regime evidence, with confirmed-dry stopping, no
+  checkpointing, and no decay. The discovery bar is gate 1/10 then 4/40 (decision 23).
+- **Mechanism** (002, 003, 005B): `serve_replays` is the whole resampling seam, confirmation
+  gates origin admission on every path (decisions 20, 21, 24), and the lifecycle runs end to end
   in-engine with 100% cross-run reproduction and caveated reporting.
-- **Representation** (004, 006B): whole-timeline pool, cap 10, first-fit, small continuation
-  budget; replay order pool, then splices, then fresh (decision 25); trie and per-position
-  anchoring closed.
-- **Boost** (006A): works, cheap, holdout-gated; ships behind reporting policy.
+- **Representation** (004, 006B): a whole-timeline pool at cap 10, first-fit, with a small
+  continuation budget. Replay order is pool, then splices, then fresh (decision 25), and the
+  trie and per-position anchoring are closed.
+- **Boost** (006A): works, cheap, and holdout-gated, shipping behind reporting policy.
 - **Deliberately left for implementation**: the blob v2 format, the strictness setting surface,
   demote-to-secondary, span-anchored split points, the `FAILED_NONDETERMINISTIC` ABI semantics,
-  and the generation strategy under ND (novel-prefix replacement; small budgets starve narrow
-  structural bugs of discoveries).
+  and the generation strategy under ND (novel-prefix replacement, and small budgets starving
+  narrow structural bugs of discoveries).
 
 Per decision 26 the experiment-grade scaffolding (`nd_experiment`, `nd_boost`, the `nd_*` fields
 in `test_runner.rs`) was the seed of the real implementation: the branch was brought to

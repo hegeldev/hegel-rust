@@ -8,7 +8,7 @@ that: shrinking proposes smaller sequences and re-executes them, the failure
 database stores the choices of the best failing example, a reproduce blob is a
 serialized choice sequence, and the flakiness errors fire when a replay
 disagrees with what was recorded. Hegel inherits Hypothesis's central
-invariant — no nondeterminism outside the system's control.
+invariant: no nondeterminism outside the system's control.
 
 Concurrent stateful testing breaks the invariant intrinsically: the thread
 schedule is not in the choice sequence, so the same choices can pass or fail,
@@ -26,7 +26,7 @@ reported, and reproduced, with the uncertainty stated rather than hidden.
 
 ## Goals and non-goals
 
-The stated goals, all met (notes/design.md):
+All of the stated goals were met (notes/design.md):
 
 - Handle tests that fail at least 10% of the times they are run. The replay
   budgets and confidence arithmetic derive from that target (decision 16,
@@ -35,15 +35,16 @@ The stated goals, all met (notes/design.md):
 - Restore shrinking, multi-failure reporting, database persistence, and
   reproduce blobs for nondeterministic tests.
 - Bound how much failure probability shrinking can trade away, and raise it
-  when possible (decision 2). The guard is statistical, not a strict never-lower:
+  when possible (decision 2). The guard is statistical rather than a strict never-lower:
   experiment 008's envelope holds a median final failure probability of 0.82
   (p10 0.58) on a rising landscape against a 0.10 floor, and target-regime
   (p = 0.1) bugs survive shrinking at 100% against 67% shipped.
 - Keep a caveat for the environment-modification hypothesis, worded to admit
   it is indistinguishable from a very rare failure (decision 3).
 
-Non-goals: Antithesis, a separate deterministic-environment path (decision
-13), and thread-schedule control — schedules are sampled, never replayed.
+The non-goals are Antithesis, a separate deterministic-environment path
+(decision 13), and thread-schedule control (schedules are sampled and never
+replayed).
 
 ## Two kinds of nondeterminism
 
@@ -52,7 +53,7 @@ Two axes need different machinery (notes/design.md):
 **Generation nondeterminism**: the same replayed prefix produces a different
 draw structure. This is a representation problem. The answer is to stop
 pretending one choice sequence describes the test and store whole realized
-**timelines** (the realized choice sequence of one execution) in a bounded
+*timelines* (the realized choice sequence of one execution) in a bounded
 per-origin pool, replayed first-fit with a continuation budget for fresh draws
 past the stored timeline, and spliced pairwise when whole-timeline replay misses.
 
@@ -66,71 +67,71 @@ target.
 ## Probabilistic bugs
 
 Failure probability is first-class. Every decision that once assumed
-"interesting is a pure function of the choice sequence" — shrinker acceptance,
-database reuse, the final replay, the flakiness errors — becomes a decision
+"interesting is a pure function of the choice sequence" (shrinker acceptance,
+database reuse, the final replay, the flakiness errors) becomes a decision
 about an estimated probability with an explicit budget. A single failing run
 is selection, not evidence: on a noisy test the first interesting sighting is
 a background fluke more often than a real bug (decision 21), so nothing is
 believed until it reproduces. Conversely a single passing replay proves
 nothing against a p = 0.5 bug, so nothing is disbelieved on one miss either.
 
-Five terms recur. An **origin** is failure identity: the panic site as a
-`file:line:col` string (decision 4). The **incumbent** is the failing timeline
-held as an origin's best example. The **pool** is a bounded per-origin set of
-other failing timelines, incumbent first. The **anchor** is a Wilson lower
+Five terms recur. An *origin* is failure identity: the panic site as a
+`file:line:col` string (decision 4). The *incumbent* is the failing timeline
+held as an origin's best example. The *pool* is a bounded per-origin set of
+other failing timelines, incumbent first. The *anchor* is a Wilson lower
 confidence bound on the incumbent's reproduction rate under the engine's own
 pinned-replay procedure, monotone and raised only at validated events
-(decisions 19, 46). The **gauntlet** is the evidence bar a shrink candidate
+(decisions 19, 46). The *gauntlet* is the evidence bar a shrink candidate
 must clear before displacing the incumbent.
 
 ## The shape of the answer
 
 A run is deterministic until proven otherwise. `Engine.nd_active` is a sticky
-run-level flag, and the **flip** into ND handling comes from one of seven
+run-level flag, and the *flip* into ND handling comes from one of seven
 sites: declared concurrency, an execution-cache verdict mismatch, a
 first-interesting check miss, replay checks at the shrink verify and final
 replay, and stored ND state from the database or a blob. The
-`nondeterminism_strictness` setting (quiet, warn, error; default quiet)
+`nondeterminism_strictness` setting (quiet, warn, or error, defaulting to quiet)
 governs what the flip says: quiet is silent, warn prints once, error keeps the
 old aborts for suites using determinism as a lint (decisions 1, 30). The data
 tree is gone, replaced by a flat execution cache that doubles as the
-verdict-mismatch detector. Under ND handling caching, targeting, and the
+verdict-mismatch detector. Under ND handling, caching, targeting, and the
 duplicate stop are all off ([detection](detection.md)).
 
 Confirmation gates origin admission on every path. An observed origin starts
-**Unconfirmed** and must clear the **discovery bar** — a gate-then-extend
-replay batch — before it is **Confirmed** and carries an anchor, a witness,
-and a pool. An origin reproduced from the database is **Trusted** without
+*Unconfirmed* and must clear the *discovery bar* (a gate-then-extend
+replay batch) before it is *Confirmed* and carries an anchor, a witness,
+and a pool. An origin reproduced from the database is *Trusted* without
 re-running the bar's verdict. Raw interesting runs never displace an occupied
 origin. Pre-flip sightings are kept in a per-origin history so a late flip can
 backtrack to the reproduction boundary. [The origin lifecycle](lifecycle.md)
 covers admission, evidence, and caveat wording.
 
-Shrinking charges accepts, not rejects (decision 7): a candidate whose first
+Shrinking charges accepts rather than rejects (decision 7): a candidate whose first
 run passes is cheaply rejected and retried later, while one that fails must
 clear the gauntlet against the incumbent's anchor before displacing it.
-Stopping is confirmed-dry — a final sweep drives every proposal's cumulative
+Stopping is confirmed-dry: a final sweep drives every proposal's cumulative
 evidence to a bound decision, so stopping carries a certificate. A low-anchor
 incumbent can be boosted onto a steadier timeline before shrinking begins.
 [Shrinking under nondeterminism](shrinking.md) covers the arithmetic.
 
-The engine owns the final replay: every about-to-be-reported failure
+The engine owns the final replay: every failure about to be reported
 re-executes first. Deterministic origins get one exact replay, and a miss
-flips the run rather than silencing the report. ND origins get
-**replay-until-failure** (`nd_reproduce`): stored timelines first-fit, then
-splices, then a few fresh generations. A confirmed origin that stays dry at
-report time switches its caveat wording instead of being unreported.
+flips the run rather than suppressing the report. ND origins get
+*replay-until-failure* (`nd_reproduce`): stored timelines are tried first-fit,
+then splices, then a few fresh generations. A confirmed origin that stays dry
+at report time switches its caveat wording instead of going unreported.
 [The final replay](final-replay.md) covers the pooled review and backtrack.
 
-Persistence stores the representation, never estimates (decision 8): a
+Persistence stores the representation rather than estimates (decision 8): a
 version-2 database entry or blob is `NdReproState` (the pooled timelines plus
 replay parameters), self-identifying, so the next run enters ND handling from
 the stored state and every run stands alone. Database hygiene is two strikes:
-a primary miss demotes, a secondary miss deletes.
+a primary miss demotes the entry and a secondary miss deletes it.
 [Persistence and reproduction](persistence.md) covers formats and reuse.
 
 At the ABI, an ND failure reports as plain `FAILED` with a per-failure caveat
-accessor. The retired `FAILED_NONDETERMINISTIC` status is reserved, never
+accessor. The retired `FAILED_NONDETERMINISTIC` status is reserved and never
 reused (decisions 27, 43). The engine stamps the executions a report can be
 built from via `hegel_test_case_should_capture`, and `hegel_run_start_blob`
 replays a blob as a full run. [The C ABI and the frontend](abi-frontend.md)
@@ -145,14 +146,14 @@ machine in `nd/lifecycle.rs`, run orchestration with history and backtrack in
 ## One failure, end to end
 
 A test body races and fails perhaps a third of the time. Generation finds an
-interesting case: a panic at one site, the origin, and the raw sighting fills
-the vacant origin as its incumbent. The run is still deterministic, and this
-one sighting is selection, not evidence.
+interesting case, a panic at one site that becomes the origin, and the raw
+sighting fills the vacant origin as its incumbent. The run is still
+deterministic, and this single sighting is selection, not evidence.
 
 Before anything consumes it, the first-interesting check replays the sighting
-exactly, stopping at the first miss, and a replay passes. The run flips —
+exactly, stopping at the first miss, and a replay passes. The run flips:
 `nd_active` sets, the execution cache flushes, and under the default quiet
-strictness nothing is printed — and the check's evidence seeds the origin's
+strictness nothing is printed. The check's evidence seeds the origin's
 discovery bar ([detection](detection.md)).
 
 The discovery sweep now runs the bar over the unconfirmed origin: pinned
@@ -172,8 +173,8 @@ incumbent reproduces on the second pooled replay, and the report evidence is
 recorded ([the final replay](final-replay.md)).
 
 The run fails with one reported failure: the captured diagnostic, a `note:`
-whose caveat quotes the run's own counts — failed so many of so many replays
-this run — and a reproducer line carrying a version-2 blob. The next run
+whose caveat quotes the run's own counts (failed so many of so many replays
+this run), and a reproducer line carrying a version-2 blob. The next run
 decodes the version-2 database entry under the primary key, flips before any
 replay, replays the stored pool until a failure, and trusts the origin on
 reproduction ([the ABI and frontend](abi-frontend.md),

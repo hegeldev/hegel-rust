@@ -20,8 +20,8 @@ The prior art landed over July and August 2026: PR #359 added cloneable test-cas
 PR #360 gave the clones independent choice streams, and PR #378 built concurrent stateful
 testing on top, handled by a sticky run-level flag that disabled shrinking, persistence,
 blobs, and the data tree wholesale. Mid-PR, an explicit frontend nondeterminism setting was
-added and removed again (5c7456b2, 2026-08-14) in favour of engine self-detection — the
-project's first reversal, predating the branch. [Design history](design-history.md) covers
+added and removed again (5c7456b2, 2026-08-14) in favour of engine self-detection. That was
+the project's first reversal, and it predates the branch. [Design history](design-history.md) covers
 the regime the branch replaced.
 
 ## Design and experiments (2026-09-02)
@@ -66,15 +66,15 @@ constants from experiment 008 (c68a89eb). Phase 13 audited and swept (44091c2d t
 7d197fa6), with the gate run recorded green on e79994f4.
 
 Two threads cross the phase order. The phase-12 in-engine spot check (fa657947) surfaced
-the deterministic-to-ND seam, recorded as gate G20 (fdc30860), the one finding carried
-open past the era. Experiment 009b (00651a9e, 8d4ca4f8, 09-04) formally closed phase 12's
+the deterministic-to-ND seam, recorded as gate G20 (fdc30860). G20 was the only finding
+carried open past the era. Experiment 009b (00651a9e, 8d4ca4f8, 09-04) formally closed phase 12's
 exit after phase 13's gate run had already been recorded.
 [Remediation](remediation.md) covers the register and the fixes.
 
 ## Seam plan: phases 14–17 (2026-09-04)
 
 The G20 analysis (0d639eb3) established that the seam is driven by pre-flip single-run
-trust, not the data tree; experiment 010 (de906f01) then measured that the tree buys
+trust, not the data tree. Experiment 010 (de906f01) then measured that the tree buys
 nothing a flat cache cannot recover. The seam plan (163026d8) was revised twice under DRM
 review before implementation: the backtrack walk became a geometric boundary scan
 (cc8a0c1f) and history retention became keep-everything with no eviction (4b997a54).
@@ -90,11 +90,11 @@ the options, and the phases.
 
 ## Review fixes (2026-09-05)
 
-Four commits from a final adversarial review of the whole branch: engine ND handling and
+A final adversarial review of the whole branch produced four commits: engine ND handling and
 shrink scheduling (b41de5a6), blob encoding and decode hardening (67653632), the origin
-lifecycle (0f504c52), and frontend, ABI docs, and notes (48894dc4, the branch tip). Some
-reverse remediation-era choices: b41de5a6 restores demote-over-delete for superseded reuse
-entries per decision 11. [Where the plan stands](../part1/status.md) covers their content
+lifecycle (0f504c52), and frontend, ABI docs, and notes (48894dc4, the branch tip). Some of these
+commits reverse choices made in the remediation era: b41de5a6 restores demote-over-delete
+for superseded reuse entries per decision 11. [Where the plan stands](../part1/status.md) covers their content
 and what remains.
 
 ## Cadence
@@ -108,5 +108,5 @@ recorded as numbered decisions in dedicated commits (06f0b81a, ffa83adf, 27ca5d3
 Two commits deliberately land out of phase order: the phase-7 smoke pinned right after
 phase 3 (84d37318), and 009b closing phase 12's exit after phase 13's gate run. Experiment
 harnesses are frozen rather than deleted, except experiment 010's, which lives on a
-separate local branch off main. Extraction of the final implementation, the step decision
-26 deliberately leaves outside all three plans, remains open at the tip.
+separate local branch off main. Extraction of the final implementation, the step that
+decision 26 deliberately leaves outside all three plans, remains open at the tip.
