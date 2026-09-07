@@ -152,10 +152,6 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
-    /// Set when running inside Antithesis. Disables every health check
-    /// regardless of `suppress_health_check`, which frontends may overwrite
-    /// with their own (typically empty) list; see
-    /// [`Settings::health_check_suppressed`].
     pub(crate) in_antithesis: bool,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
@@ -169,8 +165,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI and Antithesis
-    /// environments automatically.
     pub fn new() -> Self {
         Self::for_env(
             is_in_ci(),
