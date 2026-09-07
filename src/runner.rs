@@ -339,6 +339,17 @@ impl Settings {
         self
     }
 
+    /// The settings a `#[hegel::main]` binary runs with: one test case, and
+    /// the `TooSlow` health check suppressed, since it measures how quickly
+    /// valid test cases accumulate and a run of one has nothing to measure.
+    pub(crate) fn for_single_test_case(mut self) -> Self {
+        self.test_cases = 1;
+        if !self.suppress_health_check.contains(&HealthCheck::TooSlow) {
+            self.suppress_health_check.push(HealthCheck::TooSlow);
+        }
+        self
+    }
+
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
@@ -445,7 +456,10 @@ where
 
     /// Run exactly one test case, the behavior of `#[hegel::main]` binaries.
     /// Applied after the environment overrides in [`run`](Self::run), so
-    /// `HEGEL_TEST_CASES` cannot undo it.
+    /// `HEGEL_TEST_CASES` cannot undo it. Also suppresses
+    /// [`HealthCheck::TooSlow`]: that check judges how quickly a run
+    /// accumulates valid test cases, which is meaningless for a run of one,
+    /// and a single long test case would trip it.
     #[doc(hidden)]
     pub fn __single_test_case(mut self) -> Self {
         self.single_test_case = true;
@@ -484,7 +498,7 @@ where
     pub fn run(self) {
         let mut settings = self.settings.with_env_overrides();
         if self.single_test_case {
-            settings.test_cases = 1;
+            settings = settings.for_single_test_case();
         }
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(

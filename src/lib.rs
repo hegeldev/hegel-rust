@@ -710,6 +710,11 @@ pub use hegel_macros::test_helper;
 /// `test_cases` is rejected as an attribute arg, `--test-cases` is not
 /// accepted on the command line, and `HEGEL_TEST_CASES` has no effect.
 ///
+/// The `TooSlow` health check is always suppressed: it judges how quickly a
+/// run accumulates valid test cases, which a run of exactly one cannot be
+/// judged on, and a single long-running test case would otherwise trip it.
+/// The other health checks apply as usual.
+///
 /// Supported CLI flags (with defaults taken from the attribute args):
 /// `--seed`, `--verbosity`, `--derandomize`, `--database`,
 /// `--suppress-health-check`, `--backend`, `-h` / `--help`.
