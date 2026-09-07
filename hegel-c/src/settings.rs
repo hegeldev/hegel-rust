@@ -137,12 +137,16 @@ pub enum Verbosity {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled,
-/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
-/// default. Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), the
-/// database and all health checks are disabled by default: Antithesis owns
-/// reproduction, and its thread pausing makes wall-clock health checks like
-/// `TooSlow` meaningless.
+/// [`Settings::new`] returns the library's base defaults. Environment
+/// policy — the shipped `default`/`ci`/`antithesis` profiles, `hegel.toml`,
+/// and `HEGEL_DEFAULT_PROFILE` — lives in the profile system
+/// ([`crate::profiles`]); `hegel_settings_new` resolves the selected
+/// profile, so C-ABI callers get profile-aware defaults automatically.
+///
+/// Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), every health
+/// check is off and cannot be re-enabled: Antithesis's thread pausing makes
+/// wall-clock health checks like `TooSlow` meaningless. This is detection,
+/// not profile policy, so no profile or setting overrides it.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -158,6 +162,12 @@ pub struct Settings {
     /// Print event statistics (`tc.event()` / `tc.event_value()`
     /// observations from the generation phase) at the end of the run.
     pub(crate) show_statistics: bool,
+    /// Whether a failure should print a copy-pasteable reproduction line.
+    /// The engine never reads this: the reproduce blob is always attached
+    /// to the failure and printing it is the frontend's decision. The field
+    /// exists so profiles can carry the choice and frontends can read it
+    /// back through the C ABI.
+    pub(crate) print_blob: bool,
     /// The randomness backend, or `None` to let it be chosen automatically
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
@@ -165,30 +175,29 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The library's base defaults. Antithesis detection is the one
+    /// environment read: it stamps [`Settings::in_antithesis`], which is
+    /// detection rather than policy. For profile-aware construction use the
+    /// profile system.
     pub fn new() -> Self {
-        Self::for_env(
-            is_in_ci(),
-            crate::antithesis_detect::antithesis_env_var_set(),
-        )
+        Self::base(crate::antithesis_detect::antithesis_env_var_set())
     }
 
-    pub(crate) fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
+    /// The base defaults every profile resolution starts from, with
+    /// `in_antithesis` stamped from the caller's detection.
+    pub(crate) fn base(in_antithesis: bool) -> Self {
         Self {
             test_cases: 100,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
-            derandomize: in_ci,
-            database: if in_ci || in_antithesis || cfg!(target_family = "wasm") {
+            derandomize: false,
+            database: if cfg!(target_family = "wasm") {
                 Database::Disabled
             } else {
                 Database::Unset
             },
-            suppress_health_check: if in_ci {
-                vec![HealthCheck::TooSlow]
-            } else {
-                Vec::new()
-            },
+            suppress_health_check: Vec::new(),
             in_antithesis,
             phases: vec![
                 Phase::Explicit,
@@ -197,8 +206,9 @@ impl Settings {
                 Phase::Target,
                 Phase::Shrink,
             ],
-            report_multiple_failures: true,
+            report_multiple_failures: false,
             show_statistics: false,
+            print_blob: false,
             backend: None,
         }
     }
@@ -316,16 +326,24 @@ impl Settings {
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
-    /// When `true` (the default), each distinct origin Hegel finds is surfaced
-    /// as its own diagnostic, and the final panic message reports the count of
-    /// distinct failures.  Setting this to `false` makes Hegel collapse a
-    /// multi-bug run to one example — useful when you have a flaky predicate
-    /// that triggers several superficially-distinct failures whose root cause
-    /// is the same, and the extra reports are just noise.
+    /// When `true`, each distinct origin Hegel finds is surfaced as its own
+    /// diagnostic, and the final report gives the count of distinct
+    /// failures. When `false` (the default), Hegel collapses a multi-bug run
+    /// to one example — several superficially-distinct failures often share
+    /// a root cause, and the extra reports are just noise.
     ///
     /// Maps to Hypothesis's `report_multiple_bugs` setting.
     pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
         self.report_multiple_failures = report_multiple_failures;
+        self
+    }
+
+    /// Whether a failure should print a copy-pasteable reproduction line for
+    /// its counterexample (default: `false`). The reproduce blob is always
+    /// attached to the failure; the engine never reads this field — it
+    /// carries the printing choice for profiles and frontends.
+    pub fn print_blob(mut self, print_blob: bool) -> Self {
+        self.print_blob = print_blob;
         self
     }
 
@@ -351,11 +369,7 @@ pub(crate) enum Database {
     Path(String),
 }
 
-fn is_in_ci() -> bool {
-    is_in_ci_from(crate::sys::env_var)
-}
-
-fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
+pub(crate) fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),

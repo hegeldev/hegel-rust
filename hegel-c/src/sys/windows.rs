@@ -289,6 +289,28 @@ pub(super) fn pid() -> u32 {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() }
 }
 
+/// The current working directory, decoded lossily. `None` if the OS cannot
+/// report one.
+pub(super) fn cwd() -> Option<String> {
+    let mut buf = vec![0u16; 256];
+    loop {
+        // SAFETY: `buf` is valid for writes of its length.
+        let n = unsafe {
+            windows_sys::Win32::System::Environment::GetCurrentDirectoryW(
+                buf.len() as u32,
+                buf.as_mut_ptr(),
+            )
+        };
+        if n == 0 {
+            return None;
+        }
+        if (n as usize) < buf.len() {
+            return Some(String::from_utf16_lossy(&buf[..n as usize]));
+        }
+        buf.resize(n as usize, 0);
+    }
+}
+
 /// Block until [`unpark`] is called on `word`, returning immediately (and
 /// possibly spuriously) if `word` no longer holds `expected`.
 pub(super) fn park(word: &AtomicU32, expected: u32) {

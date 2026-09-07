@@ -231,6 +231,13 @@ pub(super) fn pid() -> u32 {
     rustix::process::getpid().as_raw_nonzero().get() as u32
 }
 
+/// The current working directory, decoded lossily. `None` if the OS cannot
+/// report one.
+pub(super) fn cwd() -> Option<String> {
+    let dir = rustix::process::getcwd(Vec::new()).ok()?;
+    Some(String::from_utf8_lossy(dir.to_bytes()).into_owned())
+}
+
 /// Block until [`unpark`] is called on `word`, returning immediately (and
 /// possibly spuriously) if `word` no longer holds `expected`.
 ///

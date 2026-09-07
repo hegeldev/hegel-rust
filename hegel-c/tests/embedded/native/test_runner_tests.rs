@@ -1330,6 +1330,45 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
 }
 
 #[test]
+fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+    );
+    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]),
+    );
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(10)
+            .report_multiple_failures(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(4242) => boom("primary bug"),
+            Ok(4243) => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].origin.contains("primary bug"),
+        "the secondary entry must not be replayed once a primary entry reproduces"
+    );
+}
+
+#[test]
 fn shrink_phase_drains_stale_secondary_corpus_entries() {
     use crate::native::bignum::BigInt;
     let dir = tempfile::TempDir::new().unwrap();
@@ -1693,7 +1732,8 @@ fn a_concurrent_machine_prints_no_nondeterminism_notice_in_antithesis() {
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&lines);
     let result = reuse_run(
-        Settings::for_env(false, true)
+        Settings::base(true)
+            .database(None)
             .test_cases(5)
             .output(Output::callback(move |line| {
                 sink.lock().unwrap().push(line.to_string());

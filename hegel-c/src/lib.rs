@@ -30,6 +30,8 @@ mod antithesis_detect;
 /// cbindgen:ignore
 mod backend;
 /// cbindgen:ignore
+mod config;
+/// cbindgen:ignore
 mod control;
 /// cbindgen:ignore
 mod embed;
@@ -37,6 +39,8 @@ mod embed;
 mod exchange;
 /// cbindgen:ignore
 mod native;
+/// cbindgen:ignore
+mod profiles;
 /// cbindgen:ignore
 mod settings;
 /// cbindgen:ignore
@@ -85,7 +89,7 @@ use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
-use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
+use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// Result of a libhegel call. See "Calling convention" in the header
 /// preamble.
@@ -421,13 +425,35 @@ fn clear_last_error(ctx: *mut HegelContext) {
 /// and then freed. Settings can be reused across runs.
 ///
 /// A configured handle may be shared across threads, but do not call setters
-/// concurrently on the same handle.
+/// concurrently on the same handle, or concurrently with
+/// `hegel_settings_get_database` reads of it.
 pub struct HegelSettings {
     inner: Settings,
     /// Optional database key used by the runner for example storage / replay.
     /// Not part of `Settings` itself in upstream hegel; passed as a separate
     /// argument to `run_native_async` on `hegel_run_start`.
     database_key: Option<String>,
+    /// The database value as `hegel_settings_get_database` reports it:
+    /// `None` for unset, an empty string for disabled, else the path. Kept
+    /// in step with `inner.database` by the constructors and
+    /// `hegel_settings_set_database` so the getter can hand out a borrowed
+    /// pointer.
+    database_c: Option<CString>,
+}
+
+impl HegelSettings {
+    fn from_settings(inner: Settings) -> Self {
+        let database_c = match &inner.database {
+            Database::Unset => None,
+            Database::Disabled => Some(CString::default()),
+            Database::Path(path) => Some(CString::new(path.replace('\0', "")).unwrap_or_default()),
+        };
+        HegelSettings {
+            inner,
+            database_key: None,
+            database_c,
+        }
+    }
 }
 
 /// State shared by every handle in a clone *family* — the handle produced by
@@ -698,35 +724,102 @@ fn cstring_lossy(s: &str) -> CString {
 }
 
 /// Parameters:
-/// `out_settings`: Receives a handle initialized with libhegel's
-///   defaults: 100 test cases, all phases enabled, normal verbosity, no
-///   seed, and the default disk database under `.hegel/`.
+/// `out_settings`: Receives a handle initialized from the automatically
+///   selected settings profile.
 ///
-/// Returns `HEGEL_OK`.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when profile resolution
+/// fails: `HEGEL_DEFAULT_PROFILE` names an unknown profile, or a
+/// `hegel.toml` is malformed. Read the message with
+/// `hegel_context_last_error`.
 ///
-/// When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
-/// similar variables) the defaults change: the database is disabled and
-/// derandomization is enabled. Override either with the explicit setters.
+/// A profile is a named settings delta. Three ship with libhegel: `default`
+/// (the base defaults: 100 test cases, all phases enabled, normal
+/// verbosity, no seed, the disk database under `.hegel/`), `ci` (extends
+/// `default`: derandomization on, database disabled, reproduction lines
+/// printed), and `antithesis` (extends `default`: database disabled). The
+/// profile resolved here is named by the `HEGEL_DEFAULT_PROFILE`
+/// environment variable when set and non-empty; otherwise `antithesis` when
+/// running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`),
+/// `ci` when a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
+/// similar variables), and `default` elsewhere.
 ///
-/// When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
-/// the database is disabled and every health check is skipped. The database
-/// can still be enabled with `hegel_settings_set_database`; the health
-/// checks cannot be re-enabled, since Antithesis's thread pausing would trip
-/// wall-clock checks such as `TooSlow` spuriously.
+/// Profiles are modified and defined in a `hegel.toml` found in the current
+/// directory or the nearest ancestor, and registered programmatically with
+/// `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
+/// to resolve one by name.
+///
+/// Inside Antithesis every health check is skipped regardless of the
+/// resolved profile, and no profile or setter re-enables them: Antithesis's
+/// thread pausing would trip wall-clock checks such as `TooSlow`
+/// spuriously.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,
     out_settings: *mut *mut HegelSettings,
 ) -> hegel_result_t {
+    unsafe { settings_new_for_profile(ctx, None, out_settings, "hegel_settings_new") }
+}
+
+/// Parameters:
+/// `name`: The profile to resolve: shipped (`default`, `ci`, `antithesis`),
+///   defined in `hegel.toml`, or registered with
+///   `hegel_settings_register_profile`.
+/// `out_settings`: Receives a handle initialized from that profile.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
+/// or a `hegel.toml` is malformed. Read the message with
+/// `hegel_context_last_error`.
+///
+/// Unlike `hegel_settings_new`, the `HEGEL_DEFAULT_PROFILE` environment
+/// variable plays no part: the named profile is resolved as-is.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_new_for_profile(
+    ctx: *mut HegelContext,
+    name: *const c_char,
+    out_settings: *mut *mut HegelSettings,
+) -> hegel_result_t {
     clear_last_error(ctx);
-    if out_settings.is_null() {
-        set_last_error(ctx, "hegel_settings_new: out parameter is null");
+    if name.is_null() {
+        set_last_error(ctx, "hegel_settings_new_for_profile: name is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let s = Box::into_raw(Box::new(HegelSettings {
-        inner: Settings::new(),
-        database_key: None,
-    }));
+    let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+        set_last_error(
+            ctx,
+            "hegel_settings_new_for_profile: name is not valid UTF-8",
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    unsafe {
+        settings_new_for_profile(
+            ctx,
+            Some(name),
+            out_settings,
+            "hegel_settings_new_for_profile",
+        )
+    }
+}
+
+/// Shared body of `hegel_settings_new` and `hegel_settings_new_for_profile`.
+unsafe fn settings_new_for_profile(
+    ctx: *mut HegelContext,
+    name: Option<&str>,
+    out_settings: *mut *mut HegelSettings,
+    func: &str,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_settings.is_null() {
+        set_last_error(ctx, &format!("{func}: out parameter is null"));
+        return HEGEL_E_INVALID_ARG;
+    }
+    let settings = match crate::profiles::settings_for(name) {
+        Ok(settings) => settings,
+        Err(e) => {
+            set_last_error(ctx, &format!("{func}: {e}"));
+            return HEGEL_E_INVALID_ARG;
+        }
+    };
+    let s = Box::into_raw(Box::new(HegelSettings::from_settings(settings)));
     unsafe { *out_settings = s };
     HEGEL_OK
 }
@@ -755,6 +848,22 @@ unsafe fn settings_mut<'a>(
     func: &str,
 ) -> Result<&'a mut HegelSettings, hegel_result_t> {
     match unsafe { s.as_mut() } {
+        Some(h) => Ok(h),
+        None => {
+            set_last_error(ctx, &format!("{func}: settings pointer is null"));
+            Err(HEGEL_E_INVALID_HANDLE)
+        }
+    }
+}
+
+/// Resolve a settings handle for a getter, recording a diagnostic and
+/// returning `HEGEL_E_INVALID_HANDLE` on a null pointer.
+unsafe fn settings_ref<'a>(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    func: &str,
+) -> Result<&'a HegelSettings, hegel_result_t> {
+    match unsafe { s.as_ref() } {
         Some(h) => Ok(h),
         None => {
             set_last_error(ctx, &format!("{func}: settings pointer is null"));
@@ -953,10 +1062,11 @@ pub unsafe extern "C" fn hegel_settings_set_show_statistics(
 }
 
 /// Parameters:
-/// `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
-///   disables the database entirely. Discovered failures will not be
-///   stored. Anything else is used as the database root directory. The
-///   directory will be created if it does not already exist.
+/// `database`: NULL sets it to the default: `./.hegel/examples/`, including
+///   resetting a value the handle already carries. `""` disables the
+///   database entirely. Discovered failures will not be stored. Anything
+///   else is used as the database root directory. The directory will be
+///   created if it does not already exist.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
@@ -971,16 +1081,20 @@ pub unsafe extern "C" fn hegel_settings_set_database(
         Err(rc) => return rc,
     };
     if database.is_null() {
+        handle.inner.database = Database::Unset;
+        handle.database_c = None;
         return HEGEL_OK;
     }
     let cstr = unsafe { CStr::from_ptr(database) };
     match cstr.to_str() {
         Ok("") => {
             handle.inner = handle.inner.clone().database(None);
+            handle.database_c = Some(CString::default());
             HEGEL_OK
         }
         Ok(path) => {
             handle.inner = handle.inner.clone().database(Some(path.to_string()));
+            handle.database_c = Some(CString::from(cstr));
             HEGEL_OK
         }
         Err(_) => {
@@ -1093,6 +1207,401 @@ pub unsafe extern "C" fn hegel_settings_set_suppress_health_check(
         v.push(HealthCheck::LargeInitialTestCase);
     }
     handle.inner = handle.inner.clone().suppress_health_check(v);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `yes`: When `true`, a failure should be reported with a copy-pasteable
+///   reproduction line for its counterexample. Defaults to `false`; the
+///   shipped `ci` profile turns it on. libhegel itself never acts on this
+///   value — the reproduce blob is always attached to the failure and
+///   printing it is the caller's decision — but carrying it in the settings
+///   lets profiles configure it for every Hegel library.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_print_blob(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_print_blob") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().print_blob(yes);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `name`: The profile name to register: ASCII letters, digits, `-` and
+///   `_` only.
+/// `settings`: The settings to snapshot. The caller keeps ownership; the
+///   handle's database key is not part of the snapshot.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
+///
+/// Registers a complete snapshot of `settings` as the profile `name`,
+/// process-wide, replacing any earlier registration of the same name.
+/// Registering a shipped name replaces that profile wholesale. A
+/// `hegel.toml` section for `name` still merges over the snapshot, and may
+/// not set `extends` on it. Registration is not retroactive: settings
+/// handles already created keep their values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_register_profile(
+    ctx: *mut HegelContext,
+    name: *const c_char,
+    settings: *const HegelSettings,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if name.is_null() {
+        set_last_error(ctx, "hegel_settings_register_profile: name is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+        set_last_error(
+            ctx,
+            "hegel_settings_register_profile: name is not valid UTF-8",
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    let handle = match unsafe { settings_ref(ctx, settings, "hegel_settings_register_profile") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    match crate::profiles::register(name, &handle.inner) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => {
+            set_last_error(ctx, &format!("hegel_settings_register_profile: {e}"));
+            HEGEL_E_INVALID_ARG
+        }
+    }
+}
+
+/// Parameters:
+/// `out`: Receives the configured number of test cases.
+///
+/// Returns `HEGEL_OK`.
+///
+/// The `hegel_settings_get_*` functions read a settings handle back — for
+/// example one resolved from a profile by `hegel_settings_new` — so a
+/// Hegel library can present the effective configuration. Each takes a
+/// `const` handle and one out parameter, and fails with
+/// `HEGEL_E_INVALID_HANDLE` / `HEGEL_E_INVALID_ARG` on a null handle or out
+/// pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_test_cases(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_test_cases") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_test_cases: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.test_cases };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives the configured verbosity.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_verbosity(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut hegel_verbosity_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_verbosity") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_verbosity: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let v = match handle.inner.verbosity {
+        Verbosity::Quiet => hegel_verbosity_t::HEGEL_VERBOSITY_QUIET,
+        Verbosity::Normal => hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL,
+        Verbosity::Verbose => hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE,
+        Verbosity::Debug => hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG,
+    };
+    unsafe { *out = v };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_seed`: Receives the configured seed when one is set, else 0.
+/// `out_has_seed`: Receives whether a seed is set.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_seed(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out_seed: *mut u64,
+    out_has_seed: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_seed") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out_seed.is_null() || out_has_seed.is_null() {
+        set_last_error(ctx, "hegel_settings_get_seed: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_seed = handle.inner.seed.unwrap_or(0);
+        *out_has_seed = handle.inner.seed.is_some();
+    }
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives whether derandomization is enabled.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_derandomize(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_derandomize") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_derandomize: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.derandomize };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_database`: Receives the database value, mirroring the setter's
+///   convention: NULL for the default, `""` for disabled, else the root
+///   directory path. The pointer borrows the handle and stays valid until
+///   the next `hegel_settings_set_database` call on it or
+///   `hegel_settings_free`.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_database(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out_database: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_database") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out_database.is_null() {
+        set_last_error(ctx, "hegel_settings_get_database: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let ptr = match &handle.database_c {
+        Some(cstring) => cstring.as_ptr(),
+        None => ptr::null(),
+    };
+    unsafe { *out_database = ptr };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives the enabled phases as a bitwise OR of `hegel_phase_t`
+///   values.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_phases(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut u32,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_phases") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_phases: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = phases_bits(&handle.inner.phases) };
+    HEGEL_OK
+}
+
+fn phases_bits(phases: &[Phase]) -> u32 {
+    use hegel_phase_t::*;
+    phases
+        .iter()
+        .map(|phase| match phase {
+            Phase::Explicit => HEGEL_PHASE_EXPLICIT as u32,
+            Phase::Reuse => HEGEL_PHASE_REUSE as u32,
+            Phase::Generate => HEGEL_PHASE_GENERATE as u32,
+            Phase::Target => HEGEL_PHASE_TARGET as u32,
+            Phase::Shrink => HEGEL_PHASE_SHRINK as u32,
+        })
+        .fold(0, |bits, bit| bits | bit)
+}
+
+/// Parameters:
+/// `out`: Receives the suppressed health checks as a bitwise OR of
+///   `hegel_health_check_t` values. Reports only explicit suppressions;
+///   inside Antithesis every check is skipped regardless.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_suppress_health_check(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut u32,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_suppress_health_check") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_settings_get_suppress_health_check: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = health_check_bits(&handle.inner.suppress_health_check) };
+    HEGEL_OK
+}
+
+fn health_check_bits(checks: &[HealthCheck]) -> u32 {
+    use hegel_health_check_t::*;
+    checks
+        .iter()
+        .map(|check| match check {
+            HealthCheck::FilterTooMuch => HEGEL_HC_FILTER_TOO_MUCH as u32,
+            HealthCheck::TooSlow => HEGEL_HC_TOO_SLOW as u32,
+            HealthCheck::TestCasesTooLarge => HEGEL_HC_TEST_CASES_TOO_LARGE as u32,
+            HealthCheck::LargeInitialTestCase => HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32,
+        })
+        .fold(0, |bits, bit| bits | bit)
+}
+
+/// Parameters:
+/// `out`: Receives whether multi-bug reporting is enabled.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_report_multiple_failures(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle =
+        match unsafe { settings_ref(ctx, s, "hegel_settings_get_report_multiple_failures") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
+    if out.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_settings_get_report_multiple_failures: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.report_multiple_failures };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives whether the statistics block is enabled.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_show_statistics(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_show_statistics") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_settings_get_show_statistics: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.show_statistics };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives whether reproduction lines should be printed. See
+///   `hegel_settings_set_print_blob`.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_print_blob(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_print_blob") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_print_blob: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.print_blob };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives the configured backend: `HEGEL_BACKEND_AUTO` when no
+///   explicit backend has been pinned.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_backend(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut hegel_backend_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_backend") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(ctx, "hegel_settings_get_backend: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let backend = match handle.inner.backend {
+        None => hegel_backend_t::HEGEL_BACKEND_AUTO,
+        Some(Backend::Default) => hegel_backend_t::HEGEL_BACKEND_DEFAULT,
+        Some(Backend::Urandom) => hegel_backend_t::HEGEL_BACKEND_URANDOM,
+    };
+    unsafe { *out = backend };
     HEGEL_OK
 }
 

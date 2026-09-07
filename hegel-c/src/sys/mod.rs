@@ -214,6 +214,12 @@ pub fn env_var(name: &str) -> Option<String> {
     imp::env_var(name)
 }
 
+/// The current working directory, decoded lossily. `None` if the OS cannot
+/// report one; callers treat that as "no directory to search".
+pub fn cwd() -> Option<String> {
+    imp::cwd()
+}
+
 /// Write `line` plus a trailing newline to stderr, best-effort: failures
 /// are ignored, and a short write may truncate the line. Diagnostics must
 /// never take down a run.

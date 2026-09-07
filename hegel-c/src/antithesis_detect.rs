@@ -11,7 +11,13 @@ const OUTPUT_DIR_VAR: &str = "ANTITHESIS_OUTPUT_DIR";
 /// defaults; the directory itself is validated later by
 /// [`is_running_in_antithesis`], which is what the run consults.
 pub(crate) fn antithesis_env_var_set() -> bool {
-    antithesis_output_dir_from(crate::sys::env_var).is_some()
+    antithesis_env_var_set_from(crate::sys::env_var)
+}
+
+/// [`antithesis_env_var_set`] with the environment read injected, for use in
+/// profile selection where the whole environment is injected together.
+pub(crate) fn antithesis_env_var_set_from(env: impl Fn(&str) -> Option<String>) -> bool {
+    antithesis_output_dir_from(env).is_some()
 }
 
 pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
