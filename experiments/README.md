@@ -9,6 +9,11 @@ below, and later API changes are expected to have broken some of them.
   with no engine dependency, so it stays runnable — `cargo run --release`
   reproduces `results.txt` from the seed printed in its header.
 
+- `fcr-sim`: experiment 014 (multiplicity control, decision 72); pure
+  simulation with no engine dependency — exact DP over the bar and
+  gauntlet rules plus a seeded Monte Carlo, `cargo run --release`
+  reproduces the tables in the notes in about a second.
+
 - `shrink-sim`, `nd-shrink`, `replay-semantics`, `nd-lifecycle`,
   `nd-boost`, `confirm-bar`, `fixate-cost`: built against `a1d1b6d2`.
   `fixate-cost` and `replay-semantics` no longer build — their `__bench`
