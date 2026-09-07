@@ -33,7 +33,7 @@ fn suppress_health_check_replaces() {
 
 #[test]
 fn settings_in_ci_disable_database_derandomize_and_suppress_too_slow() {
-    let settings = Settings::for_ci(true);
+    let settings = Settings::for_env(true, false);
     assert!(matches!(settings.database, Database::Disabled));
     assert!(settings.derandomize);
     assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
@@ -44,10 +44,52 @@ fn settings_in_ci_disable_database_derandomize_and_suppress_too_slow() {
 
 #[test]
 fn settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
-    let settings = Settings::for_ci(false);
+    let settings = Settings::for_env(false, false);
     assert!(matches!(settings.database, Database::Unset));
     assert!(!settings.derandomize);
     assert!(settings.suppress_health_check.is_empty());
+}
+
+const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
+    HealthCheck::FilterTooMuch,
+    HealthCheck::TooSlow,
+    HealthCheck::TestCasesTooLarge,
+    HealthCheck::LargeInitialTestCase,
+];
+
+#[test]
+fn settings_in_antithesis_disable_the_database_and_every_health_check() {
+    let settings = Settings::for_env(false, true);
+    assert!(matches!(settings.database, Database::Disabled));
+    assert!(
+        !settings.derandomize,
+        "Antithesis controls randomness itself"
+    );
+    for check in ALL_HEALTH_CHECKS {
+        assert!(settings.health_check_suppressed(check), "{check:?}");
+    }
+    // An explicit (even empty) suppression list does not re-enable them.
+    let settings = settings.suppress_health_check([]);
+    for check in ALL_HEALTH_CHECKS {
+        assert!(settings.health_check_suppressed(check), "{check:?}");
+    }
+}
+
+#[test]
+fn settings_in_antithesis_still_honour_an_explicit_database() {
+    let settings = Settings::for_env(false, true).database(Some("db".into()));
+    assert!(matches!(settings.database, Database::Path(_)));
+}
+
+#[test]
+fn health_checks_run_outside_antithesis_unless_suppressed_explicitly() {
+    let settings = Settings::for_env(false, false);
+    for check in ALL_HEALTH_CHECKS {
+        assert!(!settings.health_check_suppressed(check), "{check:?}");
+    }
+    let settings = settings.suppress_health_check([HealthCheck::TooSlow]);
+    assert!(settings.health_check_suppressed(HealthCheck::TooSlow));
+    assert!(!settings.health_check_suppressed(HealthCheck::FilterTooMuch));
 }
 
 #[test]

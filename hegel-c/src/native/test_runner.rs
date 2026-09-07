@@ -290,9 +290,7 @@ impl<'a> Engine<'a> {
                 run.status == Status::EarlyStop,
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
-                settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::LargeInitialTestCase),
+                settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
                 return Err(RunError::HealthCheck(msg));
             }
@@ -369,9 +367,7 @@ impl<'a> Engine<'a> {
                     if run.status == Status::Invalid
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
-                        && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
+                        && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
                     {
                         return Err(RunError::HealthCheck(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
@@ -386,9 +382,7 @@ impl<'a> Engine<'a> {
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
                         self.overrun_test_cases,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TestCasesTooLarge),
+                        settings.health_check_suppressed(HealthCheck::TestCasesTooLarge),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -397,9 +391,7 @@ impl<'a> Engine<'a> {
                         self.valid_test_cases,
                         self.total_test_time,
                         too_slow_threshold,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TooSlow),
+                        settings.health_check_suppressed(HealthCheck::TooSlow),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -433,9 +425,7 @@ impl<'a> Engine<'a> {
             && self.valid_test_cases == 0
             && self.interesting.is_empty()
             && !self.test_is_trivial
-            && !settings
-                .suppress_health_check
-                .contains(&HealthCheck::FilterTooMuch)
+            && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
             && self.invalid_test_cases > 0
         {
             return Err(RunError::HealthCheck(format!(
@@ -756,7 +746,9 @@ pub(crate) fn flaky_diagnostic() -> String {
 /// into nondeterministic mode (see [`Engine::nondeterministic`]).
 /// Informational rather than a warning: the concurrency was asked for
 /// explicitly, but the user should learn why their failure is reported
-/// unshrunk and without a reproduce blob.
+/// unshrunk and without a reproduce blob. Not printed inside Antithesis,
+/// which is deterministic and does its own reproduction, so none of the
+/// caveats apply there.
 pub(crate) fn concurrent_machine_notice() -> &'static str {
     "Concurrent state machine detected: this run is nondeterministic, so failures \
      are reported from the execution that discovered them, without shrinking, \
@@ -1047,7 +1039,7 @@ impl<'a> Engine<'a> {
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.nondeterministic && family.concurrent_machine() {
             self.nondeterministic = true;
-            if self.settings.verbosity != Verbosity::Quiet {
+            if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
                 self.settings.output.line(concurrent_machine_notice());
             }
         }
