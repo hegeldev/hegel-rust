@@ -1,0 +1,325 @@
+quickcheck:
+  type: article
+  title: "QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs"
+  author: ["Claessen, Koen", "Hughes, John"]
+  date: 2000
+  page-range: 268-279
+  parent:
+    type: proceedings
+    title: "Proceedings of the Fifth ACM SIGPLAN International Conference on Functional Programming (ICFP 2000)"
+    publisher: ACM
+
+hypothesis:
+  type: article
+  title: "Hypothesis: A New Approach to Property-Based Testing"
+  author: ["MacIver, David R.", "Hatfield-Dodds, Zac"]
+  date: 2019
+  parent:
+    type: periodical
+    title: Journal of Open Source Software
+    volume: 4
+    issue: 43
+
+reducer:
+  type: article
+  title: "Test-Case Reduction via Test-Case Generation: Insights from the Hypothesis Reducer"
+  author: ["MacIver, David R.", "Donaldson, Alastair F."]
+  date: 2020
+  parent:
+    type: proceedings
+    title: "34th European Conference on Object-Oriented Programming (ECOOP 2020)"
+    publisher: Schloss Dagstuhl
+
+pulse:
+  type: article
+  title: "Finding Race Conditions in Erlang with QuickCheck and PULSE"
+  author:
+    [
+      "Claessen, Koen",
+      "Pałka, Michał",
+      "Smallbone, Nicholas",
+      "Hughes, John",
+      "Svensson, Hans",
+      "Arts, Thomas",
+      "Wiger, Ulf",
+    ]
+  date: 2009
+  page-range: 149-160
+  parent:
+    type: proceedings
+    title: "Proceedings of the 14th ACM SIGPLAN International Conference on Functional Programming (ICFP 2009)"
+    publisher: ACM
+
+targeted-pbt:
+  type: article
+  title: Targeted Property-Based Testing
+  author: ["Löscher, Andreas", "Sagonas, Konstantinos"]
+  date: 2017
+  page-range: 46-56
+  parent:
+    type: proceedings
+    title: "Proceedings of the 26th ACM SIGSOFT International Symposium on Software Testing and Analysis (ISSTA 2017)"
+    publisher: ACM
+
+flaky-empirical:
+  type: article
+  title: An Empirical Analysis of Flaky Tests
+  author: ["Luo, Qingzhou", "Hariri, Farah", "Eloussi, Lamyaa", "Marinov, Darko"]
+  date: 2014
+  page-range: 643-653
+  parent:
+    type: proceedings
+    title: "Proceedings of the 22nd ACM SIGSOFT International Symposium on Foundations of Software Engineering (FSE 2014)"
+    publisher: ACM
+
+deflaker:
+  type: article
+  title: "DeFlaker: Automatically Detecting Flaky Tests"
+  author:
+    [
+      "Bell, Jonathan",
+      "Legunsen, Owolabi",
+      "Hilton, Michael",
+      "Eloussi, Lamyaa",
+      "Yung, Tifany",
+      "Marinov, Darko",
+    ]
+  date: 2018
+  page-range: 433-444
+  parent:
+    type: proceedings
+    title: "Proceedings of the 40th International Conference on Software Engineering (ICSE 2018)"
+    publisher: ACM
+
+idflakies:
+  type: article
+  title: "iDFlakies: A Framework for Detecting and Partially Classifying Flaky Tests"
+  author: ["Lam, Wing", "Oei, Reed", "Shi, August", "Marinov, Darko", "Xie, Tao"]
+  date: 2019
+  page-range: 312-322
+  parent:
+    type: proceedings
+    title: "Proceedings of the 12th IEEE Conference on Software Testing, Validation and Verification (ICST 2019)"
+    publisher: IEEE
+
+harman-ohearn:
+  type: article
+  title: "From Start-ups to Scale-ups: Opportunities and Open Problems for Static and Dynamic Program Analysis"
+  author: ["Harman, Mark", "O'Hearn, Peter"]
+  date: 2018
+  page-range: 1-23
+  parent:
+    type: proceedings
+    title: "Proceedings of the 18th IEEE International Working Conference on Source Code Analysis and Manipulation (SCAM 2018)"
+    publisher: IEEE
+
+wilson:
+  type: article
+  title: Probable Inference, the Law of Succession, and Statistical Inference
+  author: ["Wilson, Edwin B."]
+  date: 1927
+  page-range: 209-212
+  parent:
+    type: periodical
+    title: Journal of the American Statistical Association
+    volume: 22
+    issue: 158
+
+wald:
+  type: article
+  title: Sequential Tests of Statistical Hypotheses
+  author: ["Wald, Abraham"]
+  date: 1945
+  page-range: 117-186
+  parent:
+    type: periodical
+    title: The Annals of Mathematical Statistics
+    volume: 16
+    issue: 2
+
+benjamini-hochberg:
+  type: article
+  title: "Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing"
+  author: ["Benjamini, Yoav", "Hochberg, Yosef"]
+  date: 1995
+  page-range: 289-300
+  parent:
+    type: periodical
+    title: "Journal of the Royal Statistical Society: Series B (Methodological)"
+    volume: 57
+    issue: 1
+
+alpha-investing:
+  type: article
+  title: "α-investing: A Procedure for Sequential Control of Expected False Discoveries"
+  author: ["Foster, Dean P.", "Stine, Robert A."]
+  date: 2008
+  page-range: 429-444
+  parent:
+    type: periodical
+    title: "Journal of the Royal Statistical Society: Series B (Statistical Methodology)"
+    volume: 70
+    issue: 2
+
+chess:
+  type: article
+  title: Finding and Reproducing Heisenbugs in Concurrent Programs
+  author:
+    [
+      "Musuvathi, Madanlal",
+      "Qadeer, Shaz",
+      "Ball, Thomas",
+      "Basler, Gérard",
+      "Nainar, Piramanayagam Arumuga",
+      "Neamtiu, Iulian",
+    ]
+  date: 2008
+  page-range: 267-280
+  parent:
+    type: proceedings
+    title: "Proceedings of the 8th USENIX Symposium on Operating Systems Design and Implementation (OSDI 2008)"
+    publisher: USENIX
+
+pct:
+  type: article
+  title: A Randomized Scheduler with Probabilistic Guarantees of Finding Bugs
+  author:
+    [
+      "Burckhardt, Sebastian",
+      "Kothari, Pravesh",
+      "Musuvathi, Madanlal",
+      "Nagarakatte, Santosh",
+    ]
+  date: 2010
+  page-range: 167-178
+  parent:
+    type: proceedings
+    title: "Proceedings of the 15th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS 2010)"
+    publisher: ACM
+
+rr:
+  type: article
+  title: Engineering Record and Replay for Deployability
+  author:
+    [
+      "O'Callahan, Robert",
+      "Jones, Chris",
+      "Froyd, Nathan",
+      "Huey, Kyle",
+      "Noll, Albert",
+      "Partush, Nimrod",
+    ]
+  date: 2017
+  page-range: 377-389
+  parent:
+    type: proceedings
+    title: "Proceedings of the 2017 USENIX Annual Technical Conference (USENIX ATC 2017)"
+    publisher: USENIX
+
+foundationdb:
+  type: article
+  title: "FoundationDB: A Distributed Unbundled Transactional Key Value Store"
+  author:
+    [
+      "Zhou, Jingyu",
+      "Xu, Meng",
+      "Shraer, Alexander",
+      "Namasivayam, Bala",
+      "Miller, Alex",
+      "Tschannen, Evan",
+      "Atherton, Steve",
+      "Beamon, Andrew J.",
+      "Sears, Rusty",
+      "Leach, John",
+      "Rosenthal, Dave",
+      "Dong, Xin",
+      "Wilson, Will",
+      "Collins, Ben",
+      "Scherer, David",
+      "Grieser, Alec",
+      "Liu, Young",
+      "Moore, Alvin",
+      "Muppana, Bhaskar",
+      "Su, Xiaoge",
+      "Yadav, Vishesh",
+    ]
+  date: 2021
+  page-range: 2653-2666
+  parent:
+    type: proceedings
+    title: "Proceedings of the 2021 International Conference on Management of Data (SIGMOD 2021)"
+    publisher: ACM
+
+creduce:
+  type: article
+  title: Test-Case Reduction for C Compiler Bugs
+  author:
+    [
+      "Regehr, John",
+      "Chen, Yang",
+      "Cuoq, Pascal",
+      "Eide, Eric",
+      "Ellison, Chucky",
+      "Yang, Xuejun",
+    ]
+  date: 2012
+  page-range: 335-346
+  parent:
+    type: proceedings
+    title: "Proceedings of the 33rd ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI 2012)"
+    publisher: ACM
+
+ddmin:
+  type: article
+  title: Simplifying and Isolating Failure-Inducing Input
+  author: ["Zeller, Andreas", "Hildebrandt, Ralf"]
+  date: 2002
+  page-range: 183-200
+  parent:
+    type: periodical
+    title: IEEE Transactions on Software Engineering
+    volume: 28
+    issue: 2
+
+schedule-isolation:
+  type: article
+  title: Isolating Failure-Inducing Thread Schedules
+  author: ["Choi, Jong-Deok", "Zeller, Andreas"]
+  date: 2002
+  page-range: 210-220
+  parent:
+    type: proceedings
+    title: "Proceedings of the 2002 ACM SIGSOFT International Symposium on Software Testing and Analysis (ISSTA 2002)"
+    publisher: ACM
+
+hughes-experiences:
+  type: chapter
+  title: "Experiences with QuickCheck: Testing the Hard Stuff and Staying Sane"
+  author: ["Hughes, John"]
+  date: 2016
+  page-range: 169-186
+  parent:
+    type: book
+    title: "A List of Successes That Can Change the World: Essays Dedicated to Philip Wadler on the Occasion of His 60th Birthday"
+    publisher: Springer
+
+heisenbug:
+  type: report
+  title: Why Do Computers Stop and What Can Be Done About It?
+  author: ["Gray, Jim"]
+  date: 1986
+  publisher: Tandem Computers
+  serial-number: "Technical Report 85.7"
+
+antithesis:
+  type: web
+  title: "Antithesis: Autonomous Software Testing"
+  url: https://antithesis.com
+  date: 2026
+
+proptest:
+  type: web
+  title: "Proptest: Hypothesis-Like Property Testing for Rust"
+  author: ["Lingle, Jason"]
+  url: https://github.com/proptest-rs/proptest
+  date: 2026
