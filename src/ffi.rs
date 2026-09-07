@@ -14,6 +14,10 @@
 //! invalid-argument unwind). Keeping that split means the unsafe boundary stays
 //! small and the control-flow policy stays with the test lifecycle.
 
+pub(crate) mod sys;
+
+use self::sys as hegel_c;
+
 use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;

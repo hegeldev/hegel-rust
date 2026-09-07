@@ -3,7 +3,7 @@ use crate::control::{AttemptMispriced, LeafBudgetExceeded, raise_control};
 use crate::ffi::RecursionHandle;
 use crate::pretty::PrettyPrinter;
 use crate::test_case::{labels, raise_for_rc};
-use hegel_c::hegel_result_t;
+use crate::ffi::sys::hegel_result_t;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
