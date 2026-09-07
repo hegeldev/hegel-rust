@@ -310,12 +310,10 @@ mod replay_logic {
 
     /// Stronger regression test: intermediate shrunk versions must
     /// reach the database before the next test-body call. We snapshot
-    /// the DB file count on every body invocation; if the shrinker is
-    /// improving the DB incrementally, the count should change between
-    /// the first observation (single discovered failure) and the last
-    /// (potentially the smallest shrunk version). If saves are batched
-    /// to end-of-run, observed snapshots would either all be 0 or all
-    /// jump from 0 to N on the final replay alone.
+    /// the set of DB file paths on every body invocation. Entries are
+    /// content-addressed, so every improvement renames the primary
+    /// entry, and saves batched to end-of-run would show at most one
+    /// non-empty state.
     #[test]
     fn test_intermediate_shrinks_update_db_during_run() {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -323,7 +321,8 @@ mod replay_logic {
         let db_root = std::path::PathBuf::from(&db_path);
         let db_root_cl = db_root.clone();
 
-        let snapshots: Arc<Mutex<std::collections::HashSet<(usize, usize)>>> =
+        type Snapshot = std::collections::BTreeSet<String>;
+        let snapshots: Arc<Mutex<std::collections::HashSet<Snapshot>>> =
             Arc::new(Mutex::new(std::collections::HashSet::new()));
         let snapshots_cl = Arc::clone(&snapshots);
         let calls: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -335,8 +334,9 @@ mod replay_logic {
             Hegel::new(move |tc: TestCase| {
                 {
                     *calls_cl.lock().unwrap() += 1;
-                    let (count, total_bytes) = db_summary(&db_root_cl);
-                    snapshots_cl.lock().unwrap().insert((count, total_bytes));
+                    let mut files = Snapshot::new();
+                    db_files(&db_root_cl, &mut files);
+                    snapshots_cl.lock().unwrap().insert(files);
                 }
                 let n: i64 = tc.draw(gs::integers::<i64>().min_value(0));
                 let v: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>()).min_size(0));
@@ -357,7 +357,7 @@ mod replay_logic {
         let total = *calls.lock().unwrap();
         assert!(total > 1, "expected multiple test-body calls, got {total}");
 
-        let distinct_non_empty = snaps.iter().filter(|&&(_, b)| b > 0).count();
+        let distinct_non_empty = snaps.iter().filter(|s| !s.is_empty()).count();
         assert!(
             distinct_non_empty >= 2,
             "Only saw {distinct_non_empty} distinct non-empty DB \
@@ -367,27 +367,20 @@ mod replay_logic {
         );
     }
 
-    /// Recursively compute `(file_count, total_bytes)` for everything
-    /// under `root`. Used by the persistence tests to summarise the
-    /// database state without depending on the internal hashing.
-    fn db_summary(root: &std::path::Path) -> (usize, usize) {
+    /// Recursively collect every file path under `root`. The database
+    /// is content-addressed, so a changed entry is a changed path.
+    fn db_files(root: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
         let entries = match std::fs::read_dir(root) {
             Ok(d) => d,
-            Err(_) => return (0, 0),
+            Err(_) => return,
         };
-        let mut count = 0;
-        let mut total = 0;
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                let (c, t) = db_summary(&path);
-                count += c;
-                total += t;
-            } else if let Ok(meta) = std::fs::metadata(&path) {
-                count += 1;
-                total += meta.len() as usize;
+                db_files(&path, out);
+            } else {
+                out.insert(path.to_string_lossy().into_owned());
             }
         }
-        (count, total)
     }
 }
