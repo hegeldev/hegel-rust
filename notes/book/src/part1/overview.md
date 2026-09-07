@@ -63,7 +63,8 @@ different verdict. This is a statistics problem. The answer is to treat every
 verdict as a sample: replays accumulate `Evidence` (fails, runs), and
 decisions are made on Wilson confidence bounds over the
 estimated failure probability, with explicit budgets derived from the p >= 0.1
-target.
+target — and, because one run repeats those tests without bound, per-origin
+multiplicity budgets that cap what repetition can buy (decision 72).
 
 ## Probabilistic bugs
 
@@ -104,7 +105,10 @@ are off, and targeting trades its hill climber for a measured race
 Confirmation gates origin admission on every path. An observed origin starts
 *Unconfirmed* and must clear the *discovery bar* (a gate-then-extend
 replay batch) before it is *Confirmed* and carries an anchor, a witness,
-and a pool. An origin reproduced from the database is *Trusted* without
+and a pool. Bar batches and gauntlet proposals spend per-origin per-run
+budgets, so re-sighting or proposal volume cannot compound the per-test
+false-accept rates (decision 72). An origin reproduced from the database is
+*Trusted* without
 re-running the bar's verdict. Raw interesting runs never displace an occupied
 origin. Pre-flip sightings are kept in a per-origin history so a late flip can
 backtrack to the reproduction boundary. [The origin lifecycle](lifecycle.md)

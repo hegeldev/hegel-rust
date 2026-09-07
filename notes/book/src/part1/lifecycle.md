@@ -36,10 +36,14 @@ Until 2026-09-07 misses were weighted by the verbatim watermark, the tracked fra
 | `CONFIRM_MIN_FAILS` | 4 | failures an accept requires, taken early on the fourth |
 | `ANCHOR_SEED_RUNS` | 20 | runs an accepting batch extends to before seeding an anchor |
 | `POOL_CAP` | 10 | stored timelines per origin, incumbent included |
+| `BAR_ATTEMPTS_PER_RUN` | 5 | bar batches per origin per run (sweep, shrink admission, pooled review) |
+| `BACKTRACK_BAR_ATTEMPTS` | 3 | bar batches per origin per run for backtrack candidates |
 
 The operating points come from an exact-DP derivation (experiment 005A): 0.6% false accepts per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, ~15 replays per rejected fluke, ~4.4 per p = 0.9 confirmation. The asymmetry is deliberate. A false accept is sticky, occupying the origin behind the displacement gate for the rest of the run, while a false reject recycles through rediscovery, so power is the cheap side of the trade. The rejected alternatives were a Wilson-LCB-over-noise-floor rule (26% false accepts) and an SPRT (50+ replays buying power that rediscovery gives free).
 
-The intervals themselves are not textbook-honest: per-run peeking and stop-on-fail bias them towards acceptance. The design treats the exact-DP operating points as the specification and z = 1.96 as a tuning constant, and experiment 008 measures the realized error.
+The per-batch numbers compose across attempts, so batches are budgeted (decision 72, experiment 014). Recycling a re-sighted origin into a fresh batch at every sweep epoch confirms an uncapped q = 0.02 fluke 21% of the time over a long run; at `BAR_ATTEMPTS_PER_RUN = 5` the composition stays at the 2.9% the 005A arithmetic assumed, keeping >95% power at the p = 0.1 target. The budget is shared by the sweep, shrink admission, and the pooled review, and spent through `OriginLifecycle::spend_bar_attempt`; at the cap the origin is rejected with evidence (0, 0) — no batch runs — and gets the full unconfirmed treatment. The backtrack spends a separate `BACKTRACK_BAR_ATTEMPTS = 3` budget (held per origin across backtracks, not per call) because its candidates come from history, which skews toward the real bug's pre-flip sightings; the two budgets compose to a per-origin ceiling of eight batches, 4.6% false confirm. The price lands below the target regime: a p = 0.05 bug confirms in 42% of runs instead of near-certainly given a long one, recycling across runs instead, and mixed bug-plus-fluke origins pay most (bug confirm 0.95/0.72/0.45 at fluke share 0/0.5/0.75).
+
+The intervals themselves are not textbook-honest: per-run peeking and stop-on-fail bias them towards acceptance. The design treats the exact-DP operating points as the specification and z = 1.96 as a tuning constant, experiment 008 measures the realized per-test error, and decision 72's budgets bound the composition across tests.
 
 ## The evidence batch
 
@@ -69,7 +73,7 @@ Every stored pool obeys `POOL_CAP` = 10 timelines total, incumbent included: dec
 
 The transitions are exactly what the lifecycle's methods implement:
 
-- Unconfirmed → Confirmed: a discovery-bar accept (the sweep or shrink admission), a backtrack's bar accept, or the final replay's pooled review, which confirms on any failure with no bar.
+- Unconfirmed → Confirmed: a discovery-bar accept — the sweep, shrink admission, a backtrack, or the final replay's pooled review handing its reproducing run to a fresh batch (decision 72).
 - Unconfirmed → Trusted: database reproduction.
 - Trusted → Confirmed: promotion by a failing shrink-time evidence batch.
 - Rejection never demotes and never removes state.
@@ -84,12 +88,12 @@ Confirming an already-confirmed origin is an internal error, and every `confirm`
 
 1. a stashed confirmation witness and anchor (`take_witness`, yielded once per confirmation).
 2. for a trusted origin, an evidence batch (bar as stopping rule only).
-3. for a never-confirmed origin with pre-flip history, a backtrack over that history, whose candidate faces the full bar up to `BACKTRACK_BAR_ATTEMPTS = 3` times. Each batch holds the bar's 45% target-regime power and three compose to ~83% ([the final replay](final-replay.md) covers the scan).
-4. otherwise a fresh bar batch on the incumbent.
+3. for a never-confirmed origin with pre-flip history, a backtrack over that history, whose candidate faces the full bar on the origin's `BACKTRACK_BAR_ATTEMPTS = 3` budget. Each batch holds the bar's 45% target-regime power and three compose to ~83% ([the final replay](final-replay.md) covers the scan).
+4. otherwise a fresh bar batch on the incumbent, spending one of the origin's `BAR_ATTEMPTS_PER_RUN` attempts — at the cap the origin is rejected and evicted without a batch.
 
 An accept here must hold a witness, and its absence at `confirm` time is an internal error.
 
-**The pooled review.** At report time every reported origin replays until failure, and any failure confirms a still-unconfirmed origin with no bar: a fresh reproduction is a reportable failing execution in its own right, whatever the rate estimate. Origins first observed by report-time measurement runs are never barred (confirming them could admit further origins without bound), so they report caveat-only and recycle via rediscovery next run (decision 35). The details are in [the final replay](final-replay.md).
+**The pooled review.** At report time every reported origin replays until failure. For a still-unconfirmed origin a reproducing run is a sighting, not a confirmation: it faces a standard evidence batch on the origin's remaining bar attempts (decision 72 — the earlier any-failure rule confirmed a q = 0.02 fluke about half the time). Origins first *observed* by report-time measurement runs are still never barred (confirming them could admit further origins without bound), so they report caveat-only and recycle via rediscovery next run (decision 35's surviving scope). The details are in [the final replay](final-replay.md).
 
 ## Trust via database reproduction
 

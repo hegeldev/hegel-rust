@@ -10,7 +10,12 @@ continued past them: decisions 68 and 69 (2026-09-07) restored targeting under N
 as a measured race, with experiment 013 deriving its constants (see
 [shrinking](shrinking.md)); decisions 70 and 71 (2026-09-07) removed the concurrency
 declaration channel, so detection is by observation only, and the verbatim-watermark
-weighting, so evidence is plain (fails, runs). Part II
+weighting, so evidence is plain (fails, runs); decision 72 (2026-09-07, experiment
+014 and `research/fcr-analysis.md`) added multiplicity control — per-origin bar and
+backtrack attempt budgets, per-proposal gauntlet alpha spending with an escalating
+failure minimum, and a bar on the pooled review's reproducing run in place of the
+any-failure rule (see [the lifecycle](lifecycle.md), [shrinking](shrinking.md), and
+[the final replay](final-replay.md)). Part II
 tells the story ([production](../part2/production.md), [remediation](../part2/remediation.md),
 [seam plan](../part2/seam-plan.md)). This chapter records the state as of the plans'
 close plus that addition.
@@ -149,6 +154,13 @@ overshoot, D2 reports 68/100 deterministic finals against a 100/100 letter whose
 fake (0/100 flips, free displacement): kept 37, gained 13, lost 0, never-flipped 30. A missed
 run reports a confirmed p = 0.7 example with a v2 blob where free displacement would have
 found a smaller, deterministic core.
+
+Decision 72's multiplicity budgets add three more priced costs (experiment 014): a
+sub-target p = 0.05 bug confirms in 42% of runs instead of near-certainly given a long
+one, recycling across runs; a mixed bug-plus-fluke origin's bug confirm falls
+0.95/0.72/0.45 at fluke share 0/0.5/0.75; and the pooled review's power at p = 0.1
+falls 0.97 → 0.44 before the backtrack rescue, in exchange for a ~170x cut in fluke
+confirms and a bounded per-origin false-accept spend.
 
 ### Escalated follow-up
 

@@ -125,18 +125,31 @@ executions, and the worst case is paid only for a dry review.
 
 `batch` is the accumulated evidence's (fails, runs).
 
-For a still-unconfirmed origin, any failure confirms: the anchor is the
-evidence's Wilson lower bound, there is no witness (the shrinker is done with
-this origin), the pool is the replayed timelines, and history is dropped.
-This is the one confirmation path with no bar, because the review holds a
-stamped failing execution, which is exactly the material a report needs.
+For a still-unconfirmed origin, a reproducing review run is a sighting, not a
+confirmation (decision 72): the earlier any-failure rule confirmed a q = 0.02
+fluke in 49% of lone-incumbent reviews (59% with a pool), because 33-44
+replays find one failure about half the time. The reproducing run's realized
+timeline faces a standard evidence batch instead, spending one of the
+origin's remaining `BAR_ATTEMPTS_PER_RUN` bar attempts and bounded by the
+final replay's deadline (an expired deadline rejects — a batch cut short
+proves nothing; the batch is the one `nd_evidence_batch` caller passing a
+deadline at all). An accept confirms: the anchor is the batch's Wilson lower
+bound, there is no witness (the shrinker is done with this origin), the pool
+keeps the map incumbent first with the batch's captures merged ahead of the
+review timelines, history is dropped, and the review's own counts land in the
+report counts. Experiment 014 prices the change: fluke confirms fall ~170x
+(0.487 → 0.003) and target-regime power falls 0.97 → 0.44 before the
+backtrack rescue — the failing execution still reaches the report as a
+values-carrying unconfirmed caveat when the batch rejects.
 
-A dry review of an unconfirmed origin observes it (defensively, since it may
-never have reached the lifecycle), then backtracks when history is non-empty. On
+A rejected batch, an out-of-attempts origin, and a dry review all take the
+same fall-through: observe (defensively, since the origin may never have
+reached the lifecycle), then backtrack when history is non-empty. On
 `Restored`, the restored nodes become the incumbent, re-shrunk when
 `reshrink`, and the origin is pushed back onto `pending`: the restored
 incumbent goes through the pooled review again. On `Exhausted`, the
-backtrack's (fails, runs) fold into the reject evidence. The rejection evicts
+backtrack's (fails, runs) fold into the reject evidence alongside the
+review's and the batch's. The rejection evicts
 an unconfirmed origin from the interesting map, and it can then reach the
 report only through the caveat-only fallback (decisions 24 and 35, with the
 wording in [the lifecycle chapter](lifecycle.md)).
@@ -189,10 +202,14 @@ pass walks the entries newest-first on the remaining budget, re-probing
 earlier misses, stopping at the first failure. If nothing has reproduced after that, the walk returns
 `Backtrack::Exhausted` with the accumulated (fails, runs).
 
-The candidate faces the full discovery bar via `nd_evidence_batch`, up to
-`BACKTRACK_BAR_ATTEMPTS` = 3 batches per backtrack: a probed entry reaches
+The candidate faces the full discovery bar via `nd_evidence_batch`, spending
+the origin's `BACKTRACK_BAR_ATTEMPTS` = 3 budget — held per origin per run
+across backtracks, not per call (decision 72), and checked before the scan so
+a spent budget costs no probes: a probed entry reaches
 the bar at roughly its true reproduction rate, each attempt holds 45%
-target-regime power, and three compose to ~83%. A reject marks the candidate
+target-regime power, and three compose to ~83%. The budget is separate from
+`BAR_ATTEMPTS_PER_RUN` because history skews toward the real bug's pre-flip
+sightings. A reject marks the candidate
 non-reproducing and resumes the loop, which picks an older candidate next.
 
 A cleared bar confirms the origin and drops history: the anchor is the
