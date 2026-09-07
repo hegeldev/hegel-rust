@@ -1,8 +1,9 @@
 mod common;
 
+use common::utils::check_can_generate_examples;
 use hegel::TestCase;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, PartialEq, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Wrapper {
@@ -226,6 +227,113 @@ fn test_hashmap_with_mapped_keys(tc: TestCase) {
         .max_size(10),
     );
     assert!(map.keys().all(|&k| k % 2 == 0));
+}
+
+#[test]
+fn test_btree_sets_default() {
+    check_can_generate_examples(gs::btree_sets(gs::booleans()));
+}
+
+#[hegel::test]
+fn test_btree_set_with_max_size(tc: TestCase) {
+    let max_size: usize = tc.draw(gs::integers());
+    let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers::<i32>()).max_size(max_size));
+    assert!(set.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_set_with_min_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(20));
+    let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers::<i32>()).min_size(min_size));
+    assert!(set.len() >= min_size);
+}
+
+#[hegel::test]
+fn test_btree_set_with_min_and_max_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(10));
+    let max_size = tc.draw(gs::integers().min_value(min_size));
+    let set: BTreeSet<i32> = tc.draw(
+        gs::btree_sets(gs::integers::<i32>())
+            .min_size(min_size)
+            .max_size(max_size),
+    );
+    assert!(set.len() >= min_size && set.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_set_min_size_forces_distinct_elements(tc: TestCase) {
+    let set: BTreeSet<bool> = tc.draw(gs::btree_sets(gs::booleans()).min_size(2));
+    assert_eq!(set.len(), 2);
+}
+
+#[hegel::test]
+fn test_vec_of_btree_sets(tc: TestCase) {
+    let vec_of_sets: Vec<BTreeSet<i32>> = tc.draw(
+        gs::vecs(gs::btree_sets(gs::integers::<i32>().min_value(0).max_value(100)).max_size(5))
+            .max_size(3),
+    );
+    for set in &vec_of_sets {
+        assert!(set.len() <= 5);
+        assert!(set.iter().all(|&x| (0..=100).contains(&x)));
+    }
+}
+
+#[test]
+fn test_btree_maps_default() {
+    check_can_generate_examples(gs::btree_maps(gs::booleans(), gs::booleans()));
+}
+
+#[hegel::test]
+fn test_btree_map_with_max_size(tc: TestCase) {
+    let max_size: usize = tc.draw(gs::integers());
+    let map: BTreeMap<i32, i32> =
+        tc.draw(gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>()).max_size(max_size));
+    assert!(map.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_map_with_min_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(20));
+    let map: BTreeMap<i32, i32> =
+        tc.draw(gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>()).min_size(min_size));
+    assert!(map.len() >= min_size);
+}
+
+#[hegel::test]
+fn test_btree_map_with_min_and_max_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(10));
+    let max_size = tc.draw(gs::integers().min_value(min_size));
+    let map: BTreeMap<i32, i32> = tc.draw(
+        gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>())
+            .min_size(min_size)
+            .max_size(max_size),
+    );
+    assert!(map.len() >= min_size && map.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_map_min_size_forces_distinct_keys(tc: TestCase) {
+    let map: BTreeMap<bool, bool> =
+        tc.draw(gs::btree_maps(gs::booleans(), gs::booleans()).min_size(2));
+    assert_eq!(map.len(), 2);
+}
+
+#[hegel::test]
+fn test_vec_of_btree_maps(tc: TestCase) {
+    let vec_of_maps: Vec<BTreeMap<i32, i32>> = tc.draw(
+        gs::vecs(
+            gs::btree_maps(
+                gs::integers::<i32>().min_value(0).max_value(100),
+                gs::integers::<i32>(),
+            )
+            .max_size(5),
+        )
+        .max_size(3),
+    );
+    for map in &vec_of_maps {
+        assert!(map.len() <= 5);
+        assert!(map.keys().all(|&k| (0..=100).contains(&k)));
+    }
 }
 
 #[hegel::test]
