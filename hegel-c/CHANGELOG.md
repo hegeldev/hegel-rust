@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.2 - 2026-09-07
+
+This patch fixes a crash when shrinking a failure in a flaky test. When re-executing the test produced a shorter run than the failure being shrunk, a deletion pass could panic with an index out of bounds. That shrink attempt is now rejected and shrinking continues.
+
 ## 0.37.1 - 2026-09-07
 
 This patch suppresses `TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Calls to `hegel_settings_set_suppress_health_check` still replace the default.
