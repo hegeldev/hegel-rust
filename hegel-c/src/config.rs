@@ -555,17 +555,25 @@ pub(crate) fn discover(
 /// The result is loaded once and cached for the life of the process, so
 /// every settings resolution sees the same config even if the file changes
 /// mid-run.
+///
+/// Under Miri the result is always an empty config: Miri has no shim for
+/// the `stat` call the discovery makes.
 pub(crate) fn load() -> Result<ConfigFile, ProfileError> {
-    static LOADED: crate::sys::sync::Lazy<Result<ConfigFile, ProfileError>> =
-        crate::sys::sync::Lazy::new(|| {
-            load_from(
-                crate::sys::env_var(CONFIG_VAR),
-                crate::sys::cwd(),
-                crate::sys::fs::exists,
-                |path| crate::sys::fs::read(path).ok(),
-            )
-        });
-    LOADED.clone()
+    #[cfg(miri)]
+    return Ok(ConfigFile::default());
+    #[cfg(not(miri))]
+    {
+        static LOADED: crate::sys::sync::Lazy<Result<ConfigFile, ProfileError>> =
+            crate::sys::sync::Lazy::new(|| {
+                load_from(
+                    crate::sys::env_var(CONFIG_VAR),
+                    crate::sys::cwd(),
+                    crate::sys::fs::exists,
+                    |path| crate::sys::fs::read(path).ok(),
+                )
+            });
+        LOADED.clone()
+    }
 }
 
 /// [`load`] with the environment, directory, and filesystem reads injected.
