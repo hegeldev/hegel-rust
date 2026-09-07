@@ -11,10 +11,12 @@ readme = "README.md"
 
 # The lib is named `hegel_c` (not `hegel`) so it can coexist in one
 # dependency graph with the `hegeltest` crate, whose lib is named `hegel`:
-# the upcoming inversion has `hegeltest` depend on this crate, and two
-# crates sharing a lib name cannot. This only changes the build-output stem
+# hegeltest's `static-engine` feature depends on this crate, and two crates
+# sharing a lib name cannot. This only changes the build-output stem
 # (`libhegel_c.{so,a}`); the C header (`hegel.h`), the exported `hegel_*`
 # symbols, and the released `libhegel-<os>-<arch>` assets are unaffected.
+# The rlib crate-type is likewise for `static-engine`; every other consumer,
+# including hegeltest's default mode, uses the cdylib or staticlib.
 [lints]
 workspace = true
 

@@ -28,6 +28,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 - `src/lib.rs` — Public API surface: `hegel()`, the `Hegel` builder, `TestCase`, the `Generator` trait, and the proc-macro re-exports (`#[hegel::test]`, `#[hegel::main]`, `#[derive(DefaultGenerator)]`, `#[composite]`, `#[state_machine]`, `#[reproduce_failure]`, …)
 - `src/ffi.rs` — The libhegel C-ABI boundary: the only module that touches the raw `hegel_*` functions; the rest of the frontend works against its safe wrappers (`SettingsHandle`, `RunHandle`, `CTestCase`, `RunResult`)
+- `src/ffi/sys.rs` — Where the `hegel_*` functions come from, in two interchangeable forms: by default mirrored `repr(C)` types (`sys/types.rs`) plus a runtime loader (`sys/loader.rs`) that dlopens the `libhegel_c` cdylib `build.rs` built, so `hegeltest-c` and its dependencies stay out of consumers' cargo graphs; with the public `static-engine` feature, a re-export of the `hegel_c` rlib (self-contained binaries, visible engine dependencies — also what Miri and the coverage workspace pass use). One macro, `for_each_hegel_fn!`, is the single list of functions; embedded drift tests compile-assert it and the mirrors against `hegel_c` under `static-engine`
 - `src/run_lifecycle.rs` — Cross-cutting per-test-case lifecycle: panic hook, `catch_unwind` wrapping, translating panics into `TestCaseResult`, and the final re-raise
 - `src/backend.rs` — The result types the lifecycle speaks (`TestCaseResult`, `Failure`)
 - `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, the `Collection` helper, and the span `labels` module
@@ -47,12 +48,13 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/backend.rs` — The `DataSource` trait the engine implements and the C ABI drives
 - `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
-- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` mostly to reserve the name
+- `benches/` — Microbenchmarks of engine internals, exposed through the internal `__bench` feature
+- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` — the crate the frontend's `build.rs` builds the shared library from (and links directly under `static-engine`)
 
 ### Feature Flags (root crate)
 
 - **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules
-- **`__bench`**: internal, re-exports engine internals for `benches/`; not part of the public API
+- **`static-engine`**: links the engine in as an rlib instead of loading the `libhegel_c` shared library at runtime; see `src/ffi/sys.rs` above
 
 The `__` prefix marks a feature as internal. The coverage run enables every root-crate feature except internal ones, computed from `cargo metadata` by `public_features()` in `scripts/check-coverage.py`, so a new feature needs no coverage wiring.
 

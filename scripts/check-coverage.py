@@ -519,10 +519,9 @@ def run_coverage() -> Path:
     the dlopened shared library rather than a linked rlib. The workspace pass
     enables `static-engine` (a public feature, so `public_features()` picks
     it up), which compiles out the runtime loader in `src/ffi/sys/`; this
-    pass is what covers it. The dlopened cdylib itself is the
-    non-instrumented one `_ensure_smoke_cdylib` built — engine lines are
-    covered by the other two passes — so this pass only adds frontend lines,
-    and the per-line union merge does the rest.
+    pass is what covers it. The dlopened cdylib is the non-instrumented one
+    `_ensure_smoke_cdylib` built, so this pass adds only frontend lines to
+    the union merge; the engine's lines come from the other two passes.
 
     hegel-macros is excluded from the report. It's a proc-macro crate whose
     code runs at the *compile* time of the test crates, which `cargo llvm-cov`
