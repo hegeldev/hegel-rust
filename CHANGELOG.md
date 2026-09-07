@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.7 - 2026-09-07
+
+This patch adds `generators::btree_sets` and `generators::btree_maps` for generating `BTreeSet` and `BTreeMap` values, with the same `min_size`/`max_size` builders as `hashsets` and `hashmaps`. Both types also implement `DefaultGenerator`, so `gs::default::<BTreeMap<u8, u8>>()` and `#[derive(DefaultGenerator)]` on structs containing them now work.
+
 ## 0.39.6 - 2026-09-07
 
 This release updates the `hegeltest-c` dependency to 0.36.5.
