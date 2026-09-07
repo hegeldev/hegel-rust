@@ -32,17 +32,22 @@ fn suppress_health_check_replaces() {
 }
 
 #[test]
-fn settings_in_ci_disable_the_database_and_derandomize() {
+fn settings_in_ci_disable_database_derandomize_and_suppress_too_slow() {
     let settings = Settings::for_env(true, false);
     assert!(matches!(settings.database, Database::Disabled));
     assert!(settings.derandomize);
+    assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
+
+    let settings = settings.suppress_health_check([]);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 #[test]
-fn settings_outside_ci_leave_the_database_unset_and_randomized() {
+fn settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
     let settings = Settings::for_env(false, false);
     assert!(matches!(settings.database, Database::Unset));
     assert!(!settings.derandomize);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
