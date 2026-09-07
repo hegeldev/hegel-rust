@@ -8,6 +8,10 @@
 //!    works with the library shipped alongside it.
 //! 3. The directory `build.rs` built the engine into, baked in at compile
 //!    time, which is what makes `cargo test` and `cargo run` just work.
+//! 4. The platform's own library search, by loading the bare file name, which
+//!    honours `LD_LIBRARY_PATH`, rpaths, ldconfig directories, `DYLD_*`, and
+//!    `PATH` on Windows. This comes last so a system-installed engine can
+//!    never shadow the version-matched copies above.
 //!
 //! Loading happens once, on the first engine call, and resolves every
 //! `hegel_*` symbol eagerly so an incompatible library fails immediately
@@ -33,30 +37,43 @@ pub(super) struct Library {
     path: PathBuf,
 }
 
-pub(super) fn candidate_dirs(
+pub(super) fn candidate_paths(
     env_dir: Option<PathBuf>,
     exe_dir: Option<PathBuf>,
     baked_dir: &str,
 ) -> Vec<PathBuf> {
     if let Some(dir) = env_dir {
-        return vec![dir];
+        return vec![dir.join(LIB_FILE_NAME)];
     }
-    let mut dirs = Vec::new();
+    let mut paths = Vec::new();
     if let Some(dir) = exe_dir {
-        dirs.push(dir);
+        paths.push(dir.join(LIB_FILE_NAME));
     }
     if !baked_dir.is_empty() {
-        dirs.push(PathBuf::from(baked_dir));
+        paths.push(Path::new(baked_dir).join(LIB_FILE_NAME));
     }
-    dirs
+    paths.push(PathBuf::from(LIB_FILE_NAME));
+    paths
 }
 
-pub(super) fn load_from(dirs: &[PathBuf]) -> Result<Library, String> {
+fn is_bare_name(path: &Path) -> bool {
+    path.parent().is_some_and(|p| p.as_os_str().is_empty())
+}
+
+pub(super) fn load_from(paths: &[PathBuf]) -> Result<Library, String> {
     let mut tried = String::new();
-    for dir in dirs {
-        let path = dir.join(LIB_FILE_NAME);
-        match platform::open(&path) {
-            Ok(handle) => return Ok(Library { handle, path }),
+    for path in paths {
+        match platform::open(path) {
+            Ok(handle) => {
+                return Ok(Library {
+                    handle,
+                    path: path.clone(),
+                });
+            }
+            Err(err) if is_bare_name(path) => tried.push_str(&format!(
+                "  {} (system library search): {err}\n",
+                path.display()
+            )),
             Err(err) => tried.push_str(&format!("  {}: {err}\n", path.display())),
         }
     }
@@ -73,8 +90,8 @@ pub(super) fn load_library() -> Library {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let dirs = candidate_dirs(env_dir, exe_dir, env!("HEGEL_C_BAKED_LIB_DIR"));
-    load_from(&dirs).unwrap_or_else(|err| panic!("{err}"))
+    let paths = candidate_paths(env_dir, exe_dir, env!("HEGEL_C_BAKED_LIB_DIR"));
+    load_from(&paths).unwrap_or_else(|err| panic!("{err}"))
 }
 
 pub(super) fn require_symbol(lib: &Library, name: &'static str) -> *mut c_void {

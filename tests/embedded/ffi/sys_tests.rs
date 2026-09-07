@@ -14,25 +14,35 @@ mod loading {
 
     #[test]
     fn an_env_dir_is_authoritative() {
-        let dirs = loader::candidate_dirs(
+        let paths = loader::candidate_paths(
             Some(PathBuf::from("/env")),
             Some(PathBuf::from("/exe")),
             "/baked",
         );
-        assert_eq!(dirs, vec![PathBuf::from("/env")]);
-    }
-
-    #[test]
-    fn without_an_env_dir_the_exe_dir_is_tried_before_the_baked_dir() {
-        let dirs = loader::candidate_dirs(None, Some(PathBuf::from("/exe")), "/baked");
-        assert_eq!(dirs, vec![PathBuf::from("/exe"), PathBuf::from("/baked")]);
-    }
-
-    #[test]
-    fn unavailable_candidates_are_skipped() {
         assert_eq!(
-            loader::candidate_dirs(None, None, ""),
-            Vec::<PathBuf>::new()
+            paths,
+            vec![PathBuf::from("/env").join(loader::LIB_FILE_NAME)]
+        );
+    }
+
+    #[test]
+    fn the_exe_dir_then_the_baked_dir_come_before_the_system_search() {
+        let paths = loader::candidate_paths(None, Some(PathBuf::from("/exe")), "/baked");
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/exe").join(loader::LIB_FILE_NAME),
+                PathBuf::from("/baked").join(loader::LIB_FILE_NAME),
+                PathBuf::from(loader::LIB_FILE_NAME),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_explicit_candidates_only_the_system_search_remains() {
+        assert_eq!(
+            loader::candidate_paths(None, None, ""),
+            vec![PathBuf::from(loader::LIB_FILE_NAME)]
         );
     }
 
@@ -41,12 +51,19 @@ mod loading {
         let empty = tempfile::tempdir().unwrap();
         let garbage = tempfile::tempdir().unwrap();
         std::fs::write(garbage.path().join(loader::LIB_FILE_NAME), b"not a library").unwrap();
-        let dirs = [empty.path().to_path_buf(), garbage.path().to_path_buf()];
-        let err = loader::load_from(&dirs).unwrap_err();
-        for dir in &dirs {
-            let path = dir.join(loader::LIB_FILE_NAME).display().to_string();
-            assert!(err.contains(&path), "{err}");
+        let paths = [
+            empty.path().join(loader::LIB_FILE_NAME),
+            garbage.path().join(loader::LIB_FILE_NAME),
+            PathBuf::from("hegel_no_such_engine_library"),
+        ];
+        let err = loader::load_from(&paths).unwrap_err();
+        for path in &paths {
+            assert!(err.contains(&path.display().to_string()), "{err}");
         }
+        assert!(
+            err.contains("hegel_no_such_engine_library (system library search)"),
+            "{err}"
+        );
         assert!(err.contains("HEGEL_C_LIB_DIR"), "{err}");
         assert!(err.contains("static-engine"), "{err}");
     }
@@ -55,8 +72,8 @@ mod loading {
     #[test]
     fn a_candidate_path_with_an_interior_nul_byte_is_reported() {
         use std::os::unix::ffi::OsStringExt;
-        let dir = PathBuf::from(std::ffi::OsString::from_vec(b"nul\0dir".to_vec()));
-        let err = loader::load_from(&[dir]).unwrap_err();
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"nul\0dir".to_vec()));
+        let err = loader::load_from(&[path]).unwrap_err();
         assert!(err.contains("NUL"), "{err}");
     }
 

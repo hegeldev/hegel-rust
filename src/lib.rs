@@ -237,10 +237,12 @@
 //! dependencies never appear in your cargo graph. `cargo test` and
 //! `cargo run` find the library automatically. A binary that runs anywhere
 //! else — a deployed `#[hegel::main]` fuzzer, say — needs the library
-//! shipped next to the executable, or its directory named in the
-//! `HEGEL_C_LIB_DIR` environment variable. That variable overrides the
-//! search everywhere, including in the build script, where a prebuilt
-//! library lets offline builds skip the compile.
+//! shipped next to the executable, its directory named in the
+//! `HEGEL_C_LIB_DIR` environment variable, or a copy installed where the
+//! platform's own library search looks (`LD_LIBRARY_PATH` and friends),
+//! which is tried last. `HEGEL_C_LIB_DIR` overrides the whole search,
+//! including in the build script, where a prebuilt library lets offline
+//! builds skip the compile.
 //!
 //! Alternatively, the `static-engine` feature links the engine into your
 //! binary as an ordinary Rust dependency. Binaries are then self-contained,
