@@ -113,6 +113,13 @@ pub enum Verbosity {
 ///
 /// In CI environments (detected automatically), the database is disabled
 /// and tests are derandomized by default.
+///
+/// Inside [Antithesis](https://antithesis.com/) (detected via
+/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
+/// by default: Antithesis owns reproduction, and its thread pausing would
+/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. The
+/// database can still be enabled explicitly with [`Settings::database`];
+/// health checks stay off.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -133,7 +140,8 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically.
+    /// Create settings with defaults. Detects CI environments automatically;
+    /// Antithesis detection happens in the engine.
     pub fn new() -> Self {
         Self::for_ci(is_in_ci())
     }
