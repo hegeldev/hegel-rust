@@ -129,6 +129,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             .settings(__hegel_settings)
             #reproduce_call
             .__database_key(format!("{}::{}", module_path!(), #test_name))
+            .__database_root(env!("CARGO_MANIFEST_DIR").to_string())
             .test_location(::hegel::TestLocation {
                 function: #test_name.to_string(),
                 file: file!().replace('\\', "/"),
@@ -165,3 +166,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/hegel_test_tests.rs"]
+mod tests;

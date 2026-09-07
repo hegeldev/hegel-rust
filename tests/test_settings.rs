@@ -118,6 +118,44 @@ fn test_hegel_database_env_disables_database() {
         .run();
 }
 
+/// Fixture for `test_default_database_anchors_at_manifest_dir`, run via
+/// self-exec with `CARGO_MANIFEST_DIR` pointing at a fresh tempdir and CI
+/// detection disabled: the default database must be created under that
+/// directory, not the process cwd.
+#[test]
+#[ignore = "fixture: run via exec::self_test"]
+fn default_database_anchor_fixture() {
+    run_failing_test_with_default_database("default_database_anchor_fixture");
+    let root = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    assert!(root.join(".hegel").join("examples").is_dir());
+    assert!(!std::path::Path::new(".hegel").exists());
+}
+
+#[test]
+fn test_default_database_anchors_at_manifest_dir() {
+    let manifest_dir = tempfile::TempDir::new().unwrap();
+    let mut cmd = self_test("default_database_anchor_fixture")
+        .env("CARGO_MANIFEST_DIR", manifest_dir.path().to_str().unwrap())
+        .env_remove("HEGEL_DATABASE");
+    for var in [
+        "CI",
+        "TF_BUILD",
+        "BUILDKITE",
+        "CIRCLECI",
+        "CIRRUS_CI",
+        "CODEBUILD_BUILD_ID",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "HEROKU_TEST_RUN_ID",
+        "TEAMCITY_VERSION",
+        "bamboo.buildKey",
+    ] {
+        cmd = cmd.env_remove(var);
+    }
+    cmd.run();
+    assert!(manifest_dir.path().join(".hegel").join("examples").is_dir());
+}
+
 #[test]
 fn test_settings_verbosity_debug() {
     let mut count = 0;

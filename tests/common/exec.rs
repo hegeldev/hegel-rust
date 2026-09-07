@@ -20,9 +20,8 @@ pub struct RunOutput {
 pub struct Cmd {
     command: Command,
     expect_failure: Option<String>,
-    /// A fresh scratch cwd for the spawned process, so runs that write a
-    /// default `.hegel/` database can't interfere with each other. Owned by
-    /// `tempfile`, removed on drop.
+    /// A fresh scratch cwd for the spawned process, so cwd-relative writes
+    /// can't interfere across runs. Owned by `tempfile`, removed on drop.
     scratch_cwd: Option<tempfile::TempDir>,
 }
 

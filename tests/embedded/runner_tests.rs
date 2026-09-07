@@ -120,6 +120,64 @@ fn test_env_override_database_empty_is_ignored() {
 }
 
 #[test]
+fn test_anchor_default_database_anchors_unset_at_root() {
+    use crate::runner::Database;
+    let s = Settings::for_ci(false).anchor_default_database(Some("/crate/root"));
+    let expected = std::path::Path::new("/crate/root")
+        .join(".hegel")
+        .join("examples")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(s.database, Database::Path(expected));
+}
+
+#[test]
+fn test_anchor_default_database_without_root_stays_unset() {
+    use crate::runner::Database;
+    let s = Settings::for_ci(false).anchor_default_database(None);
+    assert_eq!(s.database, Database::Unset);
+}
+
+#[test]
+fn test_anchor_default_database_keeps_explicit_path() {
+    use crate::runner::Database;
+    let s = Settings::for_ci(false)
+        .database(Some("relative/db".to_string()))
+        .anchor_default_database(Some("/crate/root"));
+    assert_eq!(s.database, Database::Path("relative/db".to_string()));
+}
+
+#[test]
+fn test_anchor_default_database_keeps_disabled() {
+    use crate::runner::Database;
+    let s = Settings::for_ci(false)
+        .database(None)
+        .anchor_default_database(Some("/crate/root"));
+    assert_eq!(s.database, Database::Disabled);
+}
+
+#[test]
+fn test_database_root_prefers_compile_time_root_over_env() {
+    let root = database_root(Some("/compile/time".to_string()), |_| {
+        Some("/from/env".to_string())
+    });
+    assert_eq!(root, Some("/compile/time".to_string()));
+}
+
+#[test]
+fn test_database_root_falls_back_to_manifest_dir_env() {
+    let root = database_root(None, |key| {
+        (key == "CARGO_MANIFEST_DIR").then(|| "/from/env".to_string())
+    });
+    assert_eq!(root, Some("/from/env".to_string()));
+}
+
+#[test]
+fn test_database_root_absent_everywhere_is_none() {
+    assert_eq!(database_root(None, |_| None), None);
+}
+
+#[test]
 fn test_env_override_statistics_enables_reporting() {
     let s = Settings::new()
         .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "1".to_string()));
@@ -149,7 +207,7 @@ fn test_is_in_ci_from_detects_presence_and_value_variables() {
 }
 
 #[test]
-fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
+fn test_native_engine_creates_default_dot_hegel_when_database_unset_and_no_manifest_dir() {
     use crate::Hegel;
     use crate::generators as gs;
     use crate::runner::Database;
@@ -189,10 +247,11 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     child
         .args([
             "--exact",
-            "runner::tests::test_native_engine_creates_default_dot_hegel_when_database_unset",
+            "runner::tests::test_native_engine_creates_default_dot_hegel_when_database_unset_and_no_manifest_dir",
         ])
         .current_dir(tmp.path())
-        .env("HEGEL_DOT_HEGEL_TEST_CHILD", "1");
+        .env("HEGEL_DOT_HEGEL_TEST_CHILD", "1")
+        .env_remove("CARGO_MANIFEST_DIR");
     for name in CI_VAR_NAMES {
         child.env_remove(name);
     }

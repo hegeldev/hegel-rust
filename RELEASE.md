@@ -1,0 +1,3 @@
+RELEASE_TYPE: patch
+
+This patch fixes where the default failure database is created ([#439](https://github.com/hegeldev/hegel-rust/issues/439)). It was the relative path `.hegel/examples`, resolved against the process's current directory at failure time, so a test that changed the current directory (or ran concurrently with one that did) could write `.hegel/` into a temporary directory that was then deleted, losing the stored failure. The default is now anchored at the crate root, taken from `CARGO_MANIFEST_DIR` at the test's compile time or from the environment at runtime. Explicitly configured database paths are unchanged.

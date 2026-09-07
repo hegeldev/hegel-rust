@@ -1,7 +1,7 @@
 //! Regression tests: every integration-test binary should be chdir'd into a
-//! fresh per-process tempdir, so the hegel library (which creates `.hegel/`
-//! in cwd) doesn't leak state across concurrent or successive `cargo test`
-//! runs of this repo.
+//! fresh per-process tempdir, so the hegel library (which resolves relative
+//! database paths against cwd) doesn't leak state across concurrent or
+//! successive `cargo test` runs of this repo.
 //!
 //! The setup lives in `tests/common/mod.rs` behind a `#[ctor::ctor]`; these
 //! tests just assert its observable effects.

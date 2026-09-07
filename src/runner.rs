@@ -224,6 +224,14 @@ impl Settings {
 
     /// Set the database path for storing failing examples, or `None` to disable.
     ///
+    /// When no path is configured here or via `HEGEL_DATABASE`, the default
+    /// is `.hegel/examples` under the crate root: `CARGO_MANIFEST_DIR` as
+    /// captured at compile time by `#[hegel::test]` / `#[hegel::main]`, or
+    /// read from the environment otherwise. Without either, the path is
+    /// resolved against the current directory at failure time. An explicitly
+    /// configured relative path is always resolved against the current
+    /// directory.
+    ///
     /// The `HEGEL_DATABASE` environment variable, when set and non-empty,
     /// overrides this value at runtime: the literal value `disabled` turns
     /// the database off (matching the `--database` CLI flag's keyword), and
@@ -339,6 +347,23 @@ impl Settings {
         self
     }
 
+    /// Resolve an unset database to `.hegel/examples` under `root`. A
+    /// database that was configured explicitly (or disabled) is untouched,
+    /// as is an unset one when no root is known — the engine then falls
+    /// back to `.hegel/examples` relative to the current directory.
+    fn anchor_default_database(mut self, root: Option<&str>) -> Self {
+        if let (Database::Unset, Some(root)) = (&self.database, root) {
+            self.database = Database::Path(
+                std::path::Path::new(root)
+                    .join(".hegel")
+                    .join("examples")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        self
+    }
+
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
@@ -405,10 +430,18 @@ fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     })
 }
 
+/// The crate root to anchor the default database at: the compile-time value
+/// the macro expansions pass, or the process's `CARGO_MANIFEST_DIR` when
+/// absent (`None` outside cargo).
+fn database_root(explicit: Option<String>, env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    explicit.or_else(|| env("CARGO_MANIFEST_DIR"))
+}
+
 #[doc(hidden)]
 pub struct Hegel<F> {
     test_fn: F,
     database_key: Option<String>,
+    database_root: Option<String>,
     test_location: Option<TestLocation>,
     settings: Settings,
     reproduce_failure: Option<String>,
@@ -424,6 +457,7 @@ where
         Self {
             test_fn,
             database_key: None,
+            database_root: None,
             settings: Settings::new(),
             test_location: None,
             reproduce_failure: None,
@@ -440,6 +474,12 @@ where
     #[doc(hidden)]
     pub fn __database_key(mut self, key: String) -> Self {
         self.database_key = Some(key);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn __database_root(mut self, root: String) -> Self {
+        self.database_root = Some(root);
         self
     }
 
@@ -482,7 +522,11 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        let mut settings = self.settings.with_env_overrides();
+        let root = database_root(self.database_root, env_var);
+        let mut settings = self
+            .settings
+            .with_env_overrides()
+            .anchor_default_database(root.as_deref());
         if self.single_test_case {
             settings.test_cases = 1;
         }

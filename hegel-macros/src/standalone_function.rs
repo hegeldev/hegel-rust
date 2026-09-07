@@ -97,6 +97,7 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
             ::hegel::Hegel::new(move |#tc_pat: #tc_ty| #body)
             .settings(__hegel_settings)
             .__database_key(format!("{}::{}", module_path!(), #fn_name))
+            .__database_root(env!("CARGO_MANIFEST_DIR").to_string())
             .test_location(::hegel::TestLocation {
                 function: #fn_name.to_string(),
                 file: file!().replace('\\', "/"),
@@ -117,3 +118,7 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
         #func
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/embedded/standalone_function_tests.rs"]
+mod tests;
