@@ -131,7 +131,8 @@ pub enum Verbosity {
 ///
 /// - `development`: the base defaults, unchanged. What local runs get.
 /// - `ci`: [`derandomize`](Settings::derandomize) on, the database
-///   disabled, and [`print_blob`](Settings::print_blob) on.
+///   disabled, [`HealthCheck::TooSlow`] suppressed, and
+///   [`print_blob`](Settings::print_blob) on.
 /// - `antithesis`: the database disabled.
 ///
 /// [`Settings::new`] resolves `selected`. [`Settings::from_profile`]

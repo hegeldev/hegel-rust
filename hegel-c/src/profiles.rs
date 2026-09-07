@@ -24,8 +24,8 @@
 //! `hegel.toml` or replaced by registration like any other:
 //!
 //! - `development`: an empty delta, the environment profile of local runs.
-//! - `ci`: `derandomize = true`, the database disabled, and
-//!   `print_blob = true`.
+//! - `ci`: `derandomize = true`, the database disabled, the `too_slow`
+//!   health check suppressed, and `print_blob = true`.
 //! - `antithesis`: the database disabled. Health checks and the urandom
 //!   backend are driven by Antithesis *detection* rather than by this
 //!   profile, so resolving a different profile inside Antithesis does not
@@ -255,6 +255,7 @@ static SHIPPED: Lazy<[(&'static str, ProfileDelta); 3]> = Lazy::new(|| {
             ProfileDelta {
                 derandomize: Some(true),
                 database: Some(Database::Disabled),
+                suppress_health_check: Some(alloc::vec![HealthCheck::TooSlow]),
                 print_blob: Some(true),
                 ..ProfileDelta::default()
             },

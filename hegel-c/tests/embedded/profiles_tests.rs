@@ -85,6 +85,13 @@ fn the_ci_profile_derandomizes_disables_the_database_and_prints_blobs() {
     assert_eq!(s.database, Database::Disabled);
     assert!(s.print_blob);
     assert_eq!(s.test_cases, 100);
+    assert_eq!(s.suppress_health_check, vec![HealthCheck::TooSlow]);
+}
+
+#[test]
+fn a_config_delta_re_enables_the_too_slow_check_on_ci() {
+    let config = config_of("[profiles.ci]\nsuppress_health_check = []\n");
+    let s = resolve_named("ci", &config);
     assert!(s.suppress_health_check.is_empty());
 }
 

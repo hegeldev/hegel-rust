@@ -745,7 +745,8 @@ fn cstring_lossy(s: &str) -> CString {
 ///
 /// Three ordinary profiles ship with libhegel: `development` (the base
 /// defaults, unchanged — what local runs get), `ci` (derandomization on,
-/// database disabled, reproduction lines printed), and `antithesis`
+/// database disabled, the `too_slow` health check suppressed, reproduction
+/// lines printed), and `antithesis`
 /// (database disabled). A custom profile without an explicit `extends`
 /// extends `selected`, skipping any candidate already in its chain, so it
 /// sits on `ci` when resolved on a CI server and on `development` locally.

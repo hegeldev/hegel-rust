@@ -2211,6 +2211,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     let settings = Settings::new()
         .database(Some(path))
         .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
         .verbosity(Verbosity::Quiet);
     let result = run_main_sync(
         &settings,
