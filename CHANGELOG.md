@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.40.3 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.3.
+
 ## 0.40.2 - 2026-09-07
 
 This release updates the `hegeltest-c` dependency to 0.37.2.

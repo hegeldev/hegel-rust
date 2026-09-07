@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.3 - 2026-09-07
+
+This patch bounds zlib decompression when decoding a failure blob. A corrupt or hostile `reproduce_failure` blob could previously force an arbitrarily large allocation. Decoding now rejects payloads that inflate past 16 MiB, and the encoder falls back to the uncompressed encoding for anything that large, so every blob it emits still decodes.
+
 ## 0.37.2 - 2026-09-07
 
 This patch fixes a crash when shrinking a failure in a flaky test. When re-executing the test produced a shorter run than the failure being shrunk, a deletion pass could panic with an index out of bounds. That shrink attempt is now rejected and shrinking continues.
