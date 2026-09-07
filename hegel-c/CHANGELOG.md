@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.5 - 2026-09-07
+
+This patch improves how the failure database is maintained. New entries are saved before the entries they supersede are removed, so interrupting a run mid-shrink can no longer lose a failure. A shrink no longer deposits its chain of intermediate improvements into the secondary corpus, and the secondary corpus is capped at 50 entries. An entry whose bytes still serve as another failure's latest save is never deleted.
+
 ## 0.37.4 - 2026-09-07
 
 This patch fixes a missed flakiness detection during targeting. A test whose data generation first changed shape during the targeted-search phase was silently ignored and the run carried on. It now fails the run with the usual non-determinism diagnostic, matching every other phase.
