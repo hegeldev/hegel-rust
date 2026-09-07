@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.36.4 - 2026-09-07
+
+This patch changes the defaults `hegel_settings_new` picks when running inside Antithesis. The failure database is disabled and every health check is skipped. The notice that a concurrent state machine has made the run nondeterministic is also no longer printed inside Antithesis.
+
 ## 0.36.3 - 2026-09-04
 
 This patch adds a new shrink pass that is able to delete regions of the test case where it would previously have got stuck.

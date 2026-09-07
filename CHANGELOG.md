@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.5 - 2026-09-07
+
+This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.
+
 ## 0.39.4 - 2026-09-04
 
 This patch improves shrinking for collections whose elements each cost
