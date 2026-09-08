@@ -50,7 +50,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_new_collection(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_collection: *mut *mut HegelCollection) -> hegel_result_t;
             fn hegel_new_pool(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_pool: *mut *mut HegelPool) -> hegel_result_t;
             fn hegel_new_recursion(ctx: *mut HegelContext, tc: *mut HegelTestCase, max_depth: u64, max_leaves: u64, out_recursion: *mut *mut HegelRecursion) -> hegel_result_t;
-            fn hegel_new_state_machine(ctx: *mut HegelContext, tc: *mut HegelTestCase, rule_names: *const *const c_char, rule_groups: *const i64, num_rules: usize, invariant_names: *const *const c_char, num_invariants: usize, min_concurrency: i64, max_concurrency: i64, out_state_machine: *mut *mut HegelStateMachine, out_concurrency: *mut i64) -> hegel_result_t;
+            fn hegel_new_state_machine(ctx: *mut HegelContext, tc: *mut HegelTestCase, rule_names: *const *const c_char, rule_groups: *const i64, num_rules: usize, invariant_names: *const *const c_char, invariant_always_check: *const bool, num_invariants: usize, min_concurrency: i64, max_concurrency: i64, out_state_machine: *mut *mut HegelStateMachine, out_concurrency: *mut i64) -> hegel_result_t;
             fn hegel_next_test_case(ctx: *mut HegelContext, run: *mut HegelRun, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_pool_add(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, out_variable_id: *mut i64) -> hegel_result_t;
             fn hegel_pool_free(ctx: *mut HegelContext, pool: *mut HegelPool) -> hegel_result_t;
