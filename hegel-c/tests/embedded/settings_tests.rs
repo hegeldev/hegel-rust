@@ -136,3 +136,13 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
     let s = Settings::new().output(Output::callback(|_| {}));
     assert_eq!(format!("{:?}", s.output), "Output(callback)");
 }
+
+#[test]
+fn max_choices_defaults_to_the_buffer_size_and_none_removes_the_bound() {
+    let s = Settings::new();
+    assert_eq!(s.max_choices, crate::native::core::BUFFER_SIZE);
+    let s = s.max_choices(Some(100));
+    assert_eq!(s.max_choices, 100);
+    let s = s.max_choices(None);
+    assert_eq!(s.max_choices, usize::MAX);
+}

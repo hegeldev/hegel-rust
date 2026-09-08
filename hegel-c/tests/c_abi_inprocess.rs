@@ -10,7 +10,9 @@
 
 mod common;
 
-use common::{last_error, make_settings, next_case, ok, start, start_with_output};
+use common::{
+    last_error, make_settings, make_settings_no_db, next_case, ok, start, start_with_output,
+};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelCollection, HegelContext, HegelFailure, HegelPool,
@@ -2672,5 +2674,67 @@ fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
             ok(hegel_settings_free(ctx, s));
             ok(hegel_context_free(ctx));
         }
+    }
+}
+
+/// `hegel_settings_set_max_choices`: `0` lifts the per-case choice bound, so
+/// a case may draw far past the default 8192 choices and still be valid; a
+/// positive value bounds the case at exactly that many draws, the next one
+/// returning `HEGEL_E_STOP_TEST`.
+#[test]
+fn max_choices_setting_bounds_or_unbounds_a_test_case() {
+    let ctx = hegel_c::hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 0));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+        let mut bv = false;
+        for _ in 0..20_000 {
+            ok(hegel_c::hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut bv,
+            ));
+        }
+        ok(hegel_c::hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_c::hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_c::hegel_test_case_free(ctx, tc));
+        assert!(next_case(ctx, run).is_null());
+        let r = result(ctx, run);
+        assert!(status_of(ctx, r) == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_PASSED);
+        ok(hegel_c::hegel_run_result_free(ctx, r));
+        ok(hegel_c::hegel_run_free(ctx, run));
+        ok(hegel_c::hegel_settings_free(ctx, s));
+
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 100));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+        for _ in 0..100 {
+            ok(hegel_c::hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut bv,
+            ));
+        }
+        assert_eq!(
+            hegel_c::hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut bv),
+            HEGEL_E_STOP_TEST
+        );
+        ok(hegel_c::hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_c::hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
+            ptr::null(),
+        ));
+        ok(hegel_c::hegel_test_case_free(ctx, tc));
+        ok(hegel_c::hegel_run_free(ctx, run));
+        ok(hegel_c::hegel_settings_free(ctx, s));
+        ok(hegel_c::hegel_context_free(ctx));
     }
 }

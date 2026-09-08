@@ -147,6 +147,9 @@ impl SettingsHandle {
                     raw,
                     settings.stateful_step_count,
                 ));
+                if settings.unlimited_choices {
+                    require_ok(hegel_c::hegel_settings_set_max_choices(ctx, raw, 0));
+                }
                 require_ok(hegel_c::hegel_settings_set_verbosity(
                     ctx,
                     raw,

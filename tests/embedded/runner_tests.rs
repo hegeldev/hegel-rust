@@ -255,20 +255,28 @@ fn hegel_run_skips_when_generate_phase_disabled() {
 }
 
 #[test]
-fn test_settings_for_single_test_case_suppresses_too_slow() {
+fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
     let s = Settings::new().test_cases(50).for_single_test_case();
     assert_eq!(s.test_cases, 1);
-    assert_eq!(s.suppress_health_check, vec![HealthCheck::TooSlow]);
+    assert!(s.unlimited_choices);
+    assert_eq!(
+        s.suppress_health_check,
+        vec![HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge]
+    );
 }
 
 #[test]
 fn test_settings_for_single_test_case_keeps_existing_suppressions() {
     let s = Settings::new()
-        .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch])
+        .suppress_health_check([HealthCheck::TestCasesTooLarge, HealthCheck::FilterTooMuch])
         .for_single_test_case();
     assert_eq!(
         s.suppress_health_check,
-        vec![HealthCheck::TooSlow, HealthCheck::FilterTooMuch]
+        vec![
+            HealthCheck::TestCasesTooLarge,
+            HealthCheck::FilterTooMuch,
+            HealthCheck::TooSlow
+        ]
     );
 }
 

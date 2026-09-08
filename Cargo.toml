@@ -63,6 +63,10 @@ name = "fixture_main_simple"
 path = "tests/fixtures/main_simple.rs"
 
 [[bin]]
+name = "fixture_main_many_draws"
+path = "tests/fixtures/main_many_draws.rs"
+
+[[bin]]
 name = "fixture_main_failing"
 path = "tests/fixtures/main_failing.rs"
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
 use crate::native::core::choices::BooleanChoice;
 use crate::native::rng::EngineRng;

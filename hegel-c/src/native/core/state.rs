@@ -23,8 +23,8 @@ use super::choices::{
 };
 use super::float_index::index_to_float;
 use super::{
-    BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
-    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+    BOUNDARY_PROBABILITY, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE, DIRICHLET_ALPHA_ENDPOINT,
+    DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
 };
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
@@ -1608,14 +1608,19 @@ pub struct NativeTestCase {
 impl NativeTestCase {
     #[cfg(test)]
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
+        Self::for_choices_and_template(&[], None, None, crate::native::core::BUFFER_SIZE, None)
+            .with_random(rng)
     }
 
     /// Like [`Self::new_random`], but generating from the given swarm
     /// parameters rather than drawing fresh ones — used by the exploration
     /// loop so the novel-prefix walk and the test case share one distribution.
-    pub fn new_random_with_params(rng: EngineRng, params: GenerationParameters) -> Self {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None)
+    pub fn new_random_with_params(
+        rng: EngineRng,
+        params: GenerationParameters,
+        max_size: usize,
+    ) -> Self {
+        Self::for_choices_and_template(&[], None, None, max_size, None)
             .with_random_and_params(rng, params)
     }
 

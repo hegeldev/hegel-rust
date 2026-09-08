@@ -922,6 +922,20 @@ hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `n`: Maximum number of choices a single test case may make before the
+   engine concludes it as an overrun, or `0` for no limit. The default is
+   8192. The bound keeps generated inputs small enough to shrink and
+   persist; a run that does neither (one long stateful test case in a
+   standalone binary) can pass `0`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_max_choices(hegel_context_t *ctx,
+                                              hegel_settings_t *s,
+                                              uint64_t n);
+
+/*
+ Parameters:
  `v`: Controls the output verbosity. See `hegel_verbosity_t`.
 
  Returns `HEGEL_OK`.
