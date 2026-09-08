@@ -137,7 +137,7 @@ fn generate_novel_prefix_terminates_when_subtree_exhausted() {
 
 /// The novel-prefix walk must sample boolean proposals from the recorded
 /// draw's `p`, not a fair coin: while the common branch is unexhausted, a
-/// rare branch like the `p = 2^-16` stop side of the stateful round
+/// rare branch like the `p = 2^-32` stop side of the stateful round
 /// decision must stay rare.
 #[test]
 fn novel_prefix_respects_boolean_probability() {
@@ -146,7 +146,13 @@ fn novel_prefix_respects_boolean_probability() {
         record_tree(
             &mut root,
             &[
-                ChoiceNode::boolean(BooleanChoice { p: 1.0 / 65536.0 }, false, false),
+                ChoiceNode::boolean(
+                    BooleanChoice {
+                        p: 1.0 / 4_294_967_296.0,
+                    },
+                    false,
+                    false,
+                ),
                 int_node(0, 1_000_000, x),
             ],
             Status::Valid,
@@ -164,7 +170,7 @@ fn novel_prefix_respects_boolean_probability() {
     }
     assert!(
         rare_first <= 5,
-        "the p = 2^-16 branch was proposed {rare_first}/200 times; the \
+        "the p = 2^-32 branch was proposed {rare_first}/200 times; the \
          novel-prefix walk should sample from the recorded p, not 50/50"
     );
 }

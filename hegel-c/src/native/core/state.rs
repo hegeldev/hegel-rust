@@ -887,9 +887,9 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
 }
 
 /// Full-precision weighted boolean: `true` with probability `p`, faithful to
-/// probabilities within 2^-16 of 0 or 1, beyond [`weighted_boolean_sample`]'s
-/// 1/256 quantization (which would turn e.g. the stateful continue signal's
-/// `p = 1 - 2^-16` into `1 - 1/256`).
+/// probabilities far closer to 0 or 1 than [`weighted_boolean_sample`]'s
+/// 1/256 quantization allows (which would turn e.g. the stateful continue
+/// signal's `p = 1 - 2^-32` into `1 - 1/256`).
 ///
 /// Delegates to [`RngExt::random_bool`], which scales `p` to a 64-bit
 /// threshold and compares it against a fresh `u64` — spending 8 bytes of
@@ -2370,7 +2370,7 @@ impl NativeTestCase {
     /// Like [`Self::weighted`], but samples with the full-precision
     /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
     /// sampler's 1/256 quantization (e.g. the stateful continue signal at
-    /// `p = 1 - 2^-16`) are honored. Routed here from `generate_boolean`.
+    /// `p = 1 - 2^-32`) are honored. Routed here from `generate_boolean`.
     pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         self.weighted_with(p, forced, weighted_boolean_sample_precise)
     }

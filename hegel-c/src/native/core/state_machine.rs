@@ -13,11 +13,14 @@ use crate::native::draws;
 
 /// Probability that the per-round continue decision in
 /// [`NativeStateMachine::next_group`] keeps a stateful test case running,
-/// when the engine is free to choose (1 - 2^-16). Drawn as a *continue*
+/// when the engine is free to choose (1 - 2^-32). Drawn as a *continue*
 /// probability so that the simplest boolean stops the machine: the
 /// simplest test case runs a single round, and the shrinker truncates the
 /// round sequence at any boundary by simplifying that boundary's draw.
-const P_CONTINUE: f64 = 1.0 - 1.0 / 65536.0;
+/// The draw exists for that truncation, not to control length — the step
+/// count does that — so the stop side is made rare enough (one round in
+/// four billion) never to end a case that a large step count allows.
+const P_CONTINUE: f64 = 1.0 - 1.0 / 4_294_967_296.0;
 
 /// Multiplier bounding attempts against successful work: on rounds
 /// (relative to `stateful_step_count`) so a sequential machine whose rules
