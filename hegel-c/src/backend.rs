@@ -187,7 +187,9 @@ pub trait DataSource: Send + Sync {
 
     /// Register a state machine for engine-owned (swarm) rule selection:
     /// rules (each assigned to a concurrency group via `rule_groups`,
-    /// parallel to `rule_names`), invariants, and concurrency bounds.
+    /// parallel to `rule_names`), invariants (each flagged always-check or
+    /// sampled via `invariant_always_check`, parallel to
+    /// `invariant_names`), and concurrency bounds.
     /// Groups are identified by arbitrary `i64` ids: the machine has one
     /// group per distinct value of `rule_groups`. Draws the machine's
     /// concurrency level in
@@ -200,12 +202,14 @@ pub trait DataSource: Send + Sync {
     /// [`Self::state_machine_rule_rejected`]; any stream of the same family
     /// may drive it. Errors with `InvalidArgument` if `rule_names` is
     /// empty, `rule_groups` is not parallel to `rule_names`,
+    /// `invariant_always_check` is not parallel to `invariant_names`,
     /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
+        invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<NativeStateMachine, DataSourceError>;
@@ -244,11 +248,13 @@ pub trait DataSource: Send + Sync {
     ) -> Result<(), DataSourceError>;
 
     /// Decide whether the caller should run invariant `invariant_index` at
-    /// the current join point: a recorded boolean draw that is `true` with
-    /// probability `1 / stateful_step_count`, so each invariant's expected
-    /// number of sampled runs over a full-length test case is one. The
-    /// caller runs its guaranteed checks — the machine's initial state and
-    /// its final state after the last round — without consulting this.
+    /// the current join point: `true` without consuming entropy for an
+    /// invariant registered always-check, otherwise a recorded boolean draw
+    /// that is `true` with probability `1 / stateful_step_count`, so each
+    /// sampled invariant's expected number of sampled runs over a
+    /// full-length test case is one. The caller runs its guaranteed checks
+    /// — the machine's initial state and its final state after the last
+    /// round — without consulting this.
     /// Errors with `InvalidArgument` when `invariant_index` is outside the
     /// machine's registered invariants.
     fn state_machine_should_check_invariant(
@@ -364,6 +370,10 @@ pub enum RunError {
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
     NonDeterministic(String),
+    /// The test's assumptions cannot be satisfied: it rejected its input
+    /// before drawing any data, so every run repeats the same rejection.
+    /// Mirrors Hypothesis's `Unsatisfiable`.
+    Unsatisfiable(String),
     /// The client misused Hegel at run scope — violated the driving
     /// contract (e.g. never reported a test case's outcome before the run
     /// resumed) or launched the process with an invalid configuration. Not
@@ -387,6 +397,7 @@ impl core::fmt::Display for RunError {
             RunError::HealthCheck(msg)
             | RunError::Flaky(msg)
             | RunError::NonDeterministic(msg)
+            | RunError::Unsatisfiable(msg)
             | RunError::UsageError(msg) => {
                 write!(f, "{}", msg)
             }

@@ -392,3 +392,46 @@ fn run_trial_records_interesting_result_into_ctx() {
         TestCaseResult::Valid
     });
 }
+
+/// Drives `run_trial`'s mismatch propagation: the body's first draw changes
+/// kind between executions, so the probe after the initial replay contradicts
+/// the data tree and the climb must abort with `RunError::NonDeterministic`
+/// rather than continue against a poisoned tree.
+#[test]
+fn run_trial_surfaces_a_tree_mismatch_as_nondeterministic() {
+    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+    let exchange = crate::exchange::CaseExchange::new();
+    let mut calls = 0u32;
+    let fut = async {
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
+        engine.targeting.record(
+            &[ChoiceValue::Integer(BigInt::from(2))],
+            &HashMap::from_iter([("".to_string(), 2.0)]),
+        );
+        let mut optimiser = Optimiser {
+            engine: &mut engine,
+            max_valid: 10_000,
+            max_calls: 100_000,
+        };
+        match optimiser.optimise_targets().await {
+            Err(RunError::NonDeterministic(msg)) => {
+                assert!(msg.contains("non-deterministic"));
+            }
+            other => panic!("expected NonDeterministic, got {other:?}"),
+        }
+    };
+    crate::exchange::drive(&exchange, fut, |ds| {
+        calls += 1;
+        let result = (|| -> Result<TestCaseResult, ()> {
+            if calls == 1 {
+                let n = draw_int(&*ds, 0, 20)?;
+                ds.target_observation(n as f64, "").unwrap();
+            } else {
+                draw_bool(&*ds)?;
+            }
+            Ok(TestCaseResult::Valid)
+        })()
+        .unwrap_or(TestCaseResult::Overrun);
+        ds.mark_complete(&result);
+    });
+}

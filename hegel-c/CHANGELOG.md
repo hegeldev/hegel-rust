@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.37.5 - 2026-09-07
+
+This patch improves how the failure database is maintained. New entries are saved before the entries they supersede are removed, so interrupting a run mid-shrink can no longer lose a failure. A shrink no longer deposits its chain of intermediate improvements into the secondary corpus, and the secondary corpus is capped at 50 entries. An entry whose bytes still serve as another failure's latest save is never deleted.
+
+## 0.37.4 - 2026-09-07
+
+This patch fixes a missed flakiness detection during targeting. A test whose data generation first changed shape during the targeted-search phase was silently ignored and the run carried on. It now fails the run with the usual non-determinism diagnostic, matching every other phase.
+
+## 0.37.3 - 2026-09-07
+
+This patch bounds zlib decompression when decoding a failure blob. A corrupt or hostile `reproduce_failure` blob could previously force an arbitrarily large allocation. Decoding now rejects payloads that inflate past 16 MiB, and the encoder falls back to the uncompressed encoding for anything that large, so every blob it emits still decodes.
+
+## 0.37.2 - 2026-09-07
+
+This patch fixes a crash when shrinking a failure in a flaky test. When re-executing the test produced a shorter run than the failure being shrunk, a deletion pass could panic with an index out of bounds. That shrink attempt is now rejected and shrinking continues.
+
+## 0.37.1 - 2026-09-07
+
+This patch suppresses `TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Calls to `hegel_settings_set_suppress_health_check` still replace the default.
+
+## 0.37.0 - 2026-09-07
+
+This release changes `hegel_new_state_machine`: it takes a new
+`invariant_always_check` argument, an array of per-invariant flags parallel to
+`invariant_names` (NULL for all false).
+`hegel_state_machine_should_check_invariant` answers true unconditionally for
+a flagged invariant, consuming no entropy, and samples the rest as before.
+
+## 0.36.6 - 2026-09-07
+
+A test that rejects its input via `assume()` without drawing any data can never produce a valid case. The engine now stops after one call and fails the run with `Unsatisfiable`, instead of passing. Over the C ABI this surfaces as an ordinary error result; no signatures or status values change.
+
 ## 0.36.5 - 2026-09-07
 
 GitHub releases now include static `libhegel` libraries and `hegel.h` alongside

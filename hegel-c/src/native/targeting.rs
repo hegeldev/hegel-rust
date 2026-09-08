@@ -130,7 +130,10 @@ impl Optimiser<'_, '_> {
             return Ok(None);
         }
         let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE)?;
-        let (run, _mismatch) = self.engine.test_function(ntc).await?;
+        let (run, mismatch) = self.engine.test_function(ntc).await?;
+        if let Some(msg) = mismatch {
+            return Err(RunError::NonDeterministic(msg));
+        }
         Ok(Some(run))
     }
 

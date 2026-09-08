@@ -1,0 +1,5 @@
+error: #[invariant(...)] requires `always_run`
+  --> tests/ui/concurrent_state_machine_empty_invariant_args.rs:11:5
+   |
+11 |     #[invariant()]
+   |     ^^^^^^^^^^^^^^

@@ -99,6 +99,11 @@ impl<'a> Shrinker<'a> {
     /// regions of exactly the realised deficit are tried — the aligned
     /// candidates — keeping each probe linear in the sequence length so a
     /// large binding can't exhaust the stall window on a single probe.
+    ///
+    /// An accepted candidate mid-pass can leave `current_nodes` shorter than
+    /// `idx` — the adopted nodes are the *realised* run, which under a
+    /// flaky body can be shorter than the proposal — so a stale `idx`
+    /// answers `Ok(false)` rather than being assumed in bounds.
     pub(super) async fn try_replace_with_deletion(
         &mut self,
         idx: usize,
@@ -113,7 +118,7 @@ impl<'a> Shrinker<'a> {
         }
 
         let mut attempt = self.current_nodes.clone();
-        let Some(replaced) = attempt[idx].with_value(&value) else {
+        let Some(replaced) = attempt.get(idx).and_then(|node| node.with_value(&value)) else {
             return Ok(false);
         };
         attempt[idx] = replaced;
