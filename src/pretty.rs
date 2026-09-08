@@ -78,12 +78,10 @@
 //!   the output once: a type whose `Debug` is opaque (a tagged pointer, a
 //!   bit-packed struct) produces a report you cannot decode, and
 //!   `print_as_call` or `print_with` is the fix.
-//! - [`print_as_call`](crate::generators::Mapped::print_as_call) /
-//!   [`print_as_input`](crate::generators::Mapped::print_as_input) — on a
+//! - [`print_as_call`](crate::generators::Mapped::print_as_call) — on a
 //!   `map` whose input draw is printable, print the input instead of the
 //!   output: `.map(KeyData::from_ffi).print_as_call("KeyData::from_ffi")`
-//!   reports the pastable `KeyData::from_ffi(3)`, and `print_as_input()`
-//!   the bare input marked `// pre-map input`.
+//!   reports the pastable `KeyData::from_ffi(3)`.
 //! - [`print_with`](crate::Generator::print_with) — print a custom
 //!   representation from a closure taking the value and the printer:
 //!   `.print_with(|value, printer| printer.text(&format!("make({value:?})")))`.
@@ -850,7 +848,7 @@ fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
     label = "`{Self}` does not implement `PrettyPrintable`",
     note = "for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
     note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation",
-    note = "on a `map` whose input draw is printable, `.print_as_call(\"path::to::function\")` prints the mapped expression and `.print_as_input()` just the input",
+    note = "on a `map` whose input draw is printable, `.print_as_call(\"path::to::function\")` prints the mapped expression",
     note = "or draw without reporting the value via `tc.draw_silent(..)`",
     note = "the `hegel::pretty` module docs walk through the whole printing system"
 )]

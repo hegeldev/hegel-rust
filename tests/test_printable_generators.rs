@@ -391,20 +391,6 @@ fn mapped_print_as_call_prints_the_mapped_expression() {
 }
 
 #[test]
-fn mapped_print_as_input_prints_the_marked_input() {
-    let lines = failing_lines(|tc| {
-        tc.draw(
-            gs::integers::<u64>()
-                .min_value(3)
-                .map(KeyData::from_ffi)
-                .print_as_input(),
-        );
-        panic!("boom");
-    });
-    assert_eq!(lines, vec!["let draw_1 = 3;  // pre-map input"]);
-}
-
-#[test]
 fn print_as_call_composes_inside_structural_combinators() {
     let lines = failing_lines(|tc| {
         tc.draw(
