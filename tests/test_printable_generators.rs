@@ -368,6 +368,71 @@ fn print_adapters_control_the_representation() {
     assert_eq!(lines, vec!["let draw_1 = false;"]);
 }
 
+struct KeyData(u64);
+
+impl KeyData {
+    fn from_ffi(value: u64) -> KeyData {
+        KeyData(value)
+    }
+}
+
+#[test]
+fn mapped_print_as_call_prints_the_mapped_expression() {
+    let lines = failing_lines(|tc| {
+        let key = tc.draw(
+            gs::integers::<u64>()
+                .min_value(3)
+                .map(KeyData::from_ffi)
+                .print_as_call("KeyData::from_ffi"),
+        );
+        assert!(key.0 < 3, "boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = KeyData::from_ffi(3);"]);
+}
+
+#[test]
+fn print_as_call_composes_inside_structural_combinators() {
+    let lines = failing_lines(|tc| {
+        tc.draw(
+            gs::vecs(
+                gs::integers::<u64>()
+                    .map(KeyData::from_ffi)
+                    .print_as_call("KeyData::from_ffi"),
+            )
+            .min_size(2)
+            .max_size(2),
+        );
+        panic!("boom");
+    });
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = vec![KeyData::from_ffi(0), KeyData::from_ffi(0)];"]
+    );
+}
+
+#[test]
+fn print_as_call_wraps_wide_inputs_inside_the_call() {
+    let lines = failing_lines(|tc| {
+        let element = "aaaaaaaaaaaaaaaaaaaa".to_string();
+        tc.draw(
+            gs::vecs(gs::just(element))
+                .min_size(3)
+                .max_size(3)
+                .map(|parts: Vec<String>| parts.concat())
+                .print_as_call("concat_all"),
+        );
+        panic!("boom");
+    });
+    assert_eq!(
+        lines,
+        vec![
+            "let draw_1 = concat_all(vec![\"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string()]);",
+        ]
+    );
+}
+
 #[test]
 fn boxed_generators_of_printable_values_print_by_value() {
     let lines = failing_lines(|tc| {

@@ -14,7 +14,7 @@
 
 mod common;
 
-use hegel::generators as gs;
+use hegel::generators::{self as gs, Generator};
 use hegel::{Hegel, Settings};
 use std::time::Duration;
 
@@ -95,6 +95,14 @@ fn integer_max_below_min_is_a_clean_usage_error() {
         let _: i32 = tc.draw(gs::integers::<i32>().min_value(5).max_value(3));
     });
     assert_clean_usage_error(&msg, "Cannot have max_value < min_value");
+}
+
+#[test]
+fn print_as_call_empty_function_name_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        tc.draw(gs::integers::<u64>().map(|n| n + 1).print_as_call(""));
+    });
+    assert_clean_usage_error(&msg, "non-empty function name");
 }
 
 #[test]
