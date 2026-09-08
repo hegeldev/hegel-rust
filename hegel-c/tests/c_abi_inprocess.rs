@@ -147,6 +147,10 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
+            hegel_c::hegel_settings_set_max_choices(ctx, ptr::null_mut(), 0),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
             hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
