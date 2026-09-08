@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.41.1 - 2026-09-08
+
+This patch adds `.print_as_call("path::to::function")` on mapped generators, for when a `map` produces a foreign type whose `Debug` output is not pastable Rust (`let kd = 0v3;`) but the drawn input is. It prints the mapped expression, and requires the map's input generator to be printable ([#446](https://github.com/hegeldev/hegel-rust/issues/446)).
+
+```rust
+let keys = gs::integers::<u64>()
+    .map(KeyData::from_ffi)
+    .print_as_call("KeyData::from_ffi");
+```
+
+A failing draw from `keys` reports `let key = KeyData::from_ffi(3);`.
+
 ## 0.41.0 - 2026-09-08
 
 This release changes how hegeltest links Hegel's engine. The engine crate (`hegeltest-c`) is no longer a Rust dependency of `hegeltest`: by default the build script compiles it into the `libhegel_c` shared library and your tests load it at runtime, the same way every other language binding consumes the engine. Its dependencies therefore no longer appear in your cargo graph, where they were subject to feature unification and could even change type inference in unrelated code ([#442](https://github.com/hegeldev/hegel-rust/issues/442)).
