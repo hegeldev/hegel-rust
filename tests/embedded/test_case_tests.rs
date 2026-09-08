@@ -1,4 +1,5 @@
 use super::*;
+use crate::ffi::sys as hegel_c;
 use crate::ffi::{RunHandle, SettingsHandle};
 use crate::generators as gs;
 use crate::runner::Settings;

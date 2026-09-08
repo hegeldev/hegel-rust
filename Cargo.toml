@@ -95,25 +95,17 @@ name = "fixture_threaded_rejects"
 path = "tests/fixtures/threaded_rejects.rs"
 
 [dependencies]
-tempfile = "3.0"
-crc32fast = "1.4"
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.40.6", path = "hegel-macros" }
 # The native engine + C ABI ("libhegel"). hegeltest drives it through the
 # C ABI (the hegel_* extern "C" functions), exactly like other language
-# bindings. Its lib is named `hegel_c` (imported as `hegel_c`); the package
-# is `hegeltest-c`.
-hegeltest-c = { version = "=0.37.5", path = "hegel-c", default-features = false }
-rand = { version = "0.10" }
-dashu-int = { version = "0.4.1", default-features = false, features = ["std"] }
-miniz_oxide = { version = "0.8" }
-# Fast, non-DoS-resistant hasher for the native engine's internal maps
-# (data tree + span-mutation bookkeeping; keys are our own choice values /
-# span labels, never adversarial). Replaces the default SipHash, which
-# profiling showed prominently on the generation hot path.
-rustc-hash = { version = "2" }
+# bindings. Optional: by default build.rs builds it as a shared library the
+# frontend loads at runtime, and only the `static-engine` feature links this
+# crate (lib name `hegel_c`) into the dependency graph.
+hegeltest-c = { version = "=0.37.5", path = "hegel-c", default-features = false, optional = true }
 serde_json = "1.0.61"
 # optional feature dependencies
+rand = { version = "0.10", optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
 chrono = { version = "0.4.41", default-features = false, features = ["std"], optional = true }
@@ -123,17 +115,13 @@ jiff = { version = "0.2", default-features = false, features = ["std"], optional
 [dev-dependencies]
 regex = "1.0"
 rand = "0.10"
+tempfile = "3.0"
 # The bundled tz database is deliberately kept out of the library dependency
 # above; tests need one so TimeZone printing can cover IANA-named zones.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 serde_json = "1.0.61"
 insta = "1.47.2"
 ctor = "0.2"
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-# Not used directly: this is a `-Z minimal-versions` floor. criterion pulls in
-# `is-terminal`, and its pre-0.4.13 releases depend on a `rustix 0.37.0` that no
-# longer compiles on current nightly. 0.4.13 dropped the rustix dependency.
-is-terminal = "0.4.13"
 # Note: tokio 1.39 is when tokio started having the required compatibility
 # with other macros for #[hegel::test] to work with #[tokio::test]. See
 # https://github.com/tokio-rs/tokio/pull/6497
@@ -145,25 +133,19 @@ trybuild = "1.0.116"
 # cross threads) without pinning toolchain-dependent diagnostic text.
 static_assertions = "1.1.0"
 
-[[bench]]
-name = "biased_sample"
-harness = false
-required-features = ["__bench"]
-
 [features]
 default = []
-# Gates `extras::rand::randoms()`, which generates `rand::RngCore` impls. The
-# `rand` crate itself is always a dependency (the native engine uses it), so
-# this feature only toggles the extra public generator surface.
-rand = []
+# Gates `extras::rand::randoms()`, which generates `rand::RngCore` impls.
+rand = ["dep:rand"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
 serde_json = []
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
-# Internal: re-exports engine internals needed by `benches/` (from hegel-c,
-# where the engine lives). Not part of the public API; depend on at your peril.
-__bench = ["hegeltest-c/__bench"]
+# Links the engine into the binary as a normal Rust dependency instead of
+# loading the libhegel shared library at runtime. Self-contained binaries, at
+# the cost of exposing the engine's entire dependency tree to your build.
+static-engine = ["dep:hegeltest-c"]
 
 # Tune the dev/test profile for CI speed.
 #

@@ -369,7 +369,7 @@ pub(crate) fn run_test_case(
 /// `hegel_mark_complete` waits for any in-flight operation on the handle, so
 /// a still-running leaked thread cannot make this report fail.
 fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
-    use hegel_c::hegel_status_t as Status;
+    use crate::ffi::sys::hegel_status_t as Status;
     let (status, origin) = match result {
         TestCaseResult::Valid => (Status::HEGEL_STATUS_VALID, None),
         TestCaseResult::Invalid => (Status::HEGEL_STATUS_INVALID, None),
@@ -556,7 +556,7 @@ pub(crate) fn drive<F>(
     }
 
     let result = run.result();
-    use hegel_c::hegel_run_status_t as RunStatus;
+    use crate::ffi::sys::hegel_run_status_t as RunStatus;
     let status = result.status();
     emit_antithesis_assertion(status != RunStatus::HEGEL_RUN_STATUS_PASSED, test_location);
 

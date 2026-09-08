@@ -2,6 +2,7 @@ use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
+use crate::ffi::sys as hegel_c;
 use crate::generators::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 

@@ -40,7 +40,14 @@ jobs:
       - name: Check `cargo package`
         # creates a .crate for distribution and verifies it can build in isolation
         # see https://doc.rust-lang.org/cargo/commands/cargo-package.html
-        run: cargo package --workspace
+        #
+        # The packaged hegeltest has no hegel-c/ sibling, so its build.rs
+        # would fetch the pinned hegeltest-c from crates.io — which does not
+        # exist yet on a release PR. HEGEL_C_LIB_DIR short-circuits that with
+        # the cdylib built from this checkout.
+        run: |
+          cargo build -p hegeltest-c
+          HEGEL_C_LIB_DIR="$PWD/target/debug" cargo package --workspace
 
   test:
     # Keep the name matching the branch-protection required checks on Linux
@@ -519,7 +526,11 @@ jobs:
 
       - name: Publish hegeltest
         if: steps.check.outputs.skip != 'true'
-        run: cargo publish -p hegeltest
+        # HEGEL_C_LIB_DIR keeps the publish verify build from depending on
+        # the just-published hegeltest-c being visible in the registry yet.
+        run: |
+          cargo build -p hegeltest-c
+          HEGEL_C_LIB_DIR="$PWD/target/debug" cargo publish -p hegeltest
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
