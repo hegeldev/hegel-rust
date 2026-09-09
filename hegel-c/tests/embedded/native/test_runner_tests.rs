@@ -1339,7 +1339,7 @@ fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
         b"k",
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
         &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]),
