@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.41.2 - 2026-09-09
+
+Internal refactoring of how the frontend declares the engine's C ABI.
+
 ## 0.41.1 - 2026-09-08
 
 This patch adds `.print_as_call("path::to::function")` on mapped generators, for when a `map` produces a foreign type whose `Debug` output is not pastable Rust (`let kd = 0v3;`) but the drawn input is. It prints the mapped expression, and requires the map's input generator to be printable ([#446](https://github.com/hegeldev/hegel-rust/issues/446)).
