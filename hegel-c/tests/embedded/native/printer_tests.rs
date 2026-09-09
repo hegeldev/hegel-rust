@@ -1061,6 +1061,20 @@ fn held_notes_are_per_target() {
 }
 
 #[test]
+fn note_on_a_slot_killed_by_an_aborted_speculation_errors() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    let slot = p.deferred(M).unwrap();
+    p.abort_speculative(M).unwrap();
+    assert_eq!(
+        p.note(Target::Slot(slot), "late"),
+        Err(PrinterError::DeadSlot)
+    );
+    p.note(M, "still live").unwrap();
+    assert_eq!(p.value().unwrap(), "still live\n");
+}
+
+#[test]
 fn held_notes_die_when_the_document_is_sealed() {
     let mut p = printer(79);
     p.text(M, "a").unwrap();
