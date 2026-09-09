@@ -133,6 +133,7 @@ type FnNewStateMachine = unsafe extern "C" fn(
     usize,
     i64,
     i64,
+    i64,
     *mut *mut u8,
     *mut i64,
 ) -> c_int;
@@ -1057,6 +1058,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 invariant_ptrs.len(),
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut concurrency,
             );
@@ -1078,6 +1080,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 invariant_ptrs.len(),
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut concurrency,
             );

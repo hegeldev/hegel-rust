@@ -4,7 +4,7 @@
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
 //! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
 //! and final state, and sampled in between — each invariant runs after any given rule with
-//! probability `1 / stateful_step_count`, so its expected cost per test case stays constant
+//! probability `1 / step_count`, so its expected cost per test case stays constant
 //! as the step count grows). `#[invariant(always_run)]` opts an invariant out of the
 //! sampling: it runs after every rule, for invariants that must observe every intermediate
 //! state or that mutate state when checked.
@@ -12,7 +12,9 @@
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
-//! To run a state machine, call [`run()`] inside a Hegel test.
+//! To run a state machine, call [`run()`] inside a Hegel test. It runs up to
+//! [`DEFAULT_STEP_COUNT`] rules per test case; [`run_steps()`] takes the step
+//! count as a parameter instead.
 //!
 //! Example:
 //! ```rust
@@ -531,7 +533,7 @@ pub trait StateMachine {
     fn rules(&self) -> Vec<Rule<Self>>;
     /// Invariants: checked on the machine's initial and final state, and
     /// sampled after rules in between with probability
-    /// `1 / stateful_step_count` each — except invariants whose
+    /// `1 / step_count` each — except invariants whose
     /// [`always_run`](Invariant::always_run) flag is set, which run after
     /// every rule.
     fn invariants(&self) -> Vec<Invariant<Self>>;
@@ -617,7 +619,7 @@ fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_ind
 /// Ask the engine whether invariant `invariant_index` should run at the
 /// current join point — true unconditionally for an invariant registered
 /// always-run, otherwise a recorded draw that is true with probability
-/// `1 / stateful_step_count`, making a sampled invariant's expected sampled
+/// `1 / step_count`, making a sampled invariant's expected sampled
 /// runs per test case one regardless of step count.
 fn machine_should_check_invariant(
     tc: &TestCase,
@@ -630,6 +632,10 @@ fn machine_should_check_invariant(
     }
 }
 
+/// The step count [`run`] and [`run_concurrent`] use: the target number of
+/// rules (rounds, for a concurrent machine) per test case.
+pub const DEFAULT_STEP_COUNT: i64 = 50;
+
 /// Execute a stateful test by repeatedly applying random rules and checking invariants.
 ///
 /// A sequential machine is the special case of the engine's concurrent
@@ -638,14 +644,53 @@ fn machine_should_check_invariant(
 /// invariant checks may run fall after each rule. Invariants run in full on
 /// the machine's initial and final state; in between, each invariant runs at
 /// a join point only when the engine's sampling draw (probability
-/// `1 / stateful_step_count`) says to, keeping an invariant's expected cost
+/// `1 / step_count`) says to, keeping an invariant's expected cost
 /// per test case constant as the step count grows — except always-run
 /// invariants (`#[invariant(always_run)]`), which run at every join point.
 /// One consequence of the
 /// join-point timing: a sampled check can land after a rule that stopped on
 /// a violated assumption (rules are expected to reject before mutating the
 /// model, and nothing restores model state on rejection anyway).
-pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
+///
+/// Each test case runs at least one rule and at most [`DEFAULT_STEP_COUNT`];
+/// use [`run_steps`] to choose the step count.
+pub fn run<M: StateMachine>(m: M, tc: TestCase) {
+    run_steps(m, tc, DEFAULT_STEP_COUNT)
+}
+
+/// Execute a stateful test like [`run`], running at most `step_count` rules
+/// per test case.
+///
+/// `step_count` is the target number of completed rules per test case: every
+/// case runs at least one rule and at most `step_count` (rules that stop on a
+/// violated assumption do not count), and each sampled invariant runs after
+/// any given rule with probability `1 / step_count`. Most test cases run the
+/// full `step_count`; the shrinker is free to shorten a failing one. The
+/// count must be at least 1, or the run fails with a usage error.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::TestCase;
+///
+/// struct Counter {
+///     value: u32,
+/// }
+///
+/// #[hegel::state_machine]
+/// impl Counter {
+///     #[rule]
+///     fn increment(&mut self, _: TestCase) {
+///         self.value += 1;
+///     }
+/// }
+///
+/// #[hegel::test]
+/// fn test_counter(tc: TestCase) {
+///     hegel::stateful::run_steps(Counter { value: 0 }, tc, 200);
+/// }
+/// ```
+pub fn run_steps<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let rule_groups = vec![0i64; rules.len()];
@@ -660,6 +705,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
             &invariant_always_check,
             1,
             1,
+            step_count,
         )
     }) {
         Ok((handle, _)) => handle,
@@ -815,7 +861,7 @@ pub trait ConcurrentStateMachine {
     /// Invariants, run on the main thread while the worker threads are
     /// parked: checked on the machine's initial and final state, and
     /// sampled at the join points in between with probability
-    /// `1 / stateful_step_count` each — except invariants whose
+    /// `1 / step_count` each — except invariants whose
     /// [`always_run`](ConcurrentInvariant::always_run) flag is set, which
     /// run at every join point.
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>>;
@@ -1005,9 +1051,10 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
 /// group may overlap each other, and rules in different groups never
 /// overlap. Once every worker has finished its rules for the round, the
 /// main thread runs the invariants the engine's sampling draws select
-/// (probability `1 / stateful_step_count` each, and always-run invariants
+/// (probability `1 / step_count` each, and always-run invariants
 /// unconditionally); every invariant runs in full on the machine's initial
-/// and final state.
+/// and final state. Each test case runs at most [`DEFAULT_STEP_COUNT`]
+/// rounds; use [`run_concurrent_steps`] to choose the round count.
 ///
 /// The number of worker threads is drawn per test case, when the state
 /// machine is created, in `[min_concurrency, max_concurrency]` and weighted
@@ -1069,6 +1116,25 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
     min_concurrency: i64,
     max_concurrency: i64,
 ) {
+    run_concurrent_steps(m, tc, min_concurrency, max_concurrency, DEFAULT_STEP_COUNT)
+}
+
+/// Execute a concurrent stateful test like [`run_concurrent`], running at
+/// most `step_count` rounds per test case.
+///
+/// `step_count` is the target number of rounds per test case: every case runs
+/// at least one round and at most `step_count`, and each sampled invariant
+/// runs at any given join point with probability `1 / step_count`. At
+/// concurrency 1 a round is a single rule, so `step_count` bounds the number
+/// of completed rules exactly as in [`run_steps`]. The count must be at least
+/// 1, or the run fails with a usage error.
+pub fn run_concurrent_steps<M: ConcurrentStateMachine + Sync>(
+    m: M,
+    tc: TestCase,
+    min_concurrency: i64,
+    max_concurrency: i64,
+    step_count: i64,
+) {
     let rules = m.rules();
     let invariants = m.invariants();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
@@ -1095,6 +1161,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             &invariant_always_check,
             min_concurrency,
             max_concurrency,
+            step_count,
         )
     }) {
         Ok(created) => created,

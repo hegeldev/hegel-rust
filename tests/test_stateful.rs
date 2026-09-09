@@ -565,12 +565,7 @@ mod stateful {
             };
             hegel::stateful::run(m, tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
         let rules_run = *rules_run.lock().unwrap();
         let invariants_run = *invariants_run.lock().unwrap();
@@ -640,12 +635,7 @@ mod stateful {
         Hegel::new(|tc: TestCase| {
             hegel::stateful::run(DirtyCounterMachine { unchecked_steps: 0 }, tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
     }
 
@@ -695,12 +685,7 @@ mod stateful {
             };
             hegel::stateful::run(m, tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
         let rules_run = *rules_run.lock().unwrap();
         let sampled_runs = *sampled_runs.lock().unwrap();
@@ -850,15 +835,19 @@ mod stateful {
     }
 
     #[test]
-    fn test_stateful_step_count_below_one_is_a_usage_error() {
-        expect_panic(
-            || {
-                Hegel::new(|_tc: TestCase| {})
-                    .settings(Settings::new().database(None).stateful_step_count(0))
+    fn test_step_count_below_one_is_a_usage_error() {
+        for step_count in [0, -3] {
+            expect_panic(
+                || {
+                    Hegel::new(move |tc: TestCase| {
+                        hegel::stateful::run_steps(super::Linear { state: 0 }, tc, step_count);
+                    })
+                    .settings(Settings::new().database(None))
                     .run();
-            },
-            "step count must be at least 1",
-        );
+                },
+                "step count must be at least 1",
+            );
+        }
     }
 
     /// Records which rule ran at each step, one sequence per test case.
@@ -964,20 +953,20 @@ mod stateful {
     ) -> Vec<u64> {
         let counts: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let counts_in_test = Arc::clone(&counts);
-        let mut settings = Settings::new()
+        let settings = Settings::new()
             .test_cases(test_cases)
             .database(None)
             .derandomize(true);
-        if let Some(step_count) = step_count {
-            settings = settings.stateful_step_count(step_count);
-        }
         Hegel::new(move |tc: TestCase| {
             counts_in_test.lock().unwrap().push(0);
             let m = StepRecorderMachine {
                 counts: Arc::clone(&counts_in_test),
                 fail_assumption,
             };
-            hegel::stateful::run(m, tc);
+            match step_count {
+                Some(step_count) => hegel::stateful::run_steps(m, tc, step_count),
+                None => hegel::stateful::run(m, tc),
+            }
         })
         .settings(settings)
         .run();
@@ -985,10 +974,11 @@ mod stateful {
         counts.clone()
     }
 
-    /// The engine owns the step cap: with the default `stateful_step_count`,
-    /// no test case runs more than 50 steps, and most run exactly 50.
+    /// The engine owns the step cap: `run` uses `DEFAULT_STEP_COUNT`, so no
+    /// test case runs more than 50 steps, and most run exactly 50.
     #[test]
     fn test_step_cap_is_50_most_of_the_time() {
+        assert_eq!(hegel::stateful::DEFAULT_STEP_COUNT, 50);
         let counts = run_step_recorder(false, None, 100);
         assert!(counts.iter().all(|&c| c <= 50));
         let full = counts.iter().filter(|&&c| c == 50).count();
@@ -1015,11 +1005,10 @@ mod stateful {
         );
     }
 
-    /// The `stateful_step_count` setting replaces the fixed cap: with a custom
-    /// value, no test case runs more than that many steps, and most run
-    /// exactly that many.
+    /// `run_steps` replaces the default cap: with a custom value, no test
+    /// case runs more than that many steps, and most run exactly that many.
     #[test]
-    fn test_stateful_step_count_setting_bounds_steps() {
+    fn test_run_steps_bounds_steps() {
         let counts = run_step_recorder(false, Some(7), 100);
         assert!(counts.iter().all(|&c| (1..=7).contains(&c)));
         let full = counts.iter().filter(|&&c| c == 7).count();
@@ -1047,20 +1036,19 @@ mod stateful {
     }
 
     /// Regression test for #396: the failing case is replayed from its
-    /// reproduce blob, and that replay respects the stateful step count
+    /// reproduce blob, and that replay respects the machine's step count
     #[test]
     fn test_long_counterexample_replays_under_the_configured_step_count() {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(LongCounterMachine { counter: 0 }, tc);
+                    hegel::stateful::run_steps(LongCounterMachine { counter: 0 }, tc, 100);
                 })
                 .settings(
                     Settings::new()
                         .test_cases(100)
                         .database(None)
-                        .derandomize(true)
-                        .stateful_step_count(100),
+                        .derandomize(true),
                 )
                 .run();
             },
@@ -1101,14 +1089,13 @@ mod stateful {
                 counts: Arc::clone(&counts_in_test),
                 attempts: 0,
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::run_steps(m, tc, 10);
         })
         .settings(
             Settings::new()
                 .test_cases(100)
                 .database(None)
-                .derandomize(true)
-                .stateful_step_count(10),
+                .derandomize(true),
         )
         .run();
 

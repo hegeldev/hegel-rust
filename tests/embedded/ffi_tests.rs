@@ -138,7 +138,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
         ));
         assert!(matches!(tc.new_pool(), Err(ALREADY_COMPLETE)));
         assert!(matches!(
-            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1),
+            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1, 50),
             Err(ALREADY_COMPLETE)
         ));
     }

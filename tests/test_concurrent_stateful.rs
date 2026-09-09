@@ -2,7 +2,7 @@ mod common;
 
 use common::utils::{assert_matches_regex, capture_hegel_output};
 use hegel::generators as gs;
-use hegel::stateful::{ConcurrentPool, concurrent_pool, run_concurrent};
+use hegel::stateful::{ConcurrentPool, concurrent_pool, run_concurrent, run_concurrent_steps};
 use hegel::{HealthCheck, Hegel, Settings, TestCase, Verbosity};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -86,12 +86,7 @@ fn always_run_invariants_run_at_every_join_point() {
         };
         run_concurrent(m, tc, 1, 1);
     })
-    .settings(
-        Settings::new()
-            .test_cases(20)
-            .stateful_step_count(50)
-            .database(None),
-    )
+    .settings(Settings::new().test_cases(20).database(None))
     .run();
     let rules_run = rules_run.load(Ordering::SeqCst);
     let sampled_runs = sampled_runs.load(Ordering::SeqCst);
@@ -704,6 +699,51 @@ fn invalid_concurrency_bounds_are_a_usage_error() {
     }
 }
 
+#[test]
+fn run_concurrent_steps_bounds_the_rounds_per_test_case() {
+    let rules_per_case: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
+    let rules_in = Arc::clone(&rules_per_case);
+    Hegel::new(move |tc: TestCase| {
+        let m = InvariantCounts {
+            rules_run: Arc::new(AtomicI64::new(0)),
+            sampled_runs: Arc::new(AtomicI64::new(0)),
+            always_runs: Arc::new(AtomicI64::new(0)),
+        };
+        let rules_run = Arc::clone(&m.rules_run);
+        run_concurrent_steps(m, tc, 1, 1, 3);
+        rules_in
+            .lock()
+            .unwrap()
+            .push(rules_run.load(Ordering::SeqCst));
+    })
+    .settings(Settings::new().test_cases(50).database(None))
+    .run();
+    let rules_per_case = rules_per_case.lock().unwrap();
+    assert!(rules_per_case.iter().all(|&n| (1..=3).contains(&n)));
+    let full = rules_per_case.iter().filter(|&&n| n == 3).count();
+    assert!(
+        full > rules_per_case.len() / 2,
+        "expected most of {} test cases to run exactly 3 rules, got {full}",
+        rules_per_case.len()
+    );
+}
+
+#[test]
+fn a_step_count_below_one_is_a_usage_error() {
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            let m = Counter {
+                value: AtomicI64::new(0),
+            };
+            run_concurrent_steps(m, tc, 1, 1, 0);
+        })
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+        .run();
+    });
+    let payload = result.expect_err("a zero step count cannot run");
+    assert_matches_regex(&panic_message(&payload), "step count must be at least 1");
+}
+
 /// Exhaust the whole family draw budget on a clone stream, leaving the root
 /// handle un-aborted so the next engine call on it is the one that observes
 /// the exhaustion.
@@ -816,12 +856,7 @@ fn a_nondeterministic_run_prints_only_the_discovering_cases_output() {
                 panic!("boom on the third case with {x}");
             }
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .stateful_step_count(1)
-                .print_blob(true),
-        )
+        .settings(Settings::new().database(None).print_blob(true))
         .run();
     });
     let payload = result.expect_err("the third case fails the run");
@@ -854,12 +889,7 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
                 panic!("boom on the third case with {x}");
             }
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .stateful_step_count(1)
-                .verbosity(Verbosity::Verbose),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Verbose))
         .run();
     });
     let payload = result.expect_err("the third case fails the run");
