@@ -44,7 +44,7 @@ pub use deferred::{DeferredGeneratorDefinition, deferred, deferred_silent};
 pub(crate) use generators::draw_and_print_value;
 pub use generators::{
     BoxedGenerator, BoxedPrintableGenerator, Filtered, FlatMapped, Generator, Mapped,
-    PrintableGenerator, PrintedAsDebug, PrintedAsValue, PrintedWith,
+    PrintableGenerator, PrintedAsCall, PrintedAsDebug, PrintedAsValue, PrintedWith,
 };
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};

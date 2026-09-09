@@ -7,6 +7,7 @@
 //! but going through the Rust wrappers the rest of hegeltest will use.
 
 use super::*;
+use crate::ffi::sys as hegel_c;
 use crate::runner::{Backend, Settings};
 
 #[test]

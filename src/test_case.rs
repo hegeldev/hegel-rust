@@ -3,6 +3,7 @@ use crate::control::{
     hegel_internal_assert, hegel_internal_error, raise_control,
 };
 use crate::ffi::CTestCase;
+use crate::ffi::sys as hegel_c;
 use crate::generators::{Generator, PrintableGenerator};
 use crate::pretty::PrettyPrinter;
 use parking_lot::Mutex;
@@ -1217,7 +1218,7 @@ impl<'a> Collection<'a> {
 
 #[doc(hidden)]
 pub mod labels {
-    use hegel_c::hegel_label_t;
+    use crate::ffi::sys::hegel_label_t;
 
     pub const LIST: u64 = hegel_label_t::HEGEL_LABEL_LIST as u64;
     pub const LIST_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_LIST_ELEMENT as u64;
@@ -1247,6 +1248,8 @@ mod tests;
 /// (what Hypothesis's `dates()` spans) and the whole nanosecond-resolution
 /// day.
 pub(crate) mod full_ranges {
+    use crate::ffi::sys as hegel_c;
+
     pub(crate) const MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
         year: 1,
         month: 1,

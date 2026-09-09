@@ -1,3 +1,4 @@
+use crate::ffi::sys as hegel_c;
 use crate::generators::{
     DefaultGenerator, Generator, PrintableGenerator, TestCase, hashsets, integers,
 };

@@ -34,6 +34,9 @@ check-format-nix:
 
 check-clippy:
     cargo clippy --workspace --all-features --all-targets -- -D warnings
+    # Without --all-features so the default mode's engine loader (compiled
+    # out under `static-engine`, which --all-features enables) is linted too.
+    cargo clippy --workspace --all-targets -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs
@@ -172,8 +175,10 @@ c-header:
 #
 # CI=1 disables the on-disk failure database (we don't want Miri writing files);
 # isolation is disabled because the engine seeds its PRNG from OS entropy.
+# --features static-engine links the engine in as an rlib: Miri cannot call
+# into a real shared library, but this way it interprets the whole engine.
 check-miri:
-    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test test_miri
+    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --features static-engine --test test_miri
     CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p hegeltest-c --test c_abi_miri
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer

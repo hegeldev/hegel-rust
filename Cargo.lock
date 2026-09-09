@@ -223,15 +223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crc32fast"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "criterion"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -394,23 +385,17 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hegeltest"
-version = "0.40.6"
+version = "0.41.1"
 dependencies = [
  "chrono",
- "crc32fast",
- "criterion",
  "ctor",
- "dashu-int",
  "hegeltest-c",
  "hegeltest-macros",
  "insta",
- "is-terminal",
  "jiff",
- "miniz_oxide",
  "parking_lot",
  "rand",
  "regex",
- "rustc-hash",
  "serde_json",
  "static_assertions",
  "tempfile",
@@ -423,10 +408,12 @@ name = "hegeltest-c"
 version = "0.37.5"
 dependencies = [
  "cbindgen",
+ "criterion",
  "ctor",
  "dashu-int",
  "hashbrown 0.17.1",
  "insta",
+ "is-terminal",
  "libloading",
  "libm",
  "miniz_oxide",
@@ -442,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.40.6"
+version = "0.41.1"
 dependencies = [
  "proc-macro2",
  "quote",

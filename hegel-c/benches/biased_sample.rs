@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo bench --features __bench --bench biased_sample
+//! cargo bench -p hegeltest-c --features __bench --bench biased_sample
 //! ```
 //!
 //! These functions sit on the hottest path of native test-case generation
@@ -12,12 +12,12 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
-use hegel::__bench::{
+use hegel_c::__bench::{
     BytesChoice, EngineRng, FloatChoice, IntegerChoice, IntervalSet, StringChoice,
     biased_bytes_sample, biased_float_sample, biased_integer_sample, biased_string_sample,
 };
 
-type BigInt = hegel::__bench::BigInt;
+type BigInt = hegel_c::__bench::BigInt;
 
 fn integer_cases() -> Vec<(&'static str, IntegerChoice)> {
     vec![

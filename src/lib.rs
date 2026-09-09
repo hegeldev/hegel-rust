@@ -230,6 +230,30 @@
 //! documentation for the full contract and the patterns that are safe to
 //! rely on.
 //!
+//! ## The engine library
+//!
+//! Hegel's engine is `libhegel_c`, a shared library that hegeltest's build
+//! script compiles and your tests load at runtime, so the engine's Rust
+//! dependencies never appear in your cargo graph. `cargo test` and
+//! `cargo run` find the library automatically. A binary that runs anywhere
+//! else — a deployed `#[hegel::main]` fuzzer, say — needs the library
+//! shipped next to the executable, its directory named in the
+//! `HEGEL_C_LIB_DIR` environment variable, or a copy installed where the
+//! platform's own library search looks (`LD_LIBRARY_PATH` and friends),
+//! which is tried last. `HEGEL_C_LIB_DIR` overrides the whole search,
+//! including in the build script, where a prebuilt library lets offline
+//! builds skip the compile. Whichever copy is found must be the exact
+//! engine version this crate was built against. A mismatched library is
+//! refused on load with an error naming both versions.
+//!
+//! Alternatively, the `static-engine` feature links the engine into your
+//! binary as an ordinary Rust dependency. Binaries are then self-contained,
+//! but the engine's entire dependency tree becomes visible to your build,
+//! where it is subject to cargo feature unification and can even change
+//! type inference in unrelated code (a `PartialEq<serde_json::Value>` impl
+//! is enough to make `assert_eq!(true, ...)` ambiguous). Opt in where
+//! self-contained binaries matter more than that isolation.
+//!
 //! ## Learning more
 //!
 //! - Browse the [`generators`] module for the full list of available generators.
@@ -295,10 +319,6 @@ pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
 pub use antithesis::TestLocation;
-
-#[doc(hidden)]
-#[cfg(feature = "__bench")]
-pub use hegel_c::__bench;
 
 /// Derive a generator for a struct or enum.
 ///
