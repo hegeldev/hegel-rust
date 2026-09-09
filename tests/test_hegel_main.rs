@@ -10,7 +10,6 @@ use common::utils::assert_matches_regex;
 
 const BASIC_MAIN: &str = env!("CARGO_BIN_EXE_fixture_basic_main");
 const MAIN_SIMPLE: &str = env!("CARGO_BIN_EXE_fixture_main_simple");
-const MAIN_MANY_DRAWS: &str = env!("CARGO_BIN_EXE_fixture_main_many_draws");
 const MAIN_FAILING: &str = env!("CARGO_BIN_EXE_fixture_main_failing");
 const MAIN_REWRITE: &str = env!("CARGO_BIN_EXE_fixture_main_rewrite");
 const MAIN_EXPLICIT: &str = env!("CARGO_BIN_EXE_fixture_main_explicit");
@@ -19,13 +18,6 @@ const MAIN_EXPLICIT: &str = env!("CARGO_BIN_EXE_fixture_main_explicit");
 fn test_basic_main_runs_exactly_one_test_case() {
     let output = fixture(BASIC_MAIN).run();
     let count = output.stderr.matches("ran").count();
-    assert_eq!(count, 1, "stderr:\n{}", output.stderr);
-}
-
-#[test]
-fn test_main_runs_a_case_with_more_choices_than_the_default_bound() {
-    let output = fixture(MAIN_MANY_DRAWS).run();
-    let count = output.stderr.matches("ran with").count();
     assert_eq!(count, 1, "stderr:\n{}", output.stderr);
 }
 

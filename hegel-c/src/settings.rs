@@ -147,9 +147,6 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
-    /// Upper bound on the choices one test case may make before it is
-    /// concluded as an overrun. `usize::MAX` removes the bound.
-    pub(crate) max_choices: usize,
     pub(crate) verbosity: Verbosity,
     pub(crate) output: Output,
     pub(crate) seed: Option<u64>,
@@ -180,7 +177,6 @@ impl Settings {
         Self {
             test_cases: 100,
             stateful_step_count: 50,
-            max_choices: crate::native::core::BUFFER_SIZE,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
@@ -249,17 +245,6 @@ impl Settings {
     /// 50). Each case runs at least one step and at most this many.
     pub fn stateful_step_count(mut self, n: i64) -> Self {
         self.stateful_step_count = n;
-        self
-    }
-
-    /// Set the maximum number of choices a single test case may make
-    /// before the engine concludes it as an overrun (default: 8192), or
-    /// `None` for no limit. Overruns are what keep generated inputs small
-    /// enough to shrink and persist; a run that never shrinks or persists
-    /// (a `#[hegel::main]` binary running one long stateful case) can drop
-    /// the bound.
-    pub fn max_choices(mut self, n: Option<usize>) -> Self {
-        self.max_choices = n.unwrap_or(usize::MAX);
         self
     }
 

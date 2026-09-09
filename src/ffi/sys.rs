@@ -98,7 +98,6 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_seed(ctx: *mut HegelContext, s: *mut HegelSettings, seed: u64, has_seed: bool) -> hegel_result_t;
             fn hegel_settings_set_show_statistics(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_stateful_step_count(ctx: *mut HegelContext, s: *mut HegelSettings, n: i64) -> hegel_result_t;
-            fn hegel_settings_set_max_choices(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
             fn hegel_settings_set_suppress_health_check(ctx: *mut HegelContext, s: *mut HegelSettings, checks: u32) -> hegel_result_t;
             fn hegel_settings_set_test_cases(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
             fn hegel_settings_set_verbosity(ctx: *mut HegelContext, s: *mut HegelSettings, v: u32) -> hegel_result_t;

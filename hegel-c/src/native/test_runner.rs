@@ -345,14 +345,9 @@ impl<'a> Engine<'a> {
                     generate_novel_prefix(&self.tree_root, &mut self.rng, params)?
                 };
                 let ntc = if prefix.is_empty() {
-                    NativeTestCase::new_random_with_params(case_rng, params, settings.max_choices)
+                    NativeTestCase::new_random_with_params(case_rng, params)
                 } else {
-                    NativeTestCase::for_probe_with_params(
-                        &prefix,
-                        case_rng,
-                        settings.max_choices,
-                        params,
-                    )
+                    NativeTestCase::for_probe_with_params(&prefix, case_rng, BUFFER_SIZE, params)
                 };
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");

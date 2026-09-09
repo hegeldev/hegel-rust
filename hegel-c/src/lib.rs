@@ -881,33 +881,6 @@ pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
 }
 
 /// Parameters:
-/// `n`: Maximum number of choices a single test case may make before the
-///   engine concludes it as an overrun, or `0` for no limit. The default is
-///   8192. The bound keeps generated inputs small enough to shrink and
-///   persist; a run that does neither (one long stateful test case in a
-///   standalone binary) can pass `0`.
-///
-/// Returns `HEGEL_OK`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_max_choices(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    n: u64,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_max_choices") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    let max_choices = match n {
-        0 => None,
-        n => Some(usize::try_from(n).unwrap_or(usize::MAX)),
-    };
-    handle.inner = handle.inner.clone().max_choices(max_choices);
-    HEGEL_OK
-}
-
-/// Parameters:
 /// `v`: Controls the output verbosity. See `hegel_verbosity_t`.
 ///
 /// Returns `HEGEL_OK`.

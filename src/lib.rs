@@ -731,12 +731,9 @@ pub use hegel_macros::test_helper;
 /// `test_cases` is rejected as an attribute arg, `--test-cases` is not
 /// accepted on the command line, and `HEGEL_TEST_CASES` has no effect.
 ///
-/// The single test case has no bound on the number of choices it may make,
-/// so a large stateful machine runs to the end of its step count instead of
-/// being cut off as an overrun. The `TooSlow` and `TestCasesTooLarge`
-/// health checks are always suppressed: both judge how a run accumulates
-/// valid test cases, which a run of exactly one cannot be judged on.
-/// `FilterTooMuch` applies as usual.
+/// The `TooSlow` and `TestCasesTooLarge` health checks are always
+/// suppressed: both judge how a run accumulates valid test cases, which a
+/// run of exactly one cannot be judged on. `FilterTooMuch` applies as usual.
 ///
 /// Supported CLI flags (with defaults taken from the attribute args):
 /// `--seed`, `--verbosity`, `--derandomize`, `--database`,

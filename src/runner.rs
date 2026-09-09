@@ -125,10 +125,6 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
-    /// Lift the engine's bound on choices per test case. Set for
-    /// `#[hegel::main]` binaries, whose single case should run to the end
-    /// of its state machine however many draws that takes.
-    pub(crate) unlimited_choices: bool,
     pub(crate) verbosity: Verbosity,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
@@ -155,7 +151,6 @@ impl Settings {
         Self {
             test_cases: 100,
             stateful_step_count: 50,
-            unlimited_choices: false,
             verbosity: Verbosity::Normal,
             seed: None,
             derandomize: in_ci,
@@ -349,13 +344,12 @@ impl Settings {
         self
     }
 
-    /// The settings a `#[hegel::main]` binary runs with: one test case with
-    /// no bound on its choices, and the `TooSlow` and `TestCasesTooLarge`
-    /// health checks suppressed, since both measure how valid test cases
-    /// accumulate over a run and a run of one has nothing to measure.
+    /// The settings a `#[hegel::main]` binary runs with: one test case, with
+    /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
+    /// both measure how valid test cases accumulate over a run and a run of
+    /// one has nothing to measure.
     pub(crate) fn for_single_test_case(mut self) -> Self {
         self.test_cases = 1;
-        self.unlimited_choices = true;
         for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {
             if !self.suppress_health_check.contains(&check) {
                 self.suppress_health_check.push(check);
@@ -470,11 +464,10 @@ where
 
     /// Run exactly one test case, the behavior of `#[hegel::main]` binaries.
     /// Applied after the environment overrides in [`run`](Self::run), so
-    /// `HEGEL_TEST_CASES` cannot undo it. Also lifts the engine's bound on
-    /// choices per test case and suppresses [`HealthCheck::TooSlow`] and
-    /// [`HealthCheck::TestCasesTooLarge`]: the bound and both checks exist
-    /// to keep a run of many cases small and quick to shrink, which is
-    /// meaningless for a run of one long case.
+    /// `HEGEL_TEST_CASES` cannot undo it. Also suppresses
+    /// [`HealthCheck::TooSlow`] and [`HealthCheck::TestCasesTooLarge`]: both
+    /// judge how a run accumulates valid test cases, which is meaningless
+    /// for a run of one.
     #[doc(hidden)]
     pub fn __single_test_case(mut self) -> Self {
         self.single_test_case = true;
