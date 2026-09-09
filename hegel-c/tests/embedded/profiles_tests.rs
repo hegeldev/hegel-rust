@@ -95,14 +95,6 @@ fn a_config_delta_re_enables_the_too_slow_check_on_ci() {
     assert!(s.suppress_health_check.is_empty());
 }
 
-#[test]
-fn the_antithesis_profile_disables_only_the_database() {
-    let s = resolve_named("antithesis", &no_config());
-    assert_eq!(s.database, Database::Disabled);
-    assert!(!s.derandomize, "Antithesis controls randomness itself");
-    assert!(!s.print_blob);
-}
-
 const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
     HealthCheck::FilterTooMuch,
     HealthCheck::TooSlow,
@@ -111,8 +103,19 @@ const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
 ];
 
 #[test]
-fn no_profile_overrides_antithesis_health_check_forcing() {
-    for name in ["default", "development", "ci", "antithesis"] {
+fn the_antithesis_profile_disables_the_database_and_every_health_check() {
+    let s = resolve_named("antithesis", &no_config());
+    assert_eq!(s.database, Database::Disabled);
+    for check in ALL_HEALTH_CHECKS {
+        assert!(s.health_check_suppressed(check), "{check:?}");
+    }
+    assert!(!s.derandomize, "Antithesis controls randomness itself");
+    assert!(!s.print_blob);
+}
+
+#[test]
+fn antithesis_detection_does_not_force_health_checks_off() {
+    for name in ["default", "development"] {
         let s = resolve(
             name,
             &no_config(),
@@ -121,11 +124,16 @@ fn no_profile_overrides_antithesis_health_check_forcing() {
             &no_candidates(),
         )
         .unwrap();
+        assert!(s.in_antithesis);
         for check in ALL_HEALTH_CHECKS {
-            assert!(s.health_check_suppressed(check), "{name}: {check:?}");
+            assert!(!s.health_check_suppressed(check), "{name}: {check:?}");
         }
     }
-    let config = config_of("[profiles.antithesis]\nsuppress_health_check = []\n");
+}
+
+#[test]
+fn a_config_delta_re_enables_health_checks_in_antithesis() {
+    let config = config_of("[profiles.antithesis]\nsuppress_health_check = [\"too_slow\"]\n");
     let s = resolve(
         "antithesis",
         &config,
@@ -134,13 +142,12 @@ fn no_profile_overrides_antithesis_health_check_forcing() {
         &no_candidates(),
     )
     .unwrap();
-    for check in ALL_HEALTH_CHECKS {
-        assert!(s.health_check_suppressed(check), "{check:?}");
-    }
+    assert!(s.health_check_suppressed(HealthCheck::TooSlow));
+    assert!(!s.health_check_suppressed(HealthCheck::FilterTooMuch));
 }
 
 #[test]
-fn health_checks_run_outside_antithesis_unless_suppressed() {
+fn health_checks_run_unless_suppressed() {
     let s = resolve_named("development", &no_config());
     for check in ALL_HEALTH_CHECKS {
         assert!(!s.health_check_suppressed(check), "{check:?}");
@@ -836,7 +843,10 @@ fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
     let s = settings_for_env(None, &no_config(), env).unwrap();
     assert!(s.in_antithesis);
     for check in ALL_HEALTH_CHECKS {
-        assert!(s.health_check_suppressed(check), "{check:?}");
+        assert!(
+            !s.health_check_suppressed(check),
+            "explicitly selecting the root opts out of the antithesis profile's health-check policy: {check:?}"
+        );
     }
     assert_eq!(
         s.database,

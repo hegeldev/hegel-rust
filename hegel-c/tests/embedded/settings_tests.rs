@@ -48,24 +48,14 @@ const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
 ];
 
 #[test]
-fn base_settings_in_antithesis_disable_every_health_check() {
-    let settings = Settings::base(true);
-    for check in ALL_HEALTH_CHECKS {
-        assert!(settings.health_check_suppressed(check), "{check:?}");
+fn health_checks_run_unless_suppressed_explicitly() {
+    for in_antithesis in [false, true] {
+        let settings = Settings::base(in_antithesis);
+        for check in ALL_HEALTH_CHECKS {
+            assert!(!settings.health_check_suppressed(check), "{check:?}");
+        }
     }
-    // An explicit (even empty) suppression list does not re-enable them.
-    let settings = settings.suppress_health_check([]);
-    for check in ALL_HEALTH_CHECKS {
-        assert!(settings.health_check_suppressed(check), "{check:?}");
-    }
-}
-
-#[test]
-fn health_checks_run_outside_antithesis_unless_suppressed_explicitly() {
     let settings = Settings::base(false);
-    for check in ALL_HEALTH_CHECKS {
-        assert!(!settings.health_check_suppressed(check), "{check:?}");
-    }
     let settings = settings.suppress_health_check([HealthCheck::TooSlow]);
     assert!(settings.health_check_suppressed(HealthCheck::TooSlow));
     assert!(!settings.health_check_suppressed(HealthCheck::FilterTooMuch));

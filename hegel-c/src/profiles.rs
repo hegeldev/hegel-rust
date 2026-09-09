@@ -26,10 +26,13 @@
 //! - `development`: an empty delta, the environment profile of local runs.
 //! - `ci`: `derandomize = true`, the database disabled, the `too_slow`
 //!   health check suppressed, and `print_blob = true`.
-//! - `antithesis`: the database disabled. Health checks and the urandom
-//!   backend are driven by Antithesis *detection* rather than by this
-//!   profile, so resolving a different profile inside Antithesis does not
-//!   re-enable them.
+//! - `antithesis`: the database disabled and every health check
+//!   suppressed, since Antithesis's thread pausing would trip wall-clock
+//!   checks such as `too_slow` spuriously. Like any profile setting these
+//!   can be changed in `hegel.toml`, and resolving a profile that does not
+//!   extend `antithesis` inside Antithesis runs the health checks. The
+//!   urandom backend is driven by Antithesis detection (`backend = "auto"`),
+//!   not by this profile.
 //!
 //! Users modify shipped profiles and define new ones in a `hegel.toml`
 //! ([`crate::config`]), or register complete snapshots through the C ABI's
@@ -264,6 +267,12 @@ static SHIPPED: Lazy<[(&'static str, ProfileDelta); 3]> = Lazy::new(|| {
             "antithesis",
             ProfileDelta {
                 database: Some(Database::Disabled),
+                suppress_health_check: Some(alloc::vec![
+                    HealthCheck::FilterTooMuch,
+                    HealthCheck::TooSlow,
+                    HealthCheck::TestCasesTooLarge,
+                    HealthCheck::LargeInitialTestCase,
+                ]),
                 ..ProfileDelta::default()
             },
         ),

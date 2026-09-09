@@ -133,7 +133,9 @@ pub enum Verbosity {
 /// - `ci`: [`derandomize`](Settings::derandomize) on, the database
 ///   disabled, [`HealthCheck::TooSlow`] suppressed, and
 ///   [`print_blob`](Settings::print_blob) on.
-/// - `antithesis`: the database disabled.
+/// - `antithesis`: the database disabled and every health check suppressed,
+///   since Antithesis's thread pausing would trip wall-clock checks such as
+///   [`HealthCheck::TooSlow`] spuriously.
 ///
 /// [`Settings::new`] resolves `selected`. [`Settings::from_profile`]
 /// resolves a profile by name, e.g. via
@@ -182,11 +184,6 @@ pub enum Verbosity {
 /// runs before the profiles are used, such as a `#[hegel::main]` binary.
 /// Under `cargo test` there is no such hook, which is what `hegel.toml` is
 /// for.
-///
-/// Inside Antithesis every health check is off regardless of the resolved
-/// profile, and nothing re-enables them: Antithesis's thread pausing would
-/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. This
-/// is driven by detection, not by the `antithesis` profile.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,

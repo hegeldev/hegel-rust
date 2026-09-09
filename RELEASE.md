@@ -16,4 +16,6 @@ A profile layers over whichever profile the environment selects, so on CI `night
 
 The `hegel.toml` is found by searching upward from the test process's working directory; when tests run outside the source tree, set `HEGEL_CONFIG` to the file's path instead, and under debug verbosity each run logs which config file it loaded. See the "Settings profiles" section of the crate documentation for details.
 
+Inside Antithesis, health checks are now suppressed by the shipped `antithesis` profile rather than forced off by detection, so they can be re-enabled with `suppress_health_check` under `[profiles.antithesis]`, and a test that selects a profile not extending `antithesis` runs them.
+
 This changes one default: failing tests on CI now print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. The failure database is disabled on CI, so the printed blob is the only way to reproduce a CI failure locally. To restore the old behavior, set `print_blob = false` under `[profiles.ci]` in `hegel.toml`.

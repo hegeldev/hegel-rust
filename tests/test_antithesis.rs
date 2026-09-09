@@ -121,8 +121,9 @@ fn test_nonexistent_antithesis_output_dir_panics() {
 }
 
 /// Filters out every input. Outside Antithesis this trips the
-/// `FilterTooMuch` health check; inside Antithesis health checks are off, so
-/// the run ends quietly with no valid inputs.
+/// `FilterTooMuch` health check; inside Antithesis the `antithesis` profile
+/// suppresses every health check, so the run ends quietly with no valid
+/// inputs.
 #[hegel::test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_filter_everything_fixture(tc: hegel::TestCase) {
@@ -135,6 +136,16 @@ fn test_health_checks_are_disabled_in_antithesis() {
     let output_dir = TempDir::new().unwrap();
     self_test("antithesis_filter_everything_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+}
+
+#[test]
+fn test_health_checks_run_in_antithesis_under_a_profile_that_does_not_extend_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    self_test("antithesis_filter_everything_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .env("HEGEL_DEFAULT_PROFILE", "default")
+        .expect_failure("FailedHealthCheck: FilterTooMuch")
         .run();
 }
 

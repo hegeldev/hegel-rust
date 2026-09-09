@@ -746,8 +746,8 @@ fn cstring_lossy(s: &str) -> CString {
 /// Three ordinary profiles ship with libhegel: `development` (the base
 /// defaults, unchanged — what local runs get), `ci` (derandomization on,
 /// database disabled, the `too_slow` health check suppressed, reproduction
-/// lines printed), and `antithesis`
-/// (database disabled). A custom profile without an explicit `extends`
+/// lines printed), and `antithesis` (database disabled, every health check
+/// suppressed). A custom profile without an explicit `extends`
 /// extends `selected`, skipping any candidate already in its chain, so it
 /// sits on `ci` when resolved on a CI server and on `development` locally.
 /// The shipped profiles themselves extend `default` and never layer over
@@ -758,11 +758,6 @@ fn cstring_lossy(s: &str) -> CString {
 /// directory or the nearest ancestor, and registered programmatically with
 /// `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
 /// to resolve one by name.
-///
-/// Inside Antithesis every health check is skipped regardless of the
-/// resolved profile, and no profile or setter re-enables them: Antithesis's
-/// thread pausing would trip wall-clock checks such as `TooSlow`
-/// spuriously.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,

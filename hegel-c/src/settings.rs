@@ -143,11 +143,6 @@ pub enum Verbosity {
 /// system ([`crate::profiles`]); `hegel_settings_new` resolves the
 /// `selected` alias, so C-ABI callers get profile-aware defaults
 /// automatically.
-///
-/// Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), every health
-/// check is off and cannot be re-enabled: Antithesis's thread pausing makes
-/// wall-clock health checks like `TooSlow` meaningless. This is detection,
-/// not profile policy, so no profile or setting overrides it.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -182,9 +177,9 @@ pub struct Settings {
 
 impl Settings {
     /// The library's base defaults. Antithesis detection is the one
-    /// environment read: it stamps [`Settings::in_antithesis`], which is
-    /// detection rather than policy. For profile-aware construction use the
-    /// profile system.
+    /// environment read: it stamps [`Settings::in_antithesis`], which only
+    /// silences the nondeterminism notice and is not settings policy. For
+    /// profile-aware construction use the profile system.
     pub fn new() -> Self {
         Self::base(crate::antithesis_detect::antithesis_env_var_set())
     }
@@ -230,11 +225,10 @@ impl Settings {
         self
     }
 
-    /// Whether `check` should be skipped: either the user suppressed it
-    /// explicitly, or the run is inside Antithesis, where every health check
-    /// is off by default.
+    /// Whether `check` should be skipped because the resolved settings
+    /// suppress it. The shipped `antithesis` profile suppresses every check.
     pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
-        self.in_antithesis || self.suppress_health_check.contains(&check)
+        self.suppress_health_check.contains(&check)
     }
 
     /// Resolve the effective backend, given whether the process is running
