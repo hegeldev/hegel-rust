@@ -36,7 +36,6 @@ use crate::native::core::{
     Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
-use crate::native::data_tree::generate_novel_prefix;
 #[cfg(not(target_family = "wasm"))]
 use crate::native::database::DirectoryTestCaseDatabase;
 use crate::native::database::{
@@ -1468,6 +1467,6 @@ fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineR
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/test_runner_tests.rs"]
 mod tests;

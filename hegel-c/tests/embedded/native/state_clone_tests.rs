@@ -277,6 +277,7 @@ fn reassembled_values_flow_through_probe_prefixes() {
     assert_eq!(probe.status(), None);
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn concurrent_draws_on_separate_streams_are_deterministic() {
     let run = || -> (Vec<i128>, Vec<i128>) {

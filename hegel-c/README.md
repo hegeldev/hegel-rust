@@ -16,7 +16,8 @@ Each release publishes shared and static
 `libhegel-<goos>-<goarch>.<ext>` libraries, `hegel.h`, and matching
 `.sha256` sidecars for `linux/amd64`, `linux/arm64`, `darwin/arm64`,
 `windows/amd64`, and `windows/arm64`. Intel macOS (`darwin/amd64`) is not
-published; build the crate yourself if you need it.
+published; build the crate yourself if you need it. Releases also include the
+`wasm32-unknown-unknown` WebAssembly artifact.
 
 ## WebAssembly build
 

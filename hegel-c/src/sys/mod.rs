@@ -231,6 +231,6 @@ pub fn pid() -> u32 {
     imp::pid()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/sys_tests.rs"]
 mod tests;

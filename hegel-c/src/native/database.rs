@@ -457,6 +457,6 @@ pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/database_tests.rs"]
 mod tests;

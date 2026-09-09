@@ -90,6 +90,54 @@ jobs:
       - name: Run tests
         run: just check-tests
 
+  test-wasm:
+    name: test-wasm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and WebAssembly target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Compile the test suite for WebAssembly
+        run: cargo test -p hegeltest-c --target wasm32-unknown-unknown --lib --no-run
+      - name: Build the WebAssembly artifact
+        run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+      - name: Smoke-test the WebAssembly host boundary
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          import { randomFillSync } from "node:crypto";
+
+          const bytes = await readFile("target/wasm32-unknown-unknown/release/hegel_c.wasm");
+          let memory;
+          const { instance } = await WebAssembly.instantiate(bytes, {
+            hegel_host: {
+              entropy_fill(ptr, len) {
+                randomFillSync(new Uint8Array(memory.buffer, ptr, len));
+                return 1;
+              },
+              monotonic_nanos() {
+                return process.hrtime.bigint();
+              },
+            },
+          });
+          memory = instance.exports.memory;
+          const pointer = instance.exports.hegel_alloc(16, 8);
+          if (!pointer) throw new Error("hegel_alloc returned NULL");
+          new Uint8Array(memory.buffer, pointer, 16).fill(7);
+          instance.exports.hegel_dealloc(pointer, 16, 8);
+          NODE
+
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
     runs-on: ${{ matrix.os }}
@@ -406,7 +454,7 @@ jobs:
   release:
     name: release
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust'
-    needs: [lint, test, test-all-features, test-minimal-versions, test-c-bindings, test-c-runtime, compile-examples, docs, coverage, nix, miri]
+    needs: [lint, test, test-wasm, test-all-features, test-minimal-versions, test-c-bindings, test-c-runtime, compile-examples, docs, coverage, nix, miri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -681,6 +729,42 @@ jobs:
           fi
           gh release upload "$tag" "${assets[@]}" --clobber
 
+  release-wasm:
+    name: release-wasm
+    if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.c_released == 'true'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: refs/tags/v${{ needs.release.outputs.version }}
+
+      - name: Install Rust and WebAssembly target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Build WebAssembly artifact
+        run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+      - name: Stage WebAssembly asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="libhegel-wasm32-unknown-unknown.wasm"
+          cp target/wasm32-unknown-unknown/release/hegel_c.wasm "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+      - name: Upload WebAssembly asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${VERSION}" libhegel-wasm32-unknown-unknown.wasm libhegel-wasm32-unknown-unknown.wasm.sha256 --clobber
+
   # Independent post-condition check that every expected libhegel asset is
   # present on the Release. `release-binaries` uses `fail-fast: false` so
   # failed-platform diagnostics aren't lost; this aggregator job fails
@@ -690,7 +774,7 @@ jobs:
   release-binaries-verify:
     name: release-binaries-verify
     if: github.event_name == 'push' && github.repository == 'hegeldev/hegel-rust' && needs.release.outputs.c_released == 'true'
-    needs: [release, release-binaries]
+    needs: [release, release-binaries, release-wasm]
     runs-on: ubuntu-latest
     # `contents: write` (not just read) so this job can both view the draft
     # release — drafts are invisible to read-only tokens — and publish it
@@ -709,6 +793,7 @@ jobs:
           tag="v${VERSION}"
           expected=(
             hegel.h
+            libhegel-wasm32-unknown-unknown.wasm
             libhegel-linux-amd64.so
             libhegel-linux-amd64.a
             libhegel-linux-arm64.so
