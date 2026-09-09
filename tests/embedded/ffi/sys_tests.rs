@@ -3,9 +3,10 @@
 //! In the default (shared-library) mode these exercise the loader: candidate
 //! ordering and every load and symbol-resolution failure path, against real
 //! `dlopen`/`LoadLibraryW` calls. With `static-engine` enabled they instead
-//! compile-assert that the [`for_each_hegel_fn`] list and the mirrored types
-//! in `types.rs` match the real `hegel_c` definitions, so any engine-side
-//! signature or layout change fails the all-features build at compile time.
+//! compile-assert that the generated [`for_each_hegel_fn`] list and the
+//! mirrored types in `types.rs` match the real `hegel_c` definitions, so any
+//! engine-side signature or layout change fails the all-features build at
+//! compile time.
 
 #[cfg(not(feature = "static-engine"))]
 mod loading {
@@ -252,7 +253,4 @@ mod drift {
             size_of::<mirror::hegel_output_callback_t>() == size_of::<hegel_output_callback_t>()
         );
     };
-
-    const _: unsafe extern "C" fn(*mut HegelContext, *mut *const c_char) -> hegel_result_t =
-        hegel_version;
 }

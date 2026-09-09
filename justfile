@@ -59,7 +59,12 @@ check-generator-imports:
 check-release-script:
     .github/scripts/test_release.py
 
-check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-generator-imports check-release-script
+# The frontend's list of `hegel_*` functions is generated from the engine
+# source; `just c-header` refreshes it alongside the C header.
+check-ffi-list:
+    scripts/gen-ffi-list.py --check
+
+check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-generator-imports check-release-script check-ffi-list
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
@@ -146,9 +151,11 @@ c-test-runtime:
 c-test-runtime:
     @echo "Skipping c-test-runtime on Windows (GNU nm -D based check, Linux-only for now)"
 
-# Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
+# Regenerate hegel-c/include/hegel.h and the frontend's src/ffi/sys/fns.rs
+# from the Rust source (no diff check).
 c-header:
     HEGEL_C_HEADER_WRITE=1 cargo test -p hegeltest-c --test header_drift
+    scripts/gen-ffi-list.py
 
 # Run a fast core of the suite under Miri to catch undefined behaviour in the
 # native engine and the in-process C-ABI boundary hegeltest drives it through.

@@ -164,6 +164,7 @@ macro_rules! define_engine_api {
         }
 
         $(
+            #[allow(dead_code)]
             pub(crate) unsafe fn $name($($arg: $ty),*) -> $ret {
                 unsafe { (api().$name)($($arg),*) }
             }
