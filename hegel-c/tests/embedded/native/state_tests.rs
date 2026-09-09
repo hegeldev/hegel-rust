@@ -1055,6 +1055,30 @@ fn biased_string_sample_caps_constant_pool_probability() {
 }
 
 #[test]
+fn constants_in_alphabet_is_memoised_on_the_interval_set() {
+    let intervals =
+        crate::native::intervalsets::IntervalSet::new(vec![('a' as u32, 'z' as u32)]).unwrap();
+    assert!(intervals.string_constants_mask.get().is_none());
+
+    let mask = constants_in_alphabet(&intervals);
+    assert_eq!(mask.len(), GLOBAL_CONSTANTS_STRINGS.len());
+    for (cps, &contained) in GLOBAL_CONSTANTS_STRINGS.iter().zip(mask) {
+        assert_eq!(contained, cps.iter().all(|&cp| intervals.contains(cp)));
+    }
+    assert!(mask.iter().any(|&m| m));
+    assert!(mask.iter().any(|&m| !m));
+
+    let again = constants_in_alphabet(&intervals);
+    assert!(core::ptr::eq(mask.as_ptr(), again.as_ptr()));
+    assert!(intervals.string_constants_mask.get().is_some());
+
+    let other =
+        crate::native::intervalsets::IntervalSet::new(vec![('A' as u32, 'Z' as u32)]).unwrap();
+    assert!(other.string_constants_mask.get().is_none());
+    assert_ne!(constants_in_alphabet(&other), mask);
+}
+
+#[test]
 fn biased_string_sample_empty_alphabet_returns_empty_string() {
     let sc = StringChoice {
         intervals: crate::native::intervalsets::IntervalSet::new(vec![])
