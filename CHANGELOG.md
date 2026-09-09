@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.41.3 - 2026-09-09
+
+This patch updates the engine, which replaces its data tree with a flat execution cache. Runs are faster and cache memory is bounded. A test that flips between passing and failing on identical generated values now fails the run as flaky instead of being silently masked, and `HealthCheck::FilterTooMuch` fires after a streak of duplicate invalid test cases instead of on exhaustion of the generation space.
+
+## 0.41.2 - 2026-09-09
+
+Internal refactoring of how the frontend declares the engine's C ABI.
+
 ## 0.41.1 - 2026-09-08
 
 This patch adds `.print_as_call("path::to::function")` on mapped generators, for when a `map` produces a foreign type whose `Debug` output is not pastable Rust (`let kd = 0v3;`) but the drawn input is. It prints the mapped expression, and requires the map's input generator to be printable ([#446](https://github.com/hegeldev/hegel-rust/issues/446)).

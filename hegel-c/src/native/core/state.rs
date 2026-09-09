@@ -512,9 +512,8 @@ impl Default for GenerationParameters {
 
 /// Boundary-biased sample for a type-erased integer choice.
 ///
-/// Implements the "nasty value" boost used by both the
-/// [`NativeTestCase::draw_integer`] code path and the data-tree novel-prefix
-/// walk, keeping the two random-generation routes consistent.
+/// Implements the "nasty value" boost used by the
+/// [`NativeTestCase::draw_integer`] code path.
 ///
 /// When the choice's span fits `i128` (the overwhelmingly common case) this
 /// runs the native [`biased_i128_sample`] — nasty pool plus heavy-tailed
@@ -752,8 +751,7 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// values (`0.0`, `-0.0`, `±1.0`, `±MAX`, `±INFINITY`, `MIN_POSITIVE`, NaN,
 /// plus the user's `min_value`/`max_value`) with probability proportional to
 /// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
-/// otherwise. Shared with the data-tree walk so novel-prefix exploration
-/// hits the same boundary distribution as fresh draws.
+/// otherwise.
 pub(crate) fn biased_float_sample(
     fc: &FloatChoice,
     rng: &mut EngineRng,
@@ -1186,18 +1184,6 @@ pub struct Span {
     pub discarded: bool,
 }
 
-/// A span-boundary event, captured live (in `start_span` / `stop_span`) in
-/// fire order so the data tree can faithfully replay the span structure —
-/// including zero-width spans, whose open/close order can't be recovered from
-/// the finished [`Span`] list alone — without re-executing the test body.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SpanEvent {
-    /// `start_span(label)` was called.
-    Open { label: u64 },
-    /// `stop_span(discarded)` was called.
-    Close { discarded: bool },
-}
-
 /// Maximum nested span depth before the engine marks the test case
 /// `Status::Invalid`.
 ///
@@ -1571,10 +1557,6 @@ pub struct NativeTestCase {
     /// Each entry was pushed by `start_span` and is awaiting a matching
     /// `stop_span` call.
     pub span_stack: Vec<usize>,
-    /// Span open/close events in fire order, each tagged with the draw
-    /// position (`nodes.len()`) at which it occurred. Recorded so the data
-    /// tree can replay the span structure faithfully (see [`SpanEvent`]).
-    pub span_events: Vec<(usize, SpanEvent)>,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
@@ -1613,7 +1595,7 @@ impl NativeTestCase {
 
     /// Like [`Self::new_random`], but generating from the given swarm
     /// parameters rather than drawing fresh ones — used by the exploration
-    /// loop so the novel-prefix walk and the test case share one distribution.
+    /// loop, which draws each case's parameters itself.
     pub fn new_random_with_params(rng: EngineRng, params: GenerationParameters) -> Self {
         Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None)
             .with_random_and_params(rng, params)
@@ -1678,7 +1660,6 @@ impl NativeTestCase {
             clone_children: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
-            span_events: Vec::new(),
             has_discards: false,
             tags: HashSet::default(),
             labels_for_structure_stack: Vec::new(),
@@ -1689,8 +1670,7 @@ impl NativeTestCase {
 
     /// A test case where every draw past the explicit prefix returns
     /// `kind.simplest()` of the requested choice kind. A deterministic
-    /// all-simplest probe of the choice tree's "left leaf" before random
-    /// sampling begins.
+    /// all-simplest probe before random sampling begins.
     pub fn for_simplest(max_size: usize) -> Result<Self, InternalError> {
         Ok(Self::for_choices_and_template(
             &[],
@@ -1724,30 +1704,15 @@ impl NativeTestCase {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
-    /// Like [`Self::for_probe`], but generating from the given swarm parameters
-    /// rather than drawing fresh ones — used by the exploration loop so the
-    /// novel-prefix walk and the test-case tail share one distribution.
-    pub fn for_probe_with_params(
-        prefix: &[ChoiceValue],
-        rng: EngineRng,
-        max_size: usize,
-        params: GenerationParameters,
-    ) -> Self {
-        Self::for_choices_and_template(prefix, None, None, max_size, None)
-            .with_random_and_params(rng, params)
-    }
-
     /// Attach an RNG for post-prefix random draws.  Internal builder used by
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
-    /// `max_size` rather than the bare-replay `usize::MAX`.
+    /// `max_size` rather than the bare-replay `usize::MAX`. Swarm parameters
+    /// are drawn from the RNG up front, before any value is sampled; the main
+    /// exploration loop draws its own and uses
+    /// [`Self::with_random_and_params`] instead.
     fn with_random(self, mut rng: EngineRng) -> Result<Self, InternalError> {
-        // Draw this test case's swarm parameters from the RNG up front, before
-        // any value is sampled. Callers that generate a novel prefix separately
-        // (the main exploration loop) draw the parameters themselves and use
-        // [`Self::with_random_and_params`] so the prefix walk and the test case
-        // share one distribution; the simpler callers get a fresh draw here.
         let params = GenerationParameters::draw(&mut rng)?;
         Ok(self.with_random_and_params(rng, params))
     }
@@ -1841,9 +1806,9 @@ impl NativeTestCase {
     }
 
     /// Replace each clone node's placeholder value with the realized record
-    /// of its stream — nodes, spans, and span events — recursively, so
-    /// [`Self::nodes`] becomes the self-contained pieced-together choice
-    /// sequence of the whole family.
+    /// of its stream — nodes and spans — recursively, so [`Self::nodes`]
+    /// becomes the self-contained pieced-together choice sequence of the
+    /// whole family.
     ///
     /// A no-op until the family has concluded: streams can still grow while
     /// the family is running, and a concluded family's streams cannot (every
@@ -1856,11 +1821,7 @@ impl NativeTestCase {
             let mut child = handle.lock();
             child.freeze();
             child.reassemble();
-            let stream = RealizedStream::new(
-                child.nodes.clone(),
-                child.spans.clone().into_vec(),
-                child.span_events.clone(),
-            );
+            let stream = RealizedStream::new(child.nodes.clone(), child.spans.clone().into_vec());
             let was_forced = self.nodes[idx].was_forced;
             self.nodes[idx] = ChoiceNode::clone_stream(Arc::new(stream), was_forced);
         }
@@ -1890,7 +1851,6 @@ impl NativeTestCase {
             discarded: false,
         });
         self.span_stack.push(idx);
-        self.span_events.push((start, SpanEvent::Open { label }));
         let mut frame = HashSet::default();
         frame.insert(label);
         self.labels_for_structure_stack.push(frame);
@@ -1919,8 +1879,6 @@ impl NativeTestCase {
             span.end = end;
             span.discarded = discard;
         }
-        self.span_events
-            .push((end, SpanEvent::Close { discarded: discard }));
         if discard {
             self.has_discards = true;
         }
@@ -2077,7 +2035,7 @@ impl NativeTestCase {
     ///
     /// Mirrors `weighted(_, forced: Some(_))`: consumes a choice position
     /// without consulting the prefix or RNG, recording the node as forced so
-    /// the shrinker and data tree leave it alone.
+    /// the shrinker leaves it alone.
     pub fn draw_integer_forced<T: Into<BigInt>>(
         &mut self,
         min_value: T,
@@ -2184,8 +2142,7 @@ impl NativeTestCase {
     /// [`Self::draw_fresh_id`] (the pool pattern) and the registry only
     /// grows, so every member fits the range even when concurrent streams
     /// add to the pool, and the recorded kind never depends on the realized
-    /// value. The range is small enough for novel-prefix generation to
-    /// enumerate, and it keeps one identifier of headroom so a replayed
+    /// value. The range keeps one identifier of headroom so a replayed
     /// value just above a deleted top member still validates and repairs
     /// monotonically; values beyond the window are punned to the smallest
     /// member.

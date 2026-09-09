@@ -170,7 +170,7 @@ mod health_checks {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Hegel::new(|tc: TestCase| {
                 let n: i64 = tc.draw(gs::integers::<i64>());
-                tc.assume(n.rem_euclid(16) == 0);
+                tc.assume(n.rem_euclid(16) == 5);
             })
             .settings(
                 Settings::new()
