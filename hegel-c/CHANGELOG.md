@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.7 - 2026-09-09
+
+The per-round continue draw of stateful test cases now stops with probability 2^-32 per round instead of 2^-16.
+
 ## 0.37.6 - 2026-09-09
 
 This patch replaces the engine's data tree with a flat execution cache. Runs get faster — recording overhead on passing workloads drops substantially and stateful shrinking speeds up by about 40% — while the tree's main benefit, serving repeated shrink probes from memory, is kept. Cache memory is bounded at 8 MiB where the tree grew without limit.
