@@ -36,14 +36,18 @@ use crate::native::core::{
     Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
+use crate::native::data_tree::generate_novel_prefix;
+#[cfg(not(target_family = "wasm"))]
+use crate::native::database::DirectoryTestCaseDatabase;
 use crate::native::database::{
-    DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
-    serialize_nodes,
+    TestCaseDatabase, deserialize_choices, serialize_choices, serialize_nodes,
 };
 use crate::native::exec_cache::{ExecCache, KindLedger};
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
-use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::Database;
+use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -1011,11 +1015,14 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
+        #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
             Database::Disabled => None,
         };
+        #[cfg(target_family = "wasm")]
+        let db: Option<Box<dyn TestCaseDatabase>> = None;
         Ok(Engine {
             settings,
             database_key,

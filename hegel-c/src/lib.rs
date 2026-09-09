@@ -5,6 +5,8 @@ extern crate alloc;
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
+#[cfg(target_family = "wasm")]
+use alloc::alloc::{alloc as allocate, dealloc as deallocate};
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::format;
@@ -12,6 +14,8 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+#[cfg(target_family = "wasm")]
+use core::alloc::Layout;
 use core::ffi::{CStr, c_char, c_void};
 use core::future::Future;
 use core::pin::Pin;
@@ -140,6 +144,36 @@ pub enum hegel_result_t {
 }
 
 use hegel_result_t::*;
+
+/// Allocates temporary memory for the WebAssembly host. A zero size or an
+/// invalid alignment returns NULL. The host must release a non-NULL result
+/// with [`hegel_dealloc`], passing the same size and alignment.
+#[cfg(target_family = "wasm")]
+#[unsafe(no_mangle)]
+pub extern "C" fn hegel_alloc(size: usize, align: usize) -> *mut c_void {
+    if size == 0 {
+        return ptr::null_mut();
+    }
+    let Ok(layout) = Layout::from_size_align(size, align) else {
+        return ptr::null_mut();
+    };
+    unsafe { allocate(layout).cast() }
+}
+
+/// Releases memory previously returned by [`hegel_alloc`]. NULL is ignored;
+/// non-NULL pointers must have the same size and alignment used to allocate
+/// them.
+#[cfg(target_family = "wasm")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_dealloc(ptr: *mut c_void, size: usize, align: usize) {
+    if ptr.is_null() || size == 0 {
+        return;
+    }
+    let Ok(layout) = Layout::from_size_align(size, align) else {
+        return;
+    };
+    unsafe { deallocate(ptr.cast(), layout) };
+}
 
 /// Outcome of a single test case. Passed to `hegel_mark_complete`.
 #[repr(C)]

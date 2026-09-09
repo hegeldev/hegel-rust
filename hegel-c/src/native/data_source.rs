@@ -321,6 +321,12 @@ impl DataSource for NativeDataSource {
                  got [{min_concurrency}, {max_concurrency}]"
             )));
         }
+        #[cfg(target_family = "wasm")]
+        if max_concurrency > 1 {
+            return Err(DataSourceError::InvalidArgument(
+                "concurrent state machines are not supported in the WebAssembly build".to_string(),
+            ));
+        }
         self.with_ntc(|ntc| {
             if max_concurrency > 1 {
                 let family = ntc.family();

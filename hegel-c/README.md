@@ -17,3 +17,17 @@ Each release publishes shared and static
 `.sha256` sidecars for `linux/amd64`, `linux/arm64`, `darwin/arm64`,
 `windows/amd64`, and `windows/arm64`. Intel macOS (`darwin/amd64`) is not
 published; build the crate yourself if you need it.
+
+## WebAssembly build
+
+The raw C ABI can also be built for `wasm32-unknown-unknown`:
+
+```bash
+rustup target add wasm32-unknown-unknown
+just c-build-wasm
+```
+
+The resulting module uses `hegel_host.entropy_fill` and
+`hegel_host.monotonic_nanos` for platform services. Filesystem persistence and
+concurrent state machines are unavailable in this single-threaded build; a
+browser or other host binding supplies the imports and Wasm memory handling.

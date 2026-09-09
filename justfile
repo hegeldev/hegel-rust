@@ -77,6 +77,11 @@ check-coverage:
 c-build:
     cargo build -p hegeltest-c --release
 
+# Type-check and build the browser-oriented raw WebAssembly artifact.
+c-build-wasm:
+    cargo check -p hegeltest-c --target wasm32-unknown-unknown
+    cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+
 # Run the hegel-c smoke tests (Rust integration test that dlopens
 # libhegel) and build + run every example C program against both the
 # shared (libhegel.so) and static (libhegel.a) builds. The static link

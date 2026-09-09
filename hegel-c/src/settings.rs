@@ -181,7 +181,7 @@ impl Settings {
             output: Output::stderr(),
             seed: None,
             derandomize: in_ci,
-            database: if in_ci || in_antithesis {
+            database: if in_ci || in_antithesis || cfg!(target_family = "wasm") {
                 Database::Disabled
             } else {
                 Database::Unset
