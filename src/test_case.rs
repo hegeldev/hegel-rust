@@ -110,10 +110,6 @@ pub(crate) struct TestCaseGlobalData {
     /// [`TestCase::record_named_draw`] (display-name allocation + `Debug`
     /// rendering of the value) can be skipped entirely.
     emit: bool,
-    /// When this test case started, shared by every clone so the
-    /// `[worker N +X.XXXms]` offsets stamped on concurrent workers' output
-    /// lines are comparable across workers.
-    case_start: std::time::Instant,
 }
 
 /// The width drawn-value documents are laid out to.
@@ -160,7 +156,6 @@ pub(crate) struct TestCaseLocalData {
     /// Printed draws currently in progress on this instance (see
     /// [`PrintingDrawScope`]).
     printing_depth: usize,
-    indent: usize,
     on_draw: OutputSink,
 }
 
@@ -245,15 +240,18 @@ pub struct TestCase {
     global: Arc<TestCaseGlobalData>,
     local: RefCell<TestCaseLocalData>,
     /// This instance's libhegel handle, shared through the `Arc` with the
-    /// lifecycle that created it and with any [`child`](TestCase::child)
-    /// instances, so a `TestCase` that escapes its test (moved to a thread
-    /// that is never joined) keeps the handle alive rather than dangling —
-    /// its later draws fail cleanly because the case has finished.
-    /// [`clone`](TestCase::clone) instead gets a fresh handle
+    /// lifecycle that created it, so a `TestCase` that escapes its test
+    /// (moved to a thread that is never joined) keeps the handle alive
+    /// rather than dangling — its later draws fail cleanly because the case
+    /// has finished. A [`child`](TestCase::child) gets a block handle
+    /// (`hegel_test_case_block`) onto the same choice stream with its own
+    /// indented print region; [`clone`](TestCase::clone) gets a fresh handle
     /// (`hegel_test_case_clone`) onto an independent stream of the same
     /// test case, so two clones can be driven from different threads
-    /// concurrently without perturbing each other's values.
-    handle: Arc<CTestCase>,
+    /// concurrently without perturbing each other's values. The cell is for
+    /// [`repeat`](TestCase::repeat), which prints each iteration's body
+    /// through a block handle of its own and restores this one after.
+    handle: RefCell<Arc<CTestCase>>,
     /// This instance's printer onto its own region of the family document,
     /// fetched on first use. The engine anchors a clone's region when the
     /// clone is made, so where this instance's output appears is fixed even
@@ -277,7 +275,7 @@ impl Clone for TestCase {
         TestCase {
             global: self.global.clone(),
             local: RefCell::new(self.local.borrow().clone()),
-            handle: Arc::new(self.handle.clone_handle()),
+            handle: RefCell::new(Arc::new(self.handle.borrow().clone_handle())),
             printer: RefCell::new(None),
             draw_state: Arc::clone(&self.draw_state),
         }
@@ -287,6 +285,42 @@ impl Clone for TestCase {
 impl std::fmt::Debug for TestCase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TestCase").finish_non_exhaustive()
+    }
+}
+
+/// What the run lifecycle keeps of a [`TestCase`] it has handed to the test
+/// body: enough to render the document of drawn values and notes — the root
+/// region and every region forked from it — once the body has finished,
+/// successfully or not.
+pub(crate) struct OutputReporter {
+    emit: bool,
+    handle: Arc<CTestCase>,
+    sink: OutputSink,
+}
+
+impl OutputReporter {
+    /// Render the document and push it, line by line, through the output
+    /// sink. A straggling clone still writing on an unjoined thread loses
+    /// its uncommitted draw and its region dies; its later writes are
+    /// harmless no-ops.
+    pub(crate) fn emit_rendered_output(&self) {
+        if !self.emit {
+            return;
+        }
+        let output = PrettyPrinter::from_handle(self.handle.printer(PRINTER_MAX_WIDTH)).try_value();
+        match output {
+            Ok(output) => {
+                for line in output.lines() {
+                    (self.sink)(line);
+                }
+            }
+            Err(message) => (self.sink)(&format!(
+                "Failed to render this test case's drawn values ({message}). This \
+                 indicates a bug in printing code the test uses: check any \
+                 hand-written PrettyPrintable impl or print_with closure for \
+                 unbalanced begin_group/end_group calls."
+            )),
+        }
     }
 }
 
@@ -411,17 +445,13 @@ impl TestCase {
             Arc::new(|_| {})
         };
         TestCase {
-            global: Arc::new(TestCaseGlobalData {
-                emit,
-                case_start: std::time::Instant::now(),
-            }),
+            global: Arc::new(TestCaseGlobalData { emit }),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
                 printing_depth: 0,
-                indent: 0,
                 on_draw,
             }),
-            handle,
+            handle: RefCell::new(handle),
             printer: RefCell::new(None),
             draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
@@ -518,19 +548,13 @@ impl TestCase {
         let Some(display_name) = self.allocate_display_name(name, repeatable) else {
             return generator.do_draw(self);
         };
-        let indent = self.local.borrow().indent;
-        let prefix = self.worker_line_prefix();
         let _printing = PrintingDrawScope::new(self);
         self.with_printer(|printer| {
             let mut speculation = printer.speculate();
             let printer = speculation.printer();
-            printer.text(&prefix);
-            printer.text(&" ".repeat(indent));
-            printer.shift_indent(indent as isize);
             printer.text(&format!("let {display_name} = "));
             let value = self.draw_and_print(&generator, printer);
             printer.text(";");
-            printer.shift_indent(-(indent as isize));
             printer.hard_break();
             speculation.commit();
             value
@@ -632,13 +656,7 @@ impl TestCase {
         if !self.global.emit {
             return;
         }
-        let pad = " ".repeat(self.local.borrow().indent);
-        let prefix = self.worker_line_prefix();
-        let text = format!(
-            "{prefix}{pad}{}",
-            message.replace('\n', &format!("\n{pad}"))
-        );
-        tolerate(self.with_ctc(|ctc| ctc.note(&text)));
+        tolerate(self.with_ctc(|ctc| ctc.note(message)));
     }
 
     /// Record a targeting observation to help the engine find extreme inputs.
@@ -784,10 +802,9 @@ impl TestCase {
             iteration += 1;
             self.note(&format!("// Repetition #{}", iteration));
 
-            let prev_indent = self.local.borrow().indent;
-            self.local.borrow_mut().indent = prev_indent + 2;
+            let outer = self.enter_block(2);
             let result = catch_unwind(AssertUnwindSafe(&mut body));
-            self.local.borrow_mut().indent = prev_indent;
+            self.restore_handle(outer);
 
             match result {
                 Ok(()) => {}
@@ -809,20 +826,42 @@ impl TestCase {
         raise_control(LoopDone);
     }
 
+    /// An instance for an indented section of this one's output — a
+    /// stateful rule or invariant body under its heading. It draws from the
+    /// same choice stream through a block handle whose print region is
+    /// nested in this instance's at the current position, every line of it
+    /// `extra_indent` columns further in, and opens a fresh draw-naming
+    /// scope.
     pub(crate) fn child(&self, extra_indent: usize) -> Self {
         let local = self.local.borrow();
+        let block = self.handle.borrow().block_handle(extra_indent as u64);
         TestCase {
             global: self.global.clone(),
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
                 printing_depth: 0,
-                indent: local.indent + extra_indent,
                 on_draw: local.on_draw.clone(),
             }),
-            handle: Arc::clone(&self.handle),
+            handle: RefCell::new(Arc::new(block)),
             printer: RefCell::new(None),
             draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
+    }
+
+    /// Switch this instance onto a block handle nested `indent` columns in
+    /// from its current region, returning the handle to hand back to
+    /// [`restore_handle`](Self::restore_handle) afterwards. Lines printed in
+    /// between land in the block.
+    fn enter_block(&self, indent: usize) -> Arc<CTestCase> {
+        let block = Arc::new(self.handle.borrow().block_handle(indent as u64));
+        self.restore_handle(block)
+    }
+
+    /// Make `handle` this instance's handle again, returning the one it
+    /// replaces. The cached printer is dropped: it was onto the old region.
+    fn restore_handle(&self, handle: Arc<CTestCase>) -> Arc<CTestCase> {
+        *self.printer.borrow_mut() = None;
+        std::mem::replace(&mut *self.handle.borrow_mut(), handle)
     }
 
     /// Run `f` with this instance's printer onto its own region of the
@@ -837,46 +876,13 @@ impl TestCase {
         f(printer)
     }
 
-    /// The `[worker N +X.XXXms] ` attribution for output written from a
-    /// concurrent stateful worker thread, empty elsewhere. Computed when a
-    /// line is recorded — on the worker's own thread, against the case-wide
-    /// start time — so attribution and timing survive into the document
-    /// rendered after the case completes.
-    fn worker_line_prefix(&self) -> String {
-        match crate::stateful::current_worker_index() {
-            Some(worker) => {
-                let ms = self.global.case_start.elapsed().as_secs_f64() * 1000.0;
-                format!("[worker {worker} +{ms:.3}ms] ")
-            }
-            None => String::new(),
-        }
-    }
-
-    /// Render the document of drawn values and notes accumulated so far —
-    /// this instance's region and every region forked from it — and push it,
-    /// line by line, through the output sink. Called by the run lifecycle,
-    /// on the root instance, once the test body has finished (successfully
-    /// or not). A straggling clone still writing on an unjoined thread loses
-    /// its uncommitted draw and its region dies; its later writes are
-    /// harmless no-ops.
-    pub(crate) fn emit_rendered_output(&self) {
-        if !self.global.emit {
-            return;
-        }
-        let output = self.with_printer(|printer| printer.try_value());
-        let local = self.local.borrow();
-        match output {
-            Ok(output) => {
-                for line in output.lines() {
-                    (local.on_draw)(line);
-                }
-            }
-            Err(message) => (local.on_draw)(&format!(
-                "Failed to render this test case's drawn values ({message}). This \
-                 indicates a bug in printing code the test uses: check any \
-                 hand-written PrettyPrintable impl or print_with closure for \
-                 unbalanced begin_group/end_group calls."
-            )),
+    /// The reporter that renders this instance's document once the test
+    /// body — which takes the instance itself — has finished.
+    pub(crate) fn reporter(&self) -> OutputReporter {
+        OutputReporter {
+            emit: self.global.emit,
+            handle: Arc::clone(&self.handle.borrow()),
+            sink: self.local.borrow().on_draw.clone(),
         }
     }
 
@@ -951,7 +957,8 @@ impl TestCase {
     /// itself (returning `HEGEL_E_CONCURRENT_USE`), and clones each carry their
     /// own handle and lock.
     pub(crate) fn with_ctc<R>(&self, f: impl FnOnce(&CTestCase) -> R) -> R {
-        f(&self.handle)
+        let handle = Arc::clone(&self.handle.borrow());
+        f(&handle)
     }
 
     /// The number of currently-open spans on this instance. Lets a generator

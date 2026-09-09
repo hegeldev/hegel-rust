@@ -414,6 +414,33 @@ impl CTestCase {
         CTestCase { raw }
     }
 
+    /// Open a block on this handle via `hegel_test_case_block`: a new
+    /// libhegel handle onto the *same* choice stream whose print region is
+    /// nested in this handle's at the current position, every line of it
+    /// indented `indent` columns further. This is how a stateful rule body
+    /// or a `repeat` iteration prints under its heading. The block is used
+    /// in place of this handle, never concurrently with it, and is freed
+    /// independently on drop.
+    pub(crate) fn block_handle(&self, indent: u64) -> CTestCase {
+        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
+        // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_block(ctx, self.raw, indent, &mut raw)
+        }));
+        CTestCase { raw }
+    }
+
+    /// Attribute the lines recorded through this handle — and through the
+    /// blocks and clones derived from it afterwards — to concurrent worker
+    /// `worker_index` (`hegel_test_case_set_worker`): the engine prefixes
+    /// each with `[worker N +X.XXXms] `, stamped when the line is recorded.
+    pub(crate) fn set_worker(&self, worker_index: i64) {
+        // SAFETY: self.raw is a live handle.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_set_worker(ctx, self.raw, worker_index)
+        }));
+    }
+
     /// Whether this test case belongs to a run already known to be
     /// nondeterministic (`hegel_test_case_is_nondeterministic`). The engine
     /// stamps the case before it starts, so the answer is stable for the
@@ -950,8 +977,10 @@ impl CTestCase {
     }
 
     /// Append a note to this handle's print region (`hegel_note`): whole
-    /// lines, ordered with the handle's drawn values, and held back by the
-    /// engine while a drawn value is mid-print on the region.
+    /// lines, ordered with the handle's drawn values, indented with the
+    /// region's block, prefixed with the handle's worker attribution, and
+    /// held back by the engine while a drawn value is mid-print on the
+    /// region.
     pub(crate) fn note(&self, text: &str) -> Result<(), PrinterCallError> {
         PrinterHandle::check(with_context(|ctx| unsafe {
             hegel_c::hegel_note(ctx, self.raw, text.as_ptr(), text.len())

@@ -302,7 +302,7 @@ pub(crate) fn run_test_case(
         should_emit,
         case_sink.or_else(|| output.sink().cloned()),
     );
-    let reporter = tc.child(0);
+    let reporter = tc.reporter();
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
 
