@@ -547,6 +547,16 @@ fn printers_move_between_threads() {
 }
 
 #[test]
+fn a_clone_stops_printing_once_its_document_is_read() {
+    let mut doc = Document::new();
+    let mut child = doc.printer().clone();
+    assert!(child.should_print());
+    doc.finish();
+    assert!(!child.should_print());
+    child.text("ignored");
+}
+
+#[test]
 fn cloning_a_dead_region_yields_a_noop_printer() {
     let mut doc = Document::new();
     let child = doc.printer().clone();

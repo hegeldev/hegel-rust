@@ -552,6 +552,45 @@ fn family_document_is_shared_and_survives_completion() {
 }
 
 #[test]
+fn note_during_a_speculative_draw_lands_after_the_value() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+
+        let mut p: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut p));
+        ok(hegel_printer_begin_speculative(ctx, p));
+        text(ctx, p, "let x = ");
+        ok(hegel_note(ctx, tc, "mid-draw".as_ptr(), 8));
+        text(ctx, p, "5;");
+        ok(hegel_printer_hard_break(ctx, p));
+        ok(hegel_printer_commit_speculative(ctx, p));
+
+        ok(hegel_printer_begin_speculative(ctx, p));
+        text(ctx, p, "let y = ");
+        ok(hegel_note(ctx, tc, "rejected".as_ptr(), 8));
+        ok(hegel_printer_abort_speculative(ctx, p));
+
+        assert_eq!(value(ctx, p), "let x = 5;\nmid-draw\nrejected\n");
+
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
 fn clone_regions_anchor_where_the_clone_was_made() {
     let ctx = hegel_context_new();
     unsafe {

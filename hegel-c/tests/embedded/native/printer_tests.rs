@@ -1002,6 +1002,74 @@ fn note_respects_indentation_and_recording() {
     assert_eq!(p.value().unwrap(), "xafter\n  ");
 }
 
+#[test]
+fn note_during_a_speculation_is_held_until_the_commit() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = ").unwrap();
+    p.note(M, "from inside").unwrap();
+    p.text(M, "5;").unwrap();
+    p.hard_break(M).unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "let x = 5;\nfrom inside\n");
+}
+
+#[test]
+fn note_during_a_speculation_survives_its_abort() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = ").unwrap();
+    p.note(M, "from inside").unwrap();
+    p.abort_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "from inside\n");
+}
+
+#[test]
+fn held_notes_wait_for_the_outermost_speculation() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = [").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "1").unwrap();
+    p.note(M, "first").unwrap();
+    p.abort_speculative(M).unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "2").unwrap();
+    p.note(M, "second").unwrap();
+    p.commit_speculative(M).unwrap();
+    p.text(M, "];").unwrap();
+    p.hard_break(M).unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "let x = [2];\nfirst\nsecond\n");
+}
+
+#[test]
+fn held_notes_are_per_target() {
+    let mut p = printer(79);
+    let slot = p.deferred(M).unwrap();
+    let s = Target::Slot(slot);
+    p.begin_speculative(s).unwrap();
+    p.text(s, "a").unwrap();
+    p.note(s, "in slot").unwrap();
+    p.note(M, "on main").unwrap();
+    p.commit_speculative(s).unwrap();
+    p.begin_speculative(s).unwrap();
+    p.note(s, "aborted attempt").unwrap();
+    p.abort_speculative(s).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "ain slot\naborted attempt\non main\n");
+}
+
+#[test]
+fn held_notes_die_when_the_document_is_sealed() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.note(M, "never lands").unwrap();
+    assert_eq!(p.value().unwrap(), "a");
+    assert_eq!(p.note(M, "late"), Err(PrinterError::DeadSlot));
+}
+
 #[derive(Debug, Clone)]
 enum Op {
     Text(String),

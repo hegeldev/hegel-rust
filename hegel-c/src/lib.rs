@@ -4854,6 +4854,13 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 /// handle* appear in the order they were appended; a clone's notes appear
 /// in the clone's region.
 ///
+/// A note appended while a speculative region is open on the handle's
+/// region — the client is mid-way through printing a drawn value, and the
+/// note comes from inside that value's generation — is held back rather
+/// than spliced into the value's line, and appended once the outermost
+/// region closes, whether it is committed or aborted. Held notes are lost
+/// if the document is read first (the writer was a straggler).
+///
 /// Notes never configure the document's width; they render at whatever
 /// width ends up configured (default 79).
 ///

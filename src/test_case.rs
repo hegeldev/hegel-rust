@@ -5,7 +5,7 @@ use crate::control::{
 use crate::ffi::CTestCase;
 use crate::ffi::sys as hegel_c;
 use crate::generators::{Generator, PrintableGenerator};
-use crate::pretty::PrettyPrinter;
+use crate::pretty::{PrettyPrinter, tolerate};
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -120,15 +120,14 @@ pub(crate) struct TestCaseGlobalData {
 const PRINTER_MAX_WIDTH: u64 = crate::pretty::DEFAULT_MAX_WIDTH;
 
 /// Marks a printed draw as in progress: `printing_depth` is raised for the
-/// duration of the enclosing `draw_and_print` call so that a `tc.note()` or
-/// nested `tc.draw` made by a hand-written generator body behaves exactly as
-/// it does inside a combinator span — the note buffers, the nested draw
-/// stays silent — instead of re-entering the printer lock the enclosing draw
-/// already holds. Dropping the scope restores the depth and flushes the
-/// buffered notes, so they land right after their draw's line even when the
-/// draw unwinds (a failed assumption, a budget stop). This scope is the only
-/// thing that defers a note: outside it, notes and draw lines write to the
-/// instance's print region directly, in call order.
+/// duration of the enclosing `draw_and_print` call so that a nested
+/// `tc.draw` made by a hand-written generator body stays silent, exactly as
+/// it does inside a combinator span, instead of re-entering the printer the
+/// enclosing draw is already writing its line through. A `tc.note()` made
+/// during the draw needs no frontend bookkeeping: the engine holds a note
+/// appended while the region's speculative draw is open and appends it once
+/// the draw's line is done — whether the draw commits or unwinds (a failed
+/// assumption, a budget stop).
 struct PrintingDrawScope<'a> {
     tc: &'a TestCase,
 }
@@ -143,20 +142,7 @@ impl<'a> PrintingDrawScope<'a> {
 impl Drop for PrintingDrawScope<'_> {
     fn drop(&mut self) {
         self.tc.local.borrow_mut().printing_depth -= 1;
-        self.tc.flush_pending_notes();
     }
-}
-
-/// Emit one note line: the worker attribution `prefix` (empty outside
-/// concurrent workers), an indent prefix, the message (with any embedded
-/// newlines breaking at the note's indentation), and a closing line break.
-fn emit_note_line(printer: &mut PrettyPrinter, prefix: &str, indent: usize, message: &str) {
-    printer.text(prefix);
-    printer.text(&" ".repeat(indent));
-    printer.shift_indent(indent as isize);
-    printer.text(message);
-    printer.shift_indent(-(indent as isize));
-    printer.hard_break();
 }
 
 #[derive(Default)]
@@ -169,8 +155,7 @@ pub(crate) struct DrawState {
 #[derive(Clone)]
 pub(crate) struct TestCaseLocalData {
     /// Engine spans currently open on this instance (`start_span` without a
-    /// matching `stop_span`). It silences nested named draws and never
-    /// defers notes, which is `printing_depth`'s job.
+    /// matching `stop_span`). It silences nested named draws.
     span_depth: usize,
     /// Printed draws currently in progress on this instance (see
     /// [`PrintingDrawScope`]).
@@ -277,15 +262,6 @@ pub struct TestCase {
     /// clones write concurrently, and the document assembles deterministically
     /// by anchor position.
     printer: RefCell<Option<PrettyPrinter>>,
-    /// Notes recorded while this instance was printing a draw
-    /// (`printing_depth > 0`, e.g. from inside a composite body). Emitting
-    /// them inline would splice text into the middle of the draw's
-    /// `let … = …;` line, so they are buffered here and flushed, in order,
-    /// by the [`PrintingDrawScope`] that deferred them once the draw's line
-    /// is done. A note can only buffer during a printed draw on this same
-    /// instance, so the buffer is instance-local and no other instance can
-    /// flush this one's notes into its own region out of order.
-    pending_notes: RefCell<Vec<(String, usize, String)>>,
     /// Draw-name bookkeeping for this instance's naming scope, behind a
     /// blocking, non-reentrant mutex that only serialises the frontend's own
     /// accounting (no method holds it while calling back into `TestCase`).
@@ -303,7 +279,6 @@ impl Clone for TestCase {
             local: RefCell::new(self.local.borrow().clone()),
             handle: Arc::new(self.handle.clone_handle()),
             printer: RefCell::new(None),
-            pending_notes: RefCell::new(Vec::new()),
             draw_state: Arc::clone(&self.draw_state),
         }
     }
@@ -448,7 +423,6 @@ impl TestCase {
             }),
             handle,
             printer: RefCell::new(None),
-            pending_notes: RefCell::new(Vec::new()),
             draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
     }
@@ -658,18 +632,13 @@ impl TestCase {
         if !self.global.emit {
             return;
         }
-        let (indent, mid_draw) = {
-            let local = self.local.borrow();
-            (local.indent, local.printing_depth > 0)
-        };
+        let pad = " ".repeat(self.local.borrow().indent);
         let prefix = self.worker_line_prefix();
-        if mid_draw {
-            self.pending_notes
-                .borrow_mut()
-                .push((prefix, indent, message.to_string()));
-        } else {
-            self.with_printer(|printer| emit_note_line(printer, &prefix, indent, message));
-        }
+        let text = format!(
+            "{prefix}{pad}{}",
+            message.replace('\n', &format!("\n{pad}"))
+        );
+        tolerate(self.with_ctc(|ctc| ctc.note(&text)));
     }
 
     /// Record a targeting observation to help the engine find extreme inputs.
@@ -852,7 +821,6 @@ impl TestCase {
             }),
             handle: Arc::clone(&self.handle),
             printer: RefCell::new(None),
-            pending_notes: RefCell::new(Vec::new()),
             draw_state: Arc::new(Mutex::new(DrawState::default())),
         }
     }
@@ -882,20 +850,6 @@ impl TestCase {
             }
             None => String::new(),
         }
-    }
-
-    /// Emit any notes recorded while a draw was in progress on this
-    /// instance.
-    fn flush_pending_notes(&self) {
-        let notes = std::mem::take(&mut *self.pending_notes.borrow_mut());
-        if notes.is_empty() {
-            return;
-        }
-        self.with_printer(|printer| {
-            for (prefix, indent, message) in &notes {
-                emit_note_line(printer, prefix, *indent, message);
-            }
-        });
     }
 
     /// Render the document of drawn values and notes accumulated so far —

@@ -165,7 +165,19 @@ struct Group {
 struct Slot {
     commands: Vec<Cmd>,
     speculation: Vec<Vec<Cmd>>,
+    pending_notes: Vec<String>,
     dead: bool,
+}
+
+fn note_cmds(text: &str) -> Vec<Cmd> {
+    let mut cmds = Vec::new();
+    for segment in text.split('\n') {
+        if !segment.is_empty() {
+            cmds.push(Cmd::Text(segment.to_string()));
+        }
+        cmds.push(Cmd::HardBreak);
+    }
+    cmds
 }
 
 fn spaces(n: isize) -> String {
@@ -216,6 +228,7 @@ pub struct Printer {
     main: Vec<Cmd>,
     open_groups: isize,
     speculation: Vec<Vec<Cmd>>,
+    pending_notes: Vec<String>,
     slots: Vec<Slot>,
     pending_resolve: bool,
     sealed: bool,
@@ -233,6 +246,7 @@ impl Printer {
             main: Vec::new(),
             open_groups: 0,
             speculation: Vec::new(),
+            pending_notes: Vec::new(),
             slots: Vec::new(),
             pending_resolve: false,
             sealed: false,
@@ -366,7 +380,9 @@ impl Printer {
 
     /// Close the innermost speculative region on `target`, keeping its
     /// content. Committing into the main output validates group balance and
-    /// rejects atomically, leaving the region open.
+    /// rejects atomically, leaving the region open. Closing the outermost
+    /// region releases the notes held while it was open (see
+    /// [`Printer::note`]).
     pub fn commit_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
         if self.sealed {
             return Err(PrinterError::DeadSlot);
@@ -410,32 +426,55 @@ impl Printer {
                 let buf = slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
                 if let Some(outer) = slot.speculation.last_mut() {
                     outer.extend(buf);
-                } else {
-                    slot.commands.extend(buf);
+                    return Ok(());
                 }
+                slot.commands.extend(buf);
             }
         }
+        self.release_held_notes(target);
         Ok(())
     }
 
     /// Close the innermost speculative region on `target`, discarding its
-    /// content. Deferred slots opened inside the region die with it.
+    /// content. Deferred slots opened inside the region die with it. Closing
+    /// the outermost region releases the notes held while it was open (see
+    /// [`Printer::note`]): a note is never part of the retracted content.
     pub fn abort_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
         if self.sealed {
             return Err(PrinterError::DeadSlot);
         }
-        let buf = match target {
-            Target::Main => self.speculation.pop().ok_or(PrinterError::NoSpeculation)?,
+        let (buf, outermost) = match target {
+            Target::Main => {
+                let buf = self.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
+                (buf, self.speculation.is_empty())
+            }
             Target::Slot(SlotId(id)) => {
                 let slot = &mut self.slots[id];
                 if slot.dead {
                     return Err(PrinterError::DeadSlot);
                 }
-                slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?
+                let buf = slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
+                (buf, slot.speculation.is_empty())
             }
         };
         self.kill_splices(&buf);
+        if outermost {
+            self.release_held_notes(target);
+        }
         Ok(())
+    }
+
+    fn release_held_notes(&mut self, target: Target) {
+        let (notes, commands) = match target {
+            Target::Main => (core::mem::take(&mut self.pending_notes), &mut self.main),
+            Target::Slot(SlotId(id)) => {
+                let slot = &mut self.slots[id];
+                (core::mem::take(&mut slot.pending_notes), &mut slot.commands)
+            }
+        };
+        for note in &notes {
+            commands.extend(note_cmds(note));
+        }
     }
 
     /// Close the outstanding deferred session and seal the document (see
@@ -502,13 +541,35 @@ impl Printer {
     /// Append a note to `target`: each `\n`-separated line of `text` is
     /// emitted as literal text followed by a hard break, so a note always
     /// occupies whole lines and keeps width accounting correct even when the
-    /// note contains newlines. Errors only for a dead slot target.
+    /// note contains newlines.
+    ///
+    /// A note appended while a speculative region is open on `target` — a
+    /// value is being printed, and the note comes from inside its generation
+    /// — is held back rather than spliced into that value's line, and
+    /// appended when the outermost region on the target closes, whether by
+    /// [`Printer::commit_speculative`] or [`Printer::abort_speculative`].
+    /// Held notes die with the target if the document is sealed first.
+    /// Errors only for a dead target.
     pub fn note(&mut self, target: Target, text: &str) -> Result<(), PrinterError> {
-        for segment in text.split('\n') {
-            if !segment.is_empty() {
-                self.dispatch(target, Cmd::Text(segment.to_string()))?;
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
+        let held = match target {
+            Target::Main => (!self.speculation.is_empty()).then_some(&mut self.pending_notes),
+            Target::Slot(SlotId(id)) => {
+                let slot = &mut self.slots[id];
+                if slot.dead {
+                    return Err(PrinterError::DeadSlot);
+                }
+                (!slot.speculation.is_empty()).then_some(&mut slot.pending_notes)
             }
-            self.dispatch(target, Cmd::HardBreak)?;
+        };
+        if let Some(held) = held {
+            held.push(text.to_string());
+            return Ok(());
+        }
+        for cmd in note_cmds(text) {
+            self.dispatch(target, cmd)?;
         }
         Ok(())
     }
