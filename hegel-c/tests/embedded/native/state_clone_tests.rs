@@ -98,7 +98,6 @@ fn reassemble_embeds_child_records_recursively() {
     assert_eq!(stream.spans()[0].label, "42");
     assert_eq!(stream.spans()[0].start, 0);
     assert_eq!(stream.spans()[0].end, 2);
-    assert_eq!(stream.span_events().len(), 2);
 }
 
 #[test]

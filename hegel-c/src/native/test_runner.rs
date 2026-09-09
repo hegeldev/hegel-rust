@@ -32,14 +32,15 @@ use rand::RngExt;
 use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, SpanEvent,
-    Spans, Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
+    Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
-use crate::native::data_tree::generate_novel_prefix;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
+    serialize_nodes,
 };
+use crate::native::exec_cache::{ExecCache, KindLedger};
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
@@ -58,17 +59,25 @@ pub struct RunResult {
     /// `tc.target()` observations recorded during the test case, keyed by
     /// label. Empty for tests that don't call `tc.target()`.
     pub target_observations: HashMap<String, f64>,
-    /// Live span open/close events (with draw positions) from this execution,
-    /// for folding into the choice tree. Empty on a result reconstructed from
-    /// the tree (the events are already recorded there).
-    pub span_events: Vec<(usize, SpanEvent)>,
     /// `tc.event()` / `tc.event_value()` observations from this execution,
     /// in recording order. Empty for tests that record no events and on a
-    /// result reconstructed from the tree.
+    /// result served from the execution cache.
     pub events: Vec<(String, Option<f64>)>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
+
+/// Stop generating after this many consecutive generation-phase cases whose
+/// realized values had been executed before — the flat-cache replacement for
+/// the tree's exhaustion stop, applied only while no valid case has been
+/// generated. The stop exists so a tiny fully-filtered space reaches the
+/// exhausted-space FilterTooMuch instead of grinding out the whole invalid
+/// budget; once anything is valid the test-case budget bounds the run, and a
+/// duplicate streak is routine mid-size-space behavior (at k of S values
+/// seen, a streak of N duplicates has probability (k/S)^N, near 1 late in
+/// coupon collection — an unconditional stop would end a 32-way `one_of`
+/// before reaching every alternative).
+const DUPLICATE_STOP: u64 = RANDOM_GENERATION_BATCH;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
 /// Maximum number of *total* filtered (assume()-failed) test cases — counted
@@ -181,7 +190,7 @@ impl<'a> Engine<'a> {
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 log_phase("Reuse", "Start");
                 let key_bytes = key.as_bytes().to_vec();
-                let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
+                let secondary_key = crate::native::database::sub_key(&key_bytes, b"secondary");
                 let mut values = self.db().map(|db| db.fetch(&key_bytes)).unwrap_or_default();
                 values.sort_by(|a, b| shortlex(a, b));
                 replay_aligned = !values.is_empty();
@@ -225,8 +234,8 @@ impl<'a> Engine<'a> {
                     let ntc =
                         NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE)?;
                     let (run, mismatch) = self.test_function(ntc).await?;
-                    if let Some(msg) = mismatch {
-                        return Err(RunError::NonDeterministic(msg));
+                    if let Some(err) = mismatch {
+                        return Err(err);
                     }
                     if run.status == Status::Interesting {
                         if i < primary_count {
@@ -287,8 +296,8 @@ impl<'a> Engine<'a> {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
                 .await?;
-            if let Some(msg) = mismatch {
-                return Err(RunError::NonDeterministic(msg));
+            if let Some(err) = mismatch {
+                return Err(err);
             }
             if let Some(msg) = large_initial_check(
                 run.status == Status::EarlyStop,
@@ -305,7 +314,7 @@ impl<'a> Engine<'a> {
             && !self.test_is_trivial
             && self.valid_test_cases < max_test_cases
             && self.within_invalid_budget(invalid_budget)
-            && !self.tree_root.is_exhausted
+            && !(self.valid_test_cases == 0 && self.consecutive_duplicates >= DUPLICATE_STOP)
             && should_generate_more(
                 self.interesting.is_empty(),
                 self.calls,
@@ -320,7 +329,7 @@ impl<'a> Engine<'a> {
                 if self.test_is_trivial
                     || self.valid_test_cases >= max_test_cases
                     || !self.within_invalid_budget(invalid_budget)
-                    || self.tree_root.is_exhausted
+                    || (self.valid_test_cases == 0 && self.consecutive_duplicates >= DUPLICATE_STOP)
                     || !should_generate_more(
                         self.interesting.is_empty(),
                         self.calls,
@@ -335,27 +344,15 @@ impl<'a> Engine<'a> {
                 }
 
                 let mut case_rng = self.rng.spawn();
-                // Draw this test case's swarm parameters once, then use them for
-                // both the novel-prefix walk and the test case itself so the
-                // whole case generates from one consistent distribution.
                 let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let prefix = if self.nondeterministic {
-                    Vec::new()
-                } else {
-                    generate_novel_prefix(&self.tree_root, &mut self.rng, params)?
-                };
-                let ntc = if prefix.is_empty() {
-                    NativeTestCase::new_random_with_params(case_rng, params)
-                } else {
-                    NativeTestCase::for_probe_with_params(&prefix, case_rng, BUFFER_SIZE, params)
-                };
+                let ntc = NativeTestCase::new_random_with_params(case_rng, params);
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");
                 }
 
                 let (run, mismatch) = self.test_function(ntc).await?;
-                if let Some(msg) = mismatch {
-                    return Err(RunError::NonDeterministic(msg));
+                if let Some(err) = mismatch {
+                    return Err(err);
                 }
 
                 if verbosity == Verbosity::Debug {
@@ -437,7 +434,7 @@ impl<'a> Engine<'a> {
             ));
         }
 
-        if self.tree_root.is_exhausted
+        if self.consecutive_duplicates >= DUPLICATE_STOP
             && self.valid_test_cases == 0
             && self.interesting.is_empty()
             && !self.test_is_trivial
@@ -472,7 +469,7 @@ impl<'a> Engine<'a> {
             }
             if let (Some(_), Some(key)) = (self.db(), database_key) {
                 let key_bytes = key.as_bytes().to_vec();
-                let secondary_key = crate::native::data_tree::sub_key(&key_bytes, b"secondary");
+                let secondary_key = crate::native::database::sub_key(&key_bytes, b"secondary");
                 let mut entries = self
                     .db()
                     .map(|db| db.fetch(&secondary_key))
@@ -524,8 +521,8 @@ impl<'a> Engine<'a> {
                 let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
                 let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
                 let (verify, mismatch) = self.test_function(verify_ntc).await?;
-                if let Some(msg) = mismatch {
-                    return Err(RunError::NonDeterministic(msg));
+                if let Some(err) = mismatch {
+                    return Err(err);
                 }
                 if verify.status != Status::Interesting
                     || verify.origin.as_deref() != Some(origin.as_str())
@@ -925,7 +922,7 @@ impl<'a> Persister<'a> {
                 if !shared {
                     if self.preexisting.contains(prev_bytes) {
                         let secondary_key =
-                            crate::native::data_tree::sub_key(key_bytes, b"secondary");
+                            crate::native::database::sub_key(key_bytes, b"secondary");
                         db.move_value(key_bytes, &secondary_key, prev_bytes);
                     } else {
                         db.delete(key_bytes, prev_bytes);
@@ -942,30 +939,37 @@ impl<'a> Persister<'a> {
 /// The native engine — Hegel's analogue of Hypothesis's `ConjectureRunner`.
 ///
 /// One object owns everything a test run touches: the exchange it offers
-/// test cases through, the RNG, the example database (via the [`Persister`]), the choice
-/// tree, the per-origin interesting map, targeting observations, and all
-/// run-level counters. The choice tree is the single source of truth for
-/// already-seen paths: it is *lossless* (each conclusion records nodes via the
-/// path, plus span events, status, origin, and target observations), so any
-/// recorded path is replayed by [`data_tree::simulate_full`] without re-running
-/// the body — there is no separate result cache.
+/// test cases through, the RNG, the example database (via the [`Persister`]),
+/// the execution cache and kind ledger, the per-origin interesting map,
+/// targeting observations, and all run-level counters.
 ///
-/// Every execution records into the tree via [`Self::record_run`].
-/// [`Self::test_function`] is the raw executor+recorder (generation's novel
-/// prefixes go straight through it); [`Self::cached_test_function`] is the
-/// single replay chokepoint shared by generation-phase span mutation and
-/// shrinking — it serves a recorded path from the tree and otherwise falls
-/// through to `test_function`. `cached_test_function` returns the realised
-/// result; the interesting-origin filter is applied by its caller, and bugs
-/// with new origins surface through the same [`update_interesting`] path as
-/// generation.
+/// Every execution records into the cache and ledger via
+/// [`Self::record_run`]. [`Self::test_function`] is the raw
+/// executor+recorder (generation goes straight through it — its duplicates
+/// must execute, they are the stop signal); [`Self::cached_test_function`]
+/// is the single replay chokepoint shared by generation-phase span mutation
+/// and shrinking — it serves an exact repeat from the cache and otherwise
+/// falls through to `test_function`. `cached_test_function` returns the
+/// realised result; the interesting-origin filter is applied by its caller,
+/// and bugs with new origins surface through the same
+/// [`update_interesting`] path as generation.
 pub(crate) struct Engine<'a> {
     settings: &'a Settings,
     database_key: Option<&'a str>,
     exchange: &'a CaseExchange,
     rng: EngineRng,
     persister: Persister<'a>,
-    pub(crate) tree_root: crate::native::data_tree::DataTreeNode,
+    pub(crate) exec_cache: ExecCache,
+    /// Generation-nondeterminism detector: within-run, cross-execution kind
+    /// drift at a shared value prefix aborts with the tree's diagnostic.
+    /// Never fed between runs: a stored entry that stops reproducing is
+    /// staleness, not nondeterminism.
+    kind_ledger: KindLedger,
+    /// Consecutive generation-phase conclusions whose realized values had
+    /// been executed before. [`DUPLICATE_STOP`] of these ends generation
+    /// while no valid case exists; a novel conclusion resets it. Frozen (at
+    /// zero) while the run is nondeterministic.
+    pub(crate) consecutive_duplicates: u64,
     /// Per-origin tracking: each distinct panic site (file:line:col captured
     /// by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
     /// counterexample. This is what makes a single test that fails with
@@ -993,8 +997,8 @@ pub(crate) struct Engine<'a> {
     /// (see [`crate::native::core::FamilyCore::concurrent_machine`]): the
     /// test asked for real concurrency, so nothing that assumes
     /// deterministic replay can be trusted. While set, the run skips
-    /// data-tree recording (and with it novel-prefix generation and the
-    /// choice-tree mismatch check), span mutation, targeting, the verify +
+    /// execution-cache recording and serving (and with it the kind-ledger
+    /// check and the duplicate stop), span mutation, targeting, the verify +
     /// shrink pass (so generation stops at the first bug), database
     /// persistence and reuse, and reproduce-blob emission — failures are
     /// reported faithfully from the execution that discovered them.
@@ -1018,7 +1022,9 @@ impl<'a> Engine<'a> {
             exchange,
             rng: create_rng(settings, database_key)?,
             persister: Persister::new(db, database_key),
-            tree_root: crate::native::data_tree::DataTreeNode::default(),
+            exec_cache: ExecCache::default(),
+            kind_ledger: KindLedger::default(),
+            consecutive_duplicates: 0,
             interesting: HashMap::default(),
             targeting: crate::native::targeting::TargetingState::new(),
             statistics: crate::native::events::RunStatistics::default(),
@@ -1049,7 +1055,7 @@ impl<'a> Engine<'a> {
         if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), self.database_key)
         {
             let key_bytes = key.as_bytes();
-            let secondary_key = crate::native::data_tree::sub_key(key_bytes, b"secondary");
+            let secondary_key = crate::native::database::sub_key(key_bytes, b"secondary");
             let new_entries: crate::native::HashSet<Vec<u8>> = self
                 .interesting
                 .values()
@@ -1093,13 +1099,14 @@ impl<'a> Engine<'a> {
 
     /// Execute one test case and record everything about its outcome —
     /// Hypothesis's `ConjectureRunner.test_function`. Returns the run plus
-    /// the choice-tree non-determinism diagnostic, if recording the run's
-    /// path contradicted an earlier run. `Err` means the driver violated
-    /// the run contract (see [`NativeDataSource::take_outcome`]).
+    /// the nondeterminism abort, if recording the run contradicted an
+    /// earlier execution (kind drift or a verdict change — see
+    /// [`Self::record_execution`]). `Err` means the driver violated the run
+    /// contract (see [`NativeDataSource::take_outcome`]).
     pub(crate) async fn test_function(
         &mut self,
         mut ntc: NativeTestCase,
-    ) -> Result<(RunResult, Option<String>), RunError> {
+    ) -> Result<(RunResult, Option<RunError>), RunError> {
         if self.nondeterministic {
             ntc.set_nondeterministic();
         }
@@ -1111,6 +1118,9 @@ impl<'a> Engine<'a> {
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
         if !self.nondeterministic && family.concurrent_machine() {
             self.nondeterministic = true;
+            self.exec_cache.clear();
+            self.kind_ledger.clear();
+            self.consecutive_duplicates = 0;
             if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
                 self.settings.output.line(concurrent_machine_notice());
             }
@@ -1119,27 +1129,15 @@ impl<'a> Engine<'a> {
         Ok((run, mismatch))
     }
 
-    /// Record one executed test case: the choice tree (losslessly — nodes,
-    /// span events, and the full conclusion), counters, test time, triviality,
+    /// Record one executed test case: the execution cache and kind ledger
+    /// (via [`Self::record_execution`]), counters, test time, triviality,
     /// the targeting observations, the per-origin interesting map (with its
     /// incremental database save), and the bug-window markers.
-    ///
-    /// Every execution feeds the tree, so a later replay of the same path is
-    /// served by [`data_tree::simulate_full`] without re-running the body.
-    ///
-    fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<String> {
+    fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<RunError> {
         let mismatch = if self.nondeterministic {
             None
         } else {
-            crate::native::data_tree::record_tree_full(
-                &mut self.tree_root,
-                &run.nodes,
-                run.status,
-                run.origin.as_deref(),
-                &run.target_observations,
-                &run.span_events,
-                &[],
-            )
+            self.record_execution(run)
         };
         self.calls += 1;
         self.total_test_time += elapsed;
@@ -1173,6 +1171,39 @@ impl<'a> Engine<'a> {
         mismatch
     }
 
+    /// Feed one executed run to the detectors the tree used to be: the kind
+    /// ledger, then — for conclusions; an overrun concluded nothing — the
+    /// execution cache, whose digest hit both drives the duplicate-stop
+    /// counter (generation-window cases only) and, on a verdict change,
+    /// reports the flake the tree could never see. The returned error is
+    /// `NonDeterministic` for kind drift and `Flaky` for a verdict change.
+    fn record_execution(&mut self, run: &RunResult) -> Option<RunError> {
+        if let Some(msg) = self.kind_ledger.observe(&run.nodes) {
+            return Some(RunError::NonDeterministic(msg));
+        }
+        if run.status == Status::EarlyStop {
+            return None;
+        }
+        let recorded = self.exec_cache.record(
+            serialize_nodes(&run.nodes),
+            run.status,
+            run.origin.as_deref(),
+            &run.nodes,
+            &run.spans,
+            !self.collect_statistics,
+        );
+        if self.collect_statistics {
+            if recorded.duplicate {
+                self.consecutive_duplicates += 1;
+            } else {
+                self.consecutive_duplicates = 0;
+            }
+        }
+        recorded
+            .verdict_mismatch
+            .then(|| RunError::Flaky(flaky_diagnostic()))
+    }
+
     /// Whether the generation-phase invalid/overrun budget still has room.
     fn within_invalid_budget(&self, budget: (u64, u64)) -> bool {
         within_invalid_budget(
@@ -1183,8 +1214,8 @@ impl<'a> Engine<'a> {
         )
     }
 
-    /// Execute one test case by offering it through the exchange, recording
-    /// the trie and returning a [`RunResult`] populated from the outcome
+    /// Execute one test case by offering it through the exchange, returning
+    /// a [`RunResult`] populated from the outcome
     /// reported by the data source's `mark_complete` plus the
     /// [`NativeTestCase`]'s realized choice nodes. Always a non-final
     /// execution. `Err` means the driver violated the run contract by
@@ -1195,7 +1226,6 @@ impl<'a> Engine<'a> {
         self.exchange.offer(Box::new(data_source)).await;
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
-        let span_events = NativeDataSource::take_span_events(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let events = NativeDataSource::take_events(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
@@ -1213,7 +1243,6 @@ impl<'a> Engine<'a> {
             spans,
             origin,
             target_observations,
-            span_events,
             events,
         })
     }
@@ -1225,37 +1254,34 @@ impl<'a> Engine<'a> {
     /// interesting-origin filter) is applied by the caller, so replay and
     /// matching are not entangled.
     ///
-    /// A path the lossless tree already records completely is served by
-    /// [`data_tree::simulate_full`] with its full outcome — nodes, spans,
-    /// status, origin, observations — without running the body, for *any*
-    /// status (interesting included). That holds for any `extend`: a
-    /// tree-determined path concludes within `choices`, so the continuation
-    /// budget is irrelevant to it. A *predicted overrun* — `choices` runs out
-    /// on recorded territory where the tree still expects a draw — is served
-    /// as `EarlyStop` when `extend == 0` (the bare replay would conclude
-    /// exactly that without the body learning anything new); with a random
-    /// continuation budget it is not predictive, so the run executes. A
-    /// genuine miss (a novel path) runs through [`Self::test_function`] —
-    /// bare when `extend == 0`, with up to `extend` random draws past the end
-    /// of `choices` otherwise — which records the run into the tree so a
-    /// later replay of the same path is served. There is no separate result
-    /// cache: the tree is the single source of truth.
+    /// An exact repeat of an executed conclusion — `choices` equal to some
+    /// earlier run's realized values — is served from the [`ExecCache`] with
+    /// its full outcome (status, origin, nodes, spans) without running the
+    /// body, for *any* status (interesting included) and any `extend`: the
+    /// cached conclusion consumed exactly those choices, so the continuation
+    /// budget is irrelevant to it. Anything else executes through
+    /// [`Self::test_function`] — bare when `extend == 0`, with up to
+    /// `extend` random draws past the end of `choices` otherwise — and its
+    /// conclusion enters the cache so a later repeat is served. The tree's
+    /// predictions beyond exact repeats (trailing-unread proposals,
+    /// truncated-proposal overruns, pun resolution) are gone by measurement:
+    /// serves were ≈ exact repeats (experiment 010). While the run is
+    /// nondeterministic nothing is served: identical choices need not
+    /// produce identical outcomes, so every replay executes the body.
     async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if let Some(out) = crate::native::data_tree::simulate_full(&self.tree_root, choices, nodes)?
-        {
-            if out.status != Status::EarlyStop || extend == 0 {
+        if !self.nondeterministic {
+            if let Some(hit) = self.exec_cache.serve(&serialize_choices(choices)) {
                 return Ok(RunResult {
-                    status: out.status,
-                    nodes: out.nodes,
-                    spans: out.spans,
-                    origin: out.origin,
-                    target_observations: out.target_observations,
-                    span_events: Vec::new(),
+                    status: hit.status,
+                    nodes: hit.nodes,
+                    spans: hit.spans,
+                    origin: hit.origin,
+                    target_observations: HashMap::default(),
                     events: Vec::new(),
                 });
             }
@@ -1266,7 +1292,10 @@ impl<'a> Engine<'a> {
             let budget = crate::native::core::flattened_values_len(choices) + extend;
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
         };
-        let (run, _mismatch) = self.test_function(ntc).await?;
+        let (run, mismatch) = self.test_function(ntc).await?;
+        if let Some(err) = mismatch {
+            return Err(err);
+        }
         Ok(run)
     }
 }
@@ -1274,8 +1303,8 @@ impl<'a> Engine<'a> {
 /// The engine side of the shrinker's [`ShrinkProbe`]: routes every requested
 /// run through [`Engine::cached_test_function`] and reports whether the run
 /// reproduced the origin being shrunk. Borrows the engine for the duration of
-/// the shrink, so the shrinker's executions record into the engine's tree and
-/// counters like any other run.
+/// the shrink, so the shrinker's executions record into the engine's cache
+/// and counters like any other run.
 struct EngineShrinkProbe<'e, 'a> {
     engine: &'e mut Engine<'a>,
     target_origin: String,
@@ -1316,13 +1345,13 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
 /// the probe loop stops at the first such find.
 ///
 /// Makes up to [`SPAN_MUTATION_ATTEMPTS`] probes through
-/// [`Engine::cached_test_function`], so a proposed sequence whose path the
-/// lossless choice tree already records costs no test-body execution — matching
-/// Hypothesis, which routes mutations through `cached_test_function`. Each probe
-/// that *does* execute is recorded into the tree through [`Self::record_run`],
-/// so it counts toward the same budgets as a freshly generated example and a
-/// later identical proposal is served from the tree; tree-served probes are not
-/// re-recorded, exactly as Hypothesis's cache hits cost nothing.
+/// [`Engine::cached_test_function`], so a proposal repeating an executed
+/// conclusion exactly costs no test-body execution — matching Hypothesis,
+/// which routes mutations through `cached_test_function`. Each probe that
+/// *does* execute is recorded through [`Self::record_run`], so it counts
+/// toward the same budgets as a freshly generated example and a later exact
+/// repeat is served; served probes are not re-recorded, exactly as
+/// Hypothesis's cache hits cost nothing.
 ///
 /// A mutated sequence often diverges from the path its donor took and would
 /// run out of data as a bare replay. Rather than discarding such a proposal
