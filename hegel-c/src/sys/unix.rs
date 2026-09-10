@@ -239,28 +239,33 @@ pub(super) fn pid() -> u32 {
 /// caller must tolerate spurious returns anyway — but burns time under
 /// contention. The engine's locks are essentially always uncontended, so
 /// this costs nothing in practice.
-#[cfg(target_os = "linux")]
+///
+/// Miri also takes the spinning path on Linux: rustix's libc-backend futex
+/// wrapper passes the lock word as `*const AtomicU32` to the variadic
+/// `syscall`, and Miri's c-variadic type check rejects that in favour of
+/// `*mut u32`.
+#[cfg(all(target_os = "linux", not(miri)))]
 pub(super) fn park(word: &AtomicU32, expected: u32) {
     let _ =
         rustix::thread::futex::wait(word, rustix::thread::futex::Flags::PRIVATE, expected, None);
 }
 
 /// Wake one thread parked on `word` by [`park`].
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 pub(super) fn unpark(word: &AtomicU32) {
     let _ = rustix::thread::futex::wake(word, rustix::thread::futex::Flags::PRIVATE, 1);
 }
 
 /// Yield the CPU so a thread waiting on `word` makes progress; see the
 /// Linux [`park`] for the contract.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", not(miri))))]
 pub(super) fn park(_word: &AtomicU32, _expected: u32) {
     rustix::thread::sched_yield();
 }
 
-/// No-op: the non-Linux [`park`] spins rather than sleeping, so there is
-/// nobody to wake.
-#[cfg(not(target_os = "linux"))]
+/// No-op: this [`park`] spins rather than sleeping, so there is nobody to
+/// wake.
+#[cfg(not(all(target_os = "linux", not(miri))))]
 pub(super) fn unpark(_word: &AtomicU32) {}
 
 #[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]

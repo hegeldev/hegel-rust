@@ -985,37 +985,21 @@ static GLOBAL_CONSTANTS_STRINGS: Lazy<Vec<Vec<u32>>> = Lazy::new(|| {
 /// from the full alphabet (~1.1M codepoints) almost never produces the
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
-/// Per-alphabet cache of which [`GLOBAL_CONSTANTS_STRINGS`] entries consist
-/// solely of codepoints the alphabet contains. Validating the ~60 constants
-/// (some 40+ codepoints long) against the alphabet on every string draw is
-/// the dominant cost of `biased_string_sample`, and the containment result
-/// depends only on the immutable `IntervalSet`, so it is memoised per
-/// allocation. Entries are keyed by the `Arc`'s address with a `Weak`
-/// identity check, so an address reused after a drop cannot serve a stale
-/// mask — it recomputes and overwrites its slot.
-fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
-    type Cache = Mutex<HashMap<usize, (alloc::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
-    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
-    let key = Arc::as_ptr(intervals) as usize;
-    {
-        let guard = CACHE.lock();
-        if let Some((weak, mask)) = guard.get(&key) {
-            if weak
-                .upgrade()
-                .is_some_and(|live| Arc::ptr_eq(&live, intervals))
-            {
-                return Arc::clone(mask);
-            }
-        }
-    }
-    let mask: Arc<[bool]> = GLOBAL_CONSTANTS_STRINGS
-        .iter()
-        .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
-        .collect();
-    CACHE
-        .lock()
-        .insert(key, (Arc::downgrade(intervals), Arc::clone(&mask)));
-    mask
+/// Which [`GLOBAL_CONSTANTS_STRINGS`] entries consist solely of codepoints
+/// the alphabet contains. Validating the ~60 constants (some 40+ codepoints
+/// long) against the alphabet on every string draw is the dominant cost of
+/// `biased_string_sample`, and the containment result depends only on the
+/// immutable `IntervalSet`, so it is memoised on the set itself and lives
+/// exactly as long as the alphabet does.
+fn constants_in_alphabet(intervals: &IntervalSet) -> &[bool] {
+    intervals.string_constants_mask.get_or_init(|| {
+        Box::new(
+            GLOBAL_CONSTANTS_STRINGS
+                .iter()
+                .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
+                .collect(),
+        )
+    })
 }
 
 pub(crate) fn biased_string_sample(
