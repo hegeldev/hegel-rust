@@ -765,30 +765,24 @@ mod float_nastiness {
     }
 
     #[test]
-    fn test_exclude_min_without_min_value_is_invalid() {
+    #[allow(deprecated)]
+    fn test_exclude_min_is_removed() {
         expect_panic(
             || {
-                Hegel::new(|tc| {
-                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_min(true));
-                })
-                .settings(Settings::new().test_cases(1).database(None))
-                .run();
+                gs::floats::<f64>().min_value(0.0).exclude_min(true);
             },
-            "InvalidArgument",
+            "min_value_exclusive",
         );
     }
 
     #[test]
-    fn test_exclude_max_without_max_value_is_invalid() {
+    #[allow(deprecated)]
+    fn test_exclude_max_is_removed() {
         expect_panic(
             || {
-                Hegel::new(|tc| {
-                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_max(true));
-                })
-                .settings(Settings::new().test_cases(1).database(None))
-                .run();
+                gs::floats::<f64>().max_value(1.0).exclude_max(true);
             },
-            "InvalidArgument",
+            "max_value_exclusive",
         );
     }
 
