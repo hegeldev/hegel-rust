@@ -44,7 +44,7 @@ impl Linear {
 #[should_panic(expected = "assertion failed: self.state < 4")]
 fn test_state_machine_failure(tc: TestCase) {
     let m = Linear { state: 0 };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 struct TestConsumeMachine {
@@ -75,7 +75,7 @@ fn test_consume(tc: TestCase) {
         numbers: bundle,
         consumed,
     };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 struct TestLifetimeMachine<'a> {
@@ -94,7 +94,7 @@ impl<'a> TestLifetimeMachine<'a> {
 fn test_state_machine_with_lifetime(tc: TestCase) {
     let data = vec![1, 2, 3];
     let m = TestLifetimeMachine { data: &data };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 struct GenericMachine<T> {
@@ -114,7 +114,7 @@ fn test_state_machine_with_type_parameter(tc: TestCase) {
     let m = GenericMachine {
         values: vec![1, 2, 3],
     };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 struct TestDrawDomainMachine {
@@ -150,7 +150,7 @@ fn test_draw_domain(tc: TestCase) {
         domain: elements,
         pool: bundle,
     };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 /// `Pool::add` draws a fresh identifier from the engine, so it stops the
@@ -211,7 +211,7 @@ fn test_state_machine_with_shared_receivers(tc: TestCase) {
         counter: 0,
         observed: 0,
     };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 mod attrs_on_rules {
@@ -252,7 +252,7 @@ mod attrs_on_rules {
     #[hegel::test]
     fn test_attrs_on_rules(tc: TestCase) {
         let m = AttrMachine { count: 0 };
-        hegel::stateful::run(m, tc);
+        hegel::stateful::machine(m).run(tc);
     }
 }
 
@@ -315,7 +315,7 @@ mod stateful {
     #[test]
     fn test_genuine_failure_is_not_reported_as_violated_assumption() {
         let output = capture_output(false, |tc: TestCase| {
-            hegel::stateful::run(GenuineFailureMachine, tc);
+            hegel::stateful::machine(GenuineFailureMachine).run(tc);
         });
         assert!(
             output.contains("Step 1: always_fails"),
@@ -348,7 +348,7 @@ mod stateful {
     #[test]
     fn test_irrelevant_steps_are_shrunk_away() {
         let output = capture_output(false, |tc: TestCase| {
-            hegel::stateful::run(BumpMachine { count: 0 }, tc);
+            hegel::stateful::machine(BumpMachine { count: 0 }).run(tc);
         });
         let step_lines = output.lines().filter(|l| l.contains("Step ")).count();
         assert_eq!(
@@ -377,7 +377,7 @@ mod stateful {
     #[test]
     fn test_assume_skip_is_reported_as_violated_assumption() {
         let output = capture_output(true, |tc: TestCase| {
-            hegel::stateful::run(AssumeSkipMachine, tc);
+            hegel::stateful::machine(AssumeSkipMachine).run(tc);
         });
         assert!(
             output.contains("violated assumption"),
@@ -432,7 +432,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(InvariantMachine, tc);
+                    hegel::stateful::machine(InvariantMachine).run(tc);
                 })
                 .settings(Settings::new().database(None))
                 .run();
@@ -468,7 +468,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(MultipleInvariantMachine { first_ran: false }, tc);
+                    hegel::stateful::machine(MultipleInvariantMachine { first_ran: false }).run(tc);
                 })
                 .settings(Settings::new().database(None))
                 .run();
@@ -501,7 +501,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(InitialStateMachine { num: 0 }, tc);
+                    hegel::stateful::machine(InitialStateMachine { num: 0 }).run(tc);
                 })
                 .settings(Settings::new().database(None))
                 .run();
@@ -563,14 +563,9 @@ mod stateful {
                 rules_run: Arc::clone(&rules_in),
                 invariants_run: Arc::clone(&invariants_in),
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
         let rules_run = *rules_run.lock().unwrap();
         let invariants_run = *invariants_run.lock().unwrap();
@@ -604,7 +599,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(BreakOnceMachine { broken: false }, tc);
+                    hegel::stateful::machine(BreakOnceMachine { broken: false }).run(tc);
                 })
                 .settings(Settings::new().database(None))
                 .run();
@@ -638,14 +633,9 @@ mod stateful {
     #[test]
     fn test_always_run_invariants_run_after_every_rule() {
         Hegel::new(|tc: TestCase| {
-            hegel::stateful::run(DirtyCounterMachine { unchecked_steps: 0 }, tc);
+            hegel::stateful::machine(DirtyCounterMachine { unchecked_steps: 0 }).run(tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
     }
 
@@ -693,14 +683,9 @@ mod stateful {
                 sampled_runs: Arc::clone(&sampled_in),
                 always_runs: Arc::clone(&always_in),
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         })
-        .settings(
-            Settings::new()
-                .test_cases(20)
-                .stateful_step_count(50)
-                .database(None),
-        )
+        .settings(Settings::new().test_cases(20).database(None))
         .run();
         let rules_run = *rules_run.lock().unwrap();
         let sampled_runs = *sampled_runs.lock().unwrap();
@@ -723,7 +708,7 @@ mod stateful {
             let count = std::sync::Arc::new(std::sync::Mutex::new(0i64));
             let count_check = std::sync::Arc::clone(&count);
             let m = CountStepsMachine { count };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
             assert!(
                 *count_check.lock().unwrap() > 0,
                 "at least one step must run before teardown"
@@ -753,7 +738,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(RequiresInit { threshold: 42 }, tc);
+                    hegel::stateful::machine(RequiresInit { threshold: 42 }).run(tc);
                 })
                 .settings(Settings::new().database(None).test_cases(100))
                 .run();
@@ -768,7 +753,7 @@ mod stateful {
             || {
                 Hegel::new(|tc: TestCase| {
                     let charges = pool(&tc);
-                    hegel::stateful::run(DepthMachine { charges }, tc);
+                    hegel::stateful::machine(DepthMachine { charges }).run(tc);
                 })
                 .settings(Settings::new().database(None).test_cases(1000))
                 .run();
@@ -797,7 +782,7 @@ mod stateful {
     #[test]
     fn test_invariants_are_checked_after_init_steps() {
         Hegel::new(|tc: TestCase| {
-            hegel::stateful::run(TrickyInitMachine { a: 0 }, tc);
+            hegel::stateful::machine(TrickyInitMachine { a: 0 }).run(tc);
         })
         .settings(Settings::new().test_cases(100).database(None))
         .run();
@@ -821,7 +806,7 @@ mod stateful {
     #[hegel::test(database = None)]
     #[should_panic(expected = "Flaky test detected")]
     fn test_flaky_raises_flaky(tc: TestCase) {
-        hegel::stateful::run(FlakyStateMachine, tc);
+        hegel::stateful::machine(FlakyStateMachine).run(tc);
     }
 
     struct NoRulesMachine;
@@ -840,7 +825,7 @@ mod stateful {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(NoRulesMachine, tc);
+                    hegel::stateful::machine(NoRulesMachine).run(tc);
                 })
                 .settings(Settings::new().database(None))
                 .run();
@@ -850,15 +835,21 @@ mod stateful {
     }
 
     #[test]
-    fn test_stateful_step_count_below_one_is_a_usage_error() {
-        expect_panic(
-            || {
-                Hegel::new(|_tc: TestCase| {})
-                    .settings(Settings::new().database(None).stateful_step_count(0))
+    fn test_step_count_below_one_is_a_usage_error() {
+        for step_count in [0, -3] {
+            expect_panic(
+                || {
+                    Hegel::new(move |tc: TestCase| {
+                        hegel::stateful::machine(super::Linear { state: 0 })
+                            .steps(step_count)
+                            .run(tc);
+                    })
+                    .settings(Settings::new().database(None))
                     .run();
-            },
-            "step count must be at least 1",
-        );
+                },
+                "step count must be at least 1",
+            );
+        }
     }
 
     /// Records which rule ran at each step, one sequence per test case.
@@ -919,7 +910,7 @@ mod stateful {
             let m = SwarmRecorderMachine {
                 runs: Arc::clone(&runs_in_test),
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         })
         .settings(
             Settings::new()
@@ -964,20 +955,20 @@ mod stateful {
     ) -> Vec<u64> {
         let counts: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let counts_in_test = Arc::clone(&counts);
-        let mut settings = Settings::new()
+        let settings = Settings::new()
             .test_cases(test_cases)
             .database(None)
             .derandomize(true);
-        if let Some(step_count) = step_count {
-            settings = settings.stateful_step_count(step_count);
-        }
         Hegel::new(move |tc: TestCase| {
             counts_in_test.lock().unwrap().push(0);
             let m = StepRecorderMachine {
                 counts: Arc::clone(&counts_in_test),
                 fail_assumption,
             };
-            hegel::stateful::run(m, tc);
+            match step_count {
+                Some(step_count) => hegel::stateful::machine(m).steps(step_count).run(tc),
+                None => hegel::stateful::machine(m).run(tc),
+            }
         })
         .settings(settings)
         .run();
@@ -985,10 +976,11 @@ mod stateful {
         counts.clone()
     }
 
-    /// The engine owns the step cap: with the default `stateful_step_count`,
-    /// no test case runs more than 50 steps, and most run exactly 50.
+    /// The engine owns the step cap: `run` uses `DEFAULT_STEP_COUNT`, so no
+    /// test case runs more than 50 steps, and most run exactly 50.
     #[test]
     fn test_step_cap_is_50_most_of_the_time() {
+        assert_eq!(hegel::stateful::DEFAULT_STEP_COUNT, 50);
         let counts = run_step_recorder(false, None, 100);
         assert!(counts.iter().all(|&c| c <= 50));
         let full = counts.iter().filter(|&&c| c == 50).count();
@@ -1015,11 +1007,11 @@ mod stateful {
         );
     }
 
-    /// The `stateful_step_count` setting replaces the fixed cap: with a custom
-    /// value, no test case runs more than that many steps, and most run
-    /// exactly that many.
+    /// `Machine::steps` replaces the default cap: with a custom value, no
+    /// test case runs more than that many steps, and most run exactly that
+    /// many.
     #[test]
-    fn test_stateful_step_count_setting_bounds_steps() {
+    fn test_runner_steps_bounds_steps() {
         let counts = run_step_recorder(false, Some(7), 100);
         assert!(counts.iter().all(|&c| (1..=7).contains(&c)));
         let full = counts.iter().filter(|&&c| c == 7).count();
@@ -1047,20 +1039,21 @@ mod stateful {
     }
 
     /// Regression test for #396: the failing case is replayed from its
-    /// reproduce blob, and that replay respects the stateful step count
+    /// reproduce blob, and that replay respects the machine's step count
     #[test]
     fn test_long_counterexample_replays_under_the_configured_step_count() {
         expect_panic(
             || {
                 Hegel::new(|tc: TestCase| {
-                    hegel::stateful::run(LongCounterMachine { counter: 0 }, tc);
+                    hegel::stateful::machine(LongCounterMachine { counter: 0 })
+                        .steps(100)
+                        .run(tc);
                 })
                 .settings(
                     Settings::new()
                         .test_cases(100)
                         .database(None)
-                        .derandomize(true)
-                        .stateful_step_count(100),
+                        .derandomize(true),
                 )
                 .run();
             },
@@ -1101,14 +1094,13 @@ mod stateful {
                 counts: Arc::clone(&counts_in_test),
                 attempts: 0,
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).steps(10).run(tc);
         })
         .settings(
             Settings::new()
                 .test_cases(100)
                 .database(None)
-                .derandomize(true)
-                .stateful_step_count(10),
+                .derandomize(true),
         )
         .run();
 

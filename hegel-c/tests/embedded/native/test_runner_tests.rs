@@ -64,6 +64,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
         alloc::vec::Vec::new(),
         2,
         2,
+        50,
     ) {
         Ok(_) => Ok(()),
         Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
@@ -475,7 +476,9 @@ fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
             assert_eq!(count.get(), 2);
             assert!(ctx.nondeterministic);
             assert!(
-                ctx.exec_cache.serve(&serialize_choices(&choices)).is_none(),
+                ctx.exec_cache
+                    .serve(&serialize_choices(&choices).unwrap())
+                    .is_none(),
                 "the flip flushes the cache"
             );
 
@@ -1183,7 +1186,10 @@ fn reuse_replay_extends_past_stored_prefix() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let result = reuse_run(
         Settings::new()
@@ -1221,12 +1227,12 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let result = reuse_run(
@@ -1256,13 +1262,13 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     for n in [4242, 4243, 4244, 4245] {
         db.save(
             &secondary_key,
-            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap(),
         );
     }
 
@@ -1292,7 +1298,7 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
-    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
     db.save(&secondary_key, &stale);
 
     let result = reuse_run(
@@ -1348,11 +1354,11 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]).unwrap(),
     );
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -1392,7 +1398,7 @@ fn reuse_found_bug_skips_generation_entirely() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -1579,7 +1585,7 @@ fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap();
     db.save(b"k", &seeded);
 
     let result = reuse_run(
@@ -1680,8 +1686,14 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -1719,7 +1731,10 @@ fn nondeterministic_generator_contradicts_the_reuse_fed_kind_ledger_at_simplest_
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -1952,11 +1967,11 @@ impl TestCaseDatabase for LoggingDatabase {
 fn persister_saves_new_bytes_before_deleting_superseded() {
     let db = LoggingDatabase::default();
     let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
-    persister.record("Panic: bug", &[int_node(5)]);
-    persister.record("Panic: bug", &[int_node(3)]);
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
 
-    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
-    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]);
+    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
+    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap();
     let ops = db.ops();
     let saved_new = ops
         .iter()
@@ -1979,12 +1994,12 @@ fn persister_saves_new_bytes_before_deleting_superseded() {
 fn persister_deletes_superseded_same_run_saves() {
     let db = LoggingDatabase::default();
     let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
-    persister.record("Panic: bug", &[int_node(5)]);
-    persister.record("Panic: bug", &[int_node(3)]);
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
 
     assert_eq!(
         db.fetch(b"k"),
-        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))])]
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap()]
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
@@ -2001,7 +2016,8 @@ fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
     let run_start = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(1005)),
         ChoiceValue::Boolean(true),
-    ]);
+    ])
+    .unwrap();
     db.save(b"k", &run_start);
 
     let result = reuse_run(
@@ -2020,9 +2036,7 @@ fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
     assert_eq!(result.failures.len(), 1);
     assert_eq!(
         db.fetch(b"k"),
-        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(
-            1000
-        ))])]
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(1000))]).unwrap()]
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert_eq!(
@@ -2038,7 +2052,7 @@ fn secondary_corpus_cap_evicts_shortlex_largest() {
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
-    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]);
+    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap();
     for n in 0..55 {
         db.save(&secondary, &entry(n));
     }
@@ -2071,11 +2085,12 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
     let misaligned = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(95)),
         ChoiceValue::Integer(BigInt::from(3)),
-    ]);
+    ])
+    .unwrap();
     db.save(b"k", &run_start);
     db.save(b"k", &misaligned);
     let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
@@ -2099,7 +2114,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
     assert_eq!(db.fetch(b"k"), vec![shrunk]);
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
@@ -2112,14 +2127,14 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
 fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
     let db = LoggingDatabase::default();
     let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
-    persister.record("Panic: a", &[int_node(90)]);
-    persister.record("Panic: b", &[int_node(90)]);
+    persister.record("Panic: a", &[int_node(90)]).unwrap();
+    persister.record("Panic: b", &[int_node(90)]).unwrap();
     assert_eq!(db.fetch(b"k").len(), 1);
 
-    persister.record("Panic: a", &[int_node(50)]);
+    persister.record("Panic: a", &[int_node(50)]).unwrap();
 
-    let shared = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
-    let smaller = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    let shared = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
+    let smaller = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
     let primary = db.fetch(b"k");
     assert!(
         primary.contains(&shared),
@@ -2137,14 +2152,16 @@ fn shrink_phase_drain_stops_at_entries_above_the_largest_surviving_failure() {
     let run_start = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(90)),
         ChoiceValue::Boolean(true),
-    ]);
+    ])
+    .unwrap();
     db.save(b"k", &run_start);
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
-    let small = serialize_choices(&[ChoiceValue::Integer(BigInt::from(10))]);
+    let small = serialize_choices(&[ChoiceValue::Integer(BigInt::from(10))]).unwrap();
     let large = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(80)),
         ChoiceValue::Integer(BigInt::from(4)),
-    ]);
+    ])
+    .unwrap();
     db.save(&secondary, &small);
     db.save(&secondary, &large);
 
@@ -2162,7 +2179,7 @@ fn shrink_phase_drain_stops_at_entries_above_the_largest_surviving_failure() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
     assert_eq!(db.fetch(b"k"), vec![shrunk]);
     let kept = db.fetch(&secondary);
     assert!(
@@ -2184,14 +2201,14 @@ fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
     let settings = Settings::new().database(Some(path));
     let exchange = CaseExchange::new();
     let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
-    ctx.persister.record("Panic: bug", &[int_node(90)]);
+    ctx.persister.record("Panic: bug", &[int_node(90)]).unwrap();
     ctx.interesting
         .insert("Panic: bug".to_string(), vec![int_node(50)]);
-    ctx.reconcile_database();
+    ctx.reconcile_database().unwrap();
 
     assert_eq!(
         db.fetch(b"k"),
-        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))])]
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap()]
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(

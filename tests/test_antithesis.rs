@@ -10,7 +10,7 @@ mod common;
 use common::exec::self_test;
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::run_concurrent;
+use hegel::stateful::machine;
 use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::TempDir;
 
@@ -166,7 +166,10 @@ fn antithesis_concurrent_machine_fixture(tc: TestCase) {
     let m = Counter {
         value: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 2, 2);
+    machine(m)
+        .min_concurrency(2)
+        .max_concurrency(2)
+        .run_concurrent(tc);
 }
 
 #[test]

@@ -910,18 +910,6 @@ hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_setting
 
 /*
  Parameters:
- `n`: Target number of steps to run per stateful test case. Each stateful
-   case runs at least one step and at most `n`. The default is 50. `n`
-   must be at least 1.
-
- Returns `HEGEL_OK`.
- */
-hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
-                                                      hegel_settings_t *s,
-                                                      int64_t n);
-
-/*
- Parameters:
  `v`: Controls the output verbosity. See `hegel_verbosity_t`.
 
  Returns `HEGEL_OK`.
@@ -1182,6 +1170,67 @@ hegel_result_t hegel_test_case_is_nondeterministic(hegel_context_t *ctx,
 hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
                                      const hegel_test_case_t *tc,
                                      hegel_test_case_t **out_test_case);
+
+/*
+ Parameters:
+ `indent`: How many columns further than `tc`'s own lines every line of
+   the block is indented.
+ `out_test_case`: Receives a new handle onto the *same* choice stream as
+   `tc`.
+
+ Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
+
+ A block handle is how a client prints an indented section under a
+ heading — the body of a stateful rule under its `Step 3: add {` line, the
+ body of a repeated section — without touching every line itself. Its
+ print region (see `hegel_test_case_printer`) is a block nested in `tc`'s
+ region at the current position: everything printed or noted through the
+ handle, and through the clones and blocks derived from it, lands there,
+ each line indented `indent` columns further than `tc`'s lines (blocks
+ nest, and their indentation adds up). The indentation is applied to a
+ line when it gets its first content, so it covers the continuation lines
+ of a value broken across lines too, and it ends exactly with the block:
+ a line `tc` writes after the block's last one is back at `tc`'s
+ indentation. It is independent of the break-point indentation
+ `hegel_printer_begin_group` / `hegel_printer_shift_indent` manage.
+
+ Unlike a clone, a block handle draws from `tc`'s own choice sequence:
+ drawing through it and through `tc` are the same thing, so the two must
+ not be driven concurrently (give a thread a clone instead). It shares
+ everything else with `tc` — outcome, budgets, worker attribution as of
+ its creation — and is released with `hegel_test_case_free` like any
+ other handle. If `tc`'s region is dead (the document was read), the
+ block shares the dead region and its prints are no-ops.
+ */
+hegel_result_t hegel_test_case_block(hegel_context_t *ctx,
+                                     const hegel_test_case_t *tc,
+                                     uint64_t indent,
+                                     hegel_test_case_t **out_test_case);
+
+/*
+ Attribute this handle's output to concurrent worker `worker_index`:
+ every line recorded from now on through the handle — `hegel_note` lines,
+ and lines started through a printer fetched from it with
+ `hegel_test_case_printer`, before or after this call — is prefixed with
+ `[worker N +X.XXXms] `, where `X.XXX` is the time since the test case
+ started at which the line was recorded. Blocks and clones derived from
+ the handle after this call inherit the attribution (a worker's rule
+ bodies and their clones print as that worker's), and may be attributed
+ afresh on their own. Lines a group breaks across are stamped on their
+ first line only.
+
+ This is the attribution a concurrent stateful runner gives the clone it
+ hands each worker thread (see `hegel_state_machine_next_rule`), so the
+ report can be read across workers: regions order a worker's lines
+ together, and the offsets say how they interleaved in time.
+
+ Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+ `HEGEL_E_INVALID_ARG` for a negative `worker_index`.
+ */
+hegel_result_t hegel_test_case_set_worker(hegel_context_t *ctx,
+                                          const hegel_test_case_t *tc,
+                                          int64_t worker_index);
 
 /*
  A span groups a set of draws so the shrinker can treat them as a unit.
@@ -1447,7 +1496,12 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  `max_concurrency` (concurrency bugs need concurrency) rather than
  shrink-biased toward the minimum. Pass `min_concurrency ==
  max_concurrency` to fix the level without consuming entropy — `1, 1`
- for a sequential machine.
+ for a sequential machine. `step_count` is the target number of counted
+ rounds the machine runs per test case: every case runs at least one
+ round and at most `step_count` (at concurrency 1, where a round is one
+ rule, that is at most `step_count` completed rules), and each sampled
+ invariant is checked with probability `1 / step_count` per join point.
+ The engine has no default; frontends typically use 50.
 
  The engine owns rule selection — including swarm testing, where each
  worker enables a random subset of rules (at least one per group) and
@@ -1500,7 +1554,8 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
  is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
- `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
+ `max_concurrency < min_concurrency`, `step_count < 1`, or on null /
+ non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1512,13 +1567,14 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        size_t num_invariants,
                                        int64_t min_concurrency,
                                        int64_t max_concurrency,
+                                       int64_t step_count,
                                        hegel_state_machine_t **out_state_machine,
                                        int64_t *out_concurrency);
 
 /*
  Start the machine's next round: make the per-round stop decision (a
  recorded boolean draw with a small stop probability, bounded by the
- `stateful_step_count` setting) and, if the test case continues, draw
+ machine's `step_count`) and, if the test case continues, draw
  which concurrency group is current for the round. Writes the current
  group's id (its value in the creating `rule_groups`) into
  `*out_group_id` when a new round has begun and the workers should pull
@@ -1614,10 +1670,10 @@ hegel_result_t hegel_state_machine_rule_rejected(hegel_context_t *ctx,
  current join point, writing the decision into `*out_should_check`: true
  unconditionally (consuming no entropy) for an invariant whose
  `invariant_always_check` flag was set at creation, otherwise a
- recorded boolean draw that is true with probability
- `1 / stateful_step_count`, so each sampled invariant's expected number
- of sampled runs over a full-length test case is one, regardless of the
- step count. The caller owns the machine's guaranteed invariant checks —
+ recorded boolean draw that is true with probability `1 / step_count`
+ (the machine's creation-time step count), so each sampled invariant's
+ expected number of sampled runs over a full-length test case is one,
+ regardless of the step count. The caller owns the machine's guaranteed invariant checks —
  its initial state, and its final state once
  `hegel_state_machine_next_group` signals termination — and should run
  those unconditionally, without calling this.
@@ -2332,6 +2388,13 @@ hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
  line, so notes may contain newlines. Notes and drawn values from *one
  handle* appear in the order they were appended; a clone's notes appear
  in the clone's region.
+
+ A note appended while a speculative region is open on the handle's
+ region — the client is mid-way through printing a drawn value, and the
+ note comes from inside that value's generation — is held back rather
+ than spliced into the value's line, and appended once the outermost
+ region closes, whether it is committed or aborted. Held notes are lost
+ if the document is read first (the writer was a straggler).
 
  Notes never configure the document's width; they render at whatever
  width ends up configured (default 79).

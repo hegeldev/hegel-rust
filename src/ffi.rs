@@ -18,6 +18,7 @@ pub(crate) mod sys;
 
 use self::sys as hegel_c;
 
+use crate::control::hegel_internal_error;
 use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
@@ -145,11 +146,6 @@ impl SettingsHandle {
                     ctx,
                     raw,
                     settings.test_cases,
-                ));
-                require_ok(hegel_c::hegel_settings_set_stateful_step_count(
-                    ctx,
-                    raw,
-                    settings.stateful_step_count,
                 ));
                 require_ok(hegel_c::hegel_settings_set_verbosity(
                     ctx,
@@ -411,6 +407,33 @@ impl CTestCase {
             hegel_c::hegel_test_case_clone(ctx, self.raw, &mut raw)
         }));
         CTestCase { raw }
+    }
+
+    /// Open a block on this handle via `hegel_test_case_block`: a new
+    /// libhegel handle onto the *same* choice stream whose print region is
+    /// nested in this handle's at the current position, every line of it
+    /// indented `indent` columns further. This is how a stateful rule body
+    /// or a `repeat` iteration prints under its heading. The block is used
+    /// in place of this handle, never concurrently with it, and is freed
+    /// independently on drop.
+    pub(crate) fn block_handle(&self, indent: u64) -> CTestCase {
+        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
+        // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_block(ctx, self.raw, indent, &mut raw)
+        }));
+        CTestCase { raw }
+    }
+
+    /// Attribute the lines recorded through this handle — and through the
+    /// blocks and clones derived from it afterwards — to concurrent worker
+    /// `worker_index` (`hegel_test_case_set_worker`): the engine prefixes
+    /// each with `[worker N +X.XXXms] `, stamped when the line is recorded.
+    pub(crate) fn set_worker(&self, worker_index: i64) {
+        // SAFETY: self.raw is a live handle.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_set_worker(ctx, self.raw, worker_index)
+        }));
     }
 
     /// Whether this test case belongs to a run already known to be
@@ -781,7 +804,8 @@ impl CTestCase {
     /// engine draws the concurrency level in
     /// `[min_concurrency, max_concurrency]` at creation — weighted toward
     /// the maximum (the engine owns the distribution) — and returns it
-    /// alongside the new machine's id.
+    /// alongside the new machine's id. `step_count` is the target number
+    /// of counted rounds the machine runs per test case.
     pub(crate) fn new_state_machine(
         &self,
         rule_names: &[&str],
@@ -790,6 +814,7 @@ impl CTestCase {
         invariant_always_check: &[bool],
         min_concurrency: i64,
         max_concurrency: i64,
+        step_count: i64,
     ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
@@ -811,6 +836,7 @@ impl CTestCase {
                 invariant_ptrs.len(),
                 min_concurrency,
                 max_concurrency,
+                step_count,
                 &mut raw,
                 &mut concurrency,
             )
@@ -889,7 +915,7 @@ impl CTestCase {
 
     /// Ask the engine whether invariant `invariant_index` should run at the
     /// current join point: a recorded draw that is true with probability
-    /// `1 / stateful_step_count`. The guaranteed initial and final checks
+    /// `1 / step_count`. The guaranteed initial and final checks
     /// are the caller's and run without asking.
     pub(crate) fn state_machine_should_check_invariant(
         &self,
@@ -946,6 +972,17 @@ impl CTestCase {
             }));
         });
         PrinterHandle { raw }
+    }
+
+    /// Append a note to this handle's print region (`hegel_note`): whole
+    /// lines, ordered with the handle's drawn values, indented with the
+    /// region's block, prefixed with the handle's worker attribution, and
+    /// held back by the engine while a drawn value is mid-print on the
+    /// region.
+    pub(crate) fn note(&self, text: &str) -> Result<(), PrinterCallError> {
+        PrinterHandle::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_note(ctx, self.raw, text.as_ptr(), text.len())
+        }))
     }
 
     /// Report the test case's outcome. `origin` is supplied only for an
@@ -1283,6 +1320,17 @@ impl PrinterHandle {
         }
     }
 
+    /// Whether this handle's region can still be written to: `false` once
+    /// the document has been read, or — for a deferred slot — once the
+    /// speculative region its anchor sat inside was aborted.
+    pub(crate) fn is_live(&self) -> bool {
+        let mut live = false;
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_is_live(ctx, self.raw, &mut live)
+        }));
+        live
+    }
+
     /// Emit literal text. Must not contain newlines.
     pub(crate) fn text(&self, s: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
@@ -1445,24 +1493,29 @@ impl RunResult {
 
     /// The `index`-th distinct failure; `index` must be less than
     /// [`failure_count`](Self::failure_count) (libhegel rejects an
-    /// out-of-range index). The blob is copied out and the libhegel failure
-    /// snapshot released before returning.
+    /// out-of-range index). The strings are copied out and the libhegel
+    /// failure snapshot released before returning.
     pub(crate) fn failure(&self, index: usize) -> Failure {
         let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
         // SAFETY: self.raw is this snapshot's live pointer; &mut f is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
         }));
+        let mut origin: *const c_char = ptr::null();
         let mut blob: *const c_char = ptr::null();
         // SAFETY: f is the failure snapshot allocated above; it is freed
-        // exactly once, after the blob has been copied out by cstr_opt.
-        let reproduce_blob = with_context(|ctx| unsafe {
+        // exactly once, after both strings have been copied out by cstr_opt.
+        with_context(|ctx| unsafe {
+            require_ok(hegel_c::hegel_failure_origin(ctx, f, &mut origin));
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
-            let reproduce_blob = cstr_opt(blob);
+            let failure = Failure {
+                origin: cstr_opt(origin)
+                    .unwrap_or_else(|| hegel_internal_error!("failure {index} has no origin")),
+                reproduce_blob: cstr_opt(blob),
+            };
             require_ok(hegel_c::hegel_failure_free(ctx, f));
-            reproduce_blob
-        });
-        Failure { reproduce_blob }
+            failure
+        })
     }
 }
 
@@ -1473,11 +1526,13 @@ impl Drop for RunResult {
     }
 }
 
-/// A distinct failure read out of a finished run.
-///
-/// The client needs only the reproduce blob: it replays the blob to produce
-/// the diagnostic and re-raise the test's own panic.
+/// A distinct failure read out of a finished run: the origin the engine
+/// grouped the bug's test cases under (the string the frontend passed to
+/// `hegel_mark_complete` when it first reported the bug) and the reproduce
+/// blob the client replays to produce the diagnostic and re-raise the
+/// test's own panic.
 pub(crate) struct Failure {
+    pub(crate) origin: String,
     pub(crate) reproduce_blob: Option<String>,
 }
 

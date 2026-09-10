@@ -578,7 +578,7 @@ pub use hegel_macros::state_machine;
 
 /// Derive a [`ConcurrentStateMachine`](crate::stateful::ConcurrentStateMachine)
 /// implementation from an `impl` block, for concurrent stateful testing via
-/// [`stateful::run_concurrent`].
+/// [`stateful::Machine::run_concurrent`].
 ///
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
@@ -596,7 +596,7 @@ pub use hegel_macros::state_machine;
 /// The model is shared by reference across worker threads, so rules and
 /// invariants must take `&self` (mutable state needs interior mutability),
 /// and the model type must be `Sync`. See
-/// [`run_concurrent`](crate::stateful::run_concurrent) for the full
+/// [`Machine::run_concurrent`](crate::stateful::Machine::run_concurrent) for the full
 /// execution model.
 ///
 /// ```no_run
@@ -637,7 +637,7 @@ pub use hegel_macros::state_machine;
 /// #[hegel::test]
 /// fn test_kv(tc: TestCase) {
 ///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
-///     hegel::stateful::run_concurrent(m, tc, 1, 3);
+///     hegel::stateful::machine(m).max_concurrency(3).run_concurrent(tc);
 /// }
 /// ```
 pub use hegel_macros::concurrent_state_machine;

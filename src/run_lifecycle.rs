@@ -55,7 +55,7 @@ pub(crate) fn take_panic_info() -> Option<PanicInfo> {
 }
 
 /// Install `info` into this thread's panic-info slot, as if the panic hook
-/// had captured it here. Used by `stateful::run_concurrent` to re-install a
+/// had captured it here. Used by `stateful::Machine::run_concurrent` to re-install a
 /// worker thread's capture on the main thread before `resume_unwind`ing the
 /// ferried payload — the re-raise skips the panic hook, so without this the
 /// lifecycle would fall back to [`unknown_panic_info`] and every concurrent
@@ -65,14 +65,14 @@ pub(crate) fn install_panic_info(info: PanicInfo) {
 }
 
 /// Whether the panic hook captures backtraces on this thread right now.
-/// `run_test_case` decides this per case; `stateful::run_concurrent` reads
+/// `run_test_case` decides this per case; `stateful::Machine::run_concurrent` reads
 /// it on the main thread to mirror the setting onto its worker threads.
 pub(crate) fn backtrace_capture_enabled() -> bool {
     CAPTURE_BACKTRACE.get()
 }
 
 /// Set whether the panic hook captures backtraces on this thread. Called by
-/// `stateful::run_concurrent` on each worker thread (see
+/// `stateful::Machine::run_concurrent` on each worker thread (see
 /// [`backtrace_capture_enabled`]).
 pub(crate) fn set_backtrace_capture(enabled: bool) {
     CAPTURE_BACKTRACE.set(enabled);
@@ -266,10 +266,10 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// start ([`CTestCase::is_nondeterministic`]): the engine stamps every case
 /// of a run it already knows to be nondeterministic before the case starts.
 /// The case that *makes* a run nondeterministic — the first to ask
-/// `stateful::run_concurrent` for real concurrency — is discarded (the
+/// `stateful::Machine::run_concurrent` for real concurrency — is discarded (the
 /// engine rejects its machine creation like a failed assumption), so every
 /// case that can fail was stamped up front and captures its whole trace,
-/// draws and notes made before `run_concurrent` included.
+/// draws and notes made before `Machine::run_concurrent` included.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -302,7 +302,7 @@ pub(crate) fn run_test_case(
         should_emit,
         case_sink.or_else(|| output.sink().cloned()),
     );
-    let reporter = tc.child(0);
+    let reporter = tc.reporter();
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
 
@@ -591,8 +591,8 @@ pub(crate) fn drive<F>(
                 if multiple && !quiet {
                     output.line("");
                 }
-                let blob = result
-                    .failure(index)
+                let failure = result.failure(index);
+                let blob = failure
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
@@ -602,7 +602,10 @@ pub(crate) fn drive<F>(
                 let (tc_result, payload, diagnostic) =
                     run_test_case(c_tc, &mut test_fn, true, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
-                    panic!("{FLAKY_DIAGNOSTIC}");
+                    panic!(
+                        "{FLAKY_DIAGNOSTIC}\nThe failure that did not reproduce was: {}",
+                        failure.origin
+                    );
                 }
                 if let Some(diagnostic) = diagnostic {
                     output.block(&diagnostic);

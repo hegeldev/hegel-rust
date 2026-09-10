@@ -138,7 +138,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
         ));
         assert!(matches!(tc.new_pool(), Err(ALREADY_COMPLETE)));
         assert!(matches!(
-            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1),
+            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1, 50),
             Err(ALREADY_COMPLETE)
         ));
     }
@@ -218,8 +218,12 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     let result = run.result();
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
-    let blob = result
-        .failure(0)
+    let failure = result.failure(0);
+    assert_eq!(
+        failure.origin, origin,
+        "the engine reports the origin the failure was marked complete with"
+    );
+    let blob = failure
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 

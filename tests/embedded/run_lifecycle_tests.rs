@@ -293,7 +293,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
         }
     }
     let result = run_case_capturing(false, Verbosity::Normal, &mut |tc| {
-        crate::stateful::run(Hungry, tc);
+        crate::stateful::machine(Hungry).run(tc);
         panic!("unreachable: the endless rule must exhaust the choice budget");
     });
     assert!(
