@@ -1331,12 +1331,12 @@ fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]).unwrap(),
     );
 
     let result = reuse_run(
