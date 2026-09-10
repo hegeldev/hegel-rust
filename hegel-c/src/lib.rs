@@ -145,6 +145,7 @@ pub enum hegel_result_t {
 
 use hegel_result_t::*;
 
+/// cbindgen:ignore
 /// Allocates temporary memory for the WebAssembly host. A zero size or an
 /// invalid alignment returns NULL. The host must release a non-NULL result
 /// with [`hegel_dealloc`], passing the same size and alignment.
@@ -160,6 +161,7 @@ pub extern "C" fn hegel_alloc(size: usize, align: usize) -> *mut c_void {
     unsafe { allocate(layout).cast() }
 }
 
+/// cbindgen:ignore
 /// Releases memory previously returned by [`hegel_alloc`]. NULL is ignored;
 /// non-NULL pointers must have the same size and alignment used to allocate
 /// them.
