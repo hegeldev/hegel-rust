@@ -17,7 +17,7 @@ Each release publishes shared and static
 `.sha256` sidecars for `linux/amd64`, `linux/arm64`, `darwin/arm64`,
 `windows/amd64`, and `windows/arm64`. Intel macOS (`darwin/amd64`) is not
 published; build the crate yourself if you need it. Releases also include the
-`wasm32-unknown-unknown` WebAssembly artifact.
+`wasm32-unknown-unknown` WebAssembly module and static archive.
 
 ## WebAssembly build
 
@@ -28,7 +28,10 @@ rustup target add wasm32-unknown-unknown
 just c-build-wasm
 ```
 
-The resulting module uses `hegel_host.entropy_fill` and
-`hegel_host.monotonic_nanos` for platform services. Filesystem persistence and
-concurrent state machines are unavailable in this single-threaded build; a
-browser or other host binding supplies the imports and Wasm memory handling.
+`just c-build-wasm` also builds the static archive with the `wasm-static`
+feature. The resulting module uses `hegel_host.entropy_fill` and
+`hegel_host.monotonic_nanos` for platform services. The static archive uses the
+stable C symbols `hegel_host_entropy_fill` and `hegel_host_monotonic_nanos` for
+the same hooks. Filesystem persistence and concurrent state machines are
+unavailable in this single-threaded build; a browser or other host binding
+supplies the imports and Wasm memory handling.

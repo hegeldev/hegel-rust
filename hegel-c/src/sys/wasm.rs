@@ -12,12 +12,22 @@ use super::Error;
 
 const MAX_RANDOM_FILL: usize = 65_536;
 
+#[cfg(any(not(feature = "wasm-static"), test))]
 #[link(wasm_import_module = "hegel_host")]
 unsafe extern "C" {
     #[link_name = "entropy_fill"]
     fn host_entropy_fill(ptr: *mut u8, len: usize) -> i32;
 
     #[link_name = "monotonic_nanos"]
+    fn host_monotonic_nanos() -> i64;
+}
+
+#[cfg(all(feature = "wasm-static", not(test)))]
+unsafe extern "C" {
+    #[link_name = "hegel_host_entropy_fill"]
+    fn host_entropy_fill(ptr: *mut u8, len: usize) -> i32;
+
+    #[link_name = "hegel_host_monotonic_nanos"]
     fn host_monotonic_nanos() -> i64;
 }
 

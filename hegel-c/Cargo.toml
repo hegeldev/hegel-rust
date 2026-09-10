@@ -68,6 +68,7 @@ std = []
 # `panic_impl` error); `just c-test-runtime` instead builds the runtime
 # cdylib and runs the std-linked smoke suite against it via dlopen.
 runtime = []
+wasm-static = []
 # Internal: exposes engine internals via `__bench` for hegeltest's benches/.
 # Not part of the public C API; depend on at your peril.
 __bench = []

@@ -111,6 +111,17 @@ jobs:
         run: cargo test -p hegeltest-c --target wasm32-unknown-unknown --lib --no-run
       - name: Build the WebAssembly artifact
         run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+      - name: Build the WebAssembly static archive
+        run: cargo rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
+      - name: Check static archive hook names
+        shell: bash
+        run: |
+          set -euo pipefail
+          symbols=$(nm -u target/wasm32-unknown-unknown/release/libhegel_c.a)
+          grep -q 'hegel_host_entropy_fill' <<<"$symbols"
+          grep -q 'hegel_host_monotonic_nanos' <<<"$symbols"
+          if grep -Eq '_RN.*host_entropy_fill' <<<"$symbols"; then exit 1; fi
+          if grep -Eq '_RN.*host_monotonic_nanos' <<<"$symbols"; then exit 1; fi
       - name: Smoke-test the WebAssembly host boundary
         shell: bash
         run: |
@@ -753,17 +764,22 @@ jobs:
           rustup target add wasm32-unknown-unknown
       - name: Build WebAssembly artifact
         run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
-      - name: Stage WebAssembly asset
+      - name: Build WebAssembly static archive
+        run: cargo rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
+      - name: Stage WebAssembly assets
         shell: bash
         run: |
           set -euo pipefail
-          asset="libhegel-wasm32-unknown-unknown.wasm"
-          cp target/wasm32-unknown-unknown/release/hegel_c.wasm "$asset"
-          sha256sum "$asset" > "$asset.sha256"
-      - name: Upload WebAssembly asset
+          wasm_asset="libhegel-wasm32-unknown-unknown.wasm"
+          static_asset="libhegel-wasm32-unknown-unknown.a"
+          cp target/wasm32-unknown-unknown/release/hegel_c.wasm "$wasm_asset"
+          cp target/wasm32-unknown-unknown/release/libhegel_c.a "$static_asset"
+          sha256sum "$wasm_asset" > "$wasm_asset.sha256"
+          sha256sum "$static_asset" > "$static_asset.sha256"
+      - name: Upload WebAssembly assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${VERSION}" libhegel-wasm32-unknown-unknown.wasm libhegel-wasm32-unknown-unknown.wasm.sha256 --clobber
+        run: gh release upload "v${VERSION}" libhegel-wasm32-unknown-unknown.wasm libhegel-wasm32-unknown-unknown.wasm.sha256 libhegel-wasm32-unknown-unknown.a libhegel-wasm32-unknown-unknown.a.sha256 --clobber
 
   # Independent post-condition check that every expected libhegel asset is
   # present on the Release. `release-binaries` uses `fail-fast: false` so
@@ -794,6 +810,7 @@ jobs:
           expected=(
             hegel.h
             libhegel-wasm32-unknown-unknown.wasm
+            libhegel-wasm32-unknown-unknown.a
             libhegel-linux-amd64.so
             libhegel-linux-amd64.a
             libhegel-linux-arm64.so

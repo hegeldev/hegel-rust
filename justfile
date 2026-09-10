@@ -81,6 +81,7 @@ c-build:
 c-build-wasm:
     cargo check -p hegeltest-c --target wasm32-unknown-unknown
     cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+    cargo rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
 
 # Run the hegel-c smoke tests (Rust integration test that dlopens
 # libhegel) and build + run every example C program against both the
