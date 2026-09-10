@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::BooleanChoice;
-use crate::native::core::{ChoiceValue, CloneRecord, MAX_CLONE_DEPTH};
+use crate::native::core::choices::{BooleanChoice, RealizedStream};
+use crate::native::core::{ChoiceNode, ChoiceValue, CloneRecord, MAX_CLONE_DEPTH};
 use alloc::string::ToString;
 use alloc::vec;
 use tempfile::TempDir;
@@ -533,4 +533,31 @@ fn serialize_round_trips_clone_nesting_at_max_depth() {
 #[test]
 fn serialize_rejects_clone_nesting_beyond_max_depth() {
     assert!(serialize_choices(&nested_clones(MAX_CLONE_DEPTH + 1)).is_none());
+}
+
+fn nested_clone_nodes(depth: usize) -> Vec<ChoiceNode> {
+    let mut nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
+    for _ in 0..depth {
+        nodes = vec![ChoiceNode::clone_stream(
+            std::sync::Arc::new(RealizedStream::new(nodes, Vec::new())),
+            false,
+        )];
+    }
+    nodes
+}
+
+#[test]
+fn serialize_nodes_matches_serialize_choices_at_max_depth() {
+    let nodes = nested_clone_nodes(MAX_CLONE_DEPTH);
+    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+    assert_eq!(serialize_nodes(&nodes), serialize_choices(&choices));
+    assert_eq!(
+        deserialize_choices(&serialize_nodes(&nodes).unwrap()),
+        Some(choices)
+    );
+}
+
+#[test]
+fn serialize_nodes_rejects_clone_nesting_beyond_max_depth() {
+    assert!(serialize_nodes(&nested_clone_nodes(MAX_CLONE_DEPTH + 1)).is_none());
 }

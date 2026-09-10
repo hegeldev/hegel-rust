@@ -909,10 +909,7 @@ impl<'a> Persister<'a> {
     /// written to the primary key and any previously-saved bytes for this
     /// origin are then deleted (or demoted, for a run-start entry).
     fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) -> Result<(), InternalError> {
-        let Some(db) = self.db.as_deref() else {
-            return Ok(());
-        };
-        let Some(key) = self.database_key else {
+        let (Some(db), Some(key)) = (self.db.as_deref(), self.database_key) else {
             return Ok(());
         };
         let key_bytes = key.as_bytes();
