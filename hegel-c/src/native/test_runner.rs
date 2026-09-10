@@ -1851,12 +1851,13 @@ impl<'a> Engine<'a> {
                                 review.captured.into_iter().chain(timelines),
                             );
                             let reviewed = self.origins.entry(&origin);
-                            reviewed.confirm(
+                            let confirmed_origin = reviewed.confirm(
                                 review.evidence.lower_bound(),
                                 None,
                                 pool,
                                 review_evidence,
-                            )?;
+                            );
+                            confirmed_origin?;
                             reviewed.record_final_replay(batch);
                             confirmed = true;
                         }
@@ -2152,12 +2153,13 @@ impl<'a> Engine<'a> {
                 .and_then(|c| c.history().entries().get(candidate))
                 .map(|e| e.nodes.clone())
                 .unwrap_or_default();
-            self.origins.entry(origin).confirm(
+            let confirmed = self.origins.entry(origin).confirm(
                 anchor,
                 Some(witness),
                 pool,
                 (batch.evidence.fails(), batch.evidence.runs()),
-            )?;
+            );
+            confirmed?;
             #[cfg(feature = "__bench")]
             {
                 let best = accepts.last().copied().unwrap_or(candidate);
@@ -2665,12 +2667,13 @@ impl<'a> Engine<'a> {
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if batch.bar_accepted {
                 let pool = pooled_timelines(choices, batch.captured);
-                self.origins.entry(&origin).confirm(
+                let confirmed = self.origins.entry(&origin).confirm(
                     batch.evidence.lower_bound(),
                     batch.witness,
                     pool,
                     evidence,
-                )?;
+                );
+                confirmed?;
                 self.record_nd_incumbent(&origin, &nodes);
             } else {
                 self.reject_origin(&origin, evidence, false);
