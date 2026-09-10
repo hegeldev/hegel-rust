@@ -50,6 +50,16 @@
 //! how draw-time printing survives rejection (filters, collection rejection,
 //! failed assumptions).
 //!
+//! Two line decorations sit outside the layout stream. [`Printer::block`]
+//! opens a deferred slot whose every line is indented further than its
+//! parent's: a block's indentation is applied to a line when the line gets
+//! its first content, not folded into the break-point indentation, so it
+//! ends exactly with the block — the parent's next line, written after the
+//! block's last hard break, is back at the parent's indentation.
+//! [`Printer::line_prefix`] puts text ahead of a line's indentation (a
+//! worker attribution, say) when the target is at a hard line start;
+//! [`Printer::at_line_start`] is how a client decides to record one.
+//!
 //! Text passed to [`Printer::text`] and [`Printer::comment`] must not
 //! contain newlines; use [`Printer::hard_break`] instead so column and
 //! indentation accounting stay correct. Widths are counted in `char`s.
@@ -120,6 +130,7 @@ enum Cmd {
     ShiftIndent(isize),
     Comment(String),
     Splice(SlotId),
+    LinePrefix(String),
 }
 
 #[derive(Debug)]
@@ -161,15 +172,32 @@ struct Group {
     comment: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Slot {
     commands: Vec<Cmd>,
     speculation: Vec<Vec<Cmd>>,
+    pending_notes: Vec<Vec<Cmd>>,
     dead: bool,
+    /// Columns every line of this slot is indented beyond its parent's
+    /// lines (see [`Printer::block`]); 0 for a plain deferred slot.
+    block_indent: usize,
+    /// Whether the slot was opened at a hard line start of its parent, which
+    /// is where its own first content stands until it has any.
+    starts_line: bool,
 }
 
-fn spaces(n: isize) -> String {
-    " ".repeat(n.max(0) as usize)
+fn note_cmds(text: &str, line_prefix: Option<&str>) -> Vec<Cmd> {
+    let mut cmds = Vec::new();
+    for segment in text.split('\n') {
+        if let Some(prefix) = line_prefix {
+            cmds.push(Cmd::LinePrefix(prefix.to_string()));
+        }
+        if !segment.is_empty() {
+            cmds.push(Cmd::Text(segment.to_string()));
+        }
+        cmds.push(Cmd::HardBreak);
+    }
+    cmds
 }
 
 fn splice_ids(cmds: &[Cmd]) -> Vec<usize> {
@@ -216,6 +244,7 @@ pub struct Printer {
     main: Vec<Cmd>,
     open_groups: isize,
     speculation: Vec<Vec<Cmd>>,
+    pending_notes: Vec<Vec<Cmd>>,
     slots: Vec<Slot>,
     pending_resolve: bool,
     sealed: bool,
@@ -233,6 +262,7 @@ impl Printer {
             main: Vec::new(),
             open_groups: 0,
             speculation: Vec::new(),
+            pending_notes: Vec::new(),
             slots: Vec::new(),
             pending_resolve: false,
             sealed: false,
@@ -330,6 +360,22 @@ impl Printer {
     /// Open a deferred hole at the current position of `target` and return
     /// its slot. Writes to the slot are spliced in at the hole's position.
     pub fn deferred(&mut self, target: Target) -> Result<SlotId, PrinterError> {
+        self.open_slot(target, 0)
+    }
+
+    /// Open a block at the current position of `target`: a deferred slot
+    /// whose every line is indented `indent` columns further than the lines
+    /// of `target` (blocks nest, and their indentation adds up). The
+    /// indentation is applied when a line gets its first content and is
+    /// independent of the break-point indentation `begin_group` and
+    /// `shift_indent` manage, so it also pads the continuation lines of a
+    /// group broken inside the block. A block opened mid-line continues that
+    /// line; its indentation shows from its first whole line on.
+    pub fn block(&mut self, target: Target, indent: usize) -> Result<SlotId, PrinterError> {
+        self.open_slot(target, indent)
+    }
+
+    fn open_slot(&mut self, target: Target, block_indent: usize) -> Result<SlotId, PrinterError> {
         if self.sealed {
             return Err(PrinterError::DeadSlot);
         }
@@ -339,9 +385,71 @@ impl Printer {
             }
         }
         let slot = SlotId(self.slots.len());
-        self.slots.push(Slot::default());
+        self.slots.push(Slot {
+            commands: Vec::new(),
+            speculation: Vec::new(),
+            pending_notes: Vec::new(),
+            dead: false,
+            block_indent,
+            starts_line: self.at_line_start(target),
+        });
         self.dispatch(target, Cmd::Splice(slot))?;
         Ok(slot)
+    }
+
+    /// Whether the next content recorded on `target` starts a line: nothing
+    /// has been recorded there yet (for a slot, it was opened at a line
+    /// start), or the last thing recorded — in the innermost open
+    /// speculative region, or committed — was a hard break, or a splice
+    /// whose slot ends at one. Indentation shifts are looked past.
+    /// Break points are not line starts: whether one breaks is decided at
+    /// layout time.
+    pub fn at_line_start(&self, target: Target) -> bool {
+        let (commands, speculation) = match target {
+            Target::Main => (&self.main, &self.speculation),
+            Target::Slot(SlotId(id)) => (&self.slots[id].commands, &self.slots[id].speculation),
+        };
+        let last = speculation
+            .iter()
+            .rev()
+            .flat_map(|buf| buf.iter().rev())
+            .chain(commands.iter().rev())
+            .find(|cmd| !matches!(cmd, Cmd::ShiftIndent(_)));
+        match last {
+            Some(cmd) => self.ends_line(cmd),
+            None => match target {
+                Target::Main => true,
+                Target::Slot(SlotId(id)) => self.slots[id].starts_line,
+            },
+        }
+    }
+
+    fn ends_line(&self, cmd: &Cmd) -> bool {
+        match cmd {
+            Cmd::HardBreak => true,
+            Cmd::Splice(SlotId(id)) => {
+                let slot = &self.slots[*id];
+                match slot
+                    .commands
+                    .iter()
+                    .rev()
+                    .find(|cmd| !matches!(cmd, Cmd::ShiftIndent(_)))
+                {
+                    Some(cmd) => self.ends_line(cmd),
+                    None => slot.starts_line,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Put `s` ahead of the line about to start on `target`: it renders
+    /// before the line's indentation (block and break-point indentation
+    /// alike) and counts toward the line's width. Meant for a target that
+    /// [`Printer::at_line_start`] reports true for; anywhere else it is
+    /// plain text. Must not contain newlines.
+    pub fn line_prefix(&mut self, target: Target, s: &str) -> Result<(), PrinterError> {
+        self.dispatch(target, Cmd::LinePrefix(s.to_string()))
     }
 
     /// Open a speculative region on `target`: subsequent writes to it buffer
@@ -366,7 +474,9 @@ impl Printer {
 
     /// Close the innermost speculative region on `target`, keeping its
     /// content. Committing into the main output validates group balance and
-    /// rejects atomically, leaving the region open.
+    /// rejects atomically, leaving the region open. Closing the outermost
+    /// region releases the notes held while it was open (see
+    /// [`Printer::note`]).
     pub fn commit_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
         if self.sealed {
             return Err(PrinterError::DeadSlot);
@@ -410,32 +520,55 @@ impl Printer {
                 let buf = slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
                 if let Some(outer) = slot.speculation.last_mut() {
                     outer.extend(buf);
-                } else {
-                    slot.commands.extend(buf);
+                    return Ok(());
                 }
+                slot.commands.extend(buf);
             }
         }
+        self.release_held_notes(target);
         Ok(())
     }
 
     /// Close the innermost speculative region on `target`, discarding its
-    /// content. Deferred slots opened inside the region die with it.
+    /// content. Deferred slots opened inside the region die with it. Closing
+    /// the outermost region releases the notes held while it was open (see
+    /// [`Printer::note`]): a note is never part of the retracted content.
     pub fn abort_speculative(&mut self, target: Target) -> Result<(), PrinterError> {
         if self.sealed {
             return Err(PrinterError::DeadSlot);
         }
-        let buf = match target {
-            Target::Main => self.speculation.pop().ok_or(PrinterError::NoSpeculation)?,
+        let (buf, outermost) = match target {
+            Target::Main => {
+                let buf = self.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
+                (buf, self.speculation.is_empty())
+            }
             Target::Slot(SlotId(id)) => {
                 let slot = &mut self.slots[id];
                 if slot.dead {
                     return Err(PrinterError::DeadSlot);
                 }
-                slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?
+                let buf = slot.speculation.pop().ok_or(PrinterError::NoSpeculation)?;
+                (buf, slot.speculation.is_empty())
             }
         };
         self.kill_splices(&buf);
+        if outermost {
+            self.release_held_notes(target);
+        }
         Ok(())
+    }
+
+    fn release_held_notes(&mut self, target: Target) {
+        let (notes, commands) = match target {
+            Target::Main => (core::mem::take(&mut self.pending_notes), &mut self.main),
+            Target::Slot(SlotId(id)) => {
+                let slot = &mut self.slots[id];
+                (core::mem::take(&mut slot.pending_notes), &mut slot.commands)
+            }
+        };
+        for note in notes {
+            commands.extend(note);
+        }
     }
 
     /// Close the outstanding deferred session and seal the document (see
@@ -502,13 +635,42 @@ impl Printer {
     /// Append a note to `target`: each `\n`-separated line of `text` is
     /// emitted as literal text followed by a hard break, so a note always
     /// occupies whole lines and keeps width accounting correct even when the
-    /// note contains newlines. Errors only for a dead slot target.
-    pub fn note(&mut self, target: Target, text: &str) -> Result<(), PrinterError> {
-        for segment in text.split('\n') {
-            if !segment.is_empty() {
-                self.dispatch(target, Cmd::Text(segment.to_string()))?;
+    /// note contains newlines. With a `line_prefix`, every line of the note
+    /// gets it (see [`Printer::line_prefix`]).
+    ///
+    /// A note appended while a speculative region is open on `target` — a
+    /// value is being printed, and the note comes from inside its generation
+    /// — is held back rather than spliced into that value's line, and
+    /// appended when the outermost region on the target closes, whether by
+    /// [`Printer::commit_speculative`] or [`Printer::abort_speculative`].
+    /// Held notes die with the target if the document is sealed first.
+    /// Errors only for a dead target.
+    pub fn note(
+        &mut self,
+        target: Target,
+        text: &str,
+        line_prefix: Option<&str>,
+    ) -> Result<(), PrinterError> {
+        if self.sealed {
+            return Err(PrinterError::DeadSlot);
+        }
+        let held = match target {
+            Target::Main => (!self.speculation.is_empty()).then_some(&mut self.pending_notes),
+            Target::Slot(SlotId(id)) => {
+                let slot = &mut self.slots[id];
+                if slot.dead {
+                    return Err(PrinterError::DeadSlot);
+                }
+                (!slot.speculation.is_empty()).then_some(&mut slot.pending_notes)
             }
-            self.dispatch(target, Cmd::HardBreak)?;
+        };
+        let cmds = note_cmds(text, line_prefix);
+        if let Some(held) = held {
+            held.push(cmds);
+            return Ok(());
+        }
+        for cmd in cmds {
+            self.dispatch(target, cmd)?;
         }
         Ok(())
     }
@@ -581,6 +743,13 @@ struct Renderer<'a> {
     out: String,
     output_width: usize,
     at_line_start: bool,
+    /// The break-point indentation of the line being written, held until
+    /// the line's first content arrives: the padding actually written is
+    /// this plus the block indentation current at that moment, behind any
+    /// line prefix. `None` once the line has content (or its padding out).
+    pending_pad: Option<isize>,
+    /// Summed indentation of the blocks whose splices are being rendered.
+    block_indent: usize,
     buffer: VecDeque<Token>,
     buffer_width: usize,
     pending_comments: String,
@@ -599,6 +768,8 @@ impl<'a> Renderer<'a> {
             out: String::new(),
             output_width: 0,
             at_line_start: true,
+            pending_pad: Some(0),
+            block_indent: 0,
             buffer: VecDeque::new(),
             buffer_width: 0,
             pending_comments: String::new(),
@@ -633,28 +804,75 @@ impl<'a> Renderer<'a> {
             Cmd::ShiftIndent(delta) => self.indentation += delta,
             Cmd::Comment(s) => self.comment(s),
             Cmd::Splice(SlotId(id)) => {
-                let spliced = self.slots[*id].commands.as_slice();
-                return self.run(spliced);
+                let slot = &self.slots[*id];
+                self.block_indent += slot.block_indent;
+                self.run(&slot.commands)?;
+                self.block_indent -= slot.block_indent;
             }
+            Cmd::LinePrefix(s) => self.line_prefix(s),
         }
         Ok(())
     }
 
     fn finish(mut self) -> String {
         self.flush();
+        self.emit_pending_pad();
         let pending = core::mem::take(&mut self.pending_comments);
         self.out.push_str(&pending);
         self.out
     }
 
-    fn text(&mut self, s: &str) {
-        let width = s.chars().count();
-        if self.buffer.is_empty() {
+    /// Write the padding of a line that has none yet: its held break-point
+    /// indentation plus the block indentation in force now.
+    fn emit_pending_pad(&mut self) {
+        if let Some(indent) = self.pending_pad.take() {
+            let pad = self.block_indent + indent.max(0) as usize;
+            self.out.push_str(&" ".repeat(pad));
+            self.output_width = pad;
+        }
+    }
+
+    /// Write `s`, `width` chars wide, to the current line, padding the line
+    /// first if this is its first content.
+    fn push_content(&mut self, s: &str, width: usize) {
+        if width > 0 {
+            self.emit_pending_pad();
+            self.at_line_start = false;
+        }
+        self.out.push_str(s);
+        self.output_width += width;
+    }
+
+    /// End the current line — writing its padding if it never got content,
+    /// and its comments — and start the next at break-point indentation
+    /// `indent`.
+    fn start_line(&mut self, indent: isize) {
+        self.emit_pending_pad();
+        self.emit_pending_comments();
+        self.out.push('\n');
+        self.pending_pad = Some(indent);
+        self.output_width = self.block_indent + indent.max(0) as usize;
+        self.at_line_start = true;
+    }
+
+    fn line_prefix(&mut self, s: &str) {
+        if self.buffer.is_empty() && self.pending_pad.is_some() {
+            let width = s.chars().count();
             self.out.push_str(s);
+            self.emit_pending_pad();
             self.output_width += width;
             if width > 0 {
                 self.at_line_start = false;
             }
+        } else {
+            self.text(s);
+        }
+    }
+
+    fn text(&mut self, s: &str) {
+        let width = s.chars().count();
+        if self.buffer.is_empty() {
+            self.push_content(s, width);
         } else {
             match self.buffer.back_mut() {
                 Some(Token::Text { content, width: w }) => {
@@ -718,11 +936,7 @@ impl<'a> Renderer<'a> {
 
     fn newline(&mut self) {
         self.flush();
-        self.emit_pending_comments();
-        self.out.push('\n');
-        self.out.push_str(&spaces(self.indentation));
-        self.output_width = self.indentation.max(0) as usize;
-        self.at_line_start = true;
+        self.start_line(self.indentation);
     }
 
     fn begin_group(&mut self, indent: usize, open: &str) {
@@ -821,21 +1035,11 @@ impl<'a> Renderer<'a> {
 
     fn output_token(&mut self, token: Token) {
         match token {
-            Token::Text { content, width } => {
-                self.out.push_str(&content);
-                self.output_width += width;
-                if width > 0 {
-                    self.at_line_start = false;
-                }
-            }
+            Token::Text { content, width } => self.push_content(&content, width),
             Token::IfBreak { content, group } => {
                 if self.groups[group].want_break {
                     let width = content.chars().count();
-                    self.out.push_str(&content);
-                    self.output_width += width;
-                    if width > 0 {
-                        self.at_line_start = false;
-                    }
+                    self.push_content(&content, width);
                 }
             }
             Token::Comment { content } => {
@@ -849,20 +1053,12 @@ impl<'a> Renderer<'a> {
             } => {
                 self.groups[group].pending -= 1;
                 if self.groups[group].want_break {
-                    self.emit_pending_comments();
-                    self.out.push('\n');
-                    self.out.push_str(&spaces(indent));
-                    self.output_width = indent.max(0) as usize;
-                    self.at_line_start = true;
+                    self.start_line(indent);
                 } else {
                     if self.groups[group].pending == 0 {
                         self.queue_remove(group);
                     }
-                    self.out.push_str(&sep);
-                    self.output_width += width;
-                    if width > 0 {
-                        self.at_line_start = false;
-                    }
+                    self.push_content(&sep, width);
                 }
             }
         }

@@ -34,6 +34,12 @@
 //! blob can't be replayed" and panic. Compressed payloads decode under the
 //! [`MAX_DECOMPRESSED_LEN`] bound, and a stream that inflates past it counts
 //! as malformed.
+//!
+//! Every blob [`encode_failure`] returns decodes: the one input it refuses
+//! (returning `None`) is a sequence whose clone values nest deeper than
+//! [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH), which
+//! [`serialize_choices`] rejects for the same reason the decoder does. The
+//! engine never produces one.
 
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
@@ -60,9 +66,12 @@ const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
 
 /// Encode a choice sequence into a failure blob (see the module docs for the
 /// format). The returned string is safe to embed in source as a string
-/// literal and to round-trip through [`decode_failure`].
-pub fn encode_failure(choices: &[ChoiceValue]) -> String {
-    let raw = serialize_choices(choices);
+/// literal and to round-trip through [`decode_failure`]. Returns `None` only
+/// for a sequence [`serialize_choices`] rejects (clone values nested deeper
+/// than [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH)), which no
+/// blob could represent.
+pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
+    let raw = serialize_choices(choices)?;
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
     let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
@@ -74,7 +83,7 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> String {
     let mut payload = Vec::with_capacity(body.len() + 1);
     payload.push(prefix);
     payload.extend_from_slice(&body);
-    base64_encode(&payload)
+    Some(base64_encode(&payload))
 }
 
 /// Decode a failure blob produced by [`encode_failure`] back into a choice

@@ -1,5 +1,7 @@
 use super::*;
+use crate::native::blob::{decode_failure, encode_failure};
 use crate::native::core::{BUFFER_SIZE, MAX_CLONE_DEPTH};
+use crate::native::database::{deserialize_choices, serialize_choices};
 use crate::native::rng::EngineRng;
 
 fn draw(ntc: &mut NativeTestCase) -> i128 {
@@ -227,6 +229,28 @@ fn clone_nesting_beyond_max_depth_is_invalid() {
     let too_deep = current.lock().clone_stream();
     assert!(matches!(too_deep, Err(EngineError::InvalidTestCase)));
     assert_eq!(parent.status(), Some(Status::Invalid));
+}
+
+#[test]
+fn clone_nesting_at_max_depth_encodes_and_round_trips() {
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
+    let mut handles = Vec::new();
+    let mut current = parent.clone_stream().unwrap();
+    for _ in 1..MAX_CLONE_DEPTH {
+        let next = current.lock().clone_stream().unwrap();
+        handles.push(current);
+        current = next;
+    }
+    draw(&mut current.lock());
+    handles.push(current);
+    parent.conclude(Status::Valid, None);
+    parent.reassemble();
+
+    let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value()).collect();
+    let bytes = serialize_choices(&choices).unwrap();
+    assert_eq!(deserialize_choices(&bytes), Some(choices.clone()));
+    let blob = encode_failure(&choices).unwrap();
+    assert_eq!(decode_failure(&blob), Some(choices));
 }
 
 #[test]

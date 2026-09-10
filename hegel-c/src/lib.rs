@@ -20,7 +20,7 @@ use core::ffi::{CStr, c_char, c_void};
 use core::future::Future;
 use core::pin::Pin;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use crate::sys::sync::{Mutex, MutexGuard};
@@ -566,6 +566,10 @@ struct FamilyShared {
     /// wins; later conflicting ones error. Only read and written under the
     /// `printer` lock.
     printer_width_configured: AtomicBool,
+    /// When the test case started — the zero of the `+X.XXXms` offsets in
+    /// the worker attribution `hegel_test_case_set_worker` turns on. `None`
+    /// on a platform without a monotonic clock, where the offsets read 0.
+    started: Option<crate::sys::Instant>,
 }
 
 impl FamilyShared {
@@ -614,7 +618,41 @@ pub struct HegelTestCase {
     /// clone's output appears in the final document — is deterministic,
     /// however the threads are later scheduled.
     print_target: PrinterTarget,
+    /// The concurrent worker this handle's output is attributed to
+    /// (`hegel_test_case_set_worker`), or [`NO_WORKER`]. Shared with the
+    /// printer handles fetched from this handle, so an attribution set after
+    /// a printer was fetched still applies to it; copied — not shared — into
+    /// the handles derived from this one, which may be attributed on their
+    /// own.
+    worker: Arc<AtomicI64>,
     local: Mutex<LocalState>,
+}
+
+/// The `worker` value of a handle attributed to no worker.
+const NO_WORKER: i64 = -1;
+
+/// The state a printer handle stamps lines from: the worker attribution
+/// cell of the test-case handle it was fetched from and the family's start
+/// time.
+struct Attribution {
+    worker: Arc<AtomicI64>,
+    started: Option<crate::sys::Instant>,
+}
+
+impl Attribution {
+    /// The `[worker N +X.XXXms] ` prefix for a line recorded now, or `None`
+    /// while no worker is set.
+    fn line_prefix(&self) -> Option<String> {
+        let worker = self.worker.load(Ordering::Acquire);
+        if worker == NO_WORKER {
+            return None;
+        }
+        let elapsed = self
+            .started
+            .map_or(core::time::Duration::ZERO, |started| started.elapsed());
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        Some(format!("[worker {worker} +{ms:.3}ms] "))
+    }
 }
 
 /// Box `value` and leak it to a raw pointer for the C ABI.
@@ -1578,8 +1616,120 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         // the clone's prints are no-ops like its parent's.
         Err(_) => src.print_target,
     };
-    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream), print_target);
+    let clone = handle_from_stream(
+        Arc::clone(&src.family),
+        Arc::from(stream),
+        print_target,
+        src.worker.load(Ordering::Acquire),
+    );
     unsafe { *out_test_case = clone };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `indent`: How many columns further than `tc`'s own lines every line of
+///   the block is indented.
+/// `out_test_case`: Receives a new handle onto the *same* choice stream as
+///   `tc`.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
+///
+/// A block handle is how a client prints an indented section under a
+/// heading — the body of a stateful rule under its `Step 3: add {` line, the
+/// body of a repeated section — without touching every line itself. Its
+/// print region (see `hegel_test_case_printer`) is a block nested in `tc`'s
+/// region at the current position: everything printed or noted through the
+/// handle, and through the clones and blocks derived from it, lands there,
+/// each line indented `indent` columns further than `tc`'s lines (blocks
+/// nest, and their indentation adds up). The indentation is applied to a
+/// line when it gets its first content, so it covers the continuation lines
+/// of a value broken across lines too, and it ends exactly with the block:
+/// a line `tc` writes after the block's last one is back at `tc`'s
+/// indentation. It is independent of the break-point indentation
+/// `hegel_printer_begin_group` / `hegel_printer_shift_indent` manage.
+///
+/// Unlike a clone, a block handle draws from `tc`'s own choice sequence:
+/// drawing through it and through `tc` are the same thing, so the two must
+/// not be driven concurrently (give a thread a clone instead). It shares
+/// everything else with `tc` — outcome, budgets, worker attribution as of
+/// its creation — and is released with `hegel_test_case_free` like any
+/// other handle. If `tc`'s region is dead (the document was read), the
+/// block shares the dead region and its prints are no-ops.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_block(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    indent: u64,
+    out_test_case: *mut *mut HegelTestCase,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(src) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_block: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_test_case.is_null() {
+        set_last_error(ctx, "hegel_test_case_block: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let print_target = match src
+        .family
+        .printer
+        .lock()
+        .block(src.print_target, size_arg(indent))
+    {
+        Ok(slot) => PrinterTarget::Slot(slot),
+        Err(_) => src.print_target,
+    };
+    let block = handle_from_stream(
+        Arc::clone(&src.family),
+        Arc::clone(&src.stream),
+        print_target,
+        src.worker.load(Ordering::Acquire),
+    );
+    unsafe { *out_test_case = block };
+    HEGEL_OK
+}
+
+/// Attribute this handle's output to concurrent worker `worker_index`:
+/// every line recorded from now on through the handle — `hegel_note` lines,
+/// and lines started through a printer fetched from it with
+/// `hegel_test_case_printer`, before or after this call — is prefixed with
+/// `[worker N +X.XXXms] `, where `X.XXX` is the time since the test case
+/// started at which the line was recorded. Blocks and clones derived from
+/// the handle after this call inherit the attribution (a worker's rule
+/// bodies and their clones print as that worker's), and may be attributed
+/// afresh on their own. Lines a group breaks across are stamped on their
+/// first line only.
+///
+/// This is the attribution a concurrent stateful runner gives the clone it
+/// hands each worker thread (see `hegel_state_machine_next_rule`), so the
+/// report can be read across workers: regions order a worker's lines
+/// together, and the offsets say how they interleaved in time.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+/// `HEGEL_E_INVALID_ARG` for a negative `worker_index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_set_worker(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    worker_index: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(tc) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_set_worker: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if worker_index < 0 {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_test_case_set_worker: worker_index must be non-negative, got {worker_index}"
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    tc.worker.store(worker_index, Ordering::Release);
     HEGEL_OK
 }
 
@@ -1592,6 +1742,7 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
             DEFAULT_PRINTER_MAX_WIDTH,
         )))),
         printer_width_configured: AtomicBool::new(false),
+        started: crate::sys::Instant::now(),
     })
 }
 
@@ -1599,22 +1750,24 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
 /// stream, printing into the document body — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
     let stream = Arc::clone(&family.ds);
-    handle_from_stream(family, stream, PrinterTarget::Main)
+    handle_from_stream(family, stream, PrinterTarget::Main, NO_WORKER)
 }
 
 /// Allocate a handle holding one reference to `family` that draws from
-/// `stream` and prints into `print_target`, and return its raw pointer. Each
-/// handle has its own `local` buffer so concurrent handles do not stomp each
-/// other's borrowed values.
+/// `stream`, prints into `print_target` and starts out attributed to
+/// `worker`, and return its raw pointer. Each handle has its own `local`
+/// buffer so concurrent handles do not stomp each other's borrowed values.
 fn handle_from_stream(
     family: Arc<FamilyShared>,
     stream: Arc<dyn DataSource + Send + Sync>,
     print_target: PrinterTarget,
+    worker: i64,
 ) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
         stream,
         print_target,
+        worker: Arc::new(AtomicI64::new(worker)),
         local: Mutex::new(LocalState { completed: false }),
     })
 }
@@ -4058,6 +4211,30 @@ pub struct HegelPrinter {
     /// and this flag is how a second thread caught racing the same handle
     /// gets `HEGEL_E_CONCURRENT_USE` instead of silently interleaving.
     busy: AtomicBool,
+    /// Where worker line prefixes come from for a handle fetched from a
+    /// test-case handle (and the deferred handles opened from it); `None`
+    /// for a standalone document.
+    attribution: Option<Arc<Attribution>>,
+}
+
+impl HegelPrinter {
+    /// Run a content-recording operation on this handle's target, first
+    /// stamping the line it starts with the worker prefix when the handle
+    /// is attributed and the target is at a line start.
+    fn record(
+        &self,
+        op: impl FnOnce(&mut Printer, PrinterTarget) -> Result<(), PrinterError>,
+    ) -> Result<(), PrinterError> {
+        let mut printer = self.inner.lock();
+        if let Some(attribution) = &self.attribution {
+            if printer.at_line_start(self.target) {
+                if let Some(prefix) = attribution.line_prefix() {
+                    printer.line_prefix(self.target, &prefix)?;
+                }
+            }
+        }
+        op(&mut printer, self.target)
+    }
 }
 
 /// The line width a printer document is laid out to when the client does not
@@ -4278,6 +4455,7 @@ pub unsafe extern "C" fn hegel_printer_new(
         inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
         target: PrinterTarget::Main,
         busy: AtomicBool::new(false),
+        attribution: None,
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
@@ -4332,7 +4510,7 @@ pub unsafe extern "C" fn hegel_printer_if_break(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().if_break(handle.target, &text) {
+    match handle.record(|printer, target| printer.if_break(target, &text)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4363,7 +4541,7 @@ pub unsafe extern "C" fn hegel_printer_text(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().text(handle.target, &text) {
+    match handle.record(|printer, target| printer.text(target, &text)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4483,11 +4661,7 @@ pub unsafe extern "C" fn hegel_printer_begin_group(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle
-        .inner
-        .lock()
-        .begin_group(handle.target, size_arg(indent), &open)
-    {
+    match handle.record(|printer, target| printer.begin_group(target, size_arg(indent), &open)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4517,7 +4691,7 @@ pub unsafe extern "C" fn hegel_printer_end_group(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().end_group(handle.target, &close) {
+    match handle.record(|printer, target| printer.end_group(target, &close)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4584,6 +4758,7 @@ pub unsafe extern "C" fn hegel_printer_deferred(
                 inner: Arc::clone(&handle.inner),
                 target: PrinterTarget::Slot(slot),
                 busy: AtomicBool::new(false),
+                attribution: handle.attribution.clone(),
             };
             unsafe { *out_printer = into_raw_send_sync(child) };
             HEGEL_OK
@@ -4878,6 +5053,10 @@ pub unsafe extern "C" fn hegel_test_case_printer(
         inner,
         target: tc.print_target,
         busy: AtomicBool::new(false),
+        attribution: Some(Arc::new(Attribution {
+            worker: Arc::clone(&tc.worker),
+            started: tc.family.started,
+        })),
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
@@ -4889,6 +5068,13 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 /// line, so notes may contain newlines. Notes and drawn values from *one
 /// handle* appear in the order they were appended; a clone's notes appear
 /// in the clone's region.
+///
+/// A note appended while a speculative region is open on the handle's
+/// region — the client is mid-way through printing a drawn value, and the
+/// note comes from inside that value's generation — is held back rather
+/// than spliced into the value's line, and appended once the outermost
+/// region closes, whether it is committed or aborted. Held notes are lost
+/// if the document is read first (the writer was a straggler).
 ///
 /// Notes never configure the document's width; they render at whatever
 /// width ends up configured (default 79).
@@ -4919,7 +5105,17 @@ pub unsafe extern "C" fn hegel_note(
         }
         Err(rc) => return rc,
     };
-    match tc.family.printer.lock().note(tc.print_target, &text) {
+    let attribution = Attribution {
+        worker: Arc::clone(&tc.worker),
+        started: tc.family.started,
+    };
+    let prefix = attribution.line_prefix();
+    match tc
+        .family
+        .printer
+        .lock()
+        .note(tc.print_target, &text, prefix.as_deref())
+    {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }

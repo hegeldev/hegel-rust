@@ -385,7 +385,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hegeltest"
-version = "0.41.4"
+version = "0.41.7"
 dependencies = [
  "chrono",
  "ctor",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-c"
-version = "0.37.7"
+version = "0.37.10"
 dependencies = [
  "cbindgen",
  "criterion",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.41.4"
+version = "0.41.7"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.37.10 - 2026-09-10
+
+This patch adds two functions for shaping a test case's printed output without decorating every line by hand.
+
+`hegel_test_case_block` opens a handle onto the same choice stream as an existing handle whose print region is a block nested in the parent's: every line printed or noted through it — and through the clones and blocks derived from it — is indented a given number of columns further than the parent's lines, and the indentation ends exactly with the block. This is how a binding prints the body of a stateful rule under its `Step 3: add {` heading.
+
+`hegel_test_case_set_worker` attributes a handle's output to a concurrent worker: every line recorded through it from then on, notes and printer lines alike, is prefixed with `[worker N +X.XXXms] `, stamped with the time since the test case started at which the line was recorded. Blocks and clones derived from the handle inherit the attribution.
+
+To make block indentation possible, a line's indentation is now written when the line gets its first content rather than at the newline that started it. Documents without blocks render exactly as before, including the padding of blank lines and of a trailing hard break.
+
+This patch also changes when `hegel_note` appends its text. A note appended while a speculative region is open on the handle's print region — the client is mid-way through printing a drawn value, and the note comes from inside that value's generation — is now held back and appended once the outermost region closes, whether it is committed or aborted. Previously the note's lines were spliced into the value being printed. Notes appended outside a speculative region are unaffected.
+
+## 0.37.9 - 2026-09-10
+
+This patch fixes an encode/decode gap in the Hegel test case format where an encoder would allow a sequence that the decoder rejected ([#477](https://github.com/hegeldev/hegel-rust/issues/477)). This code path was unreachable in normal test execution so this is mostly an internal change.
+
+## 0.37.8 - 2026-09-10
+
+This patch fixes a memory leak in string draws. The engine memoises, per alphabet, which of its built-in constant strings fit that alphabet, and that memo was kept in a process-global table that never dropped entries for freed generators. A caller that built and freed a string generator around every draw grew without bound; the memo now lives with the alphabet and is freed with it ([#434](https://github.com/hegeldev/hegel-rust/issues/434)).
+
+It also makes the engine's mutexes spin instead of futex-parking when built under Miri on Linux, so the test suite runs under current nightly Miri. Behaviour outside Miri is unchanged.
+
 ## 0.37.7 - 2026-09-09
 
 The per-round continue draw of stateful test cases now stops with probability 2^-32 per round instead of 2^-16.

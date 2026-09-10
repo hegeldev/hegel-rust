@@ -1184,6 +1184,67 @@ hegel_result_t hegel_test_case_clone(hegel_context_t *ctx,
                                      hegel_test_case_t **out_test_case);
 
 /*
+ Parameters:
+ `indent`: How many columns further than `tc`'s own lines every line of
+   the block is indented.
+ `out_test_case`: Receives a new handle onto the *same* choice stream as
+   `tc`.
+
+ Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+ `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
+
+ A block handle is how a client prints an indented section under a
+ heading — the body of a stateful rule under its `Step 3: add {` line, the
+ body of a repeated section — without touching every line itself. Its
+ print region (see `hegel_test_case_printer`) is a block nested in `tc`'s
+ region at the current position: everything printed or noted through the
+ handle, and through the clones and blocks derived from it, lands there,
+ each line indented `indent` columns further than `tc`'s lines (blocks
+ nest, and their indentation adds up). The indentation is applied to a
+ line when it gets its first content, so it covers the continuation lines
+ of a value broken across lines too, and it ends exactly with the block:
+ a line `tc` writes after the block's last one is back at `tc`'s
+ indentation. It is independent of the break-point indentation
+ `hegel_printer_begin_group` / `hegel_printer_shift_indent` manage.
+
+ Unlike a clone, a block handle draws from `tc`'s own choice sequence:
+ drawing through it and through `tc` are the same thing, so the two must
+ not be driven concurrently (give a thread a clone instead). It shares
+ everything else with `tc` — outcome, budgets, worker attribution as of
+ its creation — and is released with `hegel_test_case_free` like any
+ other handle. If `tc`'s region is dead (the document was read), the
+ block shares the dead region and its prints are no-ops.
+ */
+hegel_result_t hegel_test_case_block(hegel_context_t *ctx,
+                                     const hegel_test_case_t *tc,
+                                     uint64_t indent,
+                                     hegel_test_case_t **out_test_case);
+
+/*
+ Attribute this handle's output to concurrent worker `worker_index`:
+ every line recorded from now on through the handle — `hegel_note` lines,
+ and lines started through a printer fetched from it with
+ `hegel_test_case_printer`, before or after this call — is prefixed with
+ `[worker N +X.XXXms] `, where `X.XXX` is the time since the test case
+ started at which the line was recorded. Blocks and clones derived from
+ the handle after this call inherit the attribution (a worker's rule
+ bodies and their clones print as that worker's), and may be attributed
+ afresh on their own. Lines a group breaks across are stamped on their
+ first line only.
+
+ This is the attribution a concurrent stateful runner gives the clone it
+ hands each worker thread (see `hegel_state_machine_next_rule`), so the
+ report can be read across workers: regions order a worker's lines
+ together, and the offsets say how they interleaved in time.
+
+ Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+ `HEGEL_E_INVALID_ARG` for a negative `worker_index`.
+ */
+hegel_result_t hegel_test_case_set_worker(hegel_context_t *ctx,
+                                          const hegel_test_case_t *tc,
+                                          int64_t worker_index);
+
+/*
  A span groups a set of draws so the shrinker can treat them as a unit.
  Libraries should wrap each compound generator in a span.
 
@@ -2332,6 +2393,13 @@ hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
  line, so notes may contain newlines. Notes and drawn values from *one
  handle* appear in the order they were appended; a clone's notes appear
  in the clone's region.
+
+ A note appended while a speculative region is open on the handle's
+ region — the client is mid-way through printing a drawn value, and the
+ note comes from inside that value's generation — is held back rather
+ than spliced into the value's line, and appended once the outermost
+ region closes, whether it is committed or aborted. Held notes are lost
+ if the document is read first (the writer was a straggler).
 
  Notes never configure the document's width; they render at whatever
  width ends up configured (default 79).

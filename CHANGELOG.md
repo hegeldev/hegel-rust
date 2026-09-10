@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.41.7 - 2026-09-10
+
+This patch improves the diagnostic for a flaky test. When a shrunk failure no longer fails on its final replay, the `Flaky test detected` message now also names the failure that did not reproduce, as the panic location the engine recorded for it.
+
+`PrettyPrinter::should_print` now also reports `false` for a printer whose region has died — a clone that outlived the document it was printing into — since its writes are discarded.
+
+In a concurrent state machine's failure report, every line of a multi-line `tc.note()` made from a worker thread now carries the `[worker N +X.XXXms]` attribution; previously only the note's first line did.
+
+Internally, the frontend now leaves the shape of its output to the engine: `TestCase::note` goes through the engine's own note primitive, the indentation of stateful rule bodies and `tc.repeat` iterations is the engine's block regions, and the worker attribution on concurrent workers' lines is stamped by the engine rather than assembled from lower-level printing calls.
+
+## 0.41.6 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.9.
+
+## 0.41.5 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.8.
+
 ## 0.41.4 - 2026-09-09
 
 `#[hegel::main]` binaries now suppress the `TooSlow` and `TestCasesTooLarge` health checks. Stateful test cases no longer stop at random after tens of thousands of rounds: the engine's per-round stop probability is now 2^-32 instead of 2^-16.
