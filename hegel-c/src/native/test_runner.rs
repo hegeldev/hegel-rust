@@ -1035,6 +1035,16 @@ pub(crate) fn flaky_diagnostic() -> String {
         .to_string()
 }
 
+/// [`flaky_diagnostic`] naming the failure whose replay disagreed, for the
+/// `error`-strictness aborts that know it: the first-interesting check,
+/// the shrink verify, and the final replay.
+pub(crate) fn flaky_diagnostic_for(origin: &str) -> String {
+    format!(
+        "{}\nThe failure that did not reproduce was: {origin}",
+        flaky_diagnostic()
+    )
+}
+
 /// Notice emitted once per run under
 /// [`NondeterminismStrictness::Warn`], when detection first switches the
 /// run into nondeterministic handling.
@@ -1639,7 +1649,7 @@ impl<'a> Engine<'a> {
             {
                 (!self.nd_handling()).then_some(verify)
             } else if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
-                return Err(RunError::Flaky(flaky_diagnostic()));
+                return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
             } else {
                 #[cfg(feature = "__bench")]
                 self.seam_flip(nd::seam_dump::FlipSite::ShrinkVerify);
@@ -1814,7 +1824,7 @@ impl<'a> Engine<'a> {
                 pending.append(&mut replayed);
                 if !reproduced {
                     if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
-                        return Err(RunError::Flaky(flaky_diagnostic()));
+                        return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
                     }
                     #[cfg(feature = "__bench")]
                     self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
@@ -2640,7 +2650,7 @@ impl<'a> Engine<'a> {
             evidence.record(failed);
             if !failed || realized != choices {
                 let miss = if realized == choices {
-                    RunError::Flaky(flaky_diagnostic())
+                    RunError::Flaky(flaky_diagnostic_for(origin))
                 } else {
                     RunError::NonDeterministic(first_check_diagnostic(&choices, &realized))
                 };
@@ -2933,9 +2943,12 @@ impl<'a> Engine<'a> {
                 self.consecutive_duplicates = 0;
             }
         }
-        Ok(recorded
-            .verdict_mismatch
-            .then(|| RunError::Flaky(flaky_diagnostic())))
+        Ok(recorded.verdict_mismatch.then(|| {
+            RunError::Flaky(match &recorded.mismatched_origin {
+                Some(origin) => flaky_diagnostic_for(origin),
+                None => flaky_diagnostic(),
+            })
+        }))
     }
 
     /// Whether the generation-phase invalid/overrun budget still has room.

@@ -7819,9 +7819,7 @@ fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
     let settings = Settings::new().database(Some(path));
     let exchange = CaseExchange::new();
     let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
-    ctx.persister
-        .record("Panic: bug", &[int_node(90)])
-        .unwrap();
+    ctx.persister.record("Panic: bug", &[int_node(90)]).unwrap();
     ctx.origins.entry("Panic: bug").replace(vec![int_node(50)]);
     ctx.reconcile_database().unwrap();
 
