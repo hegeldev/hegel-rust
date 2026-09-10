@@ -444,6 +444,10 @@ fn a_reexecuted_fingerprint_with_a_different_outcome_aborts_under_error_strictne
             match mismatch {
                 Some(RunError::Flaky(msg)) => {
                     assert!(msg.contains("Flaky test detected"), "{msg}");
+                    assert!(
+                        msg.contains("The failure that did not reproduce was: Panic: flip"),
+                        "the abort names the failure the cache recorded: {msg}"
+                    );
                 }
                 other => panic!("expected the flaky abort, got {other:?}"),
             }
@@ -451,6 +455,53 @@ fn a_reexecuted_fingerprint_with_a_different_outcome_aborts_under_error_strictne
                 !ctx.nd_active,
                 "error strictness aborts instead of flipping"
             );
+        },
+    );
+}
+
+/// A verdict flip between two non-failing conclusions has no failure to
+/// name, so the abort carries the bare diagnostic.
+#[test]
+fn a_valid_to_invalid_verdict_flip_aborts_with_the_bare_diagnostic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_engine(
+        Settings::new()
+            .database(None)
+            .nondeterminism_strictness(NondeterminismStrictness::Error),
+        None,
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                TestCaseResult::Valid
+            } else {
+                TestCaseResult::Invalid
+            }
+        },
+        async |ctx| {
+            let choices = [ChoiceValue::Boolean(true)];
+            let nodes = [bool_node(true)];
+            let (_, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(&choices, Some(&nodes), None))
+                .await
+                .unwrap();
+            assert!(mismatch.is_none());
+            let (_, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(&choices, Some(&nodes), None))
+                .await
+                .unwrap();
+            match mismatch {
+                Some(RunError::Flaky(msg)) => {
+                    assert!(msg.contains("Flaky test detected"), "{msg}");
+                    assert!(
+                        !msg.contains("did not reproduce"),
+                        "no failure to name: {msg}"
+                    );
+                }
+                other => panic!("expected the flaky abort, got {other:?}"),
+            }
         },
     );
 }
