@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceValue, ChoiceValueRef};
+use crate::native::core::{ChoiceValue, ChoiceValueRef, CloneRecord, MAX_CLONE_DEPTH};
 use crate::sys;
 
 /// Multi-value key/value store backing the native engine's replay phase.
@@ -215,42 +215,65 @@ pub(super) fn fnv1a(s: &[u8]) -> u64 {
 ///     - Clone: the cloned stream's child choice values in this same
 ///       count-then-entries layout, recursively. Only the values are
 ///       persisted — spans and kinds are recreated on replay.
-pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
+///
+/// Returns `None` if clone values nest deeper than [`MAX_CLONE_DEPTH`]: the
+/// engine never produces such a sequence (`clone_stream` rejects the clone
+/// that would exceed the depth), and [`deserialize_choices`] refuses it, so
+/// encoding one would only yield bytes that can never be read back.
+pub fn serialize_choices(choices: &[ChoiceValue]) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     serialize_choice_list(
         &mut buf,
         choices.len(),
         choices.iter().map(ChoiceValueRef::from),
-    );
-    buf
+        0,
+    )?;
+    Some(buf)
 }
 
 /// Serialize the realized values of `nodes` with the same encoding (and so
-/// the same key semantics) as [`serialize_choices`].
-pub(crate) fn serialize_nodes(nodes: &[crate::native::core::ChoiceNode]) -> Vec<u8> {
+/// the same key semantics and the same [`MAX_CLONE_DEPTH`] bound) as
+/// [`serialize_choices`].
+pub(crate) fn serialize_nodes(nodes: &[crate::native::core::ChoiceNode]) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(4 + nodes.len() * 17);
     serialize_choice_list(
         &mut buf,
         nodes.len(),
         nodes.iter().map(|n| n.data.value_ref()),
-    );
-    buf
+        0,
+    )?;
+    Some(buf)
 }
 
 fn serialize_choice_list<'a>(
     buf: &mut Vec<u8>,
     count: usize,
     choices: impl Iterator<Item = ChoiceValueRef<'a>>,
-) {
+    depth: usize,
+) -> Option<()> {
+    if depth > MAX_CLONE_DEPTH {
+        return None;
+    }
     buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
-        serialize_one_choice(buf, choice);
+        serialize_one_choice_at(buf, choice, depth)?;
     }
+    Some(())
 }
 
-/// Serialize one value with its type tag — the per-position unit of the
-/// [`serialize_choices`] encoding, exposed for prefix-incremental hashing.
-pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>) {
+/// Serialize one top-level value with its type tag — the per-position unit
+/// of the [`serialize_choices`] encoding, exposed for prefix-incremental
+/// hashing. Returns `None` under the same [`MAX_CLONE_DEPTH`] bound as
+/// [`serialize_choices`].
+pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>) -> Option<()> {
+    serialize_one_choice_at(buf, choice, 0)
+}
+
+fn serialize_one_choice_at(
+    buf: &mut Vec<u8>,
+    choice: ChoiceValueRef<'_>,
+    depth: usize,
+) -> Option<()> {
     match choice {
         ChoiceValueRef::Integer(v) => {
             buf.push(0);
@@ -280,9 +303,10 @@ pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>
         }
         ChoiceValueRef::Clone(children) => {
             buf.push(5);
-            serialize_choice_list(buf, children.len(), children.values());
+            serialize_choice_list(buf, children.len(), children.values(), depth + 1)?;
         }
     }
+    Some(())
 }
 
 /// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
@@ -337,9 +361,9 @@ fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> 
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
 /// Returns `None` if the data is truncated, malformed, contains an unknown
-/// type tag, or nests clone values deeper than
-/// [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH) (defensive
-/// against filesystem corruption).
+/// type tag, or nests clone values deeper than [`MAX_CLONE_DEPTH`]
+/// (defensive against filesystem corruption; the same bound
+/// [`serialize_choices`] enforces, so every sequence it encodes decodes).
 pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     let (choices, _) = deserialize_choice_list(bytes, 0, 0)?;
     Some(choices)
@@ -350,7 +374,7 @@ fn deserialize_choice_list(
     start: usize,
     depth: usize,
 ) -> Option<(Vec<ChoiceValue>, usize)> {
-    if depth > crate::native::core::MAX_CLONE_DEPTH {
+    if depth > MAX_CLONE_DEPTH {
         return None;
     }
     if start + 4 > bytes.len() {
@@ -423,7 +447,7 @@ fn deserialize_choice_list(
                 let (children, new_pos) = deserialize_choice_list(bytes, pos, depth + 1)?;
                 pos = new_pos;
                 choices.push(ChoiceValue::Clone(alloc::sync::Arc::new(
-                    crate::native::core::CloneRecord::from_values(children),
+                    CloneRecord::from_values(children),
                 )));
             }
             _ => return None,
