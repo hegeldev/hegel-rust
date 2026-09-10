@@ -272,7 +272,6 @@ pub(crate) fn settings_from_profile(name: Option<&str>) -> Result<Settings, Stri
 /// [`Settings`].
 fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSettings) -> Settings {
     let mut test_cases = 0u64;
-    let mut stateful_step_count = 0i64;
     let mut verbosity = hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL;
     let mut seed = 0u64;
     let mut has_seed = false;
@@ -291,11 +290,6 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
             ctx,
             raw,
             &mut test_cases,
-        ));
-        require_ok(hegel_c::hegel_settings_get_stateful_step_count(
-            ctx,
-            raw,
-            &mut stateful_step_count,
         ));
         require_ok(hegel_c::hegel_settings_get_verbosity(
             ctx,
@@ -348,7 +342,6 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
     };
     Settings {
         test_cases,
-        stateful_step_count,
         verbosity: verbosity_from_c(verbosity),
         seed: has_seed.then_some(seed),
         derandomize,

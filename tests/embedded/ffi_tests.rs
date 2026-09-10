@@ -314,7 +314,6 @@ fn ffi_settings_round_trip_every_field_through_registration() {
     use crate::runner::{Database, HealthCheck, Phase, Verbosity};
     let original = Settings::from_profile("base")
         .test_cases(7)
-        .stateful_step_count(9)
         .verbosity(Verbosity::Debug)
         .seed(Some(11))
         .derandomize(true)
@@ -328,7 +327,6 @@ fn ffi_settings_round_trip_every_field_through_registration() {
     register_profile("ffi_tests_round_trip", &original).unwrap();
     let restored = settings_from_profile(Some("ffi_tests_round_trip")).unwrap();
     assert_eq!(restored.test_cases, 7);
-    assert_eq!(restored.stateful_step_count, 9);
     assert_eq!(restored.verbosity, crate::runner::Verbosity::Debug);
     assert_eq!(restored.seed, Some(11));
     assert!(restored.derandomize);

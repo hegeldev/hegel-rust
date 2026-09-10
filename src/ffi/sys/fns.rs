@@ -88,7 +88,6 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_get_report_multiple_failures(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
             fn hegel_settings_get_seed(ctx: *mut HegelContext, s: *const HegelSettings, out_seed: *mut u64, out_has_seed: *mut bool) -> hegel_result_t;
             fn hegel_settings_get_show_statistics(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
-            fn hegel_settings_get_stateful_step_count(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut i64) -> hegel_result_t;
             fn hegel_settings_get_suppress_health_check(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut u32) -> hegel_result_t;
             fn hegel_settings_get_test_cases(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut u64) -> hegel_result_t;
             fn hegel_settings_get_verbosity(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut hegel_verbosity_t) -> hegel_result_t;

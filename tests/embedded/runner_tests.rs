@@ -213,7 +213,6 @@ fn test_from_profile_base_is_environment_independent() {
     assert!(!settings.derandomize);
     assert!(!settings.print_blob);
     assert_eq!(settings.test_cases, 100);
-    assert_eq!(settings.stateful_step_count, 50);
     assert_eq!(settings.seed, None);
     assert_eq!(settings.backend, crate::runner::Backend::Default);
     assert!(settings.suppress_health_check.is_empty());

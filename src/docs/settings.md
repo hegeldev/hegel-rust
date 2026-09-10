@@ -7,7 +7,6 @@ those places combine, and how the *profile* a run starts from is chosen.
 | Setting | Values | Base value | Effect |
 |---|---|---|---|
 | `test_cases` | integer ≥ 1 | `100` | How many test cases to run. |
-| `stateful_step_count` | integer ≥ 1 | `50` | Target number of steps per stateful test case; each case runs between one and this many. No effect on non-stateful tests. |
 | `verbosity` | `quiet`, `normal`, `verbose`, `debug` | `normal` | How much Hegel prints ([`Verbosity`](crate::Verbosity)). |
 | `seed` | integer, or none | none | A fixed seed for reproducibility; none means a fresh random seed per run. |
 | `derandomize` | boolean | `false` | Use a fixed seed derived from the test name, so every run of a test is the same. |
@@ -168,7 +167,7 @@ that the others name with `extends`:
 
 ```toml
 [profiles.common]
-stateful_step_count = 200
+test_cases = 200
 
 [profiles.development]
 extends = "common"
