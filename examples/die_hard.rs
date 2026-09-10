@@ -60,7 +60,7 @@ impl DieHard {
 #[hegel::test(test_cases = 2000)]
 fn test_die_hard(tc: TestCase) {
     let m = DieHard { small: 0, big: 0 };
-    hegel::stateful::run(m, tc);
+    hegel::stateful::machine(m).run(tc);
 }
 
 fn main() {}

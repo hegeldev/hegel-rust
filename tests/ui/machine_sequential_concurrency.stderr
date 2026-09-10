@@ -1,0 +1,19 @@
+error[E0599]: the method `max_concurrency` exists for struct `Machine<Counter>`, but its trait bounds were not satisfied
+  --> tests/ui/machine_sequential_concurrency.rs:19:10
+   |
+ 4 |   struct Counter {
+   |   -------------- doesn't satisfy `Counter: ConcurrentStateMachine`
+...
+18 | /     hegel::stateful::machine(Counter { value: 0 })
+19 | |         .max_concurrency(3)
+   | |         -^^^^^^^^^^^^^^^ private field, not a method
+   | |_________|
+   |
+   |
+   = note: the following trait bounds were not satisfied:
+           `Counter: ConcurrentStateMachine`
+note: the trait `ConcurrentStateMachine` must be implemented
+  --> src/stateful.rs
+   |
+   | pub trait ConcurrentStateMachine {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
