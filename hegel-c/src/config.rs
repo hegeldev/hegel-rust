@@ -21,7 +21,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::profiles::{ProfileDelta, ProfileError, ROOT, SELECTED, is_valid_name};
+use crate::profiles::{BASE, DEFAULT, ProfileDelta, ProfileError, is_valid_name};
 use crate::settings::{Backend, Database, HealthCheck, Phase, Verbosity};
 
 /// The config file's name, looked for in the current directory and every
@@ -116,10 +116,10 @@ pub(crate) fn parse(text: &str) -> Result<ConfigFile, ParseError> {
             }
             let value = parse_value(line[eq + 1..].trim(), line_no)?;
             let name = expect_string(value, key, line_no)?;
-            if name == SELECTED {
+            if name == DEFAULT {
                 return Err(err(
                     line_no,
-                    format!("`default` cannot name the {SELECTED:?} alias it resolves"),
+                    format!("`default` cannot name the {DEFAULT:?} alias it resolves"),
                 ));
             }
             if !is_valid_name(&name) {
@@ -158,19 +158,22 @@ fn parse_header(rest: &str, line_no: usize) -> Result<&str, ParseError> {
     if !after.is_empty() && !after.starts_with('#') {
         return Err(err(line_no, "unexpected text after table header"));
     }
-    if name == ROOT {
+    if name == BASE {
         return Err(err(
             line_no,
             format!(
-                "{ROOT:?} is the reserved base profile and cannot be modified; \
+                "{BASE:?} is the reserved base profile and cannot be modified; \
                  customize [profiles.development] instead"
             ),
         ));
     }
-    if name == SELECTED {
+    if name == DEFAULT {
         return Err(err(
             line_no,
-            format!("{SELECTED:?} is the alias for the default profile and cannot be defined"),
+            format!(
+                "{DEFAULT:?} is an alias for the default profile and cannot be defined; \
+                 choose it with `default = \"<profile>\"` instead"
+            ),
         ));
     }
     if !is_valid_name(name) {

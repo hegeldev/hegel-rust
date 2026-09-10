@@ -39,7 +39,7 @@ fn print_blob_true_prints_reproducer_line() {
 #[test]
 fn print_blob_default_suppresses_reproducer_line() {
     let out = self_test("print_blob_default_fixture")
-        .env("HEGEL_DEFAULT_PROFILE", "default")
+        .env("HEGEL_DEFAULT_PROFILE", "base")
         .expect_failure("x was")
         .run();
     let combined = format!("{}\n{}", out.stdout, out.stderr);

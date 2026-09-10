@@ -144,7 +144,7 @@ fn test_health_checks_run_in_antithesis_under_a_profile_that_does_not_extend_ant
     let output_dir = TempDir::new().unwrap();
     self_test("antithesis_filter_everything_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
-        .env("HEGEL_DEFAULT_PROFILE", "default")
+        .env("HEGEL_DEFAULT_PROFILE", "base")
         .expect_failure("FailedHealthCheck: FilterTooMuch")
         .run();
 }

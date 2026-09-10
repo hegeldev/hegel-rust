@@ -1,24 +1,25 @@
 //! Named settings profiles.
 //!
-//! A profile is a named delta over the engine's base defaults
+//! A profile is a named delta over the engine's base settings
 //! ([`Settings::base`]). Two names are reserved:
 //!
-//! - `default`: the base defaults themselves, set once and immutable. A
-//!   chain that reaches `default` terminates, so selecting or extending it
-//!   pins settings to the plain defaults, independent of the environment.
-//! - `selected`: an alias for the default profile. Its candidates, in
-//!   order, are the named default (the strongest set of the process
-//!   override ([`set_default_profile`]), `HEGEL_DEFAULT_PROFILE`, and the
-//!   `default` entry in `hegel.toml`) and the environment's profile
-//!   (`antithesis` inside Antithesis, else `ci` on a CI server, else
-//!   `development`). The alias resolves to the first candidate not already
-//!   part of the chain being resolved, falling back to `default`.
-//!   Resolving no name at all resolves `selected`, and a custom profile
-//!   without `extends` extends `selected`, so it picks up the environment's
-//!   behaviour wherever it sits. The shipped profiles themselves extend
-//!   `default` unless a `hegel.toml` section says otherwise: they are
-//!   siblings, never layers over one another, and a delta shared between
-//!   them must be a profile they name with `extends`.
+//! - `base`: the base settings themselves, set once and immutable. A chain
+//!   that reaches `base` terminates, so selecting or extending it pins
+//!   settings to the plain base, independent of the environment.
+//! - `default`: the default profile, the one in effect when nothing names
+//!   a profile. It is an alias whose candidates, in order, are the named
+//!   default (the strongest set of the process override
+//!   ([`set_default_profile`]), `HEGEL_DEFAULT_PROFILE`, and the `default`
+//!   entry in `hegel.toml`) and the environment's profile (`antithesis`
+//!   inside Antithesis, else `ci` on a CI server, else `development`). The
+//!   alias resolves to the first candidate not already part of the chain
+//!   being resolved, falling back to `base`. Resolving no name at all
+//!   resolves `default`, and a custom profile without `extends` extends
+//!   `default`, so it picks up the environment's behaviour wherever it
+//!   sits. The shipped profiles themselves extend `base` unless a
+//!   `hegel.toml` section says otherwise: they are siblings, never layers
+//!   over one another, and a delta shared between them must be a profile
+//!   they name with `extends`.
 //!
 //! Three ordinary profiles ship with the library and can be customized in
 //! `hegel.toml` or replaced by registration like any other:
@@ -52,18 +53,19 @@ use crate::sys::sync::{Lazy, Mutex};
 pub(crate) const DEFAULT_PROFILE_VAR: &str = "HEGEL_DEFAULT_PROFILE";
 
 /// The reserved name of the immutable base profile.
-pub(crate) const ROOT: &str = "default";
+pub(crate) const BASE: &str = "base";
 
-/// The reserved name of the alias for the default profile.
-pub(crate) const SELECTED: &str = "selected";
+/// The reserved name of the default profile, an alias resolved through
+/// [`Candidates`].
+pub(crate) const DEFAULT: &str = "default";
 
 /// The environment profile when nothing is detected: what local runs get.
 const FALLBACK: &str = "development";
 
 /// A named set of settings overrides: every profile-settable field, each
 /// optional. Unset fields inherit from the parent profile: `extends`, or
-/// when absent the `selected` alias for custom profiles and the `default`
-/// root for shipped ones. Resolution bottoms out at [`Settings::base`].
+/// when absent the `default` alias for custom profiles and `base` for
+/// shipped ones. Resolution bottoms out at [`Settings::base`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ProfileDelta {
     /// The profile this one layers over. Only meaningful for profiles
@@ -173,7 +175,7 @@ pub(crate) enum ProfileError {
     /// A `hegel.toml` section set `extends` on a registered profile, whose
     /// snapshot already terminates the chain.
     ExtendsOnRegistered(String),
-    /// A default-profile setting named the `selected` alias it resolves.
+    /// A default-profile setting named the `default` alias it resolves.
     /// `source` is the setting that named it.
     CircularDefault {
         source: &'static str,
@@ -224,7 +226,7 @@ impl core::fmt::Display for ProfileError {
                 )
             }
             ProfileError::CircularDefault { source } => {
-                write!(f, "{source} cannot name the {SELECTED:?} alias it resolves")
+                write!(f, "{source} cannot name the {DEFAULT:?} alias it resolves")
             }
             ProfileError::ReservedName(name) => {
                 write!(f, "cannot register reserved profile name {name:?}")
@@ -295,7 +297,7 @@ static DEFAULT_OVERRIDE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(N
 /// shipped name replaces its shipped delta as the resolution base for that
 /// name; `hegel.toml` deltas still merge on top.
 pub(crate) fn register(name: &str, settings: &Settings) -> Result<(), ProfileError> {
-    if name == ROOT || name == SELECTED {
+    if name == BASE || name == DEFAULT {
         return Err(ProfileError::ReservedName(name.to_owned()));
     }
     if !is_valid_name(name) {
@@ -315,7 +317,7 @@ pub(crate) fn register(name: &str, settings: &Settings) -> Result<(), ProfileErr
 /// `hegel_set_default_profile`.
 pub(crate) fn set_default_profile(name: Option<&str>) -> Result<(), ProfileError> {
     if let Some(name) = name {
-        if name == SELECTED {
+        if name == DEFAULT {
             return Err(ProfileError::CircularDefault {
                 source: "hegel_set_default_profile",
             });
@@ -336,10 +338,10 @@ fn lookup<'a>(entries: &'a [(String, ProfileDelta)], name: &str) -> Option<&'a P
     entries.iter().find(|(n, _)| n == name).map(|(_, d)| d)
 }
 
-/// The names [`resolve`] accepts, for unknown-profile diagnostics: `default`
+/// The names [`resolve`] accepts, for unknown-profile diagnostics: `base`
 /// and every shipped, configured, and registered profile, sorted.
 fn known_names(config: &ConfigFile, registry: &[(String, ProfileDelta)]) -> Vec<String> {
-    let mut known: Vec<String> = alloc::vec![ROOT.to_owned()];
+    let mut known: Vec<String> = alloc::vec![BASE.to_owned()];
     known.extend(SHIPPED.iter().map(|(n, _)| (*n).to_owned()));
     known.extend(config.profiles.iter().map(|(n, _)| n.clone()));
     known.extend(registry.iter().map(|(n, _)| n.clone()));
@@ -348,7 +350,7 @@ fn known_names(config: &ConfigFile, registry: &[(String, ProfileDelta)]) -> Vec<
     known
 }
 
-/// The candidates the `selected` alias resolves through, strongest first.
+/// The candidates the `default` alias resolves through, strongest first.
 pub(crate) struct Candidates {
     overridden: Option<String>,
     env: Option<String>,
@@ -401,7 +403,7 @@ impl Candidates {
         ];
         for (candidate, source) in named {
             let Some(name) = candidate else { continue };
-            if name == SELECTED {
+            if name == DEFAULT {
                 return Err(ProfileError::CircularDefault { source });
             }
             return Ok(Some((name, source)));
@@ -409,12 +411,12 @@ impl Candidates {
         Ok(None)
     }
 
-    /// The name the `selected` alias resolves to within `chain`: the named
+    /// The name the `default` alias resolves to within `chain`: the named
     /// default ([`Candidates::named_default`]) if not already in the chain,
-    /// else the environment's profile if not already in the chain, else the
-    /// `default` root. The environment profiles never layer over one
-    /// another, so every chain roots in the base settings. The source
-    /// accompanying the name feeds unknown-profile diagnostics.
+    /// else the environment's profile if not already in the chain, else
+    /// `base`. The environment profiles never layer over one another, so
+    /// every chain roots in the base settings. The source accompanying the
+    /// name feeds unknown-profile diagnostics.
     fn resolve(&self, chain: &[&str]) -> Result<(&str, Option<&'static str>), ProfileError> {
         if let Some((name, source)) = self.named_default()? {
             if !chain.contains(&name) {
@@ -424,7 +426,7 @@ impl Candidates {
         if !chain.contains(&self.environment) {
             return Ok((self.environment, None));
         }
-        Ok((ROOT, None))
+        Ok((BASE, None))
     }
 }
 
@@ -440,8 +442,8 @@ enum Arrival<'a> {
 }
 
 /// The deltas making up profile `name`, topmost first: the walk from `name`
-/// through `extends` links and `selected` aliases until a terminator (the
-/// `default` root, or a registered snapshot). At each name, a `hegel.toml`
+/// through `extends` links and `default` aliases until a terminator
+/// (`base`, or a registered snapshot). At each name, a `hegel.toml`
 /// delta layers over the shipped or registered delta of the same name.
 fn delta_chain<'a>(
     name: &'a str,
@@ -455,7 +457,7 @@ fn delta_chain<'a>(
     let mut arrival = arrival;
     let mut current = name;
     loop {
-        if current == SELECTED {
+        if current == DEFAULT {
             let (next, source) = candidates.resolve(&chain)?;
             current = next;
             if let Some(source) = source {
@@ -463,7 +465,7 @@ fn delta_chain<'a>(
             }
             continue;
         }
-        if current == ROOT {
+        if current == BASE {
             return Ok(deltas);
         }
         if chain.contains(&current) {
@@ -511,7 +513,7 @@ fn delta_chain<'a>(
                 arrival = Arrival::Extends(current);
                 current = parent;
             }
-            None => current = if ship.is_some() { ROOT } else { SELECTED },
+            None => current = if ship.is_some() { BASE } else { DEFAULT },
         }
     }
 }
@@ -538,7 +540,7 @@ pub(crate) fn resolve(
 /// profile fails loudly instead of lingering until someone selects it. The
 /// volatile default-profile settings are stripped first: what they name is
 /// checked by the resolutions that consult them, and must not fail
-/// resolutions that don't (such as the `default` root).
+/// resolutions that don't (such as `base`).
 fn validate(
     config: &ConfigFile,
     registry: &[(String, ProfileDelta)],
@@ -560,7 +562,7 @@ fn validate(
     Ok(())
 }
 
-/// Resolve settings for the profile `name`, or for the `selected` alias
+/// Resolve settings for the profile `name`, or for the `default` alias
 /// when `name` is `None`. The entry point behind `hegel_settings_new` and
 /// `hegel_settings_new_for_profile`.
 pub(crate) fn settings_for(name: Option<&str>) -> Result<Settings, ProfileError> {
@@ -583,7 +585,7 @@ fn settings_for_from(
     validate(config, registry, &candidates)?;
     let base = Settings::base(crate::antithesis_detect::antithesis_env_var_set_from(&env));
     let mut settings = resolve(
-        name.unwrap_or(SELECTED),
+        name.unwrap_or(DEFAULT),
         config,
         registry,
         &base,

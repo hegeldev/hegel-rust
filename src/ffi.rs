@@ -132,20 +132,20 @@ pub(crate) struct SettingsHandle {
 impl SettingsHandle {
     /// Materialize a libhegel settings handle from the frontend settings,
     /// translating every field through the corresponding `hegel_settings_*`
-    /// setter. The handle starts from the engine's immutable `default` root
-    /// rather than the selected profile — every field is overwritten below,
-    /// and the root keeps a broken default-profile setting from failing
-    /// runs whose settings were already resolved.
+    /// setter. The handle starts from the engine's immutable `base` profile
+    /// rather than the default profile — every field is overwritten below,
+    /// and `base` keeps a broken default-profile setting from failing runs
+    /// whose settings were already resolved.
     pub(crate) fn build(settings: &Settings, database_key: Option<&str>) -> Self {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
-            let default_profile = CString::new("default").unwrap();
+            let base_profile = CString::new("base").unwrap();
             // SAFETY: ctx is this thread's live context; &mut raw is a valid
             // out-parameter.
             unsafe {
                 require_ok(hegel_c::hegel_settings_new_for_profile(
                     ctx,
-                    default_profile.as_ptr(),
+                    base_profile.as_ptr(),
                     &mut raw,
                 ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
@@ -240,7 +240,7 @@ impl Drop for SettingsHandle {
 }
 
 /// Materialize a frontend [`Settings`] from an engine-resolved profile: the
-/// one `name` names, or the `selected` alias for `None`. The engine owns
+/// one `name` names, or the `default` alias for `None`. The engine owns
 /// profile resolution (shipped profiles, `hegel.toml`, default-profile
 /// selection, registrations), and this reads the resolved handle back field
 /// by field through the `hegel_settings_get_*` functions. The `Err` carries

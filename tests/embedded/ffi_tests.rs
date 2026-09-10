@@ -312,7 +312,7 @@ fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
 #[test]
 fn ffi_settings_round_trip_every_field_through_registration() {
     use crate::runner::{Database, HealthCheck, Phase, Verbosity};
-    let original = Settings::from_profile("default")
+    let original = Settings::from_profile("base")
         .test_cases(7)
         .stateful_step_count(9)
         .verbosity(Verbosity::Debug)
@@ -349,7 +349,7 @@ fn ffi_settings_round_trip_every_field_through_registration() {
 fn ffi_settings_round_trip_the_remaining_enum_values() {
     use crate::runner::Verbosity;
     for verbosity in [Verbosity::Quiet, Verbosity::Verbose] {
-        let original = Settings::from_profile("default")
+        let original = Settings::from_profile("base")
             .verbosity(verbosity)
             .backend(Backend::Default);
         register_profile("ffi_tests_enum_values", &original).unwrap();
@@ -362,7 +362,7 @@ fn ffi_settings_round_trip_the_remaining_enum_values() {
 #[test]
 fn ffi_settings_build_preserves_an_unset_database() {
     use crate::runner::Database;
-    let unset = Settings::from_profile("default");
+    let unset = Settings::from_profile("base");
     assert_eq!(unset.database, Database::Unset);
     register_profile("ffi_tests_unset_database", &unset).unwrap();
     let restored = settings_from_profile(Some("ffi_tests_unset_database")).unwrap();
@@ -384,7 +384,7 @@ fn ffi_settings_from_profile_reports_engine_errors() {
 
 #[test]
 fn ffi_register_profile_reports_engine_errors() {
-    let e = register_profile("bad name", &Settings::from_profile("default")).unwrap_err();
+    let e = register_profile("bad name", &Settings::from_profile("base")).unwrap_err();
     assert!(e.contains("invalid profile name"), "got: {e}");
 }
 

@@ -113,77 +113,21 @@ pub enum Verbosity {
 ///
 /// # Profiles
 ///
-/// Defaults come from named settings *profiles*, resolved by the engine.
-/// Two names are reserved:
+/// The values a `Settings` starts from come from a named *profile*,
+/// resolved by the engine. Two names are reserved: `base` is the immutable
+/// base settings, and `default` is the default profile — the one in effect
+/// when nothing names a profile, chosen by [`Settings::set_default_profile`],
+/// `HEGEL_DEFAULT_PROFILE`, or the `default` entry in `hegel.toml`, else by
+/// the environment (`antithesis` inside Antithesis, `ci` on a CI server,
+/// `development` locally). [`Settings::new`] resolves `default`;
+/// [`Settings::from_profile`] resolves a profile by name. Profiles are
+/// modified and defined in a `hegel.toml` at the package or workspace root,
+/// or registered with [`Settings::register_profile`].
 ///
-/// - `default`: the base defaults, set once and immutable. Extending or
-///   selecting it pins the plain base settings, whatever the environment.
-/// - `selected`: an alias for the *default profile*: the strongest set of
-///   [`Settings::set_default_profile`], the `HEGEL_DEFAULT_PROFILE`
-///   environment variable, and the `default = "<profile>"` entry in
-///   `hegel.toml` (an unknown name is an error), else the environment's
-///   profile (`antithesis` inside [Antithesis](https://antithesis.com/),
-///   detected via `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI server, detected
-///   via `CI`, `GITHUB_ACTIONS`, and similar variables), else
-///   `development`.
-///
-/// Three ordinary profiles ship with Hegel:
-///
-/// - `development`: the base defaults, unchanged. What local runs get.
-/// - `ci`: [`derandomize`](Settings::derandomize) on, the database
-///   disabled, [`HealthCheck::TooSlow`] suppressed, and
-///   [`print_blob`](Settings::print_blob) on.
-/// - `antithesis`: the database disabled and every health check suppressed,
-///   since Antithesis's thread pausing would trip wall-clock checks such as
-///   [`HealthCheck::TooSlow`] spuriously.
-///
-/// [`Settings::new`] resolves `selected`. [`Settings::from_profile`]
-/// resolves a profile by name, e.g. via
-/// `#[hegel::test(profile = "nightly")]`; that selects the profile without
-/// changing what the default profile is.
-///
-/// A custom profile without an explicit `extends` extends `selected`, so
-/// it layers over `ci` when resolved on a CI server and over `development`
-/// locally: on CI a run of `nightly` resolves `nightly` → `ci` → base
-/// defaults, wherever `nightly` was selected from. The shipped profiles
-/// themselves extend `default` and never layer over one another, so a
-/// delta meant for all environments goes in a profile of its own that the
-/// others name with `extends`.
-///
-/// Profiles are modified and defined in a `hegel.toml` found in the current
-/// directory or the nearest ancestor — typically the package or workspace
-/// root, since cargo runs tests from the package directory. The nearest
-/// file wins outright, and configs do not merge across files. When the test
-/// process runs outside the source tree (a Bazel sandbox, say), set
-/// `HEGEL_CONFIG` to the file's path to load it directly. A set
-/// `HEGEL_CONFIG` that cannot be read is an error rather than an ignored
-/// config. Under [`Verbosity::Debug`] each run logs which config file was
-/// loaded, if any. Entries merge onto the shipped profile of the same
-/// name. Values use the same vocabulary as the corresponding builder
-/// methods and CLI flags, plus `seed = "none"` and
-/// `database = "default"` to undo a parent's setting:
-///
-/// ```toml
-/// default = "nightly"    # optional: the default profile for this project
-///
-/// [profiles.development]
-/// test_cases = 200
-///
-/// [profiles.ci]          # merges onto the shipped ci profile
-/// test_cases = 1000
-///
-/// [profiles.nightly]
-/// extends = "ci"
-/// test_cases = 10000
-/// suppress_health_check = ["too_slow"]
-/// ```
-///
-/// Profiles can also be registered programmatically with
-/// [`Settings::register_profile`], and the default profile set with
-/// [`Settings::set_default_profile`]. Those are reliable only where code
-/// runs before the profiles are used, such as a `#[hegel::main]` binary.
-/// Under `cargo test` there is no such hook, which is what `hegel.toml` is
-/// for.
+/// The [`docs::settings`](crate::docs::settings) page covers the whole
+/// system: every setting and the layers it can be set in, the shipped
+/// profiles, inheritance, the `hegel.toml` format, and the programmatic
+/// API.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -203,21 +147,21 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings from the default profile — the `selected` alias in
-    /// the [profiles](Settings#profiles) section. Panics when profile
+    /// Create settings from the `default` profile described in the
+    /// [profiles](Settings#profiles) section. Panics when profile
     /// resolution fails: a default-profile setting names an unknown
     /// profile, or a `hegel.toml` is malformed.
     pub fn new() -> Self {
         Self::from_resolution(crate::ffi::settings_from_profile(None))
     }
 
-    /// Create settings from the named profile: reserved (`default`),
-    /// shipped (`development`, `ci`, `antithesis`), defined in
+    /// Create settings from the named profile: reserved (`base`,
+    /// `default`), shipped (`development`, `ci`, `antithesis`), defined in
     /// `hegel.toml`, or registered with [`Settings::register_profile`].
     /// Selecting a profile does not change what the default profile is, and
-    /// the named profile still implicitly extends `selected`, so it layers
-    /// over the environment's profile — except `default`, which is always
-    /// the plain base settings. Panics when the profile is unknown or a
+    /// the named profile still implicitly extends `default`, so it layers
+    /// over the environment's profile — except `base`, which is always the
+    /// plain base settings. Panics when the profile is unknown or a
     /// `hegel.toml` is malformed; [`Settings::try_from_profile`] reports
     /// the failure as an `Err` instead.
     pub fn from_profile(name: &str) -> Self {
@@ -264,8 +208,8 @@ impl Settings {
     /// prefer `hegel.toml` there.
     ///
     /// Panics when `name` is not a valid profile name (ASCII letters,
-    /// digits, `-` and `_`) or is one of the reserved names `default` and
-    /// `selected`.
+    /// digits, `-` and `_`) or is one of the reserved names `base` and
+    /// `default`.
     ///
     /// # Example
     ///

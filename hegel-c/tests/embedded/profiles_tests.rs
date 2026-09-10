@@ -47,8 +47,8 @@ fn resolve_err(name: &str, config: &ConfigFile) -> ProfileError {
 }
 
 #[test]
-fn the_default_root_is_the_base_defaults() {
-    let s = resolve_named("default", &no_config());
+fn base_is_the_base_settings() {
+    let s = resolve_named("base", &no_config());
     assert_eq!(s.test_cases, 100);
     assert_eq!(s.verbosity, Verbosity::Normal);
     assert_eq!(s.seed, None);
@@ -69,12 +69,12 @@ fn assert_same_settings(a: &Settings, b: &Settings) {
 #[test]
 fn the_development_profile_is_the_base_defaults_unchanged() {
     let s = resolve_named("development", &no_config());
-    assert_same_settings(&s, &resolve_named("default", &no_config()));
+    assert_same_settings(&s, &resolve_named("base", &no_config()));
 }
 
 #[test]
-fn the_selected_alias_resolves_to_development_with_no_candidates() {
-    let s = resolve_named("selected", &no_config());
+fn the_default_alias_resolves_to_development_with_no_candidates() {
+    let s = resolve_named("default", &no_config());
     assert_same_settings(&s, &resolve_named("development", &no_config()));
 }
 
@@ -115,7 +115,7 @@ fn the_antithesis_profile_disables_the_database_and_every_health_check() {
 
 #[test]
 fn antithesis_detection_does_not_force_health_checks_off() {
-    for name in ["default", "development"] {
+    for name in ["base", "development"] {
         let s = resolve(
             name,
             &no_config(),
@@ -185,7 +185,7 @@ fn shipped_profiles_root_in_the_base_defaults_not_development() {
 }
 
 #[test]
-fn config_profiles_extend_the_selected_alias_implicitly() {
+fn config_profiles_extend_the_default_alias_implicitly() {
     let config = config_of(
         "[profiles.development]\ntest_cases = 200\n[profiles.nightly]\nshow_statistics = true\n",
     );
@@ -212,8 +212,8 @@ fn config_profiles_extend_the_selected_alias_implicitly() {
 }
 
 #[test]
-fn explicit_selected_extends_matches_the_implicit_parent() {
-    let config = config_of("[profiles.a]\nextends = \"selected\"\n[profiles.b]\n");
+fn explicit_default_extends_matches_the_implicit_parent() {
+    let config = config_of("[profiles.a]\nextends = \"default\"\n[profiles.b]\n");
     let candidates = detected("ci");
     let a = resolve("a", &config, &[], &Settings::base(false), &candidates).unwrap();
     let b = resolve("b", &config, &[], &Settings::base(false), &candidates).unwrap();
@@ -222,8 +222,8 @@ fn explicit_selected_extends_matches_the_implicit_parent() {
 }
 
 #[test]
-fn extending_the_default_root_pins_the_base_settings() {
-    let config = config_of("[profiles.plain]\nextends = \"default\"\ntest_cases = 7\n");
+fn extending_base_pins_the_base_settings() {
+    let config = config_of("[profiles.plain]\nextends = \"base\"\ntest_cases = 7\n");
     let s = resolve(
         "plain",
         &config,
@@ -233,7 +233,7 @@ fn extending_the_default_root_pins_the_base_settings() {
     )
     .unwrap();
     assert_eq!(s.test_cases, 7);
-    assert!(!s.derandomize, "extends = \"default\" opts out of ci");
+    assert!(!s.derandomize, "extends = \"base\" opts out of ci");
     assert!(!s.print_blob);
 }
 
@@ -340,8 +340,8 @@ fn unknown_profiles_are_reported_with_the_known_names() {
             source: None,
             known: vec![
                 "antithesis".to_owned(),
+                "base".to_owned(),
                 "ci".to_owned(),
-                "default".to_owned(),
                 "development".to_owned(),
             ],
         }
@@ -349,7 +349,7 @@ fn unknown_profiles_are_reported_with_the_known_names() {
     assert_eq!(
         e.to_string(),
         "unknown settings profile \"nope\"; known profiles: \
-         antithesis, ci, default, development"
+         antithesis, base, ci, development"
     );
 }
 
@@ -373,14 +373,7 @@ fn known_names_include_config_and_registered_profiles() {
     };
     assert_eq!(
         known,
-        vec![
-            "antithesis",
-            "ci",
-            "default",
-            "development",
-            "mine",
-            "nightly"
-        ]
+        vec!["antithesis", "base", "ci", "development", "mine", "nightly"]
     );
 }
 
@@ -549,13 +542,13 @@ fn register_validates_names_and_replaces_earlier_registrations() {
 
 #[test]
 fn register_rejects_the_reserved_names() {
-    for name in ["default", "selected"] {
+    for name in ["base", "default"] {
         let e = register(name, &Settings::base(false)).unwrap_err();
         assert_eq!(e, ProfileError::ReservedName(name.to_owned()));
     }
     assert_eq!(
-        ProfileError::ReservedName("default".to_owned()).to_string(),
-        "cannot register reserved profile name \"default\""
+        ProfileError::ReservedName("base".to_owned()).to_string(),
+        "cannot register reserved profile name \"base\""
     );
 }
 
@@ -565,7 +558,7 @@ fn set_default_profile_validates_the_name() {
         set_default_profile(Some("bad name")),
         Err(ProfileError::InvalidName("bad name".to_owned()))
     );
-    let e = set_default_profile(Some("selected")).unwrap_err();
+    let e = set_default_profile(Some("default")).unwrap_err();
     assert_eq!(
         e,
         ProfileError::CircularDefault {
@@ -574,7 +567,7 @@ fn set_default_profile_validates_the_name() {
     );
     assert_eq!(
         e.to_string(),
-        "hegel_set_default_profile cannot name the \"selected\" alias it resolves"
+        "hegel_set_default_profile cannot name the \"default\" alias it resolves"
     );
 }
 
@@ -641,25 +634,25 @@ fn the_strongest_named_default_displaces_the_weaker_ones() {
 }
 
 #[test]
-fn the_alias_falls_back_from_the_environment_to_the_root() {
+fn the_alias_falls_back_from_the_environment_to_base() {
     let candidates = detected("ci");
     assert_eq!(candidates.resolve(&[]).unwrap(), ("ci", None));
     assert_eq!(
         candidates.resolve(&["ci"]).unwrap(),
-        ("default", None),
+        ("base", None),
         "the environment profiles never layer over one another"
     );
     assert_eq!(no_candidates().resolve(&[]).unwrap(), ("development", None));
     assert_eq!(
         no_candidates().resolve(&["development"]).unwrap(),
-        ("default", None)
+        ("base", None)
     );
 }
 
 #[test]
 fn a_default_profile_variable_naming_the_alias_is_circular() {
     let candidates = Candidates {
-        env: Some("selected".to_owned()),
+        env: Some("default".to_owned()),
         ..no_candidates()
     };
     assert_eq!(
@@ -673,7 +666,7 @@ fn a_default_profile_variable_naming_the_alias_is_circular() {
             source: "HEGEL_DEFAULT_PROFILE",
         }
         .to_string(),
-        "HEGEL_DEFAULT_PROFILE cannot name the \"selected\" alias it resolves"
+        "HEGEL_DEFAULT_PROFILE cannot name the \"default\" alias it resolves"
     );
 }
 
@@ -686,13 +679,13 @@ fn settings_for_env(
 }
 
 #[test]
-fn settings_for_from_resolves_the_selected_profile() {
+fn settings_for_from_resolves_the_default_profile() {
     let env = env_of(&[("CI", "true")]);
     let s = settings_for_env(None, &no_config(), env).unwrap();
     assert!(s.derandomize);
     assert!(s.print_blob);
-    let s = settings_for_env(Some("default"), &no_config(), env).unwrap();
-    assert!(!s.derandomize, "the default root ignores CI detection");
+    let s = settings_for_env(Some("base"), &no_config(), env).unwrap();
+    assert!(!s.derandomize, "base ignores CI detection");
 }
 
 #[test]
@@ -763,7 +756,7 @@ fn settings_for_from_stamps_the_loaded_config_path() {
     config.path = Some("/a/hegel.toml".to_owned());
     let s = settings_for_env(Some("x"), &config, env_of(&[])).unwrap();
     assert_eq!(s.config_path.as_deref(), Some("/a/hegel.toml"));
-    let s = settings_for_env(Some("default"), &no_config(), env_of(&[])).unwrap();
+    let s = settings_for_env(Some("base"), &no_config(), env_of(&[])).unwrap();
     assert_eq!(s.config_path, None);
 }
 
@@ -778,8 +771,8 @@ fn settings_for_from_rejects_an_unknown_default_profile_variable() {
             source: Some("HEGEL_DEFAULT_PROFILE"),
             known: vec![
                 "antithesis".to_owned(),
+                "base".to_owned(),
                 "ci".to_owned(),
-                "default".to_owned(),
                 "development".to_owned(),
             ],
         }
@@ -787,26 +780,26 @@ fn settings_for_from_rejects_an_unknown_default_profile_variable() {
     assert_eq!(
         e.to_string(),
         "unknown settings profile \"bogus\" (named by HEGEL_DEFAULT_PROFILE); \
-         known profiles: antithesis, ci, default, development"
+         known profiles: antithesis, base, ci, development"
     );
 }
 
 #[test]
-fn the_default_root_resolves_despite_a_broken_default_profile_variable() {
+fn base_resolves_despite_a_broken_default_profile_variable() {
     let env = env_of(&[("HEGEL_DEFAULT_PROFILE", "bogus")]);
-    assert!(settings_for_env(Some("default"), &no_config(), env).is_ok());
+    assert!(settings_for_env(Some("base"), &no_config(), env).is_ok());
 }
 
 #[test]
 fn settings_for_from_validates_unselected_profiles_eagerly() {
     let cycling = config_of("[profiles.unused]\nextends = \"unused\"\n");
     assert_eq!(
-        settings_for_env(Some("default"), &cycling, env_of(&[])).unwrap_err(),
+        settings_for_env(Some("base"), &cycling, env_of(&[])).unwrap_err(),
         ProfileError::ExtendsCycle(vec!["unused".to_owned(), "unused".to_owned()])
     );
     let dangling = config_of("[profiles.unused]\nextends = \"ghost\"\n");
     assert_eq!(
-        settings_for_env(Some("default"), &dangling, env_of(&[])).unwrap_err(),
+        settings_for_env(Some("base"), &dangling, env_of(&[])).unwrap_err(),
         ProfileError::UnknownExtends {
             profile: "unused".to_owned(),
             extends: "ghost".to_owned(),
@@ -817,7 +810,7 @@ fn settings_for_from_validates_unselected_profiles_eagerly() {
 #[test]
 fn settings_for_from_validates_the_toml_default_entry_eagerly() {
     let config = config_of("default = \"ghost\"\n");
-    let e = settings_for_env(Some("default"), &config, env_of(&[])).unwrap_err();
+    let e = settings_for_env(Some("base"), &config, env_of(&[])).unwrap_err();
     assert_eq!(
         e,
         ProfileError::UnknownProfile {
@@ -825,8 +818,8 @@ fn settings_for_from_validates_the_toml_default_entry_eagerly() {
             source: Some("the default entry in hegel.toml"),
             known: vec![
                 "antithesis".to_owned(),
+                "base".to_owned(),
                 "ci".to_owned(),
-                "default".to_owned(),
                 "development".to_owned(),
             ],
         }
@@ -838,20 +831,20 @@ fn settings_for_from_validates_the_toml_default_entry_eagerly() {
 fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
     let env = env_of(&[
         ("ANTITHESIS_OUTPUT_DIR", "/tmp"),
-        ("HEGEL_DEFAULT_PROFILE", "default"),
+        ("HEGEL_DEFAULT_PROFILE", "base"),
     ]);
     let s = settings_for_env(None, &no_config(), env).unwrap();
     assert!(s.in_antithesis);
     for check in ALL_HEALTH_CHECKS {
         assert!(
             !s.health_check_suppressed(check),
-            "explicitly selecting the root opts out of the antithesis profile's health-check policy: {check:?}"
+            "explicitly selecting base opts out of the antithesis profile's health-check policy: {check:?}"
         );
     }
     assert_eq!(
         s.database,
         Database::Unset,
-        "explicitly selecting the root opts out of the antithesis profile's database policy"
+        "explicitly selecting base opts out of the antithesis profile's database policy"
     );
 }
 
@@ -859,7 +852,7 @@ fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
 /// environment selects.
 #[test]
 fn settings_for_reads_the_real_environment() {
-    assert!(settings_for(Some("default")).is_ok());
+    assert!(settings_for(Some("base")).is_ok());
 }
 
 #[test]

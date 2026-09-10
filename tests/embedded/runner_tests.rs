@@ -206,9 +206,9 @@ fn test_from_profile_ci_disables_database_derandomizes_and_prints_blobs() {
 }
 
 #[test]
-fn test_from_profile_default_is_environment_independent() {
+fn test_from_profile_base_is_environment_independent() {
     use crate::runner::Database;
-    let settings = Settings::from_profile("default");
+    let settings = Settings::from_profile("base");
     assert_eq!(settings.database, Database::Unset);
     assert!(!settings.derandomize);
     assert!(!settings.print_blob);
@@ -232,7 +232,7 @@ fn test_from_profile_unknown_name_is_a_usage_error() {
 fn test_register_profile_round_trips() {
     Settings::register_profile(
         "runner_tests_registered",
-        Settings::from_profile("default").test_cases(17),
+        Settings::from_profile("base").test_cases(17),
     );
     let settings = Settings::from_profile("runner_tests_registered");
     assert_eq!(settings.test_cases, 17);
@@ -241,18 +241,18 @@ fn test_register_profile_round_trips() {
 #[test]
 #[should_panic(expected = "invalid profile name \"bad name\"")]
 fn test_register_profile_rejects_invalid_names() {
-    Settings::register_profile("bad name", Settings::from_profile("default"));
+    Settings::register_profile("bad name", Settings::from_profile("base"));
 }
 
 #[test]
-#[should_panic(expected = "reserved profile name \"default\"")]
+#[should_panic(expected = "reserved profile name \"base\"")]
 fn test_register_profile_rejects_reserved_names() {
-    Settings::register_profile("default", Settings::from_profile("default"));
+    Settings::register_profile("base", Settings::from_profile("base"));
 }
 
 #[test]
 fn test_try_from_profile_reports_failure_without_panicking() {
-    assert!(Settings::try_from_profile("default").is_ok());
+    assert!(Settings::try_from_profile("base").is_ok());
     let e = Settings::try_from_profile("no_such_profile").unwrap_err();
     assert!(
         e.to_string()

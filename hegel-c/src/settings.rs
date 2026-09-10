@@ -141,7 +141,7 @@ pub enum Verbosity {
 /// policy — the shipped `development`/`ci`/`antithesis` profiles,
 /// `hegel.toml`, and default-profile selection — lives in the profile
 /// system ([`crate::profiles`]); `hegel_settings_new` resolves the
-/// `selected` alias, so C-ABI callers get profile-aware defaults
+/// `default` alias, so C-ABI callers get profile-aware defaults
 /// automatically.
 #[derive(Debug, Clone)]
 pub struct Settings {

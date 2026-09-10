@@ -220,11 +220,12 @@
 //! HEGEL_DEFAULT_PROFILE=nightly cargo test
 //! ```
 //!
-//! See [`Settings`] for what each shipped profile sets, the reserved
-//! `default` and `selected` names, every `hegel.toml` key, the
-//! `HEGEL_CONFIG` variable for naming the config file directly, and the
-//! programmatic [`Settings::register_profile`] and
-//! [`Settings::set_default_profile`].
+//! The [`docs::settings`] page covers the whole settings system: every
+//! setting, the layers it can be set in and how they combine, what each
+//! shipped profile sets, the reserved `base` and `default` names, profile
+//! inheritance, every `hegel.toml` key, the `HEGEL_CONFIG` variable for
+//! naming the config file directly, and the programmatic
+//! [`Settings::register_profile`] and [`Settings::set_default_profile`].
 //!
 //! ## Threading
 //!
@@ -305,6 +306,7 @@ pub(crate) mod antithesis;
 pub mod backend;
 pub(crate) mod cli;
 pub(crate) mod control;
+pub mod docs;
 #[doc(hidden)]
 pub mod explicit_test_case;
 pub mod extras;

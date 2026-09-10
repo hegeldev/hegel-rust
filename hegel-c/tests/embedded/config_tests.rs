@@ -127,10 +127,10 @@ fn rejects_duplicate_default_entries() {
 }
 
 #[test]
-fn rejects_a_default_entry_naming_the_selected_alias() {
+fn rejects_a_default_entry_naming_the_default_alias() {
     assert_eq!(
-        parse_err("default = \"selected\"\n").message,
-        "`default` cannot name the \"selected\" alias it resolves"
+        parse_err("default = \"default\"\n").message,
+        "`default` cannot name the \"default\" alias it resolves"
     );
 }
 
@@ -160,13 +160,14 @@ fn rejects_a_default_entry_after_a_section() {
 #[test]
 fn rejects_reserved_section_names() {
     assert_eq!(
-        parse_err("[profiles.default]\n").message,
-        "\"default\" is the reserved base profile and cannot be modified; \
+        parse_err("[profiles.base]\n").message,
+        "\"base\" is the reserved base profile and cannot be modified; \
          customize [profiles.development] instead"
     );
     assert_eq!(
-        parse_err("[profiles.selected]\n").message,
-        "\"selected\" is the alias for the default profile and cannot be defined"
+        parse_err("[profiles.default]\n").message,
+        "\"default\" is an alias for the default profile and cannot be defined; \
+         choose it with `default = \"<profile>\"` instead"
     );
 }
 

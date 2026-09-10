@@ -732,27 +732,27 @@ fn cstring_lossy(s: &str) -> CString {
 /// `hegel.toml` is malformed. Read the message with
 /// `hegel_context_last_error`.
 ///
-/// A profile is a named settings delta. Two names are reserved: `default`
-/// is the immutable base (100 test cases, all phases enabled, normal
-/// verbosity, no seed, the disk database under `.hegel/`), and `selected`
-/// is an alias for the default profile: the strongest set of
-/// `hegel_set_default_profile`, the `HEGEL_DEFAULT_PROFILE` environment
-/// variable, and the top-level `default = "<profile>"` entry in
-/// `hegel.toml`, else the detected environment (`antithesis` inside
-/// Antithesis, detected via `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI
-/// server, detected via `CI`, `GITHUB_ACTIONS`, and similar variables),
-/// else `development`. This function resolves `selected`.
+/// A profile is a named settings delta. Two names are reserved: `base` is
+/// the immutable base settings (100 test cases, all phases enabled, normal
+/// verbosity, no seed, the disk database under `.hegel/`), and `default`
+/// is the default profile, the one in effect when nothing names a profile:
+/// the strongest set of `hegel_set_default_profile`, the
+/// `HEGEL_DEFAULT_PROFILE` environment variable, and the top-level
+/// `default = "<profile>"` entry in `hegel.toml`, else the detected
+/// environment (`antithesis` inside Antithesis, detected via
+/// `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI server, detected via `CI`,
+/// `GITHUB_ACTIONS`, and similar variables), else `development`. This
+/// function resolves `default`.
 ///
 /// Three ordinary profiles ship with libhegel: `development` (the base
-/// defaults, unchanged — what local runs get), `ci` (derandomization on,
+/// settings, unchanged — what local runs get), `ci` (derandomization on,
 /// database disabled, the `too_slow` health check suppressed, reproduction
 /// lines printed), and `antithesis` (database disabled, every health check
-/// suppressed). A custom profile without an explicit `extends`
-/// extends `selected`, skipping any candidate already in its chain, so it
-/// sits on `ci` when resolved on a CI server and on `development` locally.
-/// The shipped profiles themselves extend `default` and never layer over
-/// one another. Extending or selecting `default` pins the plain base
-/// settings.
+/// suppressed). A custom profile without an explicit `extends` extends
+/// `default`, skipping any candidate already in its chain, so it sits on
+/// `ci` when resolved on a CI server and on `development` locally. The
+/// shipped profiles themselves extend `base` and never layer over one
+/// another. Extending or selecting `base` pins the plain base settings.
 ///
 /// Profiles are modified and defined in a `hegel.toml` found in the current
 /// directory or the nearest ancestor, and registered programmatically with
@@ -767,9 +767,9 @@ pub unsafe extern "C" fn hegel_settings_new(
 }
 
 /// Parameters:
-/// `name`: The profile to resolve: reserved (`default`, `selected`),
-///   shipped (`development`, `ci`, `antithesis`), defined in `hegel.toml`,
-///   or registered with `hegel_settings_register_profile`.
+/// `name`: The profile to resolve: reserved (`base`, `default`), shipped
+///   (`development`, `ci`, `antithesis`), defined in `hegel.toml`, or
+///   registered with `hegel_settings_register_profile`.
 /// `out_settings`: Receives a handle initialized from that profile.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
@@ -777,9 +777,9 @@ pub unsafe extern "C" fn hegel_settings_new(
 /// `hegel_context_last_error`.
 ///
 /// Selecting a profile by name does not change what the default profile is:
-/// the named profile still implicitly extends `selected` (see
+/// the named profile still implicitly extends `default` (see
 /// `hegel_settings_new`), so it layers over the environment's profile —
-/// except `default`, which is always the plain base settings.
+/// except `base`, which is always the plain base settings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new_for_profile(
     ctx: *mut HegelContext,
@@ -1244,7 +1244,7 @@ pub unsafe extern "C" fn hegel_settings_set_print_blob(
 
 /// Parameters:
 /// `name`: The profile name to register: ASCII letters, digits, `-` and
-///   `_` only. The reserved names `default` and `selected` are rejected.
+///   `_` only. The reserved names `base` and `default` are rejected.
 /// `settings`: The settings to snapshot. The caller keeps ownership; the
 ///   handle's database key is not part of the snapshot.
 ///
@@ -1289,9 +1289,9 @@ pub unsafe extern "C" fn hegel_settings_register_profile(
 }
 
 /// Parameters:
-/// `name`: The profile the `selected` alias should resolve to, or NULL to
+/// `name`: The profile the `default` alias should resolve to, or NULL to
 ///   clear an earlier call. The name is not required to exist yet; naming
-///   the `selected` alias itself is rejected.
+///   the `default` alias itself is rejected.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
 ///

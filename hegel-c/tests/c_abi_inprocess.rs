@@ -2926,7 +2926,7 @@ unsafe fn settings_for_profile(ctx: *mut HegelContext, name: &str) -> *mut hegel
 fn settings_getters_read_back_every_setter() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 7));
         ok(hegel_c::hegel_settings_set_verbosity(
             ctx,
@@ -2989,7 +2989,7 @@ fn settings_getters_read_back_every_setter() {
 fn settings_getters_read_back_the_remaining_enum_values() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         for verbosity in [
             hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET,
             hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE,
@@ -3018,10 +3018,10 @@ fn settings_getters_read_back_the_remaining_enum_values() {
 }
 
 #[test]
-fn the_default_profile_reads_back_the_base_defaults() {
+fn the_base_profile_reads_back_the_base_settings() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         let view = read_settings(ctx, s);
         assert_eq!(view.test_cases, 100);
         assert_eq!(
@@ -3088,7 +3088,7 @@ fn new_for_profile_validates_its_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
-        let name = CString::new("default").unwrap();
+        let name = CString::new("base").unwrap();
         assert_eq!(
             hegel_c::hegel_settings_new_for_profile(ctx, name.as_ptr(), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
@@ -3102,7 +3102,7 @@ fn new_for_profile_validates_its_arguments() {
 fn registered_profiles_round_trip() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 23));
         ok(hegel_c::hegel_settings_set_print_blob(ctx, s, true));
         let name = CString::new("c_abi_registered_roundtrip").unwrap();
@@ -3126,7 +3126,7 @@ fn registered_profiles_round_trip() {
 fn register_profile_validates_its_arguments() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         assert_eq!(
             hegel_c::hegel_settings_register_profile(ctx, ptr::null(), s),
             HEGEL_E_INVALID_ARG
@@ -3144,7 +3144,7 @@ fn register_profile_validates_its_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid profile name"));
-        for reserved in ["default", "selected"] {
+        for reserved in ["base", "default"] {
             let name = CString::new(reserved).unwrap();
             assert_eq!(
                 hegel_c::hegel_settings_register_profile(ctx, name.as_ptr(), s),
@@ -3178,25 +3178,25 @@ fn set_default_profile_validates_its_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid profile name"));
-        let alias = CString::new("selected").unwrap();
+        let alias = CString::new("default").unwrap();
         assert_eq!(
             hegel_c::hegel_set_default_profile(ctx, alias.as_ptr()),
             HEGEL_E_INVALID_ARG
         );
-        assert!(last_error(ctx).contains("cannot name the \"selected\" alias"));
+        assert!(last_error(ctx).contains("cannot name the \"default\" alias"));
         ok(hegel_context_free(ctx));
     }
 }
 
-/// The override target must be the `default` root: it resolves to settings
+/// The override target must be `base`: it resolves to settings
 /// no concurrently running test can distinguish from the ones it already
 /// sees, whatever the ambient environment, so tests running in parallel
 /// with the override briefly set cannot observe it.
 #[test]
-fn set_default_profile_overrides_the_selected_profile() {
+fn set_default_profile_overrides_the_default_profile() {
     let ctx = hegel_context_new();
     unsafe {
-        let name = CString::new("default").unwrap();
+        let name = CString::new("base").unwrap();
         ok(hegel_c::hegel_set_default_profile(ctx, name.as_ptr()));
         let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
         ok(hegel_settings_new(ctx, &mut s));
@@ -3228,7 +3228,7 @@ fn set_database_null_resets_to_the_default() {
 fn settings_getters_reject_null_handles_and_null_outs() {
     let ctx = hegel_context_new();
     unsafe {
-        let s = settings_for_profile(ctx, "default");
+        let s = settings_for_profile(ctx, "base");
         let null_s: *const hegel_c::HegelSettings = ptr::null();
 
         let mut u = 0u64;
