@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.37.10 - 2026-09-10
+
+This patch adds two functions for shaping a test case's printed output without decorating every line by hand.
+
+`hegel_test_case_block` opens a handle onto the same choice stream as an existing handle whose print region is a block nested in the parent's: every line printed or noted through it — and through the clones and blocks derived from it — is indented a given number of columns further than the parent's lines, and the indentation ends exactly with the block. This is how a binding prints the body of a stateful rule under its `Step 3: add {` heading.
+
+`hegel_test_case_set_worker` attributes a handle's output to a concurrent worker: every line recorded through it from then on, notes and printer lines alike, is prefixed with `[worker N +X.XXXms] `, stamped with the time since the test case started at which the line was recorded. Blocks and clones derived from the handle inherit the attribution.
+
+To make block indentation possible, a line's indentation is now written when the line gets its first content rather than at the newline that started it. Documents without blocks render exactly as before, including the padding of blank lines and of a trailing hard break.
+
+This patch also changes when `hegel_note` appends its text. A note appended while a speculative region is open on the handle's print region — the client is mid-way through printing a drawn value, and the note comes from inside that value's generation — is now held back and appended once the outermost region closes, whether it is committed or aborted. Previously the note's lines were spliced into the value being printed. Notes appended outside a speculative region are unaffected.
+
+## 0.37.9 - 2026-09-10
+
+This patch fixes an encode/decode gap in the Hegel test case format where an encoder would allow a sequence that the decoder rejected ([#477](https://github.com/hegeldev/hegel-rust/issues/477)). This code path was unreachable in normal test execution so this is mostly an internal change.
+
+## 0.37.8 - 2026-09-10
+
+This patch fixes a memory leak in string draws. The engine memoises, per alphabet, which of its built-in constant strings fit that alphabet, and that memo was kept in a process-global table that never dropped entries for freed generators. A caller that built and freed a string generator around every draw grew without bound; the memo now lives with the alphabet and is freed with it ([#434](https://github.com/hegeldev/hegel-rust/issues/434)).
+
+It also makes the engine's mutexes spin instead of futex-parking when built under Miri on Linux, so the test suite runs under current nightly Miri. Behaviour outside Miri is unchanged.
+
+## 0.37.7 - 2026-09-09
+
+The per-round continue draw of stateful test cases now stops with probability 2^-32 per round instead of 2^-16.
+
+## 0.37.6 - 2026-09-09
+
+This patch replaces the engine's data tree with a flat execution cache. Runs get faster — recording overhead on passing workloads drops substantially and stateful shrinking speeds up by about 40% — while the tree's main benefit, serving repeated shrink probes from memory, is kept. Cache memory is bounded at 8 MiB where the tree grew without limit.
+
+Some behaviour moves with it. A test that repeatedly produces the same values but flips between passing and failing is now detected and fails the run as flaky, where the tree silently kept its first conclusion. Exhaustible generation spaces no longer stop the run early: `FilterTooMuch` now fires after a streak of duplicate invalid test cases, and a tiny valid space runs to the normal test-case budget. Recursive generators reach extreme depths somewhat less often.
+
+## 0.37.5 - 2026-09-07
+
+This patch improves how the failure database is maintained. New entries are saved before the entries they supersede are removed, so interrupting a run mid-shrink can no longer lose a failure. A shrink no longer deposits its chain of intermediate improvements into the secondary corpus, and the secondary corpus is capped at 50 entries. An entry whose bytes still serve as another failure's latest save is never deleted.
+
+## 0.37.4 - 2026-09-07
+
+This patch fixes a missed flakiness detection during targeting. A test whose data generation first changed shape during the targeted-search phase was silently ignored and the run carried on. It now fails the run with the usual non-determinism diagnostic, matching every other phase.
+
+## 0.37.3 - 2026-09-07
+
+This patch bounds zlib decompression when decoding a failure blob. A corrupt or hostile `reproduce_failure` blob could previously force an arbitrarily large allocation. Decoding now rejects payloads that inflate past 16 MiB, and the encoder falls back to the uncompressed encoding for anything that large, so every blob it emits still decodes.
+
+## 0.37.2 - 2026-09-07
+
+This patch fixes a crash when shrinking a failure in a flaky test. When re-executing the test produced a shorter run than the failure being shrunk, a deletion pass could panic with an index out of bounds. That shrink attempt is now rejected and shrinking continues.
+
+## 0.37.1 - 2026-09-07
+
+This patch suppresses `TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Calls to `hegel_settings_set_suppress_health_check` still replace the default.
+
+## 0.37.0 - 2026-09-07
+
+This release changes `hegel_new_state_machine`: it takes a new
+`invariant_always_check` argument, an array of per-invariant flags parallel to
+`invariant_names` (NULL for all false).
+`hegel_state_machine_should_check_invariant` answers true unconditionally for
+a flagged invariant, consuming no entropy, and samples the rest as before.
+
+## 0.36.6 - 2026-09-07
+
+A test that rejects its input via `assume()` without drawing any data can never produce a valid case. The engine now stops after one call and fails the run with `Unsatisfiable`, instead of passing. Over the C ABI this surfaces as an ordinary error result; no signatures or status values change.
+
+## 0.36.5 - 2026-09-07
+
+GitHub releases now include static `libhegel` libraries and `hegel.h` alongside
+the existing shared libraries, making the C ABI easier to consume without
+building Hegel from source.
+
+## 0.36.4 - 2026-09-07
+
+This patch changes the defaults `hegel_settings_new` picks when running inside Antithesis. The failure database is disabled and every health check is skipped. The notice that a concurrent state machine has made the run nondeterministic is also no longer printed inside Antithesis.
+
+## 0.36.3 - 2026-09-04
+
+This patch adds a new shrink pass that is able to delete regions of the test case where it would previously have got stuck.
+You should see improvements in cases where there were previously redundant elements that were "obviously" deletable but that the shrinker was for some reason struggling with.
+
+## 0.36.2 - 2026-09-04
+
+This patch adds a shrink pass that deletes whole spans. The existing
+deletion passes only try windows of up to eight choices, so a stateful step
+whose rule draws and sampled invariant checks together cost more than that
+could never be deleted, and shrunk rule sequences kept redundant steps
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)).
+
+## 0.36.1 - 2026-09-04
+
+This patch inverts the per-round decision drawn by `hegel_state_machine_next_group`. We were using a stop signal where we should have been using a continue signal.
+
+## 0.36.0 - 2026-09-02
+
+This release changes `hegel_time_t` from microsecond to nanosecond resolution. The `microsecond` field (in `[0, 999999]`) is now `nanosecond` (in `[0, 999999999]`). `hegel_generate_time` and `hegel_generate_datetime` now also draw whole nanoseconds.
+
+## 0.35.0 - 2026-09-02
+
+This release removes single-test-case mode from the C ABI: the `hegel_mode_t` enum and `hegel_settings_set_mode` are gone, and every run drives the full property-test loop. Frontends that want one test case per invocation should set the test-case budget to 1 with `hegel_settings_set_test_cases` instead. To make that budget useful, a run with a one-case budget now skips the simplest-example probe that opens the generate phase. The single case is randomly generated, at the cost of the `LargeInitialTestCase` health check not running for such runs.
+
+Along with the mode, this release removes the machinery that silently unbounded state machines in single-test-case runs. State machines now always bound their rounds by the `stateful_step_count` setting.
+
 ## 0.34.1 - 2026-09-02
 
 This patch adds event statistics: `hegel_event` and `hegel_event_value` record labelled observations on the current test case, and with the new `hegel_settings_set_show_statistics` setting the engine prints a statistics block on the run's output at the end of the run — per label, the fraction of generation-phase test cases the event occurred in, and a distribution summary of numeric observations.

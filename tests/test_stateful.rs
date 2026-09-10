@@ -260,7 +260,7 @@ mod stateful {
     use super::common::utils::expect_panic;
     use hegel::TestCase;
     use hegel::generators as gs;
-    use hegel::stateful::{Pool, Rule, StateMachine, pool};
+    use hegel::stateful::{Invariant, Pool, Rule, StateMachine, pool};
     use hegel::{Hegel, Settings, Verbosity};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{Arc, Mutex};
@@ -338,8 +338,8 @@ mod stateful {
                 Rule::new("noop", |_m: &mut BumpMachine, _tc| {}),
             ]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("below_three", |m: &mut BumpMachine, _tc| {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
+            vec![Invariant::new("below_three", |m: &mut BumpMachine, _tc| {
                 assert!(m.count < 3);
             })]
         }
@@ -523,7 +523,7 @@ mod stateful {
                 },
             )]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }
@@ -542,8 +542,8 @@ mod stateful {
                 },
             )]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new(
+        fn invariants(&self) -> Vec<Invariant<Self>> {
+            vec![Invariant::new(
                 "count_invariant",
                 |m: &mut SampledInvariantMachine, _tc: TestCase| {
                     *m.invariants_run.lock().unwrap() += 1;
@@ -610,6 +610,110 @@ mod stateful {
                 .run();
             },
             "machine is broken",
+        );
+    }
+
+    struct DirtyCounterMachine {
+        unchecked_steps: i64,
+    }
+
+    #[hegel::state_machine]
+    impl DirtyCounterMachine {
+        #[rule]
+        fn step(&mut self, _tc: TestCase) {
+            self.unchecked_steps += 1;
+        }
+
+        #[invariant(always_run)]
+        fn at_most_one_step_since_last_check(&mut self, _tc: TestCase) {
+            assert!(
+                self.unchecked_steps <= 1,
+                "invariant missed {} rules",
+                self.unchecked_steps
+            );
+            self.unchecked_steps = 0;
+        }
+    }
+
+    #[test]
+    fn test_always_run_invariants_run_after_every_rule() {
+        Hegel::new(|tc: TestCase| {
+            hegel::stateful::run(DirtyCounterMachine { unchecked_steps: 0 }, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20)
+                .stateful_step_count(50)
+                .database(None),
+        )
+        .run();
+    }
+
+    struct MixedInvariantMachine {
+        rules_run: Arc<Mutex<i64>>,
+        sampled_runs: Arc<Mutex<i64>>,
+        always_runs: Arc<Mutex<i64>>,
+    }
+
+    impl StateMachine for MixedInvariantMachine {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![Rule::new(
+                "count_rule",
+                |m: &mut MixedInvariantMachine, _tc: TestCase| {
+                    *m.rules_run.lock().unwrap() += 1;
+                },
+            )]
+        }
+        fn invariants(&self) -> Vec<Invariant<Self>> {
+            vec![
+                Invariant::new("sampled", |m: &mut MixedInvariantMachine, _tc: TestCase| {
+                    *m.sampled_runs.lock().unwrap() += 1;
+                }),
+                Invariant::new_always_run(
+                    "always",
+                    |m: &mut MixedInvariantMachine, _tc: TestCase| {
+                        *m.always_runs.lock().unwrap() += 1;
+                    },
+                ),
+            ]
+        }
+    }
+
+    #[test]
+    fn test_always_run_invariants_are_not_sampled() {
+        let rules_run = Arc::new(Mutex::new(0i64));
+        let sampled_runs = Arc::new(Mutex::new(0i64));
+        let always_runs = Arc::new(Mutex::new(0i64));
+        let rules_in = Arc::clone(&rules_run);
+        let sampled_in = Arc::clone(&sampled_runs);
+        let always_in = Arc::clone(&always_runs);
+        Hegel::new(move |tc: TestCase| {
+            let m = MixedInvariantMachine {
+                rules_run: Arc::clone(&rules_in),
+                sampled_runs: Arc::clone(&sampled_in),
+                always_runs: Arc::clone(&always_in),
+            };
+            hegel::stateful::run(m, tc);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20)
+                .stateful_step_count(50)
+                .database(None),
+        )
+        .run();
+        let rules_run = *rules_run.lock().unwrap();
+        let sampled_runs = *sampled_runs.lock().unwrap();
+        let always_runs = *always_runs.lock().unwrap();
+        assert!(
+            always_runs > rules_run,
+            "expected the always-run invariant ({always_runs} runs) to check every rule \
+             ({rules_run}) plus the initial and final states"
+        );
+        assert!(
+            sampled_runs < rules_run / 4,
+            "expected sampled invariant runs ({sampled_runs}) to stay far below \
+             rule runs ({rules_run})"
         );
     }
 
@@ -729,7 +833,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }
@@ -779,7 +883,7 @@ mod stateful {
                 Rule::new("rule_2", |m, _tc| m.record(2)),
             ]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }
@@ -851,7 +955,7 @@ mod stateful {
                 tc.assume(!m.fail_assumption);
             })]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }
@@ -940,7 +1044,7 @@ mod stateful {
                 assert!(m.counter <= 60, "counter exceeded threshold");
             })]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }
@@ -982,7 +1086,7 @@ mod stateful {
                 *m.counts.lock().unwrap().last_mut().unwrap() += 1;
             })]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }

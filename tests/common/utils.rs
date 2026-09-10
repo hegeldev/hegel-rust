@@ -380,6 +380,7 @@ where
     generator: G,
     condition: P,
     test_cases: u64,
+    seed: Option<u64>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -394,6 +395,7 @@ where
             generator,
             condition,
             test_cases: 500,
+            seed: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -404,14 +406,23 @@ where
         self
     }
 
+    #[allow(dead_code)]
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
     pub fn run(self) -> T {
         let generator = self.generator;
-        MinimalWith::new(
+        let mut with = MinimalWith::new(
             move |tc: &TestCase| tc.draw_silent(&generator),
             self.condition,
         )
-        .test_cases(self.test_cases)
-        .run()
+        .test_cases(self.test_cases);
+        if let Some(seed) = self.seed {
+            with = with.seed(seed);
+        }
+        with.run()
     }
 }
 
@@ -441,6 +452,7 @@ where
     body: F,
     condition: P,
     test_cases: u64,
+    seed: Option<u64>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -455,6 +467,7 @@ where
             body,
             condition,
             test_cases: 500,
+            seed: None,
             _marker: std::marker::PhantomData,
         }
     }
@@ -465,10 +478,17 @@ where
         self
     }
 
+    #[allow(dead_code)]
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
     pub fn run(self) -> T {
         let found: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
         let found_clone = Arc::clone(&found);
         let test_cases = self.test_cases;
+        let seed = self.seed;
         let body = self.body;
         let condition = self.condition;
 
@@ -484,6 +504,7 @@ where
                 Settings::new()
                     .test_cases(test_cases)
                     .database(None)
+                    .seed(seed)
                     .derandomize(true)
                     .report_multiple_failures(true),
             )
@@ -557,20 +578,30 @@ where
 
     pub fn run(self) {
         let condition = self.condition;
-        Hegel::new(move |tc| {
-            let value = tc.draw_silent(&self.generator);
-            assert!(
-                !condition(&value),
-                "Found value that does not match predicate"
-            );
-        })
-        .settings(
-            Settings::new()
-                .test_cases(self.test_cases)
-                .database(None)
-                .suppress_health_check([HealthCheck::FilterTooMuch]),
-        )
-        .run();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Hegel::new(move |tc| {
+                let value = tc.draw_silent(&self.generator);
+                assert!(
+                    !condition(&value),
+                    "Found value that does not match predicate"
+                );
+            })
+            .settings(
+                Settings::new()
+                    .test_cases(self.test_cases)
+                    .database(None)
+                    .suppress_health_check([HealthCheck::FilterTooMuch]),
+            )
+            .run();
+        }));
+        if let Err(payload) = result {
+            let is_unsatisfiable = payload
+                .downcast_ref::<String>()
+                .is_some_and(|s| s.starts_with("Unsatisfiable"));
+            if !is_unsatisfiable {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }
 

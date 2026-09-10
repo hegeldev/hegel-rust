@@ -66,6 +66,11 @@ fn error_strictness_aborts_a_vanishing_failure_as_flaky() {
     .expect_err("error strictness aborts a vanishing failure");
     let msg = panic_message(&*panic);
     assert!(msg.contains("Flaky test detected"), "got: {msg:?}");
+    assert!(
+        msg.contains("The failure that did not reproduce was: Panic at "),
+        "the diagnostic names the failure the engine recorded, got: {msg:?}"
+    );
+    assert!(msg.contains("test_flaky_replay.rs"), "got: {msg:?}");
 }
 
 /// The hidden counter is calibrated to the engine's execution schedule:

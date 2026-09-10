@@ -170,7 +170,7 @@ impl<'a> Shrinker<'a> {
                 .skip(i + 1)
                 .any(|(a, e)| a.data.kind() != *e);
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
         }
         Ok(diverged)
     }

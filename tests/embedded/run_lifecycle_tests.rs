@@ -98,6 +98,20 @@ fn filter_short_backtrace_trims_at_begin_marker() {
 }
 
 #[test]
+fn filter_short_backtrace_does_not_panic_when_markers_invert_indices() {
+    let input = "  0: first_frame at /tmp/a.rs:1\n\
+                 stuff: __rust_end_short_backtrace\n\
+                 stuff: __rust_begin_short_backtrace\n  \
+                 1: last_frame at /tmp/b.rs:2";
+    let out = filter_short_backtrace(input);
+    assert!(
+        out.contains("first_frame") || out.contains("last_frame"),
+        "expected some frame to survive, got {:?}",
+        out
+    );
+}
+
+#[test]
 fn format_backtrace_full_returns_display_verbatim() {
     let bt = std::backtrace::Backtrace::disabled();
     let out = format_backtrace(&bt, true);
@@ -203,15 +217,7 @@ fn run_one_case(
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    run_test_case(
-        c_tc,
-        body,
-        is_final,
-        Mode::TestRun,
-        verbosity,
-        &RunOutput::resolve(),
-        None,
-    )
+    run_test_case(c_tc, body, is_final, verbosity, &RunOutput::resolve(), None)
 }
 
 fn run_case_capturing(
@@ -315,7 +321,7 @@ fn capture_flag() -> bool {
 
 #[test]
 fn stateful_overrun_mid_rule_is_reported_as_overrun() {
-    use crate::stateful::{Rule, StateMachine};
+    use crate::stateful::{Invariant, Rule, StateMachine};
     struct Hungry;
     impl StateMachine for Hungry {
         fn rules(&self) -> Vec<Rule<Self>> {
@@ -325,7 +331,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
                 }
             })]
         }
-        fn invariants(&self) -> Vec<Rule<Self>> {
+        fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
         }
     }

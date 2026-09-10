@@ -1,4 +1,4 @@
-use crate::common::utils::{assert_all_examples, check_can_generate_examples};
+use crate::common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::extras::jiff as jiff_gs;
 use hegel::generators as gs;
 use jiff::civil::{Date, DateTime, ISOWeekDate, Time};
@@ -89,16 +89,16 @@ fn test_jiff_times_max_value() {
     assert_all_examples(jiff_gs::times().max_value(max), move |t| *t <= max);
 }
 
-/// Generated times are whole microseconds, so a min bound with a
-/// sub-microsecond component must round *up* to the next microsecond, not
-/// down past the bound.
 #[test]
-fn test_jiff_times_sub_microsecond_min_bound_rounds_up() {
+fn test_jiff_times_nanosecond_bounds() {
+    // submicrosecond bounds shouldn't be an error
     let min = Time::constant(1, 2, 3, 500);
-    let max = Time::constant(1, 2, 3, 10_000);
+    let max = Time::constant(1, 2, 3, 900);
     assert_all_examples(jiff_gs::times().min_value(min).max_value(max), move |t| {
-        *t >= min && *t <= max && t.subsec_nanosecond() % 1_000 == 0
+        *t >= min && *t <= max
     });
+    // regression against only generating microseconds
+    find_any(jiff_gs::times(), |t| t.subsec_nanosecond() % 1_000 != 0);
 }
 
 #[hegel::test]
@@ -108,18 +108,6 @@ fn test_jiff_times_min_greater_than_max(tc: hegel::TestCase) {
         jiff_gs::times()
             .min_value(Time::constant(13, 0, 0, 0))
             .max_value(Time::constant(12, 0, 0, 0)),
-    );
-}
-
-/// `min_value < max_value`, but no whole microsecond lies between them:
-/// a clean usage error rather than an out-of-bounds value.
-#[hegel::test]
-#[should_panic(expected = "whole microsecond")]
-fn test_jiff_times_empty_microsecond_range_is_a_usage_error(tc: hegel::TestCase) {
-    tc.draw(
-        jiff_gs::times()
-            .min_value(Time::constant(12, 0, 0, 100))
-            .max_value(Time::constant(12, 0, 0, 900)),
     );
 }
 

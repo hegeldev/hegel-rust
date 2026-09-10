@@ -14,11 +14,18 @@ fn machine_concurrent(
     num_rules: usize,
     concurrency: i64,
 ) -> NativeStateMachine {
-    NativeStateMachine::new(ntc, vec![0; num_rules], 0, concurrency, concurrency).unwrap()
+    NativeStateMachine::new(
+        ntc,
+        vec![0; num_rules],
+        Vec::new(),
+        concurrency,
+        concurrency,
+    )
+    .unwrap()
 }
 
 fn grouped_machine(ntc: &mut NativeTestCase, rule_groups: &[i64]) -> NativeStateMachine {
-    NativeStateMachine::new(ntc, rule_groups.to_vec(), 0, 1, 1).unwrap()
+    NativeStateMachine::new(ntc, rule_groups.to_vec(), Vec::new(), 1, 1).unwrap()
 }
 
 fn replay(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
@@ -39,11 +46,29 @@ fn int(v: i64) -> ChoiceValue {
     ChoiceValue::Integer(BigInt::from(v))
 }
 
-/// A keep-going stop decision. The first round's decision is forced, so a
+/// A keep-going round decision. The first round's decision is forced, so a
 /// prefix entry at its position is a placeholder that only keeps later
 /// entries aligned.
 fn go() -> ChoiceValue {
+    ChoiceValue::Boolean(true)
+}
+
+/// A stop round decision: the simplest boolean.
+fn stop() -> ChoiceValue {
     ChoiceValue::Boolean(false)
+}
+
+/// A simplest-template test case whose prefix keeps a sequential machine
+/// with every rule enabled running for `rounds` rounds: the p_disabled
+/// draw, then per round the continue decision, the rule index, and the
+/// feature-flag placeholder. Draws past the prefix take the simplest value,
+/// so the machine stops at the next free round decision.
+fn sequential_rounds(rounds: usize, max_size: usize) -> NativeTestCase {
+    let mut prefix = vec![int(0)];
+    for _ in 0..rounds {
+        prefix.extend([go(), int(0), ChoiceValue::Boolean(false)]);
+    }
+    simplest_after(&prefix, max_size)
 }
 
 /// The node recording the rule index chosen by the enumeration fallback:
@@ -65,12 +90,12 @@ fn count_draws_with_max(ntc: &NativeTestCase, max_value: i64) -> usize {
 }
 
 #[test]
-fn first_round_stop_decision_is_a_forced_keep_going_boolean() {
-    let mut ntc = replay(&[int(0), go(), int(2)], 8);
+fn first_round_decision_is_a_forced_keep_going_boolean() {
+    let mut ntc = replay(&[int(0), stop(), int(2)], 8);
     let mut sm = machine(&mut ntc, 3);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(ntc.nodes[1].was_forced);
-    assert_eq!(ntc.nodes[1].value(), ChoiceValue::Boolean(false));
+    assert_eq!(ntc.nodes[1].value(), ChoiceValue::Boolean(true));
 }
 
 #[test]
@@ -92,8 +117,8 @@ fn zero_p_disabled_enables_every_rule() {
 }
 
 #[test]
-fn bounded_case_runs_exactly_step_count_rounds_under_simplest_template() {
-    let mut ntc = simplest_after(&[], 4096);
+fn bounded_case_runs_at_most_step_count_rounds() {
+    let mut ntc = sequential_rounds(6, 4096);
     ntc.family().set_stateful_step_count(5);
     let mut sm = machine(&mut ntc, 2);
     for _ in 0..5 {
@@ -102,7 +127,31 @@ fn bounded_case_runs_exactly_step_count_rounds_under_simplest_template() {
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     }
     assert!(sm.next_group(&mut ntc).unwrap().is_none());
+    assert!(
+        ntc.nodes.last().unwrap().was_forced,
+        "the stop at the step count is forced"
+    );
     assert!(sm.next_group(&mut ntc).unwrap().is_none());
+}
+
+#[test]
+fn simplest_template_runs_exactly_one_round() {
+    let mut ntc = simplest_after(&[], 4096);
+    ntc.family().set_stateful_step_count(500);
+    let mut sm = machine(&mut ntc, 2);
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
+    assert!(sm.next_group(&mut ntc).unwrap().is_none());
+    assert!(
+        !ntc.nodes.last().unwrap().was_forced,
+        "the stop is the simplest value"
+    );
+    assert_eq!(
+        ntc.nodes.last().unwrap().value(),
+        ChoiceValue::Boolean(false)
+    );
+    assert_eq!(ntc.nodes.len(), 5);
 }
 
 #[test]
@@ -118,13 +167,7 @@ fn bounded_case_runs_at_least_one_round_even_with_step_count_one() {
 
 #[test]
 fn free_stop_decision_can_halt_before_the_step_count() {
-    let prefix = [
-        int(254),
-        go(),
-        int(0),
-        ChoiceValue::Boolean(false),
-        ChoiceValue::Boolean(true),
-    ];
+    let prefix = [int(254), go(), int(0), ChoiceValue::Boolean(false), stop()];
     let mut ntc = replay(&prefix, 16);
     let mut sm = machine(&mut ntc, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
@@ -135,7 +178,7 @@ fn free_stop_decision_can_halt_before_the_step_count() {
 
 #[test]
 fn sequential_machine_hands_out_exactly_one_rule_per_round() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = sequential_rounds(2, 4096);
     let mut sm = machine(&mut ntc, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
@@ -144,18 +187,6 @@ fn sequential_machine_hands_out_exactly_one_rule_per_round() {
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-}
-
-#[test]
-fn unbounded_families_never_halt() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
-    ntc.family().set_state_machine_steps_unbounded();
-    let mut sm = machine(&mut ntc, 2);
-    for _ in 0..100 {
-        assert!(sm.next_group(&mut ntc).unwrap().is_some());
-        assert!(sm.next_rule(&mut ntc, 0).unwrap().is_some());
-        assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
-    }
 }
 
 #[test]
@@ -190,7 +221,7 @@ fn decided_flag_is_rewritten_as_forced_draw_on_later_queries() {
         go(),
         int(0),
         ChoiceValue::Boolean(false),
-        ChoiceValue::Boolean(false),
+        go(),
         int(0),
     ];
     let mut ntc = replay(&prefix, 8);
@@ -296,13 +327,17 @@ fn group_ids_are_arbitrary_and_deduplicated_by_first_appearance() {
 fn selection_stays_in_the_current_group() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
-        ntc.family().set_state_machine_steps_unbounded();
         let mut sm = grouped_machine(&mut ntc, &[0, 1, 0, 1, 1]);
+        let mut rounds = 0;
         for _ in 0..30 {
-            let group = sm.next_group(&mut ntc).unwrap().unwrap();
+            let Some(group) = sm.next_group(&mut ntc).unwrap() else {
+                break;
+            };
             let rule = sm.next_rule(&mut ntc, 0).unwrap().unwrap() as usize;
             assert_eq!([0, 1, 0, 1, 1][rule], group);
+            rounds += 1;
         }
+        assert!(rounds >= 1, "the first round is always forced to run");
     }
 }
 
@@ -363,7 +398,10 @@ fn concurrent_workers_have_their_own_flags_and_round_budgets() {
 
 #[test]
 fn simplest_template_runs_no_rules() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = simplest_after(
+        &[int(0), int(0), int(0), go(), stop(), stop(), stop(), go()],
+        4096,
+    );
     ntc.family().set_stateful_step_count(2);
     let mut sm = machine_concurrent(&mut ntc, 2, 3);
     for _ in 0..2 {
@@ -411,7 +449,10 @@ fn concurrent_worker_continue_decision_is_a_recorded_hazard_boolean() {
 
 #[test]
 fn concurrent_rounds_stop_at_the_step_count() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = simplest_after(
+        &[int(0), int(0), int(0), go(), go(), go(), go(), go()],
+        4096,
+    );
     ntc.family().set_stateful_step_count(4);
     let mut sm = machine_concurrent(&mut ntc, 2, 3);
     for _ in 0..4 {
@@ -447,7 +488,7 @@ fn concurrent_worker_attempts_are_capped_per_round() {
 
 #[test]
 fn rejected_rounds_do_not_count_toward_the_round_budget() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = sequential_rounds(9, 4096);
     ntc.family().set_stateful_step_count(3);
     let mut sm = machine(&mut ntc, 2);
     for _ in 0..5 {
@@ -465,7 +506,7 @@ fn rejected_rounds_do_not_count_toward_the_round_budget() {
 
 #[test]
 fn round_attempts_stop_at_ten_times_the_step_count_once_a_round_has_succeeded() {
-    let mut ntc = simplest_after(&[], 4096);
+    let mut ntc = sequential_rounds(21, 4096);
     ntc.family().set_stateful_step_count(2);
     let mut sm = machine(&mut ntc, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
@@ -480,7 +521,7 @@ fn round_attempts_stop_at_ten_times_the_step_count_once_a_round_has_succeeded() 
 
 #[test]
 fn a_machine_with_no_successful_rounds_gets_a_thousand_attempts() {
-    let mut ntc = simplest_after(&[], 16384);
+    let mut ntc = sequential_rounds(1001, 16384);
     ntc.family().set_stateful_step_count(2);
     let mut sm = machine(&mut ntc, 2);
     for _ in 0..1000 {
@@ -493,7 +534,7 @@ fn a_machine_with_no_successful_rounds_gets_a_thousand_attempts() {
 
 #[test]
 fn rule_rejected_without_an_outstanding_rule_is_an_error() {
-    let mut ntc = simplest_after(&[], 64);
+    let mut ntc = sequential_rounds(2, 64);
     ntc.family().set_stateful_step_count(5);
     let mut sm = machine(&mut ntc, 2);
     assert!(matches!(
@@ -530,7 +571,7 @@ fn rule_rejected_for_an_out_of_range_worker_is_an_error() {
 
 #[test]
 fn a_rule_outstanding_at_the_join_point_is_not_rejectable_next_round() {
-    let mut ntc = simplest_after(&[], 64);
+    let mut ntc = sequential_rounds(2, 64);
     let mut sm = machine(&mut ntc, 2);
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
@@ -544,7 +585,7 @@ fn a_rule_outstanding_at_the_join_point_is_not_rejectable_next_round() {
 #[test]
 fn fixed_concurrency_bounds_consume_no_entropy() {
     let mut ntc = replay(&[int(0), int(0), int(0)], 8);
-    let sm = NativeStateMachine::new(&mut ntc, vec![0], 0, 3, 3).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 3, 3).unwrap();
     assert_eq!(sm.concurrency(), 3);
     assert_eq!(ntc.nodes.len(), 3);
 }
@@ -553,7 +594,7 @@ fn fixed_concurrency_bounds_consume_no_entropy() {
 fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
     let prefix = [ChoiceValue::Boolean(true), int(0), int(0), int(0), int(0)];
     let mut ntc = replay(&prefix, 8);
-    let sm = NativeStateMachine::new(&mut ntc, vec![0], 0, 1, 4).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 1, 4).unwrap();
     assert_eq!(sm.concurrency(), 4);
     assert_eq!(
         ntc.spans[0usize].label,
@@ -565,7 +606,7 @@ fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
 fn concurrency_draw_falls_back_to_a_uniform_level() {
     let prefix = [ChoiceValue::Boolean(false), int(2), int(0), int(0)];
     let mut ntc = replay(&prefix, 8);
-    let sm = NativeStateMachine::new(&mut ntc, vec![0], 0, 1, 4).unwrap();
+    let sm = NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 1, 4).unwrap();
     assert_eq!(sm.concurrency(), 2);
 }
 
@@ -573,7 +614,7 @@ fn concurrency_draw_falls_back_to_a_uniform_level() {
 fn drawn_concurrency_respects_bounds() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
-        let sm = NativeStateMachine::new(&mut ntc, vec![0], 0, 2, 5).unwrap();
+        let sm = NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 2, 5).unwrap();
         assert!((2..=5).contains(&sm.concurrency()));
     }
 }
@@ -582,7 +623,7 @@ fn drawn_concurrency_respects_bounds() {
 fn overrun_while_drawing_the_concurrency_level_propagates() {
     let mut ntc = replay(&[], 0);
     assert!(matches!(
-        NativeStateMachine::new(&mut ntc, vec![0], 0, 1, 4),
+        NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 1, 4),
         Err(EngineError::Overrun)
     ));
 }
@@ -616,7 +657,7 @@ fn try_machine(
     ntc: &mut NativeTestCase,
     num_rules: usize,
 ) -> Result<NativeStateMachine, EngineError> {
-    NativeStateMachine::new(ntc, vec![0; num_rules], 0, 1, 1)
+    NativeStateMachine::new(ntc, vec![0; num_rules], Vec::new(), 1, 1)
 }
 
 #[test]
@@ -629,7 +670,7 @@ fn overrun_while_drawing_p_disabled_at_creation_propagates() {
 }
 
 #[test]
-fn overrun_while_drawing_the_stop_decision_propagates() {
+fn overrun_while_drawing_the_round_decision_propagates() {
     let mut ntc = replay(&[int(0)], 1);
     let mut sm = machine(&mut ntc, 2);
     assert!(matches!(sm.next_group(&mut ntc), Err(EngineError::Overrun)));
@@ -723,19 +764,22 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
 fn all_selected_rules_are_in_range() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
-        ntc.family().set_state_machine_steps_unbounded();
         let mut sm = machine(&mut ntc, 5);
+        let mut rounds = 0;
         for _ in 0..30 {
-            assert!(sm.next_group(&mut ntc).unwrap().is_some());
+            if sm.next_group(&mut ntc).unwrap().is_none() {
+                break;
+            }
             assert!(sm.next_rule(&mut ntc, 0).unwrap().unwrap() < 5);
+            rounds += 1;
         }
+        assert!(rounds >= 1, "the first round is always forced to run");
     }
 }
 
 #[test]
 fn simplest_template_always_selects_rule_zero() {
-    let mut ntc = simplest_after(&[], 64);
-    ntc.family().set_state_machine_steps_unbounded();
+    let mut ntc = sequential_rounds(5, 64);
     let mut sm = machine(&mut ntc, 3);
     for _ in 0..5 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());
@@ -754,20 +798,20 @@ fn no_rules_is_error() {
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn zero_min_concurrency_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
-    NativeStateMachine::new(&mut ntc, vec![0], 0, 0, 1).unwrap();
+    NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 0, 1).unwrap();
 }
 
 #[test]
 #[should_panic(expected = "Stateful testing: concurrency bounds must satisfy 1 <= min <= max")]
 fn inverted_concurrency_bounds_is_error() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
-    NativeStateMachine::new(&mut ntc, vec![0], 0, 2, 1).unwrap();
+    NativeStateMachine::new(&mut ntc, vec![0], Vec::new(), 2, 1).unwrap();
 }
 
 #[test]
 fn should_check_invariant_rejects_out_of_range_indices() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
-    let mut sm = NativeStateMachine::new(&mut ntc, vec![0], 2, 1, 1).unwrap();
+    let mut sm = NativeStateMachine::new(&mut ntc, vec![0], vec![false, false], 1, 1).unwrap();
     assert!(matches!(
         sm.should_check_invariant(&mut ntc, 2),
         Err(EngineError::InvalidArgument(_))
@@ -782,7 +826,7 @@ fn should_check_invariant_rejects_out_of_range_indices() {
 fn should_check_invariant_is_always_true_at_step_count_one() {
     let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     ntc.family().set_stateful_step_count(1);
-    let mut sm = NativeStateMachine::new(&mut ntc, vec![0], 1, 1, 1).unwrap();
+    let mut sm = NativeStateMachine::new(&mut ntc, vec![0], vec![false], 1, 1).unwrap();
     for _ in 0..10 {
         assert!(sm.should_check_invariant(&mut ntc, 0).unwrap());
     }
@@ -794,7 +838,7 @@ fn should_check_invariant_samples_at_one_over_step_count() {
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         ntc.family().set_stateful_step_count(50);
-        let mut sm = NativeStateMachine::new(&mut ntc, vec![0], 1, 1, 1).unwrap();
+        let mut sm = NativeStateMachine::new(&mut ntc, vec![0], vec![false], 1, 1).unwrap();
         for _ in 0..100 {
             if sm.should_check_invariant(&mut ntc, 0).unwrap() {
                 trues += 1;
@@ -805,4 +849,18 @@ fn should_check_invariant_samples_at_one_over_step_count() {
         (10..=100).contains(&trues),
         "expected about 40 sampled checks in 2000, got {trues}"
     );
+}
+
+#[test]
+fn always_check_invariants_are_checked_without_consuming_entropy() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    ntc.family().set_stateful_step_count(50);
+    let mut sm = NativeStateMachine::new(&mut ntc, vec![0], vec![true, false], 1, 1).unwrap();
+    let nodes_before = ntc.nodes.len();
+    for _ in 0..20 {
+        assert!(sm.should_check_invariant(&mut ntc, 0).unwrap());
+    }
+    assert_eq!(ntc.nodes.len(), nodes_before);
+    sm.should_check_invariant(&mut ntc, 1).unwrap();
+    assert_eq!(ntc.nodes.len(), nodes_before + 1);
 }

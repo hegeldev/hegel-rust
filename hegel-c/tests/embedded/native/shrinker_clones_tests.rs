@@ -319,9 +319,10 @@ impl crate::native::shrinker::ShrinkProbe for AdoptionRecorder {
         })))
     }
 
-    fn candidate_adopted(&mut self) {
+    fn candidate_adopted(&mut self) -> Result<(), crate::control::InternalError> {
         self.adopted
             .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -340,6 +341,6 @@ fn nested_clone_probe_forwards_candidate_adopted() {
         outer_values: &outer_values,
         i: 0,
     };
-    crate::native::shrinker::ShrinkProbe::candidate_adopted(&mut probe);
+    crate::native::shrinker::ShrinkProbe::candidate_adopted(&mut probe).unwrap();
     assert_eq!(adopted.load(core::sync::atomic::Ordering::SeqCst), 1);
 }

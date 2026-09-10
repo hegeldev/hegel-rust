@@ -10,12 +10,13 @@ use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_void};
 use core::future::Future;
 use core::pin::Pin;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use crate::sys::sync::{Mutex, MutexGuard};
@@ -90,7 +91,7 @@ use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
 use crate::settings::{
-    Backend, HealthCheck, Mode, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
+    Backend, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
 };
 
 /// Result of a libhegel call. See "Calling convention" in the header
@@ -165,22 +166,6 @@ pub enum hegel_status_t {
     HEGEL_STATUS_OVERRUN = 2,
     /// The property failed and this test case is a counterexample.
     HEGEL_STATUS_INTERESTING = 3,
-}
-
-/// How the engine should treat the run: a full property-test loop or a
-/// single test case. Set via `hegel_settings_set_mode`.
-#[repr(C)]
-#[derive(Copy, Clone)]
-#[allow(non_camel_case_types)]
-pub enum hegel_mode_t {
-    /// libhegel drives a full generate / shrink / replay loop until the
-    /// test-case budget is spent or generation stops producing novel
-    /// cases. The default.
-    HEGEL_MODE_TEST_RUN = 0,
-    /// libhegel produces exactly one test case and stops, with no shrinking.
-    /// Useful for replaying a stored counterexample or running an
-    /// exploratory probe.
-    HEGEL_MODE_SINGLE_TEST_CASE = 1,
 }
 
 /// Which source of randomness the engine draws from. Set via
@@ -577,6 +562,10 @@ struct FamilyShared {
     /// wins; later conflicting ones error. Only read and written under the
     /// `printer` lock.
     printer_width_configured: AtomicBool,
+    /// When the test case started — the zero of the `+X.XXXms` offsets in
+    /// the worker attribution `hegel_test_case_set_worker` turns on. `None`
+    /// on a platform without a monotonic clock, where the offsets read 0.
+    started: Option<crate::sys::Instant>,
 }
 
 impl FamilyShared {
@@ -625,7 +614,41 @@ pub struct HegelTestCase {
     /// clone's output appears in the final document — is deterministic,
     /// however the threads are later scheduled.
     print_target: PrinterTarget,
+    /// The concurrent worker this handle's output is attributed to
+    /// (`hegel_test_case_set_worker`), or [`NO_WORKER`]. Shared with the
+    /// printer handles fetched from this handle, so an attribution set after
+    /// a printer was fetched still applies to it; copied — not shared — into
+    /// the handles derived from this one, which may be attributed on their
+    /// own.
+    worker: Arc<AtomicI64>,
     local: Mutex<LocalState>,
+}
+
+/// The `worker` value of a handle attributed to no worker.
+const NO_WORKER: i64 = -1;
+
+/// The state a printer handle stamps lines from: the worker attribution
+/// cell of the test-case handle it was fetched from and the family's start
+/// time.
+struct Attribution {
+    worker: Arc<AtomicI64>,
+    started: Option<crate::sys::Instant>,
+}
+
+impl Attribution {
+    /// The `[worker N +X.XXXms] ` prefix for a line recorded now, or `None`
+    /// while no worker is set.
+    fn line_prefix(&self) -> Option<String> {
+        let worker = self.worker.load(Ordering::Acquire);
+        if worker == NO_WORKER {
+            return None;
+        }
+        let elapsed = self
+            .started
+            .map_or(core::time::Duration::ZERO, |started| started.elapsed());
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        Some(format!("[worker {worker} +{ms:.3}ms] "))
+    }
 }
 
 /// Box `value` and leak it to a raw pointer for the C ABI.
@@ -702,9 +725,9 @@ pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence — or, for a nondeterministic failure, its replay state — or
-    /// `None` when the engine produced no blob (a single-test-case run, an
-    /// unconfirmed nondeterministic failure, or a failure returned from a
-    /// blob replay). Read via `hegel_failure_reproduction_blob`.
+    /// `None` when the engine produced no blob (an unconfirmed
+    /// nondeterministic failure, or a failure returned from a blob replay).
+    /// Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
     /// The failure's confirmation standing when the run handled
     /// nondeterminism, quoting the run's own replay evidence; `None` for
@@ -779,6 +802,12 @@ fn cstring_lossy(s: &str) -> CString {
 /// When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
 /// similar variables) the defaults change: the database is disabled and
 /// derandomization is enabled. Override either with the explicit setters.
+///
+/// When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
+/// the database is disabled and every health check is skipped. The database
+/// can still be enabled with `hegel_settings_set_database`; the health
+/// checks cannot be re-enabled, since Antithesis's thread pausing would trip
+/// wall-clock checks such as `TooSlow` spuriously.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,
@@ -830,44 +859,13 @@ unsafe fn settings_mut<'a>(
 }
 
 /// Parameters:
-/// `mode`: A full run loop or a single test case with no shrinking. See
-///   `hegel_mode_t`.
+/// `backend`: A `hegel_backend_t` value selecting the source of
+///   randomness.
 ///
 /// Returns `HEGEL_OK`.
 ///
 /// The enum-valued setters take `uint32_t` rather than the enum type so
 /// that an out-of-range value is an error instead of undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_mode(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    mode: u32,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_mode") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    let m = match mode {
-        x if x == hegel_mode_t::HEGEL_MODE_TEST_RUN as u32 => Mode::TestRun,
-        x if x == hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32 => Mode::SingleTestCase,
-        _ => {
-            set_last_error(
-                ctx,
-                &format!("hegel_settings_set_mode: unknown mode {mode}"),
-            );
-            return HEGEL_E_INVALID_ARG;
-        }
-    };
-    handle.inner = handle.inner.clone().mode(m);
-    HEGEL_OK
-}
-
-/// Parameters:
-/// `backend`: A `hegel_backend_t` value selecting the source of
-///   randomness.
-///
-/// Returns `HEGEL_OK`.
 ///
 /// Once an explicit backend has been set on a handle there is no way to
 /// change it within a run.
@@ -1720,8 +1718,120 @@ pub unsafe extern "C" fn hegel_test_case_clone(
         // the clone's prints are no-ops like its parent's.
         Err(_) => src.print_target,
     };
-    let clone = handle_from_stream(Arc::clone(&src.family), Arc::from(stream), print_target);
+    let clone = handle_from_stream(
+        Arc::clone(&src.family),
+        Arc::from(stream),
+        print_target,
+        src.worker.load(Ordering::Acquire),
+    );
     unsafe { *out_test_case = clone };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `indent`: How many columns further than `tc`'s own lines every line of
+///   the block is indented.
+/// `out_test_case`: Receives a new handle onto the *same* choice stream as
+///   `tc`.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_test_case`.
+///
+/// A block handle is how a client prints an indented section under a
+/// heading — the body of a stateful rule under its `Step 3: add {` line, the
+/// body of a repeated section — without touching every line itself. Its
+/// print region (see `hegel_test_case_printer`) is a block nested in `tc`'s
+/// region at the current position: everything printed or noted through the
+/// handle, and through the clones and blocks derived from it, lands there,
+/// each line indented `indent` columns further than `tc`'s lines (blocks
+/// nest, and their indentation adds up). The indentation is applied to a
+/// line when it gets its first content, so it covers the continuation lines
+/// of a value broken across lines too, and it ends exactly with the block:
+/// a line `tc` writes after the block's last one is back at `tc`'s
+/// indentation. It is independent of the break-point indentation
+/// `hegel_printer_begin_group` / `hegel_printer_shift_indent` manage.
+///
+/// Unlike a clone, a block handle draws from `tc`'s own choice sequence:
+/// drawing through it and through `tc` are the same thing, so the two must
+/// not be driven concurrently (give a thread a clone instead). It shares
+/// everything else with `tc` — outcome, budgets, worker attribution as of
+/// its creation — and is released with `hegel_test_case_free` like any
+/// other handle. If `tc`'s region is dead (the document was read), the
+/// block shares the dead region and its prints are no-ops.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_block(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    indent: u64,
+    out_test_case: *mut *mut HegelTestCase,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(src) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_block: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if out_test_case.is_null() {
+        set_last_error(ctx, "hegel_test_case_block: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let print_target = match src
+        .family
+        .printer
+        .lock()
+        .block(src.print_target, size_arg(indent))
+    {
+        Ok(slot) => PrinterTarget::Slot(slot),
+        Err(_) => src.print_target,
+    };
+    let block = handle_from_stream(
+        Arc::clone(&src.family),
+        Arc::clone(&src.stream),
+        print_target,
+        src.worker.load(Ordering::Acquire),
+    );
+    unsafe { *out_test_case = block };
+    HEGEL_OK
+}
+
+/// Attribute this handle's output to concurrent worker `worker_index`:
+/// every line recorded from now on through the handle — `hegel_note` lines,
+/// and lines started through a printer fetched from it with
+/// `hegel_test_case_printer`, before or after this call — is prefixed with
+/// `[worker N +X.XXXms] `, where `X.XXX` is the time since the test case
+/// started at which the line was recorded. Blocks and clones derived from
+/// the handle after this call inherit the attribution (a worker's rule
+/// bodies and their clones print as that worker's), and may be attributed
+/// afresh on their own. Lines a group breaks across are stamped on their
+/// first line only.
+///
+/// This is the attribution a concurrent stateful runner gives the clone it
+/// hands each worker thread (see `hegel_state_machine_next_rule`), so the
+/// report can be read across workers: regions order a worker's lines
+/// together, and the offsets say how they interleaved in time.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_INVALID_HANDLE` for a NULL `tc`, and
+/// `HEGEL_E_INVALID_ARG` for a negative `worker_index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_test_case_set_worker(
+    ctx: *mut HegelContext,
+    tc: *const HegelTestCase,
+    worker_index: i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let Some(tc) = (unsafe { tc.as_ref() }) else {
+        set_last_error(ctx, "hegel_test_case_set_worker: test case pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if worker_index < 0 {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_test_case_set_worker: worker_index must be non-negative, got {worker_index}"
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    tc.worker.store(worker_index, Ordering::Release);
     HEGEL_OK
 }
 
@@ -1734,6 +1844,7 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
             DEFAULT_PRINTER_MAX_WIDTH,
         )))),
         printer_width_configured: AtomicBool::new(false),
+        started: crate::sys::Instant::now(),
     })
 }
 
@@ -1741,22 +1852,24 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
 /// stream, printing into the document body — and return its raw pointer.
 fn handle_from_family(family: Arc<FamilyShared>) -> *mut HegelTestCase {
     let stream = Arc::clone(&family.ds);
-    handle_from_stream(family, stream, PrinterTarget::Main)
+    handle_from_stream(family, stream, PrinterTarget::Main, NO_WORKER)
 }
 
 /// Allocate a handle holding one reference to `family` that draws from
-/// `stream` and prints into `print_target`, and return its raw pointer. Each
-/// handle has its own `local` buffer so concurrent handles do not stomp each
-/// other's borrowed values.
+/// `stream`, prints into `print_target` and starts out attributed to
+/// `worker`, and return its raw pointer. Each handle has its own `local`
+/// buffer so concurrent handles do not stomp each other's borrowed values.
 fn handle_from_stream(
     family: Arc<FamilyShared>,
     stream: Arc<dyn DataSource + Send + Sync>,
     print_target: PrinterTarget,
+    worker: i64,
 ) -> *mut HegelTestCase {
     into_raw_send_sync(HegelTestCase {
         family,
         stream,
         print_target,
+        worker: Arc::new(AtomicI64::new(worker)),
         local: Mutex::new(LocalState { completed: false }),
     })
 }
@@ -2665,7 +2778,11 @@ unsafe fn state_machine_ref<'a>(
 /// testing, sequential or concurrent: `num_rules` rules — each assigned to
 /// a concurrency group by `rule_groups`, an array of group ids parallel to
 /// `rule_names` — and `num_invariants` invariants, with names as
-/// NUL-terminated UTF-8, plus concurrency bounds. Group ids are arbitrary
+/// NUL-terminated UTF-8, plus concurrency bounds. `invariant_always_check`
+/// is an array of `num_invariants` flags parallel to `invariant_names`
+/// (NULL for all-false): `hegel_state_machine_should_check_invariant`
+/// answers true unconditionally for a flagged invariant and samples the
+/// rest. Group ids are arbitrary
 /// (any value except `HEGEL_STATE_MACHINE_DONE`, which
 /// `hegel_state_machine_next_group` reserves as its termination sentinel):
 /// the machine has one concurrency group per distinct value of
@@ -2721,6 +2838,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     rule_groups: *const i64,
     num_rules: usize,
     invariant_names: *const *const c_char,
+    invariant_always_check: *const bool,
     num_invariants: usize,
     min_concurrency: i64,
     max_concurrency: i64,
@@ -2784,10 +2902,17 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         Ok(v) => v,
         Err(rc) => return rc,
     };
+    let invariant_always_check: Vec<bool> =
+        if num_invariants == 0 || invariant_always_check.is_null() {
+            vec![false; num_invariants]
+        } else {
+            unsafe { core::slice::from_raw_parts(invariant_always_check, num_invariants) }.to_vec()
+        };
     match tc.stream.new_state_machine(
         rules,
         rule_groups,
         invariants,
+        invariant_always_check,
         min_concurrency,
         max_concurrency,
     ) {
@@ -2829,9 +2954,7 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
 /// `hegel_state_machine_next_rule` stream is exhausted — including before the
 /// first rule is requested. This applies to sequential machines too: the
 /// frontend must advance the group when the rule stream is exhausted, even
-/// though there is only a single group. In single-test-case mode (steps
-/// unbounded, e.g. under Antithesis) `*out_group_id` is never set to
-/// `HEGEL_STATE_MACHINE_DONE`: rounds continue forever.
+/// though there is only a single group.
 ///
 /// `state_machine` must be a handle returned by `hegel_new_state_machine`
 /// on this test-case family. Returns `HEGEL_E_STOP_TEST` when the
@@ -2989,10 +3112,12 @@ pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
 }
 
 /// Decide whether the caller should run invariant `invariant_index` at the
-/// current join point, writing the decision into `*out_should_check`: a
+/// current join point, writing the decision into `*out_should_check`: true
+/// unconditionally (consuming no entropy) for an invariant whose
+/// `invariant_always_check` flag was set at creation, otherwise a
 /// recorded boolean draw that is true with probability
-/// `1 / stateful_step_count`, so each invariant's expected number of
-/// sampled runs over a full-length test case is one, regardless of the
+/// `1 / stateful_step_count`, so each sampled invariant's expected number
+/// of sampled runs over a full-length test case is one, regardless of the
 /// step count. The caller owns the machine's guaranteed invariant checks —
 /// its initial state, and its final state once
 /// `hegel_state_machine_next_group` signals termination — and should run
@@ -3774,7 +3899,7 @@ pub struct hegel_date_t {
 }
 
 /// A drawn time of day: `hour` in `[0, 23]`, `minute` and `second` in
-/// `[0, 59]`, `microsecond` in `[0, 999999]`.
+/// `[0, 59]`, `nanosecond` in `[0, 999999999]`.
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -3782,7 +3907,7 @@ pub struct hegel_time_t {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
-    pub microsecond: u32,
+    pub nanosecond: u32,
 }
 
 /// A drawn naive datetime (a date plus a time of day, no timezone).
@@ -3807,7 +3932,7 @@ fn rust_time(t: &hegel_time_t) -> crate::native::draws::special::Time {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3831,7 +3956,7 @@ fn c_time(t: crate::native::draws::special::Time) -> hegel_time_t {
         hour: t.hour,
         minute: t.minute,
         second: t.second,
-        microsecond: t.microsecond,
+        nanosecond: t.nanosecond,
     }
 }
 
@@ -3869,7 +3994,7 @@ pub unsafe extern "C" fn hegel_generate_date(
 
 /// Parameters:
 /// `min_value` / `max_value`: Inclusive bounds. Pass all-zeros and
-///   `{23, 59, 59, 999999}` for the full day.
+///   `{23, 59, 59, 999999999}` for the full day.
 ///
 /// Returns `HEGEL_OK` or `HEGEL_E_STOP_TEST`.
 ///
@@ -4170,6 +4295,30 @@ pub struct HegelPrinter {
     /// and this flag is how a second thread caught racing the same handle
     /// gets `HEGEL_E_CONCURRENT_USE` instead of silently interleaving.
     busy: AtomicBool,
+    /// Where worker line prefixes come from for a handle fetched from a
+    /// test-case handle (and the deferred handles opened from it); `None`
+    /// for a standalone document.
+    attribution: Option<Arc<Attribution>>,
+}
+
+impl HegelPrinter {
+    /// Run a content-recording operation on this handle's target, first
+    /// stamping the line it starts with the worker prefix when the handle
+    /// is attributed and the target is at a line start.
+    fn record(
+        &self,
+        op: impl FnOnce(&mut Printer, PrinterTarget) -> Result<(), PrinterError>,
+    ) -> Result<(), PrinterError> {
+        let mut printer = self.inner.lock();
+        if let Some(attribution) = &self.attribution {
+            if printer.at_line_start(self.target) {
+                if let Some(prefix) = attribution.line_prefix() {
+                    printer.line_prefix(self.target, &prefix)?;
+                }
+            }
+        }
+        op(&mut printer, self.target)
+    }
 }
 
 /// The line width a printer document is laid out to when the client does not
@@ -4390,6 +4539,7 @@ pub unsafe extern "C" fn hegel_printer_new(
         inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
         target: PrinterTarget::Main,
         busy: AtomicBool::new(false),
+        attribution: None,
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
@@ -4444,7 +4594,7 @@ pub unsafe extern "C" fn hegel_printer_if_break(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().if_break(handle.target, &text) {
+    match handle.record(|printer, target| printer.if_break(target, &text)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4475,7 +4625,7 @@ pub unsafe extern "C" fn hegel_printer_text(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().text(handle.target, &text) {
+    match handle.record(|printer, target| printer.text(target, &text)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4595,11 +4745,7 @@ pub unsafe extern "C" fn hegel_printer_begin_group(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle
-        .inner
-        .lock()
-        .begin_group(handle.target, size_arg(indent), &open)
-    {
+    match handle.record(|printer, target| printer.begin_group(target, size_arg(indent), &open)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4629,7 +4775,7 @@ pub unsafe extern "C" fn hegel_printer_end_group(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    match handle.inner.lock().end_group(handle.target, &close) {
+    match handle.record(|printer, target| printer.end_group(target, &close)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }
@@ -4696,6 +4842,7 @@ pub unsafe extern "C" fn hegel_printer_deferred(
                 inner: Arc::clone(&handle.inner),
                 target: PrinterTarget::Slot(slot),
                 busy: AtomicBool::new(false),
+                attribution: handle.attribution.clone(),
             };
             unsafe { *out_printer = into_raw_send_sync(child) };
             HEGEL_OK
@@ -4990,6 +5137,10 @@ pub unsafe extern "C" fn hegel_test_case_printer(
         inner,
         target: tc.print_target,
         busy: AtomicBool::new(false),
+        attribution: Some(Arc::new(Attribution {
+            worker: Arc::clone(&tc.worker),
+            started: tc.family.started,
+        })),
     };
     unsafe { *out_printer = into_raw_send_sync(handle) };
     HEGEL_OK
@@ -5001,6 +5152,13 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 /// line, so notes may contain newlines. Notes and drawn values from *one
 /// handle* appear in the order they were appended; a clone's notes appear
 /// in the clone's region.
+///
+/// A note appended while a speculative region is open on the handle's
+/// region — the client is mid-way through printing a drawn value, and the
+/// note comes from inside that value's generation — is held back rather
+/// than spliced into the value's line, and appended once the outermost
+/// region closes, whether it is committed or aborted. Held notes are lost
+/// if the document is read first (the writer was a straggler).
 ///
 /// Notes never configure the document's width; they render at whatever
 /// width ends up configured (default 79).
@@ -5031,7 +5189,17 @@ pub unsafe extern "C" fn hegel_note(
         }
         Err(rc) => return rc,
     };
-    match tc.family.printer.lock().note(tc.print_target, &text) {
+    let attribution = Attribution {
+        worker: Arc::clone(&tc.worker),
+        started: tc.family.started,
+    };
+    let prefix = attribution.line_prefix();
+    match tc
+        .family
+        .printer
+        .lock()
+        .note(tc.print_target, &text, prefix.as_deref())
+    {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }

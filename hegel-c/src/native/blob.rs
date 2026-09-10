@@ -40,6 +40,12 @@
 //! [`MAX_DECOMPRESSED_LEN`] bound, and a stream that inflates past it counts
 //! as malformed.
 //!
+//! Every blob the encoders return decodes: the one input they refuse
+//! (returning `None`) is a sequence whose clone values nest deeper than
+//! [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH), which
+//! [`serialize_choices`] rejects for the same reason the decoder does. The
+//! engine never produces one.
+//!
 //! The nondeterministic state bytes double as the version-2 **database
 //! entry** format (decision 8: ND-ness is carried by the representation).
 //! They open with a `u32::MAX` choice count no genuine [`serialize_choices`]
@@ -88,9 +94,12 @@ const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
 
 /// Encode a choice sequence into a failure blob (see the module docs for the
 /// format). The returned string is safe to embed in source as a string
-/// literal and to round-trip through [`decode_blob`].
-pub fn encode_failure(choices: &[ChoiceValue]) -> String {
-    let raw = serialize_choices(choices);
+/// literal and to round-trip through [`decode_blob`]. Returns `None` only
+/// for a sequence [`serialize_choices`] rejects (clone values nested deeper
+/// than [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH)), which no
+/// blob could represent.
+pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
+    let raw = serialize_choices(choices)?;
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
     let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
@@ -102,7 +111,7 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> String {
     let mut payload = Vec::with_capacity(body.len() + 1);
     payload.push(prefix);
     payload.extend_from_slice(&body);
-    base64_encode(&payload)
+    Some(base64_encode(&payload))
 }
 
 /// The replay state a nondeterministic failure persists (blob prefix 2/3,
@@ -128,7 +137,7 @@ impl NdReproState {
 /// Encode nondeterministic replay state (see the module docs). The output
 /// is both the version-2 database entry format and the payload behind blob
 /// prefixes 2/3.
-pub(crate) fn encode_nd_state(state: &NdReproState) -> Vec<u8> {
+pub(crate) fn encode_nd_state(state: &NdReproState) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&ND_STATE_MAGIC);
     buf.push(ND_STATE_VERSION);
@@ -136,11 +145,11 @@ pub(crate) fn encode_nd_state(state: &NdReproState) -> Vec<u8> {
     buf.extend_from_slice(&state.extension.to_le_bytes());
     buf.extend_from_slice(&(state.timelines.len() as u32).to_le_bytes());
     for timeline in &state.timelines {
-        let bytes = serialize_choices(timeline);
+        let bytes = serialize_choices(timeline)?;
         buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
         buf.extend_from_slice(&bytes);
     }
-    buf
+    Some(buf)
 }
 
 /// Decode [`encode_nd_state`] output, or `None` on any malformation —
@@ -185,8 +194,8 @@ pub(crate) fn decode_nd_state(bytes: &[u8]) -> Option<NdReproState> {
 
 /// Encode nondeterministic replay state into a failure blob (prefix 2/3),
 /// the counterpart of [`encode_failure`] for flaky failures.
-pub(crate) fn encode_nd_failure(state: &NdReproState) -> String {
-    let raw = encode_nd_state(state);
+pub(crate) fn encode_nd_failure(state: &NdReproState) -> Option<String> {
+    let raw = encode_nd_state(state)?;
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
     let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
@@ -198,7 +207,7 @@ pub(crate) fn encode_nd_failure(state: &NdReproState) -> String {
     let mut payload = Vec::with_capacity(body.len() + 1);
     payload.push(prefix);
     payload.extend_from_slice(&body);
-    base64_encode(&payload)
+    Some(base64_encode(&payload))
 }
 
 /// A decoded failure blob: a plain choice sequence (prefixes 0/1) or
@@ -230,6 +239,17 @@ pub(crate) fn decode_blob(blob: &str) -> Option<DecodedBlob> {
             Some(DecodedBlob::Nd(decode_nd_state(&raw)?))
         }
         _ => None,
+    }
+}
+
+/// [`decode_blob`] narrowed to a plain choice sequence: `None` for a
+/// malformed blob and for nondeterministic replay state, which
+/// `hegel_test_case_from_blob` cannot replay as a single case.
+#[cfg(test)]
+pub(crate) fn decode_failure(blob: &str) -> Option<Vec<ChoiceValue>> {
+    match decode_blob(blob)? {
+        DecodedBlob::Choices(choices) => Some(choices),
+        DecodedBlob::Nd(_) => None,
     }
 }
 

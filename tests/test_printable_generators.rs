@@ -182,6 +182,18 @@ fn sets_and_maps_print_in_draw_order() {
         lines,
         vec!["let draw_1 = HashMap::from([(\"\".to_string(), false)]);"]
     );
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_sets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = BTreeSet::from([1]);"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_maps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = BTreeMap::from([(9, false)]);"]);
 }
 
 #[test]
@@ -356,6 +368,99 @@ fn print_adapters_control_the_representation() {
     assert_eq!(lines, vec!["let draw_1 = false;"]);
 }
 
+struct KeyData(u64);
+
+impl KeyData {
+    fn from_ffi(value: u64) -> KeyData {
+        KeyData(value)
+    }
+}
+
+#[test]
+fn mapped_print_as_call_prints_the_mapped_expression() {
+    let lines = failing_lines(|tc| {
+        let key = tc.draw(
+            gs::integers::<u64>()
+                .min_value(3)
+                .map(KeyData::from_ffi)
+                .print_as_call("KeyData::from_ffi"),
+        );
+        assert!(key.0 < 3, "boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = KeyData::from_ffi(3);"]);
+}
+
+#[test]
+fn print_as_call_composes_inside_structural_combinators() {
+    let lines = failing_lines(|tc| {
+        tc.draw(
+            gs::vecs(
+                gs::integers::<u64>()
+                    .map(KeyData::from_ffi)
+                    .print_as_call("KeyData::from_ffi"),
+            )
+            .min_size(2)
+            .max_size(2),
+        );
+        panic!("boom");
+    });
+    assert_eq!(
+        lines,
+        vec!["let draw_1 = vec![KeyData::from_ffi(0), KeyData::from_ffi(0)];"]
+    );
+}
+
+#[test]
+fn print_as_call_wraps_wide_inputs_inside_the_call() {
+    let lines = failing_lines(|tc| {
+        let element = "aaaaaaaaaaaaaaaaaaaa".to_string();
+        tc.draw(
+            gs::vecs(gs::just(element))
+                .min_size(3)
+                .max_size(3)
+                .map(|parts: Vec<String>| parts.concat())
+                .print_as_call("concat_all"),
+        );
+        panic!("boom");
+    });
+    assert_eq!(
+        lines,
+        vec![
+            "let draw_1 = concat_all(vec![\"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
+            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string()]);",
+        ]
+    );
+}
+
+#[test]
+fn boxed_generators_of_printable_values_print_by_value() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::integers::<i64>().min_value(0).max_value(9).boxed());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 0;"]);
+}
+
+#[test]
+fn boxing_replaces_the_erased_generators_custom_printing_with_value_printing() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::just(5i32).print_with(|_, p| p.text("custom")).boxed());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = 5;"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(
+            gs::just(5i32)
+                .print_with(|_, p| p.text("custom"))
+                .boxed_printable(),
+        );
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = custom;"]);
+}
+
 #[test]
 fn notes_inside_composites_flush_after_the_draw() {
     let lines = failing_lines(|tc| {
@@ -516,6 +621,16 @@ fn invalid_collection_sizes_report_while_printing() {
                     .max_size(2),
             );
         },
+        |tc| {
+            let _ = tc.draw(gs::btree_sets(gs::booleans()).min_size(5).max_size(2));
+        },
+        |tc| {
+            let _ = tc.draw(
+                gs::btree_maps(gs::booleans(), gs::booleans())
+                    .min_size(5)
+                    .max_size(2),
+            );
+        },
     ] {
         let result = catch_unwind(AssertUnwindSafe(|| {
             Hegel::new(body)
@@ -623,6 +738,25 @@ fn note_inside_a_printed_draw_buffers_until_the_line_completes() {
         panic!("boom");
     });
     assert_eq!(lines, vec!["let draw_1 = 5;", "noted mid-draw"]);
+}
+
+/// A hand-written generator that notes and then panics mid-draw, so the
+/// enclosing printed draw unwinds with the note still buffered.
+struct NoteThenPanicGenerator;
+
+impl Generator<i64> for NoteThenPanicGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> i64 {
+        tc.note("noted before the panic");
+        panic!("boom");
+    }
+}
+
+#[test]
+fn note_inside_an_unwinding_draw_still_reaches_the_output() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(NoteThenPanicGenerator.print_with(|v, p| p.text(&format!("{v}"))));
+    });
+    assert_eq!(lines, vec!["noted before the panic"]);
 }
 
 /// A hand-written generator that makes a named `tc.draw` from inside

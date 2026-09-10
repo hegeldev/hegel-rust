@@ -1,6 +1,6 @@
 //! Embedded tests for `src/native/test_runner.rs`.
 //!
-//! These drive the engine directly — `run_main`, `run_single_case`, `Engine`,
+//! These drive the engine directly — `run_main`, `Engine`,
 //! the health-check helpers, and the database reuse phase. Test bodies draw
 //! from the engine's own `DataSource` (the same interface the C ABI exposes)
 //! and report their outcome by returning a `TestCaseResult`, rather than going
@@ -15,7 +15,7 @@ use alloc::vec;
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::settings::{Mode, Phase};
+use crate::settings::Phase;
 use std::time::Duration;
 
 /// A drawn boolean, or `Err(())` if the case overran / was aborted.
@@ -59,6 +59,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
         vec![0],
+        alloc::vec::Vec::new(),
         alloc::vec::Vec::new(),
         2,
         2,
@@ -133,22 +134,6 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     });
-}
-
-/// Drive [`run_single_case`] to completion with a synchronous `run_case`
-/// callback, the way the old pre-exchange entry point worked.
-fn run_single_case_sync(
-    settings: &Settings,
-    key: Option<&str>,
-    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
-) -> Option<Failure> {
-    let exchange = CaseExchange::new();
-    crate::exchange::drive(
-        &exchange,
-        run_single_case(settings, key, &exchange),
-        run_case,
-    )
-    .unwrap()
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -487,7 +472,9 @@ fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
 
             ctx.nd_flip();
             assert!(
-                ctx.exec_cache.serve(&serialize_choices(&choices)).is_none(),
+                ctx.exec_cache
+                    .serve(&serialize_choices(&choices).unwrap())
+                    .is_none(),
                 "the flip flushes the cache"
             );
             ctx.cached_test_function(&choices, None, 0).await.unwrap();
@@ -824,37 +811,6 @@ fn create_rng_urandom_backend_reads_urandom() {
     ));
 }
 
-#[test]
-fn run_single_case_returns_the_failure() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&boom("single-case bug"));
-        },
-    )
-    .unwrap();
-    assert!(failure.origin.contains("single-case bug"), "{failure:?}");
-}
-
-#[test]
-fn run_single_case_returns_none_for_a_passing_case() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&TestCaseResult::Valid);
-        },
-    );
-    assert!(failure.is_none(), "{failure:?}");
-}
-
 /// Drive [`reproduce_blob`] to completion with a synchronous body.
 fn reproduce_blob_sync(
     settings: &Settings,
@@ -884,7 +840,7 @@ fn reproduce_blob_rejects_an_undecodable_blob_as_the_runs_error() {
 
 #[test]
 fn reproduce_blob_replays_a_deterministic_blob_exactly_once() {
-    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
     let mut calls = 0u32;
     let mut stamped = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
@@ -908,7 +864,7 @@ fn reproduce_blob_replays_a_deterministic_blob_exactly_once() {
 
 #[test]
 fn reproduce_blob_reports_a_stale_deterministic_blob_as_passed() {
-    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(false)]);
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(false)]).unwrap();
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| match rbool(ds) {
         Ok(true) => boom("never"),
         Ok(false) => TestCaseResult::Valid,
@@ -920,7 +876,7 @@ fn reproduce_blob_reports_a_stale_deterministic_blob_as_passed() {
 
 #[test]
 fn a_v1_blob_replays_with_the_continuation_budget() {
-    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
         let first = match rbool(ds) {
             Ok(b) => b,
@@ -942,7 +898,7 @@ fn a_v1_blob_replays_with_the_continuation_budget() {
 
 #[test]
 fn a_v1_blob_retries_up_to_its_budget() {
-    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
     let mut calls = 0u32;
     let mut stamped = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
@@ -967,7 +923,7 @@ fn a_v1_blob_retries_up_to_its_budget() {
 
 #[test]
 fn a_truly_stale_v1_blob_still_reports_stale_within_budget() {
-    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]);
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
     let mut calls = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
         calls += 1;
@@ -988,6 +944,7 @@ fn nd_blob() -> String {
         entropy: 7,
         extension: 4,
     })
+    .unwrap()
 }
 
 #[test]
@@ -1363,7 +1320,10 @@ fn reuse_replay_extends_past_stored_prefix() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let result = reuse_run(
         Settings::new()
@@ -1401,12 +1361,12 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let result = reuse_run(
@@ -1436,13 +1396,13 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     for n in [4242, 4243, 4244, 4245] {
         db.save(
             &secondary_key,
-            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap(),
         );
     }
 
@@ -1472,7 +1432,7 @@ fn shrink_phase_drains_stale_secondary_corpus_entries() {
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
-    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
     db.save(&secondary_key, &stale);
 
     let result = reuse_run(
@@ -1528,11 +1488,11 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]).unwrap(),
     );
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -1572,7 +1532,7 @@ fn reuse_found_bug_skips_generation_entirely() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -1856,7 +1816,7 @@ fn a_flipped_reuse_run_persists_v2_entries() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap();
     db.save(b"k", &seeded);
 
     let mut settings = Settings::new()
@@ -1940,8 +1900,14 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -1988,7 +1954,8 @@ fn a_stale_stored_entry_is_not_nondeterminism_evidence_under_error() {
         &serialize_choices(&[
             ChoiceValue::Integer(BigInt::from(5)),
             ChoiceValue::Integer(BigInt::from(6)),
-        ]),
+        ])
+        .unwrap(),
     );
     let result = reuse_run(
         Settings::new()
@@ -2017,7 +1984,10 @@ fn nondeterministic_generator_contradicts_the_reuse_fed_kind_ledger_at_simplest_
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -2049,35 +2019,6 @@ fn nondeterministic_generator_contradicts_the_reuse_fed_kind_ledger_at_simplest_
         }
         other => panic!("expected RunError::NonDeterministic, got {other:?}"),
     }
-}
-
-#[test]
-fn run_single_case_derandomize_is_keyed_by_test_identity() {
-    let settings = Settings::new()
-        .database(None)
-        .derandomize(true)
-        .mode(Mode::SingleTestCase)
-        .verbosity(Verbosity::Quiet);
-    let draw_with_key = |key: Option<&str>| {
-        let mut drawn: Vec<u64> = Vec::new();
-        {
-            let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
-                for _ in 0..4 {
-                    if let Ok(n) = ru64(&*ds) {
-                        drawn.push(n);
-                    }
-                }
-                ds.mark_complete(&TestCaseResult::Valid);
-            };
-            run_single_case_sync(&settings, key, &mut run_case);
-        }
-        drawn
-    };
-    let a1 = draw_with_key(Some("test-a"));
-    let a2 = draw_with_key(Some("test-a"));
-    let b = draw_with_key(Some("test-b"));
-    assert_eq!(a1, a2, "the same key must replay the same draws");
-    assert_ne!(a1, b, "different keys must not share a derandomized stream");
 }
 
 #[test]
@@ -2197,7 +2138,8 @@ fn history_records_raw_displacements_and_shrink_accepts() {
                 &interesting_at(origin, vec![bool_node(true), bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at(
                     origin,
@@ -2205,12 +2147,14 @@ fn history_records_raw_displacements_and_shrink_accepts() {
                 ),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let history = ctx.origins.get(origin).unwrap().history();
             assert_eq!(history.entries().len(), 3);
             assert!(history.entries()[0].accept, "founding sighting");
@@ -2233,7 +2177,8 @@ fn history_dedupes_repeated_timelines() {
                     &interesting_at(origin, vec![bool_node(true)]),
                     Duration::ZERO,
                     false,
-                );
+                )
+                .unwrap();
             }
             assert_eq!(
                 ctx.origins.get(origin).unwrap().history().entries().len(),
@@ -2255,18 +2200,21 @@ fn history_is_kept_only_while_deterministic() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.nd_flip();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: other", vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let history = ctx.origins.get(origin).unwrap().history();
             assert_eq!(
                 history.entries().len(),
@@ -2297,12 +2245,14 @@ fn a_measurement_run_neither_displaces_nor_persists() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 true,
-            );
+            )
+            .unwrap();
             assert_eq!(
                 ctx.origins.incumbent(origin).unwrap(),
                 &[bool_node(true)],
@@ -2318,7 +2268,8 @@ fn a_measurement_run_neither_displaces_nor_persists() {
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 true,
-            );
+            )
+            .unwrap();
             ctx.reuse_replays = false;
             assert_eq!(
                 ctx.origins.incumbent(origin).unwrap(),
@@ -2351,7 +2302,8 @@ fn history_is_dropped_when_the_origin_confirms() {
                 &interesting_at(&origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(
                 ctx.origins
                     .get(&origin)
@@ -2390,7 +2342,8 @@ fn a_first_check_outcome_miss_flips_the_run_before_displacement() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.first_check_sweep().await.unwrap();
             assert!(ctx.nd_active, "an outcome miss must flip the run");
             assert_eq!(
@@ -2421,7 +2374,8 @@ fn a_first_check_realized_timeline_miss_flips_the_run() {
                 &interesting_at(&origin, vec![int_node(5)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.first_check_sweep().await.unwrap();
             assert!(
                 ctx.nd_active,
@@ -2449,7 +2403,8 @@ fn first_check_evidence_seeds_the_origins_ledger() {
                 &interesting_at(&origin, vec![int_node(5)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.first_check_sweep().await.unwrap();
             let seed = ctx.origins.entry(&origin).take_seed().unwrap();
             assert_eq!(seed.fails(), 1, "the failing divergent replay is a fail");
@@ -2520,12 +2475,14 @@ fn each_origin_gets_its_own_first_check() {
                 &interesting_at("Panic: a", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.first_check_sweep().await.unwrap();
             assert!(!ctx.nd_active);
             assert!(
@@ -2564,7 +2521,8 @@ fn an_all_reproduce_first_check_keeps_the_run_deterministic() {
                 &interesting_at(&origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.first_check_sweep().await.unwrap();
             assert!(!ctx.nd_active);
             assert!(
@@ -2590,7 +2548,8 @@ fn seed_history(ctx: &mut Engine<'_>, origin: &str, values: &[i128]) {
             &interesting_at(origin, vec![int_node(value)]),
             Duration::ZERO,
             false,
-        );
+        )
+        .unwrap();
     }
 }
 
@@ -2830,7 +2789,8 @@ fn the_sweep_rejects_an_origin_out_of_bar_attempts() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
                 assert!(ctx.origins.entry(origin).spend_bar_attempt());
             }
@@ -2868,7 +2828,8 @@ fn shrink_admission_rejects_an_origin_out_of_bar_attempts() {
                 &interesting_at(&origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.origins.entry(&origin).clear_history();
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
                 assert!(ctx.origins.entry(&origin).spend_bar_attempt());
@@ -2915,7 +2876,8 @@ fn the_final_replay_review_confirms_through_the_bar() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(ctx.origins.needs_confirmation(origin));
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -2963,7 +2925,8 @@ fn a_bar_rejected_review_falls_through_to_eviction() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.origins.entry(origin).clear_history();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -3029,7 +2992,8 @@ fn an_out_of_attempts_review_evicts_without_a_batch() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.origins.entry(origin).clear_history();
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
                 assert!(ctx.origins.entry(origin).spend_bar_attempt());
@@ -3319,7 +3283,8 @@ fn a_flip_during_final_replay_reviews_already_replayed_origins() {
                 &interesting_at("Panic: alpha", vec![int_node(3)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             seed_history(ctx, "Panic: zeta", &[90, 40]);
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -3495,7 +3460,8 @@ fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
                 &interesting_at(&origin, vec![int_node(90)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(
                 ctx.origins
                     .get(&origin)
@@ -3545,9 +3511,11 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
                 &interesting_at(origin, vec![int_node(70)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             for v in 50..70 {
-                ctx.record_run(&valid_at(vec![int_node(v)]), Duration::ZERO, false);
+                ctx.record_run(&valid_at(vec![int_node(v)]), Duration::ZERO, false)
+                    .unwrap();
             }
             ctx.collect_statistics = false;
             let output = ctx.settings.output.clone();
@@ -3595,7 +3563,8 @@ fn an_exact_final_replay_vanish_aborts_under_error_strictness() {
                 &interesting_at("Panic: bug", vec![int_node(90)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let output = ctx.settings.output.clone();
             let err = ctx
                 .final_replay(Verbosity::Quiet, &output, None, false)
@@ -3741,7 +3710,8 @@ fn an_exact_shrink_verify_vanish_aborts_under_error_strictness() {
                 &interesting_at(origin, vec![int_node(90)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
             let err = ctx
@@ -3780,7 +3750,8 @@ fn a_divergent_shrink_verify_vanish_aborts_under_error_strictness() {
                 &interesting_at(origin, vec![int_node(90)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
             let err = ctx
@@ -3823,7 +3794,8 @@ fn a_first_check_structural_miss_aborts_under_error_strictness() {
                 &interesting_at(&origin, vec![int_node(5), int_node(6)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             match ctx.first_check_sweep().await {
                 Err(crate::backend::RunError::NonDeterministic(msg)) => {
                     assert!(msg.contains("position 1"), "got: {msg}");
@@ -3851,7 +3823,8 @@ fn a_first_check_outcome_miss_aborts_under_error_strictness() {
                 &interesting_at(origin, vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             match ctx.first_check_sweep().await {
                 Err(crate::backend::RunError::Flaky(msg)) => {
                     assert!(msg.contains("Flaky test detected"), "got: {msg}");
@@ -3902,14 +3875,16 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
         async |ctx| {
             let origin = "Panic: bug";
             let big = vec![bool_node(true), bool_node(true)];
-            ctx.record_run(&interesting_at(origin, big), Duration::ZERO, false);
+            ctx.record_run(&interesting_at(origin, big), Duration::ZERO, false)
+                .unwrap();
             assert_eq!(ctx.origins.incumbent(origin).unwrap().len(), 2);
 
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert_eq!(
                 ctx.origins.incumbent(origin).unwrap().len(),
                 2,
@@ -3924,7 +3899,8 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert_eq!(ctx.origins.incumbent(origin).unwrap().len(), 2);
         },
     );
@@ -3941,7 +3917,8 @@ fn nd_admission_leaves_the_origin_unconfirmed() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(ctx.origins.incumbent("Panic: bug").is_some());
             assert!(ctx.origins.needs_confirmation("Panic: bug"));
         },
@@ -3968,7 +3945,8 @@ fn nd_discovery_sweep_evicts_an_unconfirmable_origin() {
                 &interesting_at("Panic: fluke", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let output = ctx.settings.output.clone();
             ctx.nd_discovery_sweep(Verbosity::Debug, &output)
                 .await
@@ -4005,7 +3983,8 @@ fn nd_discovery_sweep_confirms_a_real_failure() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             let output = ctx.settings.output.clone();
             ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
                 .await
@@ -4046,7 +4025,8 @@ fn nd_persists_only_validated_incumbents() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(
                 db.fetch(b"k").is_empty(),
                 "raw interesting must not persist before confirmation"
@@ -4414,7 +4394,7 @@ fn a_rejected_candidate_latches_its_verdict() {
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(!matched, "the recruit's ledger drives to a reject");
-            let key = serialize_choices(&[ChoiceValue::Boolean(true)]);
+            let key = serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap();
             assert_eq!(probe.ledger.get(&key).unwrap().verdict, Some(false));
             let replays = execs.load(Ordering::SeqCst);
             let (rematch, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -4557,7 +4537,7 @@ fn deterministic_core_is_retained() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]),
+        &serialize_choices(&[ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]).unwrap(),
     );
     let mut settings = Settings::new()
         .database(Some(path.clone()))
@@ -4666,7 +4646,10 @@ fn nd_reuse_retries_a_stored_flaky_timeline_until_it_reproduces() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
     let execs = AtomicUsize::new(0);
     let mut settings = Settings::new()
         .database(Some(path.clone()))
@@ -4698,7 +4681,10 @@ fn nd_misaligned_trusted_reuse_confirms_at_shrink_and_persists_its_pool() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
     let execs = AtomicUsize::new(0);
     let mut settings = Settings::new()
         .database(Some(path.clone()))
@@ -4740,7 +4726,10 @@ fn nd_trusted_failure_that_stops_reproducing_is_still_reported() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
     let execs = AtomicUsize::new(0);
     let mut settings = Settings::new()
         .database(Some(path.clone()))
@@ -4870,8 +4859,14 @@ fn reuse_kind_flip_under_quiet_completes_without_failures() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -5058,12 +5053,14 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
                 target_observations: crate::native::HashMap::default(),
                 events: Vec::new(),
             };
-            ctx.record_run(&valid, Duration::from_secs(1), true);
+            ctx.record_run(&valid, Duration::from_secs(1), true)
+                .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: measured", vec![bool_node(true)]),
                 Duration::ZERO,
                 true,
-            );
+            )
+            .unwrap();
             assert_eq!(ctx.calls, 0);
             assert_eq!(ctx.valid_test_cases, 0);
             assert_eq!(ctx.total_test_time, Duration::ZERO);
@@ -5075,7 +5072,8 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
             );
             assert!(ctx.origins.needs_confirmation("Panic: measured"));
 
-            ctx.record_run(&valid, Duration::from_secs(1), false);
+            ctx.record_run(&valid, Duration::from_secs(1), false)
+                .unwrap();
             assert_eq!(ctx.calls, 1);
             assert_eq!(ctx.valid_test_cases, 1);
             assert_eq!(ctx.total_test_time, Duration::from_secs(1));
@@ -5266,7 +5264,7 @@ fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_a
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(matched);
-            probe.candidate_adopted();
+            probe.candidate_adopted().unwrap();
             let raised_anchor = probe.anchor;
             assert!(
                 raised_anchor > 0.3,
@@ -5274,7 +5272,7 @@ fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_a
             );
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
             assert!(matched);
-            probe.candidate_adopted();
+            probe.candidate_adopted().unwrap();
             assert_eq!(
                 probe.anchor, raised_anchor,
                 "re-accepting the same timeline draws on replay evidence and \
@@ -5393,7 +5391,7 @@ fn nd_trusted_promotion_repersists_the_stored_pool() {
         entropy: 0,
         extension: 4,
     };
-    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let result = reuse_run(
         Settings::new()
@@ -5437,7 +5435,8 @@ fn measurement_replays_are_counted_in_the_run_statistics() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(
                 !ctx.statistics
                     .render()
@@ -5470,7 +5469,7 @@ fn nd_trusted_zero_fail_shrink_batch_keeps_trusted_and_reports_honestly() {
         entropy: 0,
         extension: 4,
     };
-    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
     let result = reuse_run(
@@ -5516,7 +5515,7 @@ fn nd_trusted_weak_batch_promotes_and_shrinks_under_the_floor() {
         entropy: 0,
         extension: 4,
     };
-    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
     let result = reuse_run(
@@ -5591,7 +5590,7 @@ fn stale_nd_entries_demote_to_secondary_then_delete() {
         entropy: 0,
         extension: 4,
     };
-    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let settings = || {
         Settings::new()
@@ -5688,7 +5687,7 @@ fn a_v2_entry_replay_that_detects_nondeterminism_under_error_strictness_aborts()
         entropy: 0,
         extension: 4,
     };
-    db.save(b"k", &crate::native::blob::encode_nd_state(&state));
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
     let result = reuse_run(
@@ -5906,7 +5905,7 @@ fn nd_state_for_caps_stored_timelines_at_pool_cap() {
                 .confirm(0.5, None, pool, (4, 6))
                 .unwrap();
             let incumbent = vec![ChoiceValue::Boolean(false)];
-            let state = ctx.nd_state_for("Panic: bug", incumbent.clone());
+            let state = ctx.nd_state_for("Panic: bug", incumbent.clone()).unwrap();
             assert_eq!(state.timelines.len(), nd::POOL_CAP);
             assert_eq!(state.timelines[0], incumbent);
         },
@@ -5929,7 +5928,8 @@ fn final_replay_evicts_a_dry_unconfirmed_origin() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(ctx.origins.incumbent("Panic: bug").is_some());
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -5963,7 +5963,8 @@ fn a_reproducing_final_replay_confirms_an_unconfirmed_origin() {
                 &interesting_at("Panic: bug", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(ctx.origins.needs_confirmation("Panic: bug"));
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -5974,7 +5975,7 @@ fn a_reproducing_final_replay_confirms_an_unconfirmed_origin() {
                 "a reproducing final replay confirms the origin"
             );
             assert!(ctx.origins.incumbent("Panic: bug").is_some());
-            let report = ctx.build_report();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert!(report.failures[0].reproduce_blob.is_some());
         },
@@ -5992,7 +5993,8 @@ fn report_blobs_only_confirmed_origins() {
                 &interesting_at("Panic: a", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.origins
                 .entry("Panic: a")
                 .confirm(0.5, None, Vec::new(), (4, 6))
@@ -6001,8 +6003,9 @@ fn report_blobs_only_confirmed_origins() {
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
-            let report = ctx.build_report();
+            )
+            .unwrap();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert_eq!(report.failures[0].origin, "Panic: a");
             assert!(report.failures[0].reproduce_blob.is_some());
@@ -6048,7 +6051,7 @@ fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
                 ctx.origins.incumbent("Panic: b").is_some(),
                 "the report-time measurement run admits the new origin"
             );
-            let report = ctx.build_report();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert_eq!(report.failures[0].origin, "Panic: a");
             assert!(report.failures[0].reproduce_blob.is_some());
@@ -6067,15 +6070,17 @@ fn unconfirmed_origins_report_caveat_only_when_nothing_confirmed() {
                 &interesting_at("Panic: a", vec![bool_node(true)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.origins.entry("Panic: a").reject((0, 24));
             assert!(ctx.origins.needs_confirmation("Panic: a"));
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
-            let report = ctx.build_report();
+            )
+            .unwrap();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 2);
             for failure in &report.failures {
                 assert!(failure.reproduce_blob.is_none());
@@ -6116,8 +6121,9 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
-            );
-            let report = ctx.build_report();
+            )
+            .unwrap();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert_eq!(
                 report.failures[0].origin, "Panic: a",
@@ -6144,14 +6150,16 @@ fn nd_runs_record_targeting_observations_as_race_seeds() {
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
-            ctx.record_run(&observing_run(), Duration::ZERO, false);
+            ctx.record_run(&observing_run(), Duration::ZERO, false)
+                .unwrap();
             assert!(!ctx.targeting.is_empty());
         },
     );
     with_counting_ctx(
         |_ds| TestCaseResult::Valid,
         async |ctx, _execs| {
-            ctx.record_run(&observing_run(), Duration::ZERO, false);
+            ctx.record_run(&observing_run(), Duration::ZERO, false)
+                .unwrap();
             assert!(!ctx.targeting.is_empty());
         },
     );
@@ -6540,10 +6548,10 @@ fn anchor_raises_only_on_adoption_and_once_per_timeline() {
                 let nodes = vec![bool_node(true)];
                 let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
                 assert!(matched);
-                probe.candidate_adopted();
+                probe.candidate_adopted().unwrap();
                 raised_anchor = probe.anchor;
                 assert!(raised_anchor > 0.3, "adoption raises the anchor");
-                probe.candidate_adopted();
+                probe.candidate_adopted().unwrap();
                 assert_eq!(
                     probe.anchor, raised_anchor,
                     "adoption without a fresh accept is a no-op"
@@ -6564,7 +6572,7 @@ fn reproduce_blob_never_runs_a_fresh_generation() {
         entropy: 0,
         extension: 4,
     };
-    let blob = crate::native::blob::encode_nd_failure(&state);
+    let blob = crate::native::blob::encode_nd_failure(&state).unwrap();
     let draws = std::cell::RefCell::new(Vec::new());
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
         match rint(ds, 0, 1_000_000) {
@@ -6671,8 +6679,9 @@ fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
         timelines: vec![vec![ChoiceValue::Boolean(true)]],
         entropy: 7,
         extension: 4,
-    });
-    let pre_shrink = serialize_choices(&vec![ChoiceValue::Boolean(false); 20]);
+    })
+    .unwrap();
+    let pre_shrink = serialize_choices(&vec![ChoiceValue::Boolean(false); 20]).unwrap();
     assert!(
         shortlex(&v2_bytes, &pre_shrink) != core::cmp::Ordering::Greater,
         "the seeded entry must sit under the drain's shortlex break"
@@ -6703,7 +6712,7 @@ fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
 fn nd_run_skips_the_pre_shrink_secondary_drain() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let v1_bytes = serialize_choices(&[ChoiceValue::Boolean(false)]);
+    let v1_bytes = serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap();
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
         let db = DirectoryTestCaseDatabase::new(&path);
@@ -6763,8 +6772,8 @@ fn drain_stops_at_mid_drain_nd_flip() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let drained_first = serialize_choices(&vec![ChoiceValue::Boolean(false); 4]);
-    let survivor = serialize_choices(&vec![ChoiceValue::Boolean(true); 4]);
+    let drained_first = serialize_choices(&vec![ChoiceValue::Boolean(false); 4]).unwrap();
+    let survivor = serialize_choices(&vec![ChoiceValue::Boolean(true); 4]).unwrap();
     assert!(shortlex(&drained_first, &survivor) == core::cmp::Ordering::Less);
     let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     {
@@ -6840,7 +6849,7 @@ fn nd_blob_replay_cases_are_stamped() {
         entropy: 0,
         extension: 4,
     };
-    let blob = crate::native::blob::encode_nd_failure(&state);
+    let blob = crate::native::blob::encode_nd_failure(&state).unwrap();
     let mut calls = 0u32;
     let mut stamped = 0u32;
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
@@ -6938,11 +6947,11 @@ impl TestCaseDatabase for LoggingDatabase {
 fn persister_saves_new_bytes_before_deleting_superseded() {
     let db = LoggingDatabase::default();
     let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
-    persister.record("Panic: bug", &[int_node(5)]);
-    persister.record("Panic: bug", &[int_node(3)]);
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
 
-    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
-    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]);
+    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
+    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap();
     let ops = db.ops();
     let saved_new = ops
         .iter()
@@ -6965,12 +6974,12 @@ fn persister_saves_new_bytes_before_deleting_superseded() {
 fn persister_deletes_superseded_same_run_saves() {
     let db = LoggingDatabase::default();
     let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
-    persister.record("Panic: bug", &[int_node(5)]);
-    persister.record("Panic: bug", &[int_node(3)]);
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
 
     assert_eq!(
         db.fetch(b"k"),
-        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))])]
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap()]
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
@@ -6987,7 +6996,8 @@ fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
     let run_start = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(1005)),
         ChoiceValue::Boolean(true),
-    ]);
+    ])
+    .unwrap();
     db.save(b"k", &run_start);
 
     let result = reuse_run(
@@ -7006,9 +7016,7 @@ fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
     assert_eq!(result.failures.len(), 1);
     assert_eq!(
         db.fetch(b"k"),
-        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(
-            1000
-        ))])]
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(1000))]).unwrap()]
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert_eq!(
@@ -7078,7 +7086,7 @@ fn secondary_corpus_cap_evicts_shortlex_largest() {
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
-    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]);
+    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap();
     for n in 0..55 {
         db.save(&secondary, &entry(n));
     }
@@ -7111,9 +7119,12 @@ fn reuse_stops_sampling_secondary_once_the_primary_reproduces() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
-    let sampled = serialize_choices(&[ChoiceValue::Boolean(false)]);
+    let sampled = serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap();
     db.save(&secondary, &sampled);
 
     let result = reuse_run(
@@ -7147,13 +7158,15 @@ fn shrink_drain_stops_at_secondary_entries_above_the_incumbent() {
         &serialize_choices(&[
             ChoiceValue::Integer(BigInt::from(1005)),
             ChoiceValue::Boolean(true),
-        ]),
+        ])
+        .unwrap(),
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     let above = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(2000)),
         ChoiceValue::Integer(BigInt::from(2000)),
-    ]);
+    ])
+    .unwrap();
     db.save(&secondary, &above);
 
     let result = reuse_run(
@@ -7206,7 +7219,8 @@ fn a_flip_during_a_successful_final_replay_keeps_the_failure() {
                 &interesting_at(&origin, vec![int_node(3)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             assert!(!ctx.nd_handling());
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -7221,7 +7235,7 @@ fn a_flip_during_a_successful_final_replay_keeps_the_failure() {
                 "the reproduced origin re-entered the queue and confirmed"
             );
             assert!(ctx.origins.incumbent(&origin).is_some());
-            let report = ctx.build_report();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert!(report.failures[0].reproduce_blob.is_some());
         },
@@ -7256,12 +7270,14 @@ fn a_dry_pooled_review_backtracks_over_history_at_the_final_replay() {
                 &interesting_at(&origin, vec![int_node(77), int_node(77)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at(&origin, vec![int_node(3)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.nd_flip();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, true)
@@ -7318,12 +7334,14 @@ fn an_exhausted_backtrack_after_a_dry_pooled_review_rejects_the_origin() {
                 &interesting_at(origin, vec![wide_node(999_999)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![wide_node(3)]),
                 Duration::ZERO,
                 false,
-            );
+            )
+            .unwrap();
             ctx.nd_flip();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, true)
@@ -7462,12 +7480,13 @@ fn error_strictness_aborts_on_kind_drift_in_the_pre_shrink_drain() {
         &serialize_choices(&[
             ChoiceValue::Integer(BigInt::from(9)),
             ChoiceValue::Integer(BigInt::from(3)),
-        ]),
+        ])
+        .unwrap(),
     );
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary,
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
     let executions = Rc::new(Cell::new(0u32));
     let execs = executions.clone();
@@ -7505,11 +7524,12 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
     let misaligned = serialize_choices(&[
         ChoiceValue::Integer(BigInt::from(95)),
         ChoiceValue::Integer(BigInt::from(3)),
-    ]);
+    ])
+    .unwrap();
     db.save(b"k", &run_start);
     db.save(b"k", &misaligned);
     let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
@@ -7533,7 +7553,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     )
     .unwrap();
     assert_eq!(result.failures.len(), 1);
-    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
     assert_eq!(db.fetch(b"k"), vec![shrunk]);
     let secondary = crate::native::database::sub_key(b"k", b"secondary");
     assert!(
@@ -7547,13 +7567,14 @@ fn reconciliation_demotes_a_reproduced_run_start_entry_after_a_flip() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
     db.save(b"k", &run_start);
     let junk_v2 = crate::native::blob::encode_nd_state(&crate::native::blob::NdReproState {
         timelines: vec![vec![ChoiceValue::Integer(BigInt::from(7))]],
         entropy: 0,
         extension: 4,
-    });
+    })
+    .unwrap();
     db.save(b"k", &junk_v2);
     let executions = Rc::new(Cell::new(0u32));
     let execs = executions.clone();
@@ -7601,10 +7622,13 @@ fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
     let fut = async {
         let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
         ctx.nd_flip();
-        ctx.record_nd_incumbent("Panic: a", &[int_node(90)]);
-        ctx.record_nd_incumbent("Panic: b", &[int_node(90)]);
+        ctx.record_nd_incumbent("Panic: a", &[int_node(90)])
+            .unwrap();
+        ctx.record_nd_incumbent("Panic: b", &[int_node(90)])
+            .unwrap();
         assert_eq!(db.fetch(b"k").len(), 1);
-        ctx.record_nd_incumbent("Panic: a", &[int_node(50)]);
+        ctx.record_nd_incumbent("Panic: a", &[int_node(50)])
+            .unwrap();
         assert_eq!(
             db.fetch(b"k").len(),
             2,
@@ -7626,7 +7650,7 @@ fn the_caveat_only_fallback_honors_report_multiple_failures() {
             ctx.nd_flip();
             ctx.origins.entry("Panic: a");
             ctx.origins.entry("Panic: b");
-            let report = ctx.build_report();
+            let report = ctx.build_report().unwrap();
             assert_eq!(report.failures.len(), 1);
             assert_eq!(report.failures[0].origin, "Panic: a");
         },
@@ -7657,7 +7681,7 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
                 raised: crate::native::HashSet::default(),
                 pending_accept: None,
             };
-            let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]);
+            let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]).unwrap();
             let mut evidence = nd::Evidence::default();
             for _ in 0..nd::ANCHOR_SEED_RUNS {
                 evidence.record(true);
@@ -7679,5 +7703,241 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
             assert!(probe.pending_accept.is_some());
             assert_eq!(actual, nodes);
         },
+    );
+}
+
+/// A one-case budget skips the deterministic simplest-example probe (which
+/// would otherwise consume the whole budget and pin every run to the
+/// all-simplest case), so the single case is randomly generated.
+#[test]
+fn a_one_case_budget_generates_a_random_case() {
+    let mut executions = 0;
+    let mut drawn: Vec<u64> = Vec::new();
+    let result = run_main_sync(
+        &Settings::new()
+            .test_cases(1)
+            .database(None)
+            .seed(Some(0))
+            .verbosity(Verbosity::Quiet),
+        None,
+        |ds| {
+            executions += 1;
+            for _ in 0..4 {
+                if let Ok(n) = ru64(&*ds) {
+                    drawn.push(n);
+                }
+            }
+            ds.mark_complete(&TestCaseResult::Valid);
+        },
+        Duration::from_secs(30),
+        Duration::ZERO,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert_eq!(executions, 1, "one valid case is the whole budget");
+    assert!(
+        drawn.iter().any(|&n| n != 0),
+        "the one case must be random, not the all-simplest probe: {drawn:?}"
+    );
+}
+
+#[test]
+fn derandomize_is_keyed_by_test_identity() {
+    let settings = Settings::new()
+        .test_cases(5)
+        .database(None)
+        .derandomize(true)
+        .verbosity(Verbosity::Quiet);
+    let draw_with_key = |key: Option<&str>| {
+        let mut drawn: Vec<u64> = Vec::new();
+        {
+            let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+                for _ in 0..4 {
+                    if let Ok(n) = ru64(&*ds) {
+                        drawn.push(n);
+                    }
+                }
+                ds.mark_complete(&TestCaseResult::Valid);
+            };
+            run_main_sync(
+                &settings,
+                key,
+                &mut run_case,
+                Duration::from_secs(30),
+                Duration::ZERO,
+            )
+            .unwrap();
+        }
+        drawn
+    };
+    let a1 = draw_with_key(Some("test-a"));
+    let a2 = draw_with_key(Some("test-a"));
+    let b = draw_with_key(Some("test-b"));
+    assert_eq!(a1, a2, "the same key must replay the same draws");
+    assert_ne!(a1, b, "different keys must not share a derandomized stream");
+}
+
+/// A run under nondeterministic handling trusts no repeat, so the duplicate
+/// stop is off and an all-invalid two-value space grinds to its invalid
+/// budget instead of stopping after ten duplicates.
+#[test]
+fn duplicate_stop_is_disabled_for_a_nondeterministic_run() {
+    let execs = Cell::new(0u64);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = match rbool(&*ds) {
+            Ok(_) => TestCaseResult::Invalid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let mut settings = Settings::new()
+        .database(None)
+        .test_cases(10_000)
+        .verbosity(Verbosity::Quiet)
+        .suppress_health_check([HealthCheck::FilterTooMuch]);
+    settings.nd_force = true;
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert!(
+        execs.get() > 100,
+        "no duplicate stop under nondeterministic handling: {}",
+        execs.get()
+    );
+}
+
+#[test]
+fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let settings = Settings::new().database(Some(path));
+    let exchange = CaseExchange::new();
+    let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
+    ctx.persister
+        .record("Panic: bug", &[int_node(90)])
+        .unwrap();
+    ctx.origins.entry("Panic: bug").replace(vec![int_node(50)]);
+    ctx.reconcile_database().unwrap();
+
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap()]
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a same-run leftover is deleted, not demoted"
+    );
+}
+
+/// Regression for issue #78: a test that rejects its input before making
+/// any draw can never produce a valid case, so the run must report
+/// Unsatisfiable after one call instead of passing.
+#[test]
+fn run_main_reports_unsatisfiable_for_trivial_always_invalid_test() {
+    let mut calls = 0usize;
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        calls += 1;
+        ds.mark_complete(&TestCaseResult::Invalid);
+    };
+    let settings = Settings::new().test_cases(100).database(None);
+    let exploration = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    match exploration {
+        Err(crate::backend::RunError::Unsatisfiable(msg)) => {
+            assert!(msg.contains("Unsatisfiable"), "unexpected message: {msg}");
+            assert!(msg.contains("assume()"), "unexpected message: {msg}");
+        }
+        other => panic!("expected RunError::Unsatisfiable, got {other:?}"),
+    }
+    assert_eq!(calls, 1, "a trivial invalid test must stop after one call");
+}
+
+#[test]
+fn shrink_phase_drain_stops_at_entries_above_the_largest_surviving_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(90)),
+        ChoiceValue::Boolean(true),
+    ])
+    .unwrap();
+    db.save(b"k", &run_start);
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    let small = serialize_choices(&[ChoiceValue::Integer(BigInt::from(10))]).unwrap();
+    let large = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(80)),
+        ChoiceValue::Integer(BigInt::from(4)),
+    ])
+    .unwrap();
+    db.save(&secondary, &small);
+    db.save(&secondary, &large);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let kept = db.fetch(&secondary);
+    assert!(
+        !kept.contains(&small),
+        "an entry at or below the surviving failure is replayed and drained"
+    );
+    assert!(
+        kept.contains(&large),
+        "an entry shortlex above the surviving failure survives the drain"
+    );
+    assert!(kept.contains(&run_start));
+}
+
+/// Antithesis is deterministic and does its own reproduction, so the
+/// `warn` notice a flip would print does not apply there.
+#[test]
+fn the_warn_notice_is_suppressed_in_antithesis() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::for_env(false, true)
+            .phases([Phase::Generate, Phase::Shrink])
+            .report_multiple_failures(false)
+            .nondeterminism_strictness(NondeterminismStrictness::Warn)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| kind_switch_body(&seen_bug, ds),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let text = lines.lock().unwrap().join("\n");
+    assert!(
+        !text.contains("Nondeterministic test behavior detected"),
+        "Antithesis is deterministic, so the notice does not apply:\n{text}"
     );
 }

@@ -3,20 +3,21 @@
 //! Run with:
 //!
 //! ```text
-//! cargo bench --features __bench --bench biased_sample
+//! cargo bench -p hegeltest-c --features __bench --bench biased_sample
 //! ```
 //!
-//! These functions sit on the hottest path of native test-case generation,
-//! so even small per-call wins compound across a full property-test run.
+//! These functions sit on the hottest path of native test-case generation
+//! (every random `NativeTestCase` draw samples through them), so even small
+//! per-call wins compound across a full property-test run.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
-use hegel::__bench::{
+use hegel_c::__bench::{
     BytesChoice, EngineRng, FloatChoice, IntegerChoice, IntervalSet, StringChoice,
     biased_bytes_sample, biased_float_sample, biased_integer_sample, biased_string_sample,
 };
 
-type BigInt = hegel::__bench::BigInt;
+type BigInt = hegel_c::__bench::BigInt;
 
 fn integer_cases() -> Vec<(&'static str, IntegerChoice)> {
     vec![

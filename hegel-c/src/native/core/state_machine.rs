@@ -11,10 +11,16 @@ use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
 
-/// Probability that the per-round stop decision in
-/// [`NativeStateMachine::next_group`] halts a stateful test case, when the
-/// engine is free to choose (2^-16).
-const P_STOP: f64 = 1.0 / 65536.0;
+/// Probability that the per-round continue decision in
+/// [`NativeStateMachine::next_group`] keeps a stateful test case running,
+/// when the engine is free to choose (1 - 2^-32). Drawn as a *continue*
+/// probability so that the simplest boolean stops the machine: the
+/// simplest test case runs a single round, and the shrinker truncates the
+/// round sequence at any boundary by simplifying that boundary's draw.
+/// The draw exists for that truncation, not to control length — the step
+/// count does that — so the stop side is made rare enough (one round in
+/// four billion) never to end a case that a large step count allows.
+const P_CONTINUE: f64 = 1.0 - 1.0 / 4_294_967_296.0;
 
 /// Multiplier bounding attempts against successful work: on rounds
 /// (relative to `stateful_step_count`) so a sequential machine whose rules
@@ -199,9 +205,11 @@ pub struct NativeStateMachine {
     /// round counts and rejections refund only the worker's within-round
     /// budget.
     rounds_rejected: i64,
-    /// Number of registered invariants, bounding the indices
-    /// [`Self::should_check_invariant`] accepts.
-    num_invariants: usize,
+    /// Per registered invariant: whether [`Self::should_check_invariant`]
+    /// answers `true` unconditionally instead of sampling. The length is the
+    /// number of registered invariants, bounding the indices that method
+    /// accepts.
+    invariant_always_check: Vec<bool>,
     workers: Vec<WorkerState>,
 }
 
@@ -214,7 +222,7 @@ impl NativeStateMachine {
     pub fn new(
         ntc: &mut NativeTestCase,
         rule_groups: Vec<i64>,
-        num_invariants: usize,
+        invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<Self, EngineError> {
@@ -257,7 +265,7 @@ impl NativeStateMachine {
             current_group: 0,
             rounds_started: 0,
             rounds_rejected: 0,
-            num_invariants,
+            invariant_always_check,
             workers,
         })
     }
@@ -273,9 +281,11 @@ impl NativeStateMachine {
     /// current group's caller-supplied id, or `None` once the test case has
     /// run enough rounds.
     ///
-    /// Each call first makes a per-round stop decision: a boolean draw with
-    /// probability [`P_STOP`] of halting, recorded in the choice sequence
-    /// so the shrinker can truncate the round sequence at any boundary.
+    /// Each call first makes a per-round continue decision: a boolean draw
+    /// with probability [`P_CONTINUE`] of running another round, recorded
+    /// in the choice sequence so the shrinker can truncate the round
+    /// sequence at any boundary. The simplest value stops, so the simplest
+    /// test case runs exactly one round however large the step count.
     /// Every test case runs at least one round and at most
     /// `stateful_step_count` counted rounds — at concurrency 1 a round
     /// whose rule was rejected ([`Self::rule_rejected`]) does not count,
@@ -284,9 +294,7 @@ impl NativeStateMachine {
     /// [`MIN_ATTEMPTS_WITHOUT_SUCCESS`] while no rule has succeeded.
     ///
     /// Must be called from the root handle at each join point, including
-    /// before the first `next_rule` call. Families marked as unbounded
-    /// (single-test-case runs) never return `None`: rounds continue
-    /// forever.
+    /// before the first `next_rule` call.
     pub fn next_group(&mut self, ntc: &mut NativeTestCase) -> Result<Option<i64>, EngineError> {
         let counted_rounds = self.rounds_started - self.rounds_rejected;
         let step_count = ntc.family().stateful_step_count();
@@ -297,16 +305,14 @@ impl NativeStateMachine {
         } else {
             step_count.saturating_mul(ATTEMPT_MULTIPLIER)
         };
-        let forced = if ntc.family().state_machine_steps_unbounded() {
+        let forced = if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
             Some(false)
-        } else if counted_rounds >= step_count || self.rounds_started >= attempt_cap {
-            Some(true)
         } else if self.rounds_started == 0 {
-            Some(false)
+            Some(true)
         } else {
             None
         };
-        if ntc.weighted_precise(P_STOP, forced)? {
+        if !ntc.weighted_precise(P_CONTINUE, forced)? {
             return Ok(None);
         }
         let group = if self.groups.len() == 1 {
@@ -331,7 +337,7 @@ impl NativeStateMachine {
     /// the next join point.
     ///
     /// At concurrency 1 every round is exactly one rule, so a join point
-    /// follows each rule and the per-round stop decision in
+    /// follows each rule and the per-round continue decision in
     /// [`Self::next_group`] carries the whole step budget. At higher
     /// concurrency each worker runs between zero and [`MAX_ROUND_RULES`]
     /// rules per round, distributed uniformly: every call makes a
@@ -413,10 +419,12 @@ impl NativeStateMachine {
     }
 
     /// Decide whether the caller should run invariant `invariant_index` at
-    /// the current join point: a recorded boolean draw that is `true` with
+    /// the current join point. For an invariant registered with its
+    /// always-check flag set, the answer is `true` without consuming
+    /// entropy; otherwise it is a recorded boolean draw that is `true` with
     /// probability `1 / stateful_step_count`, so over a full-length test
-    /// case each invariant's expected number of sampled runs is one,
-    /// regardless of the step count. The caller owns the machine's
+    /// case each sampled invariant's expected number of sampled runs is
+    /// one, regardless of the step count. The caller owns the machine's
     /// guaranteed checks — its initial state and the final state after the
     /// last round — and runs those without consulting this draw.
     ///
@@ -427,14 +435,17 @@ impl NativeStateMachine {
         ntc: &mut NativeTestCase,
         invariant_index: i64,
     ) -> Result<bool, EngineError> {
-        let valid = usize::try_from(invariant_index)
+        let always = usize::try_from(invariant_index)
             .ok()
-            .filter(|&i| i < self.num_invariants);
-        if valid.is_none() {
+            .and_then(|i| self.invariant_always_check.get(i).copied());
+        let Some(always) = always else {
             return Err(EngineError::InvalidArgument(format!(
                 "invariant_index must be in [0, {}), got {invariant_index}",
-                self.num_invariants
+                self.invariant_always_check.len()
             )));
+        };
+        if always {
+            return Ok(true);
         }
         let p = 1.0 / ntc.family().stateful_step_count() as f64;
         ntc.weighted_precise(p, None)

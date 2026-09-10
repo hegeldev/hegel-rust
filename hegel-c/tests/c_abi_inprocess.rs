@@ -19,20 +19,20 @@ use hegel_c::{
     hegel_context_last_error, hegel_context_new, hegel_event, hegel_event_value,
     hegel_failure_caveat, hegel_failure_free, hegel_failure_origin,
     hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer, hegel_label_t,
-    hegel_mark_complete, hegel_mode_t, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
+    hegel_mark_complete, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
     hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free,
     hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
     hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
     hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
     hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_start_blob,
     hegel_run_status_t, hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
-    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_mode,
-    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
-    hegel_settings_set_suppress_health_check, hegel_start_span, hegel_state_machine_free,
-    hegel_state_machine_next_group, hegel_state_machine_next_rule,
-    hegel_state_machine_rule_rejected, hegel_state_machine_should_check_invariant, hegel_status_t,
-    hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
-    hegel_test_case_from_blob, hegel_test_case_should_capture, hegel_version,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_phases,
+    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
+    hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
+    hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
+    hegel_state_machine_should_check_invariant, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_test_case_should_capture, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -110,14 +110,6 @@ unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *con
 fn null_handles_are_rejected_without_crashing() {
     let ctx = hegel_context_new();
     unsafe {
-        assert_eq!(
-            hegel_settings_set_mode(
-                ctx,
-                ptr::null_mut(),
-                hegel_mode_t::HEGEL_MODE_TEST_RUN as u32
-            ),
-            HEGEL_E_INVALID_HANDLE
-        );
         assert_eq!(
             hegel_settings_set_backend(
                 ctx,
@@ -806,8 +798,6 @@ fn out_of_range_enum_values_are_invalid_arguments() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
-        assert_eq!(hegel_settings_set_mode(ctx, s, 999), HEGEL_E_INVALID_ARG);
-        assert!(last_error(ctx).contains("unknown mode"));
         assert_eq!(hegel_settings_set_backend(ctx, s, 999), HEGEL_E_INVALID_ARG);
         assert!(last_error(ctx).contains("unknown backend"));
         assert_eq!(
@@ -1291,67 +1281,6 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
     }
 }
 
-/// A `Mode::SingleTestCase` run that fails surfaces a failure with an origin
-/// but no reproduce blob (there is no shrunk choice sequence to encode). This
-/// drives the engine's single-case path at the C level and the
-/// `hegel_failure_reproduction_blob` arm that returns NULL for a blobless
-/// failure.
-#[test]
-fn single_test_case_failure_has_origin_but_no_blob() {
-    let ctx = hegel_context_new();
-    unsafe {
-        let s = make_settings(ctx);
-        let empty = CString::new("").unwrap();
-        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
-        ok(hegel_settings_set_mode(
-            ctx,
-            s,
-            hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32,
-        ));
-        let run = start(ctx, s);
-        let origin = CString::new("single-case bug").unwrap();
-
-        let tc = next_case(ctx, run);
-        assert!(!tc.is_null());
-        let mut should_capture = false;
-        ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
-        assert!(!should_capture);
-        let mut value = 0i64;
-        assert_eq!(
-            hegel_generate_integer(ctx, tc, 0, 100, &mut value),
-            HEGEL_OK
-        );
-        ok(hegel_mark_complete(
-            ctx,
-            tc,
-            hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
-            origin.as_ptr(),
-        ));
-        ok(hegel_test_case_free(ctx, tc));
-        assert!(next_case(ctx, run).is_null());
-
-        let res = result(ctx, run);
-        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
-        let f = failure_at(ctx, res, 0);
-        assert!(!f.is_null());
-        let origin_back = std::ffi::CStr::from_ptr(origin_of(ctx, f))
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            origin_back.contains("single-case bug"),
-            "got {origin_back:?}"
-        );
-        assert!(repro_blob_of(ctx, f).is_null());
-        assert!(caveat_of(ctx, f).is_null());
-        ok(hegel_failure_free(ctx, f));
-        ok(hegel_run_result_free(ctx, res));
-
-        ok(hegel_run_free(ctx, run));
-        ok(hegel_settings_free(ctx, s));
-        ok(hegel_context_free(ctx));
-    }
-}
-
 /// A full run over a concurrent, intermittently-failing body enters
 /// nondeterministic handling when the engine observes a verdict flip
 /// (decision 70: creating a `max_concurrency > 1` machine declares
@@ -1390,6 +1319,7 @@ fn concurrent_run_failure_has_blob_and_caveat() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 2,
@@ -1480,6 +1410,7 @@ unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, orig
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 2,
@@ -1616,6 +1547,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             rule_groups.as_ptr(),
             1,
             ptr::null(),
+            ptr::null(),
             0,
             1,
             1,
@@ -1673,6 +1605,7 @@ fn primitives_after_overrun_all_report_stop_test() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1751,6 +1684,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1799,6 +1733,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1814,6 +1749,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1831,6 +1767,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1850,6 +1787,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 ptr::null(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1867,6 +1805,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 null_entry.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -1886,6 +1825,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1904,6 +1844,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 bad_inv.as_ptr(),
+                ptr::null(),
                 1,
                 1,
                 1,
@@ -1922,6 +1863,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 reserved_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 1,
                 1,
@@ -1939,6 +1881,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 1,
@@ -1955,6 +1898,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 3,
@@ -1973,6 +1917,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 1,
@@ -2082,6 +2027,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rule_groups.as_ptr(),
                 1,
                 invariants.as_ptr(),
+                ptr::null(),
                 1,
                 1,
                 1,
@@ -2124,6 +2070,41 @@ fn state_machine_and_primitive_boolean_paths() {
         }
         assert_eq!(hegel_state_machine_free(ctx, checked), HEGEL_OK);
 
+        let always_check: [bool; 1] = [true];
+        let mut always_checked: *mut HegelStateMachine = ptr::null_mut();
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                1,
+                invariants.as_ptr(),
+                always_check.as_ptr(),
+                1,
+                1,
+                1,
+                &mut always_checked,
+                &mut out_concurrency,
+            ),
+            HEGEL_OK
+        );
+        for _ in 0..20 {
+            let mut should_check = false;
+            assert_eq!(
+                hegel_state_machine_should_check_invariant(
+                    ctx,
+                    tc,
+                    always_checked,
+                    0,
+                    &mut should_check
+                ),
+                HEGEL_OK
+            );
+            assert!(should_check, "an always-check invariant is always checked");
+        }
+        assert_eq!(hegel_state_machine_free(ctx, always_checked), HEGEL_OK);
+
         let mut ranged: *mut HegelStateMachine = ptr::null_mut();
         assert_eq!(
             hegel_new_state_machine(
@@ -2132,6 +2113,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
                 1,
+                ptr::null(),
                 ptr::null(),
                 0,
                 2,
@@ -2743,6 +2725,7 @@ fn object_handles_are_freed_safely_after_the_run() {
             rules.as_ptr(),
             rule_groups.as_ptr(),
             1,
+            ptr::null(),
             ptr::null(),
             0,
             1,

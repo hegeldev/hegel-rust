@@ -715,8 +715,9 @@ impl crate::native::shrinker::ShrinkProbe for AdoptionRecorder {
         })))
     }
 
-    fn candidate_adopted(&mut self) {
+    fn candidate_adopted(&mut self) -> Result<(), crate::control::InternalError> {
         self.adopted.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 

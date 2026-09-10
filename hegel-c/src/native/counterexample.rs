@@ -38,6 +38,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::HashSet;
 use crate::native::blob::NdReproState;
 use crate::native::core::{ChoiceNode, ChoiceValue, sort_key};
@@ -99,14 +100,18 @@ pub(crate) struct History {
 }
 
 impl History {
-    fn record(&mut self, nodes: &[ChoiceNode], accept: bool) {
-        let key = serialize_nodes(nodes);
+    fn record(&mut self, nodes: &[ChoiceNode], accept: bool) -> Result<(), InternalError> {
+        let key = hegel_internal_unwrap!(
+            serialize_nodes(nodes),
+            "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+        );
         if self.seen.insert(key) {
             self.entries.push(HistoryEntry {
                 nodes: nodes.to_vec(),
                 accept,
             });
         }
+        Ok(())
     }
 
     pub(crate) fn entries(&self) -> &[HistoryEntry] {
@@ -252,18 +257,25 @@ impl Counterexample {
     /// handed back): the timelines incumbent-first, content-hash entropy
     /// (so identical state re-encodes identically across runs), and the
     /// standard continuation extension.
-    pub(crate) fn repro_state(&self, incumbent: Vec<ChoiceValue>) -> NdReproState {
+    pub(crate) fn repro_state(
+        &self,
+        incumbent: Vec<ChoiceValue>,
+    ) -> Result<NdReproState, InternalError> {
         let len = crate::native::core::flattened_values_len(&incumbent);
         let timelines = self.timelines_from(incumbent);
         let mut content = Vec::new();
         for timeline in &timelines {
-            content.extend_from_slice(&serialize_choices(timeline));
+            let bytes = hegel_internal_unwrap!(
+                serialize_choices(timeline),
+                "a stored timeline's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
+            content.extend_from_slice(&bytes);
         }
-        NdReproState {
+        Ok(NdReproState {
             timelines,
             entropy: crate::native::database::fnv1a(&content),
             extension: (nd::continuation_budget(len) - len) as u32,
-        }
+        })
     }
 
     /// Whether the origin still has to face the discovery bar before its
@@ -398,8 +410,12 @@ impl Counterexample {
 
     /// Append a pre-flip interesting execution to the history (see
     /// [`History`]). `accept` says whether it became the incumbent.
-    pub(crate) fn record_sighting(&mut self, nodes: &[ChoiceNode], accept: bool) {
-        self.history.record(nodes, accept);
+    pub(crate) fn record_sighting(
+        &mut self,
+        nodes: &[ChoiceNode],
+        accept: bool,
+    ) -> Result<(), InternalError> {
+        self.history.record(nodes, accept)
     }
 
     pub(crate) fn history(&self) -> &History {

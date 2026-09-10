@@ -92,9 +92,9 @@ fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
 #[test]
 fn confirmation_drops_the_history() {
     let mut c = Counterexample::default();
-    c.record_sighting(&[int_node(3)], true);
-    c.record_sighting(&[int_node(3)], false);
-    c.record_sighting(&[int_node(4)], false);
+    c.record_sighting(&[int_node(3)], true).unwrap();
+    c.record_sighting(&[int_node(3)], false).unwrap();
+    c.record_sighting(&[int_node(4)], false).unwrap();
     assert_eq!(c.history().entries().len(), 2, "deduplicated by choices");
     assert!(c.history().entries()[0].accept);
     c.confirm(0.4, None, Vec::new(), (4, 9)).unwrap();
@@ -118,7 +118,7 @@ fn timelines_put_the_current_incumbent_ahead_of_the_captured_pool() {
     assert_eq!(timelines[0], values(&[int_node(1)]));
     assert_eq!(timelines[1], values(&confirmed));
     assert_eq!(timelines[2], values(&[int_node(7)]));
-    let state = c.repro_state(values(&[int_node(1)]));
+    let state = c.repro_state(values(&[int_node(1)])).unwrap();
     assert_eq!(state.timelines, timelines);
     assert_eq!(
         state.extension as usize,

@@ -3,6 +3,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+use hegel::Generator;
 use hegel::generators as gs;
 use hegel::stateful::{Pool, pool};
 use hegel::{Hegel, Settings, TestCase};
@@ -299,5 +300,239 @@ fn test_noisy_triple_increment_shrinks_to_four_ops() {
             ["new v0", "incr v0", "incr v0", "incr v0"],
             "seed {seed}"
         );
+    }
+}
+
+const DOMAIN_MIN: i32 = -50;
+const DOMAIN_MAX: i32 = 50;
+
+fn domain_ranges() -> impl gs::PrintableGenerator<std::ops::Range<i32>> {
+    gs::integers::<i32>()
+        .min_value(DOMAIN_MIN)
+        .max_value(DOMAIN_MAX - 1)
+        .flat_map(|start| {
+            gs::integers::<i32>()
+                .min_value(start + 1)
+                .max_value(DOMAIN_MAX)
+                .map(move |end| start..end)
+        })
+}
+
+#[derive(Clone, Debug)]
+enum MapOp {
+    Insert(std::ops::Range<i32>, u8),
+    Remove(std::ops::Range<i32>),
+}
+
+/// The number of coalesced ranges an interval map holds after `ops`,
+/// computed on a per-point model.
+fn stored_ranges_after<'a>(ops: impl Iterator<Item = &'a MapOp>) -> usize {
+    let mut points = std::collections::BTreeMap::new();
+    for op in ops {
+        match op {
+            MapOp::Insert(range, value) => {
+                for p in range.clone() {
+                    points.insert(p, *value);
+                }
+            }
+            MapOp::Remove(range) => {
+                for p in range.clone() {
+                    points.remove(&p);
+                }
+            }
+        }
+    }
+    let mut runs = 0;
+    let mut prev: Option<(i32, u8)> = None;
+    for (&p, &v) in &points {
+        if prev != Some((p - 1, v)) {
+            runs += 1;
+        }
+        prev = Some((p, v));
+    }
+    runs
+}
+
+type Ops = Arc<Mutex<Vec<MapOp>>>;
+
+/// An interval map modelled per point, with the invariant-heavy shape of a
+/// real model-based suite (rangemap's): several always-true invariants plus
+/// one planted failing one. Each sampled invariant adds a boolean draw to
+/// every step's choice footprint.
+struct IntervalMapModel {
+    points: std::collections::BTreeMap<i32, u8>,
+    ops: Ops,
+    trace: Trace,
+}
+
+impl IntervalMapModel {
+    fn stored_ranges(&self) -> usize {
+        stored_ranges_after(self.ops.lock().unwrap().iter())
+    }
+}
+
+#[hegel::state_machine]
+impl IntervalMapModel {
+    #[rule]
+    fn insert(&mut self, tc: TestCase) {
+        let range = tc.draw(domain_ranges());
+        let value = tc.draw(gs::integers::<u8>().max_value(2));
+        self.trace
+            .lock()
+            .unwrap()
+            .push(format!("insert {range:?} v{value}"));
+        self.ops
+            .lock()
+            .unwrap()
+            .push(MapOp::Insert(range.clone(), value));
+        for p in range {
+            self.points.insert(p, value);
+        }
+    }
+
+    #[rule]
+    fn remove(&mut self, tc: TestCase) {
+        let range = tc.draw(domain_ranges());
+        self.trace.lock().unwrap().push(format!("remove {range:?}"));
+        self.ops.lock().unwrap().push(MapOp::Remove(range.clone()));
+        for p in range {
+            self.points.remove(&p);
+        }
+    }
+
+    #[invariant]
+    fn points_in_domain(&mut self, _tc: TestCase) {
+        assert!(
+            self.points
+                .keys()
+                .all(|&p| (DOMAIN_MIN..DOMAIN_MAX).contains(&p))
+        );
+    }
+
+    #[invariant]
+    fn values_small(&mut self, _tc: TestCase) {
+        assert!(self.points.values().all(|&v| v <= 2));
+    }
+
+    #[invariant]
+    fn runs_not_more_than_points(&mut self, _tc: TestCase) {
+        assert!(self.stored_ranges() <= self.points.len());
+    }
+
+    #[invariant]
+    fn planted_few_ranges(&mut self, _tc: TestCase) {
+        assert!(self.stored_ranges() <= 3, "map holds more than 3 ranges");
+    }
+}
+
+#[test]
+fn test_interval_map_shrinks_to_a_one_deletion_minimal_sequence() {
+    for seed in 0..10u64 {
+        let ops: Ops = Arc::new(Mutex::new(Vec::new()));
+        let ops_in_body = Arc::clone(&ops);
+        let trace = minimal_stateful_trace(
+            move |tc, trace| {
+                ops_in_body.lock().unwrap().clear();
+                let m = IntervalMapModel {
+                    points: std::collections::BTreeMap::new(),
+                    ops: Arc::clone(&ops_in_body),
+                    trace,
+                };
+                hegel::stateful::run(m, tc);
+            },
+            Some(seed),
+        );
+        let ops = ops.lock().unwrap().clone();
+        assert!(
+            stored_ranges_after(ops.iter()) > 3,
+            "seed {seed}: {trace:?}"
+        );
+        for skip in 0..ops.len() {
+            let without = ops
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i != skip)
+                .map(|(_, op)| op);
+            assert!(
+                stored_ranges_after(without) <= 3,
+                "seed {seed}: step {} is redundant in {trace:?}",
+                skip + 1,
+            );
+        }
+    }
+}
+
+/// `DoubleIncrement` above, plus enough always-true invariants that a step's
+/// choice footprint (stop draw + rule selection + pool draw + one sampled
+/// boolean per invariant) exceeds the shrinker's largest deletion window.
+struct InvariantHeavyDoubleIncrement {
+    handles: Pool<usize>,
+    counters: Vec<u32>,
+    trace: Trace,
+}
+
+#[hegel::state_machine]
+impl InvariantHeavyDoubleIncrement {
+    #[rule]
+    fn new_counter(&mut self, _tc: TestCase) {
+        let id = self.counters.len();
+        self.counters.push(0);
+        self.handles.add(id);
+        self.trace.lock().unwrap().push(format!("new v{id}"));
+    }
+
+    #[rule]
+    fn increment(&mut self, tc: TestCase) {
+        let id = *tc.draw(self.handles.values_reusable());
+        self.counters[id] += 1;
+        self.trace.lock().unwrap().push(format!("incr v{id}"));
+    }
+
+    #[invariant]
+    fn ids_dense(&mut self, _tc: TestCase) {
+        assert!(self.handles.len() == self.counters.len());
+    }
+
+    #[invariant]
+    fn counts_fit(&mut self, _tc: TestCase) {
+        assert!(self.counters.iter().all(|&c| c < 100));
+    }
+
+    #[invariant]
+    fn sum_fits(&mut self, _tc: TestCase) {
+        assert!(self.counters.iter().sum::<u32>() < 10_000);
+    }
+
+    #[invariant]
+    fn non_negative_len(&mut self, _tc: TestCase) {
+        assert!(self.counters.capacity() >= self.counters.len());
+    }
+
+    #[invariant]
+    fn handles_populated(&mut self, _tc: TestCase) {
+        assert!(self.handles.len() <= self.counters.len());
+    }
+
+    #[invariant]
+    fn planted_below_two(&mut self, _tc: TestCase) {
+        assert!(self.counters.iter().all(|&c| c < 2), "counter reached 2");
+    }
+}
+
+#[test]
+fn test_invariant_heavy_double_increment_shrinks_to_three_ops() {
+    for seed in 0..5u64 {
+        let trace = minimal_stateful_trace(
+            |tc, trace| {
+                let m = InvariantHeavyDoubleIncrement {
+                    handles: pool(&tc),
+                    counters: Vec::new(),
+                    trace,
+                };
+                hegel::stateful::run(m, tc);
+            },
+            Some(seed),
+        );
+        assert_eq!(trace, ["new v0", "incr v0", "incr v0"], "seed {seed}");
     }
 }

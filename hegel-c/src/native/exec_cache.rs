@@ -1,5 +1,5 @@
-//! The flat replacements for the data tree (seam plan, phase 15; experiment
-//! 010): a two-tier execution cache and an error-strictness kind ledger.
+//! The flat replacements for the data tree (experiment 010): a two-tier
+//! execution cache and a choice-kind ledger.
 //!
 //! The cache keys every executed conclusion on its realized choice values —
 //! [`crate::native::database::serialize_choices`] gives the exact key
@@ -11,18 +11,19 @@
 //! re-running the body, byte-bounded with oldest-first eviction. Overruns
 //! enter neither tier: a proposal that ran out of data concluded nothing.
 //!
-//! The kind ledger is the tree's generation-nondeterminism detector kept for
-//! `error` strictness: for each value prefix it remembers the choice kind
-//! (constraints included) drawn at the next position, and a within-run
-//! contradiction produces the tree's diagnostic verbatim. Between-run drift
-//! is deliberately invisible to it — a stored entry that stops reproducing
-//! is staleness, never nondeterminism evidence (decision 9).
+//! The kind ledger is the tree's generation-nondeterminism detector: for
+//! each value prefix it remembers the choice kind (constraints included)
+//! drawn at the next position, and a within-run contradiction produces the
+//! tree's diagnostic verbatim. Between-run drift is deliberately invisible
+//! to it — a stored entry that stops reproducing is staleness, never
+//! nondeterminism evidence.
 
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::HashMap;
 use crate::native::core::{ChoiceKind, ChoiceNode, Span, Status};
 
@@ -185,9 +186,10 @@ impl ExecCache {
         })
     }
 
-    /// Drop everything — both tiers. Called at the nondeterminism flip:
-    /// post-flip, identical timelines need not conclude identically, so
-    /// nothing recorded pre-flip may be served or compared again.
+    /// Drop everything — both tiers. Called at the concurrent-state-machine
+    /// nondeterministic flip: post-flip, identical timelines need not
+    /// conclude identically, so nothing recorded pre-flip may be served or
+    /// compared again.
     pub(crate) fn clear(&mut self) {
         self.verdicts.clear();
         self.full.clear();
@@ -207,20 +209,25 @@ pub(crate) struct KindLedger {
 
 impl KindLedger {
     /// Fold one execution's realized nodes into the ledger, returning the
-    /// tree's kind-mismatch diagnostic on the first contradiction.
-    pub(crate) fn observe(&mut self, nodes: &[ChoiceNode]) -> Option<String> {
+    /// tree's kind-mismatch diagnostic on the first contradiction. The engine
+    /// bounds clone nesting at `MAX_CLONE_DEPTH` as a case runs, so the
+    /// serializer refusing an executed node is a violated internal invariant.
+    pub(crate) fn observe(
+        &mut self,
+        nodes: &[ChoiceNode],
+    ) -> Result<Option<String>, InternalError> {
         let mut prefix = Digest::new();
         let mut scratch = Vec::new();
         for node in nodes {
             let kind = node.kind();
             match self.entries.get(&prefix) {
                 Some(expected) if *expected != kind => {
-                    return Some(format!(
+                    return Ok(Some(format!(
                         "Your data generation is non-deterministic: at the same choice \
                          position with the same prefix, the choice kind changed from {:?} to {:?}. \
                          This usually means a generator depends on global mutable state.",
                         expected, kind
-                    ));
+                    )));
                 }
                 None if self.entries.len() < KIND_LEDGER_CAP => {
                     self.entries.insert(prefix, kind);
@@ -228,10 +235,13 @@ impl KindLedger {
                 _ => {}
             }
             scratch.clear();
-            crate::native::database::serialize_one_choice(&mut scratch, node.data.value_ref());
+            hegel_internal_unwrap!(
+                crate::native::database::serialize_one_choice(&mut scratch, node.data.value_ref()),
+                "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
             prefix.update(&scratch);
         }
-        None
+        Ok(None)
     }
 
     pub(crate) fn clear(&mut self) {

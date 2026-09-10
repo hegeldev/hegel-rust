@@ -44,8 +44,14 @@ fn lib_path() -> PathBuf {
             }
         }
     }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir.parent().unwrap().join("target");
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("target")
+        });
     for profile in ["debug", "release"] {
         let candidate = target_dir.join(profile).join(filename);
         if candidate.exists() {
@@ -129,6 +135,7 @@ type FnNewStateMachine = unsafe extern "C" fn(
     *const i64,
     usize,
     *const *const c_char,
+    *const bool,
     usize,
     i64,
     i64,
@@ -1052,6 +1059,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 rule_groups.as_ptr(),
                 0,
                 invariant_ptrs.as_ptr(),
+                ptr::null(),
                 invariant_ptrs.len(),
                 1,
                 1,
@@ -1072,6 +1080,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
+                ptr::null(),
                 invariant_ptrs.len(),
                 1,
                 1,

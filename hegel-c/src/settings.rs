@@ -43,18 +43,6 @@ pub enum Phase {
     Shrink,
 }
 
-/// Controls the test execution mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Mode {
-    /// Run a full test (multiple test cases with shrinking). This is the default.
-    TestRun,
-    /// Run a single test case with no shrinking or replay. Useful for
-    /// Antithesis workloads and other contexts where you want pure data
-    /// generation without property-testing overhead.
-    SingleTestCase,
-}
-
 /// Selects the source of randomness the engine draws from.
 ///
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
@@ -163,11 +151,14 @@ pub enum NondeterminismStrictness {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled
-/// and tests are derandomized by default.
+/// In CI environments (detected automatically), the database is disabled,
+/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
+/// default. Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), the
+/// database and all health checks are disabled by default: Antithesis owns
+/// reproduction, and its thread pausing makes wall-clock health checks like
+/// `TooSlow` meaningless.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
@@ -176,6 +167,7 @@ pub struct Settings {
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
     pub(crate) suppress_health_check: Vec<HealthCheck>,
+    pub(crate) in_antithesis: bool,
     pub(crate) phases: Vec<Phase>,
     pub(crate) report_multiple_failures: bool,
     /// Print event statistics (`tc.event()` / `tc.event_value()`
@@ -193,26 +185,32 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically.
     pub fn new() -> Self {
-        Self::for_ci(is_in_ci())
+        Self::for_env(
+            is_in_ci(),
+            crate::antithesis_detect::antithesis_env_var_set(),
+        )
     }
 
-    fn for_ci(in_ci: bool) -> Self {
+    pub(crate) fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
         Self {
-            mode: Mode::TestRun,
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
             derandomize: in_ci,
-            database: if in_ci {
+            database: if in_ci || in_antithesis {
                 Database::Disabled
             } else {
                 Database::Unset
             },
-            suppress_health_check: Vec::new(),
+            suppress_health_check: if in_ci {
+                vec![HealthCheck::TooSlow]
+            } else {
+                Vec::new()
+            },
+            in_antithesis,
             phases: vec![
                 Phase::Explicit,
                 Phase::Reuse,
@@ -228,12 +226,6 @@ impl Settings {
         }
     }
 
-    /// Set the execution mode. Defaults to [`Mode::TestRun`].
-    pub fn mode(mut self, mode: Mode) -> Self {
-        self.mode = mode;
-        self
-    }
-
     /// Select the randomness backend.
     ///
     /// By default the backend is chosen automatically: [`Backend::Urandom`]
@@ -242,6 +234,13 @@ impl Settings {
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = Some(backend);
         self
+    }
+
+    /// Whether `check` should be skipped: either the user suppressed it
+    /// explicitly, or the run is inside Antithesis, where every health check
+    /// is off by default.
+    pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
+        self.in_antithesis || self.suppress_health_check.contains(&check)
     }
 
     /// Resolve the effective backend, given whether the process is running

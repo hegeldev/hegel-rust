@@ -1185,6 +1185,19 @@ fn clone_values_is_empty_matches_child_count() {
     assert!(!CloneValues::Stream(&stream).is_empty());
 }
 
+/// The record and stream representations of one clone are different
+/// variants (and different pointers), so equality must fall through the
+/// identity check to the value comparison — equal children compare equal,
+/// differing children don't.
+#[test]
+fn clone_values_equality_compares_record_against_stream_by_values() {
+    let stream = RealizedStream::new(vec![boolean_node(true)], Vec::new());
+    let same = CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]);
+    let different = CloneRecord::from_values(vec![ChoiceValue::Boolean(false)]);
+    assert!(CloneValues::Record(&same) == CloneValues::Stream(&stream));
+    assert!(CloneValues::Record(&different) != CloneValues::Stream(&stream));
+}
+
 #[test]
 fn choice_data_equality_compares_constraint_and_value() {
     let pairs = [

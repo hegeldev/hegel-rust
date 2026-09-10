@@ -4,6 +4,7 @@
 
 use crate::control::{InternalError, hegel_internal_assert};
 use alloc::vec::Vec;
+use once_cell::race::OnceBox;
 
 /// A sorted, disjoint set of `(start, end)` codepoint intervals. Inclusive on
 /// both endpoints. Acts like a sorted sequence of the covered integers.
@@ -14,6 +15,10 @@ pub struct IntervalSet {
     size: usize,
     idx_of_zero: usize,
     idx_of_z: isize,
+    /// Memo slot for the string draw's per-alphabet mask of which global
+    /// constant strings this alphabet contains. Living on the set, the memo
+    /// is computed once per alphabet and freed with it.
+    pub(crate) string_constants_mask: OnceBox<Vec<bool>>,
 }
 
 impl IntervalSet {
@@ -37,6 +42,7 @@ impl IntervalSet {
             size,
             idx_of_zero: 0,
             idx_of_z: -1,
+            string_constants_mask: OnceBox::new(),
         };
         set.idx_of_zero = set.index_above('0' as u32);
         let z_above = set.index_above('Z' as u32);

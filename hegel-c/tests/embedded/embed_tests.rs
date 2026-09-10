@@ -39,18 +39,6 @@ fn run_native_reports_a_usage_error_when_mark_complete_is_skipped() {
     assert!(msg.contains("never marked complete"), "{msg}");
 }
 
-/// The same contract violation during a `SingleTestCase` run surfaces
-/// through `run_single_case`'s own outcome read.
-#[test]
-fn run_native_single_test_case_reports_a_usage_error_when_unconcluded() {
-    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let err = run_native(&settings, None, |ds| {
-        ds.generate_boolean(0.5, None).unwrap();
-    })
-    .unwrap_err();
-    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
-}
-
 /// Reproduces hegel-go report #2: persists a failing example on the first
 /// run, then re-runs with the same database + key and expects the first
 /// test case to be a replay of the persisted value.
@@ -364,6 +352,7 @@ fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) ->
             alloc::vec!["increment".to_string()],
             alloc::vec![0],
             Vec::new(),
+            Vec::new(),
             1,
             1,
         )
@@ -429,41 +418,6 @@ fn data_source_for_blob_rejects_an_undecodable_blob() {
 }
 
 #[test]
-fn run_native_single_test_case_reports_the_failure() {
-    use crate::backend::Failure;
-
-    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let calls = AtomicUsize::new(0);
-    let result = run_native(&settings, None, |ds| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        ds.mark_complete(&TestCaseResult::Interesting(Failure {
-            origin: "single-case bug".to_string(),
-            reproduce_blob: None,
-            caveat: None,
-        }));
-    })
-    .unwrap();
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(result.failures[0].origin, "single-case bug");
-    assert!(result.failures[0].reproduce_blob.is_none());
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "the single test case runs exactly once"
-    );
-}
-
-#[test]
-fn run_native_single_test_case_passes_cleanly() {
-    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let result = run_native(&settings, None, |ds| {
-        ds.mark_complete(&TestCaseResult::Valid);
-    })
-    .unwrap();
-    assert!(result.failures.is_empty());
-}
-
-#[test]
 fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budget() {
     use crate::native::blob::{NdReproState, encode_nd_failure};
     use crate::native::core::ChoiceValue;
@@ -474,7 +428,7 @@ fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budge
         entropy: 7,
         extension: 4,
     };
-    let blob = encode_nd_failure(&state);
+    let blob = encode_nd_failure(&state).unwrap();
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&lines);
     let settings = quiet_settings(1)

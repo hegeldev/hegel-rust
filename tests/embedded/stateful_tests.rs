@@ -1,5 +1,4 @@
 use super::*;
-use crate::Mode;
 use crate::ffi::{RunHandle, SettingsHandle};
 use crate::generators as gs;
 use crate::runner::Settings;
@@ -26,7 +25,7 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
             .unwrap_or_else(|e| e.into_inner())
             .push(msg.to_string());
     });
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, Some(sink));
+    let tc = TestCase::new(Arc::new(c_tc), true, Some(sink));
     (run, tc, lines)
 }
 
@@ -35,7 +34,9 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> StateMachineHandle {
     let rule_groups = vec![0i64; rules.len()];
     let (machine, level) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(rules, &rule_groups, &[], concurrency, concurrency))
+        .with_ctc(|ctc| {
+            ctc.new_state_machine(rules, &rule_groups, &[], &[], concurrency, concurrency)
+        })
         .unwrap();
     assert_eq!(level, concurrency);
     machine
@@ -67,10 +68,22 @@ fn resolve_round_unwind(events: Vec<WorkerEvent>, tc: &TestCase) -> Box<dyn std:
 }
 
 #[test]
+fn note_panic_trailer_notes_real_panics_and_skips_control_unwinds() {
+    let (_run, tc, lines) = capturing_test_case();
+    let assume: Box<dyn std::any::Any + Send> = Box::new(AssumeFailed);
+    let stop: Box<dyn std::any::Any + Send> = Box::new(StopTest);
+    note_panic_trailer(&tc, assume.as_ref(), "unwanted");
+    note_panic_trailer(&tc, stop.as_ref(), "unwanted");
+    note_panic_trailer(&tc, string_panic("boom").as_ref(), "Invariant x failed:");
+    tc.reporter().emit_rendered_output();
+    assert_eq!(*lines.lock().unwrap(), vec!["Invariant x failed:"]);
+}
+
+#[test]
 fn resolve_round_with_all_workers_done_returns_normally() {
     let (_run, tc, lines) = capturing_test_case();
     resolve_round(vec![WorkerEvent::RoundDone, WorkerEvent::RoundDone], &tc);
-    tc.emit_rendered_output();
+    tc.reporter().emit_rendered_output();
     assert!(lines.lock().unwrap().is_empty());
 }
 
@@ -96,7 +109,7 @@ fn resolve_round_overrun_wins_over_panic_and_notes_the_dropped_panic() {
     ];
     let payload = resolve_round_unwind(events, &tc);
     assert!(payload.downcast_ref::<StopTest>().is_some());
-    tc.emit_rendered_output();
+    tc.reporter().emit_rendered_output();
     let lines = lines.lock().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(
@@ -111,7 +124,7 @@ fn resolve_round_invalid_wins_over_panic_and_raises_assume_failed() {
     let events = vec![WorkerEvent::Invalid, panicked_event("induced panic", None)];
     let payload = resolve_round_unwind(events, &tc);
     assert!(payload.downcast_ref::<AssumeFailed>().is_some());
-    tc.emit_rendered_output();
+    tc.reporter().emit_rendered_output();
     assert_eq!(lines.lock().unwrap().len(), 1);
 }
 
@@ -129,7 +142,7 @@ fn resolve_round_lowest_worker_index_panic_wins_and_losers_are_noted() {
     let (thread_name, _, location, _) = run_lifecycle::take_panic_info().unwrap();
     assert_eq!(thread_name, "worker-thread");
     assert_eq!(location, "winner.rs:1:1");
-    tc.emit_rendered_output();
+    tc.reporter().emit_rendered_output();
     let lines = lines.lock().unwrap();
     assert_eq!(lines.len(), 1);
     assert!(
@@ -219,7 +232,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
     let event = with_test_context(|| run_worker_round(0, &tc, &m, &rules, &machine));
     assert!(matches!(event, WorkerEvent::RoundDone));
     assert_eq!(m.hits.load(Ordering::SeqCst), 1);
-    tc.emit_rendered_output();
+    tc.reporter().emit_rendered_output();
     assert!(
         lines
             .lock()
@@ -232,7 +245,7 @@ fn run_worker_round_executes_the_rounds_rule_and_finishes() {
 #[test]
 fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     run_lifecycle::init_panic_hook();
-    let (_run, tc, _lines) = capturing_test_case();
+    let (_run, tc, lines) = capturing_test_case();
     let m = AlwaysPanics;
     let rules = m.rules();
     let machine = register_machine(&tc, &["boom"], 1);
@@ -248,6 +261,14 @@ fn run_worker_round_ferries_a_rule_panic_with_its_capture() {
     assert_eq!(run_lifecycle::panic_message(&payload), "rule boom");
     let (_, _, location, _) = info.unwrap();
     assert!(location.contains("stateful_tests.rs"), "{location}");
+    tc.reporter().emit_rendered_output();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("Rule boom failed:"))
+    );
 }
 
 #[test]
@@ -280,7 +301,7 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
     let (machine, _) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], 1, 1))
+        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], &[], 1, 1))
         .unwrap();
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {

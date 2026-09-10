@@ -24,7 +24,7 @@ use crate::control::{
     hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
-use crate::runner::{Mode, Settings, Verbosity};
+use crate::runner::{Settings, Verbosity};
 use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -178,6 +178,10 @@ fn filter_short_backtrace(backtrace_str: &str) -> String {
         }
     }
 
+    if start_idx > end_idx {
+        start_idx = 0;
+        end_idx = lines.len();
+    }
     let filtered: Vec<&str> = lines[start_idx..end_idx].to_vec();
     let mut new_frame_num = 0usize;
     let mut result = Vec::new();
@@ -278,7 +282,6 @@ pub(crate) fn run_test_case(
     c_tc: CTestCase,
     test_fn: &mut dyn FnMut(TestCase),
     is_final: bool,
-    mode: Mode,
     verbosity: Verbosity,
     output: &RunOutput,
     case_sink: Option<crate::test_case::OutputSink>,
@@ -301,10 +304,9 @@ pub(crate) fn run_test_case(
     let tc = TestCase::new(
         Arc::clone(&c_tc),
         should_emit,
-        mode,
         case_sink.or_else(|| output.sink().cloned()),
     );
-    let reporter = tc.child(0);
+    let reporter = tc.reporter();
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
 
@@ -371,7 +373,7 @@ pub(crate) fn run_test_case(
 /// `hegel_mark_complete` waits for any in-flight operation on the handle, so
 /// a still-running leaked thread cannot make this report fail.
 fn report_outcome(handle: &CTestCase, result: &TestCaseResult) {
-    use hegel_c::hegel_status_t as Status;
+    use crate::ffi::sys::hegel_status_t as Status;
     let (status, origin) = match result {
         TestCaseResult::Valid => (Status::HEGEL_STATUS_VALID, None),
         TestCaseResult::Invalid => (Status::HEGEL_STATUS_INVALID, None),
@@ -438,9 +440,8 @@ fn render_diagnostic(
 ///
 /// `Some` only when [`Settings::print_blob`](crate::Settings::print_blob) is
 /// enabled *and* the failure carries a reproduce blob. A blobless failure —
-/// `Mode::SingleTestCase`, an unconfirmed nondeterministic failure reported
-/// caveat-only, a blob replay (the caller already holds the blob) — prints
-/// nothing.
+/// an unconfirmed nondeterministic failure reported caveat-only, a blob
+/// replay (the caller already holds the blob) — prints nothing.
 fn reproducer_line(settings: &Settings, reproduce_blob: Option<&str>) -> Option<String> {
     if !settings.print_blob {
         return None;
@@ -530,10 +531,6 @@ fn store_capture(
 /// run-level error — a failed health check, a nondeterminism abort under
 /// `error` strictness, an engine panic — surfaces with the engine's own
 /// message instead of the `Property test failed:` framing.
-///
-/// `Mode::SingleTestCase` has no exploration, shrinking, or blob: the engine
-/// emits one case, and if it fails the run re-raises that case's own panic
-/// straight away (see [`drive_single_case`]).
 pub(crate) fn drive<F>(
     test_fn: F,
     settings: &Settings,
@@ -543,7 +540,6 @@ pub(crate) fn drive<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
 
@@ -552,17 +548,6 @@ pub(crate) fn drive<F>(
         Ok(run) => run,
         Err(message) => panic!("{message}"), // nocov
     };
-
-    if settings.mode == Mode::SingleTestCase {
-        drive_single_case(
-            &run,
-            &mut test_fn,
-            settings.verbosity,
-            test_location,
-            &output,
-        );
-        return;
-    }
 
     drive_run(run, &mut test_fn, settings, test_location, &output, None);
 }
@@ -585,7 +570,6 @@ fn drive_run<F: FnMut(TestCase)>(
     output: &RunOutput,
     stale_message: Option<&str>,
 ) {
-    let mode = settings.mode;
     let verbosity = settings.verbosity;
     let quiet = verbosity == Verbosity::Quiet;
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
@@ -608,7 +592,7 @@ fn drive_run<F: FnMut(TestCase)>(
             }))
         };
         let (tc_result, payload, diagnostic) =
-            run_test_case(c_tc, test_fn, false, mode, verbosity, output, case_sink);
+            run_test_case(c_tc, test_fn, false, verbosity, output, case_sink);
         if let TestCaseResult::Interesting(failure) = &tc_result {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             store_capture(
@@ -624,7 +608,7 @@ fn drive_run<F: FnMut(TestCase)>(
     }
 
     let result = run.result();
-    use hegel_c::hegel_run_status_t as RunStatus;
+    use crate::ffi::sys::hegel_run_status_t as RunStatus;
     let status = result.status();
     emit_antithesis_assertion(status != RunStatus::HEGEL_RUN_STATUS_PASSED, test_location);
 
@@ -688,43 +672,6 @@ fn drive_run<F: FnMut(TestCase)>(
     }
 }
 
-/// Drive a `Mode::SingleTestCase` run: the engine emits exactly one case and
-/// the run's verdict is that case's outcome. The case is still run through
-/// [`run_test_case`] — the engine needs its `mark_complete`, and `assume()` /
-/// out-of-data must be classified rather than escape — but a real failure is
-/// re-raised straight away. There is no shrinking or replay, so no report to
-/// build and no run-level error to consult.
-fn drive_single_case(
-    run: &RunHandle,
-    test_fn: &mut dyn FnMut(TestCase),
-    verbosity: Verbosity,
-    test_location: Option<&TestLocation>,
-    output: &RunOutput,
-) {
-    let c_tc = run
-        .next_test_case()
-        .expect("a SingleTestCase run produces exactly one test case");
-    let (result, payload, diagnostic) = run_test_case(
-        c_tc,
-        test_fn,
-        true,
-        Mode::SingleTestCase,
-        verbosity,
-        output,
-        None,
-    );
-    if matches!(result, TestCaseResult::Interesting(_)) {
-        emit_antithesis_assertion(true, test_location);
-        if let Some(diagnostic) = diagnostic {
-            output.block(&diagnostic);
-        }
-        std::panic::resume_unwind(
-            payload.expect("an interesting case carries the caught panic payload"),
-        );
-    }
-    emit_antithesis_assertion(false, test_location);
-}
-
 /// Replay a base64 failure blob through the C ABI (`hegel_run_start_blob`),
 /// bypassing generation and shrinking.
 ///
@@ -747,7 +694,6 @@ pub(crate) fn drive_blob_replay<F>(
     F: FnMut(TestCase),
 {
     init_panic_hook();
-    require_antithesis_feature();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
     let c_settings = SettingsHandle::build(settings, database_key);
@@ -768,18 +714,8 @@ pub(crate) fn drive_blob_replay<F>(
     );
 }
 
-/// Fail fast — before any test case runs — when running under Antithesis
-/// without the `antithesis` feature compiled in.
-fn require_antithesis_feature() {
-    crate::antithesis::require_antithesis_feature(
-        crate::antithesis::is_running_in_antithesis(),
-        cfg!(feature = "antithesis"),
-    );
-}
-
 /// Report the run's verdict to Antithesis (when running under it).
 fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
-    #[cfg(feature = "antithesis")]
     // nocov start
     if crate::antithesis::is_running_in_antithesis() {
         if let Some(loc) = test_location {
@@ -787,7 +723,6 @@ fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocat
         }
     }
     // nocov end
-    let _ = (test_failed, test_location);
 }
 
 #[cfg(test)]

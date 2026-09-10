@@ -18,7 +18,13 @@ any-failure rule (see [the lifecycle](lifecycle.md), [shrinking](shrinking.md), 
 [the final replay](final-replay.md)); and decision 73 (2026-09-10) gave the failing
 test case one representation, `Counterexample` (`counterexample.rs`), replacing the
 engine's interesting map, `OriginLifecycle`, and the separate history, alpha-budget, and
-first-check containers (see [the lifecycle](lifecycle.md)). Part II
+first-check containers (see [the lifecycle](lifecycle.md)). On 2026-09-10 `main` (at
+799451cc) was merged into the branch: the pieces already extracted to main (the execution
+cache, the persister's save discipline, the blob decode bound, the `bind_deletion` guard,
+the targeting mismatch propagation) reconciled against the branch's versions, and main's
+other changes taken — fallible choice serialization (`MAX_CLONE_DEPTH`), the frontend's
+`ffi::sys` loader, worker attribution and blocks in the printer, `Unsatisfiable`, the
+Antithesis settings, and the removal of single-test-case mode. Part II
 tells the story ([production](../part2/production.md), [remediation](../part2/remediation.md),
 [seam plan](../part2/seam-plan.md)). This chapter records the state as of the plans'
 close plus that addition.

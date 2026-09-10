@@ -291,6 +291,7 @@ impl DataSource for NativeDataSource {
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
         invariant_names: Vec<String>,
+        invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<NativeStateMachine, DataSourceError> {
@@ -307,6 +308,14 @@ impl DataSource for NativeDataSource {
                 rule_names.len()
             )));
         }
+        if invariant_always_check.len() != invariant_names.len() {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "invariant_always_check must be parallel to invariant_names: got {} flags \
+                 for {} invariants",
+                invariant_always_check.len(),
+                invariant_names.len()
+            )));
+        }
         if min_concurrency < 1 || max_concurrency < min_concurrency {
             return Err(DataSourceError::InvalidArgument(format!(
                 "state machine concurrency bounds must satisfy 1 <= min <= max, \
@@ -317,7 +326,7 @@ impl DataSource for NativeDataSource {
             NativeStateMachine::new(
                 ntc,
                 rule_groups,
-                invariant_names.len(),
+                invariant_always_check,
                 min_concurrency,
                 max_concurrency,
             )

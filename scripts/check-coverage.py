@@ -338,14 +338,14 @@ def _run_lcov_phase(
     cargo_args: list[str],
     output: Path,
     label: str,
-    target_dir: Path | None = None,
+    target_dir: Path,
 ) -> None:
     """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`.
 
-    `target_dir` redirects the whole cargo build (and therefore
+    `target_dir` is where the whole cargo build (and therefore
     cargo-llvm-cov's coverage tree, profile data, and the set of binary
-    objects it exports from) into its own directory, making the phase
-    hermetic: nothing another phase built can leak into its report.
+    objects it exports from) goes. Giving a phase its own directory makes
+    it hermetic: nothing another phase built can leak into its report.
     """
     print(f"  Cleaning previous coverage data ({label})...")
     # Fully remove the coverage build tree, not just the profile data
@@ -353,12 +353,10 @@ def _run_lcov_phase(
     # instrumentation can never leak into this run's coverage.
     import shutil
 
-    cov_tree = (target_dir or Path("target")) / "llvm-cov-target"
-    shutil.rmtree(cov_tree, ignore_errors=True)
+    shutil.rmtree(target_dir / "llvm-cov-target", ignore_errors=True)
 
     env = os.environ.copy()
-    if target_dir is not None:
-        env["CARGO_TARGET_DIR"] = str(target_dir)
+    env["CARGO_TARGET_DIR"] = str(target_dir)
 
     print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
@@ -435,7 +433,7 @@ def _merge_lcov(inputs: list[Path], output: Path) -> None:
             f.write("end_of_record\n")
 
 
-def _ensure_smoke_cdylib() -> None:
+def _ensure_smoke_cdylib(target_dir: Path) -> None:
     """Build the libhegel cdylib and point the dlopen smoke test at it.
 
     `cargo llvm-cov` runs `cargo test`, which builds rlibs and test binaries
@@ -443,20 +441,65 @@ def _ensure_smoke_cdylib() -> None:
     (`hegel-c/tests/smoke.rs`) dlopens that cdylib, so without it every smoke
     test fails to find `libhegel_c.so` and the whole coverage run errors out.
 
-    Build it into the default target dir (separate from
-    `target/llvm-cov-target`, so no instrumentation-flag thrash) and export
-    `HEGEL_C_LIB_DIR` so the smoke test loads it. A non-instrumented cdylib is
-    fine here: the engine's line coverage comes from the in-process tests
-    (hegeltest driving the C ABI plus hegel-c's embedded/`c_abi_inprocess`
-    tests), not from dlopening the library — the smoke test only exercises the
-    FFI boundary behaviourally.
+    Build it into cargo's target dir (separate from its `llvm-cov-target`
+    subtree, so no instrumentation-flag thrash) and export
+    `HEGEL_C_LIB_DIR` so the smoke test loads it. The default-features
+    hegeltest phase rides on the same export: hegeltest's build.rs honours
+    `HEGEL_C_LIB_DIR` instead of nested-building the engine, and its loader
+    dlopens this cdylib. A non-instrumented cdylib is fine in both cases: the
+    engine's line coverage comes from the in-process tests (hegeltest driving
+    the C ABI under `static-engine` plus hegel-c's embedded/`c_abi_inprocess`
+    tests), not from dlopening the library — the dlopen-based tests only
+    exercise the FFI boundary behaviourally.
     """
     print("  Building libhegel cdylib for the dlopen smoke test...")
     result = subprocess.run(["cargo", "build", "-p", "hegeltest-c"])
     if result.returncode != 0:
         print("ERROR: failed to build the hegeltest-c cdylib", file=sys.stderr)
         sys.exit(1)
-    os.environ["HEGEL_C_LIB_DIR"] = str((Path("target") / "debug").resolve())
+    os.environ["HEGEL_C_LIB_DIR"] = str(target_dir / "debug")
+
+
+def cargo_metadata() -> dict:
+    """`cargo metadata --no-deps` for the workspace, parsed."""
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        print("ERROR: cargo metadata failed", file=sys.stderr)
+        sys.exit(1)
+    return json.loads(result.stdout)
+
+
+def cargo_target_dir() -> Path:
+    """The target directory cargo resolves for this workspace.
+
+    Honours `CARGO_TARGET_DIR` and `.cargo/config.toml` the same way cargo
+    itself does, so the artifacts this script builds and the ones it
+    looks for agree on where they live.
+    """
+    return Path(cargo_metadata()["target_directory"])
+
+
+def public_features() -> str:
+    """Every root-crate feature except `default` and internal `__*` ones.
+
+    The `__` prefix marks internal features, which gate code that would
+    report as permanently uncovered.
+    """
+    metadata = cargo_metadata()
+    root_manifest = Path(metadata["workspace_root"]) / "Cargo.toml"
+    package = next(
+        p for p in metadata["packages"] if Path(p["manifest_path"]) == root_manifest
+    )
+    features = sorted(
+        f for f in package["features"] if f != "default" and not f.startswith("__")
+    )
+    return ",".join(features)
 
 
 def run_coverage() -> Path:
@@ -485,6 +528,14 @@ def run_coverage() -> Path:
     collisions. Mangled functions are unaffected either way (their record
     names are unique per compilation).
 
+    A third pass runs hegeltest with default features, where the engine is
+    the dlopened shared library rather than a linked rlib. The workspace pass
+    enables `static-engine` (a public feature, so `public_features()` picks
+    it up), which compiles out the runtime loader in `src/ffi/sys/`; this
+    pass is what covers it. The dlopened cdylib is the non-instrumented one
+    `_ensure_smoke_cdylib` built, so this pass adds only frontend lines to
+    the union merge; the engine's lines come from the other two passes.
+
     hegel-macros is excluded from the report. It's a proc-macro crate whose
     code runs at the *compile* time of the test crates, which `cargo llvm-cov`
     does not measure as runtime coverage — a workspace pass only adds its lines
@@ -497,14 +548,16 @@ def run_coverage() -> Path:
     lcov_path = Path("lcov.info")
     raw_lcov = Path("lcov-all.info")
     hegel_c_lib_lcov = Path("lcov-hegel-c-lib.info")
+    ffi_lcov = Path("lcov-hegeltest-ffi.info")
+    target_dir = cargo_target_dir()
 
-    _ensure_smoke_cdylib()
+    _ensure_smoke_cdylib(target_dir)
 
     _run_lcov_phase(
         cargo_args=[
             "--workspace",
             "--features",
-            "rand,antithesis,chrono,jiff,serde_json,serde_json_raw_value",
+            public_features(),
             # proc-macro compile-time execution isn't runtime coverage; keep
             # hegel-macros out of the report rather than count it as uncovered.
             "--ignore-filename-regex",
@@ -512,17 +565,25 @@ def run_coverage() -> Path:
         ],
         output=raw_lcov,
         label="workspace, all features",
+        target_dir=target_dir,
     )
 
     _run_lcov_phase(
         cargo_args=["-p", "hegeltest-c", "--lib"],
         output=hegel_c_lib_lcov,
         label="hegel-c lib tests, isolated no_mangle records",
-        target_dir=Path("target/coverage-hegel-c-lib"),
+        target_dir=target_dir / "coverage-hegel-c-lib",
+    )
+
+    _run_lcov_phase(
+        cargo_args=["-p", "hegeltest"],
+        output=ffi_lcov,
+        label="hegeltest default features, shared-library engine",
+        target_dir=target_dir / "coverage-hegeltest-ffi",
     )
 
     print("  Merging LCOV output...")
-    _merge_lcov([raw_lcov, hegel_c_lib_lcov], lcov_path)
+    _merge_lcov([raw_lcov, hegel_c_lib_lcov, ffi_lcov], lcov_path)
     if not lcov_path.exists():
         print("ERROR: lcov.info was not generated", file=sys.stderr)
         sys.exit(1)

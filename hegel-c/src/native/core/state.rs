@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering};
 
 use once_cell::race::OnceBox;
 
@@ -885,9 +885,9 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
 }
 
 /// Full-precision weighted boolean: `true` with probability `p`, faithful to
-/// probabilities far below [`weighted_boolean_sample`]'s 1/256 quantization
-/// floor (which would turn e.g. a stateful stop signal's `p = 2^-16` into
-/// `1/256`).
+/// probabilities far closer to 0 or 1 than [`weighted_boolean_sample`]'s
+/// 1/256 quantization allows (which would turn e.g. the stateful continue
+/// signal's `p = 1 - 2^-32` into `1 - 1/256`).
 ///
 /// Delegates to [`RngExt::random_bool`], which scales `p` to a 64-bit
 /// threshold and compares it against a fresh `u64` — spending 8 bytes of
@@ -985,37 +985,21 @@ static GLOBAL_CONSTANTS_STRINGS: Lazy<Vec<Vec<u32>>> = Lazy::new(|| {
 /// from the full alphabet (~1.1M codepoints) almost never produces the
 /// `XXY`-shape strings that property tests of, for example, run-length
 /// encoding need to find.
-/// Per-alphabet cache of which [`GLOBAL_CONSTANTS_STRINGS`] entries consist
-/// solely of codepoints the alphabet contains. Validating the ~60 constants
-/// (some 40+ codepoints long) against the alphabet on every string draw is
-/// the dominant cost of `biased_string_sample`, and the containment result
-/// depends only on the immutable `IntervalSet`, so it is memoised per
-/// allocation. Entries are keyed by the `Arc`'s address with a `Weak`
-/// identity check, so an address reused after a drop cannot serve a stale
-/// mask — it recomputes and overwrites its slot.
-fn constants_in_alphabet(intervals: &Arc<IntervalSet>) -> Arc<[bool]> {
-    type Cache = Mutex<HashMap<usize, (alloc::sync::Weak<IntervalSet>, Arc<[bool]>)>>;
-    static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
-    let key = Arc::as_ptr(intervals) as usize;
-    {
-        let guard = CACHE.lock();
-        if let Some((weak, mask)) = guard.get(&key) {
-            if weak
-                .upgrade()
-                .is_some_and(|live| Arc::ptr_eq(&live, intervals))
-            {
-                return Arc::clone(mask);
-            }
-        }
-    }
-    let mask: Arc<[bool]> = GLOBAL_CONSTANTS_STRINGS
-        .iter()
-        .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
-        .collect();
-    CACHE
-        .lock()
-        .insert(key, (Arc::downgrade(intervals), Arc::clone(&mask)));
-    mask
+/// Which [`GLOBAL_CONSTANTS_STRINGS`] entries consist solely of codepoints
+/// the alphabet contains. Validating the ~60 constants (some 40+ codepoints
+/// long) against the alphabet on every string draw is the dominant cost of
+/// `biased_string_sample`, and the containment result depends only on the
+/// immutable `IntervalSet`, so it is memoised on the set itself and lives
+/// exactly as long as the alphabet does.
+fn constants_in_alphabet(intervals: &IntervalSet) -> &[bool] {
+    intervals.string_constants_mask.get_or_init(|| {
+        Box::new(
+            GLOBAL_CONSTANTS_STRINGS
+                .iter()
+                .map(|cps| cps.iter().all(|&cp| intervals.contains(cp)))
+                .collect(),
+        )
+    })
 }
 
 pub(crate) fn biased_string_sample(
@@ -1375,13 +1359,8 @@ pub struct FamilyCore {
     /// the label plus the numeric observation for `event_value`. Family-wide
     /// so clone-stream events land on the same test case.
     pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
-    /// When set, state machines draw no step cap and never report their
-    /// rule sequence as done. Set for single-test-case runs, which explore
-    /// one unbounded test case instead of many capped ones.
-    state_machine_steps_unbounded: AtomicBool,
     /// Target number of rounds a stateful test case runs. Bounds the
-    /// per-round stop decision in [`NativeStateMachine::next_group`];
-    /// ignored when [`Self::state_machine_steps_unbounded`] is set.
+    /// per-round stop decision in [`NativeStateMachine::next_group`].
     /// Defaults to 50, overridden per run from the `stateful_step_count`
     /// setting.
     stateful_step_count: AtomicI64,
@@ -1404,7 +1383,6 @@ impl FamilyCore {
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
             events: Mutex::new(Vec::new()),
-            state_machine_steps_unbounded: AtomicBool::new(false),
             stateful_step_count: AtomicI64::new(50),
             fresh_ids: Mutex::new(BTreeSet::new()),
             generation_parameters: OnceBox::new(),
@@ -1425,17 +1403,6 @@ impl FamilyCore {
             .get()
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Make every state machine of this family run without a step cap.
-    pub(crate) fn set_state_machine_steps_unbounded(&self) {
-        self.state_machine_steps_unbounded
-            .store(true, Ordering::Relaxed);
-    }
-
-    /// Whether state machines of this family run without a step cap.
-    pub(crate) fn state_machine_steps_unbounded(&self) -> bool {
-        self.state_machine_steps_unbounded.load(Ordering::Relaxed)
     }
 
     /// Set the target number of steps a stateful test case runs.
@@ -1559,6 +1526,8 @@ pub struct NativeTestCase {
 }
 
 impl NativeTestCase {
+    /// A fresh randomly generated test case: the replay primitive's
+    /// fresh-generation tier under nondeterministic handling.
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
         Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
     }
@@ -2291,8 +2260,8 @@ impl NativeTestCase {
 
     /// Like [`Self::weighted`], but samples with the full-precision
     /// [`weighted_boolean_sample_precise`], so probabilities below the one-byte
-    /// sampler's 1/256 floor (e.g. a stateful stop signal at `p = 2^-16`) are
-    /// honored. Routed here from `generate_boolean`.
+    /// sampler's 1/256 quantization (e.g. the stateful continue signal at
+    /// `p = 1 - 2^-32`) are honored. Routed here from `generate_boolean`.
     pub fn weighted_precise(&mut self, p: f64, forced: Option<bool>) -> Result<bool, EngineError> {
         self.weighted_with(p, forced, weighted_boolean_sample_precise)
     }

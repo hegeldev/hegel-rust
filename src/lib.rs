@@ -230,9 +230,37 @@
 //! documentation for the full contract and the patterns that are safe to
 //! rely on.
 //!
+//! ## The engine library
+//!
+//! Hegel's engine is `libhegel_c`, a shared library that hegeltest's build
+//! script compiles and your tests load at runtime, so the engine's Rust
+//! dependencies never appear in your cargo graph. `cargo test` and
+//! `cargo run` find the library automatically. A binary that runs anywhere
+//! else — a deployed `#[hegel::main]` fuzzer, say — needs the library
+//! shipped next to the executable, its directory named in the
+//! `HEGEL_C_LIB_DIR` environment variable, or a copy installed where the
+//! platform's own library search looks (`LD_LIBRARY_PATH` and friends),
+//! which is tried last. `HEGEL_C_LIB_DIR` overrides the whole search,
+//! including in the build script, where a prebuilt library lets offline
+//! builds skip the compile. Whichever copy is found must be the exact
+//! engine version this crate was built against. A mismatched library is
+//! refused on load with an error naming both versions.
+//!
+//! Alternatively, the `static-engine` feature links the engine into your
+//! binary as an ordinary Rust dependency. Binaries are then self-contained,
+//! but the engine's entire dependency tree becomes visible to your build,
+//! where it is subject to cargo feature unification and can even change
+//! type inference in unrelated code (a `PartialEq<serde_json::Value>` impl
+//! is enough to make `assert_eq!(true, ...)` ambiguous). Opt in where
+//! self-contained binaries matter more than that isolation.
+//!
 //! ## Learning more
 //!
 //! - Browse the [`generators`] module for the full list of available generators.
+//! - `use hegel::prelude::*;` brings in the imports these examples spell out
+//!   (see [`prelude`]).
+//! - Read the [`pretty`] module docs for how a failing test reports the values
+//!   it drew, and how to make your own types printable.
 //! - See [`Settings`] for more configuration settings to customise how your test runs.
 
 #![forbid(future_incompatible)]
@@ -262,15 +290,35 @@ pub use generators::PrintableGenerator;
 pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
 pub use test_case::TestCase;
 
+/// The imports nearly every hegel test wants in scope.
+///
+/// ```no_run
+/// use hegel::prelude::*;
+///
+/// #[hegel::test]
+/// fn doubling_preserves_parity(tc: TestCase) {
+///     let n = tc.draw(gs::integers::<i32>().max_value(1000));
+///     assert_eq!((n * 2) % 2, 0);
+/// }
+/// ```
+///
+/// Brings in the [`Generator`] and [`PrintableGenerator`] traits (so
+/// combinator and boxing methods resolve), the [`PrettyPrintable`] and
+/// [`DefaultGenerator`](generators::DefaultGenerator) traits and their
+/// derive macros, [`TestCase`], and the [`generators`] module both under
+/// its own name and its conventional alias `gs`.
+pub mod prelude {
+    pub use crate::DefaultGenerator;
+    pub use crate::generators;
+    pub use crate::generators::{self as gs, DefaultGenerator, Generator, PrintableGenerator};
+    pub use crate::{PrettyPrintable, TestCase};
+}
+
 #[doc(hidden)]
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
 pub use antithesis::TestLocation;
-
-#[doc(hidden)]
-#[cfg(feature = "__bench")]
-pub use hegel_c::__bench;
 
 /// Derive a generator for a struct or enum.
 ///
@@ -540,7 +588,8 @@ pub use hegel_macros::state_machine;
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
 /// invariants, checked in full on the machine's initial and final state and
-/// sampled at the join points between rounds. Rules in the same
+/// sampled at the join points between rounds (`#[invariant(always_run)]`
+/// runs at every join point instead). Rules in the same
 /// group may run concurrently with each other; rules in different groups
 /// never overlap.
 ///
@@ -642,6 +691,35 @@ pub use hegel_macros::concurrent_state_machine;
 /// ```
 pub use hegel_macros::test;
 
+/// Name the draws in a helper function after their bindings.
+///
+/// [`#[hegel::test]`](macro@test) and `#[state_machine]` rules rewrite
+/// `let x = tc.draw(..)` so the failure report names the draw `x`, but only
+/// for draws written directly in that body — a draw inside a helper function
+/// reports as the anonymous `draw_1`, `draw_2`, …. This attribute applies the
+/// same rewrite to the helper's body. Because a helper can run any number of
+/// times per test, its names always carry a counter suffix: `x_1`, `x_2`, ….
+///
+/// The attribute works on free functions and methods, and finds the test
+/// case by type: exactly one parameter must be a [`TestCase`] (by reference
+/// or value).
+///
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::generators as gs;
+///
+/// #[hegel::test_helper]
+/// fn draw_index(tc: &TestCase, len: usize) -> usize {
+///     let index = tc.draw(gs::integers::<usize>().max_value(len - 1));
+///     index
+/// }
+/// ```
+///
+/// A failing test that calls `draw_index` twice reports `let index_1 = …;`
+/// and `let index_2 = …;`. To name a single draw without the attribute, use
+/// [`TestCase::draw_named`].
+pub use hegel_macros::test_helper;
+
 /// Turn a function into a standalone Hegel binary entry point.
 ///
 /// The function must take exactly one parameter of type [`TestCase`]. Behaves
@@ -650,15 +728,27 @@ pub use hegel_macros::test;
 /// producing a `#[test]` it produces a plain function body that parses CLI
 /// arguments and runs a [`Hegel`] driver.
 ///
+/// Each invocation of the binary runs exactly one test case: invalid cases
+/// (a failed [`assume`](TestCase::assume)) are retried until one valid case
+/// has run, and a failure is shrunk, reported, and persisted to the failure
+/// database as usual, so a failure found by one invocation is replayed by
+/// the next. The test-case count is the one thing that cannot be changed:
+/// `test_cases` is rejected as an attribute arg, `--test-cases` is not
+/// accepted on the command line, and `HEGEL_TEST_CASES` has no effect.
+///
+/// The `TooSlow` and `TestCasesTooLarge` health checks are always
+/// suppressed: both judge how a run accumulates valid test cases, which a
+/// run of exactly one cannot be judged on. `FilterTooMuch` applies as usual.
+///
 /// Supported CLI flags (with defaults taken from the attribute args):
-/// `--test-cases`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
-/// `--suppress-health-check`, `-h` / `--help`.
+/// `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `--backend`, `-h` / `--help`.
 ///
 /// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;
 ///
-/// #[hegel::main(test_cases = 500)]
+/// #[hegel::main]
 /// fn main(tc: TestCase) {
 ///     let n: i32 = tc.draw(gs::integers());
 ///     assert_eq!(n + 0, n);
@@ -698,5 +788,5 @@ pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{
-    Backend, HealthCheck, Hegel, Mode, NondeterminismStrictness, Phase, Settings, Verbosity,
+    Backend, HealthCheck, Hegel, NondeterminismStrictness, Phase, Settings, Verbosity,
 };

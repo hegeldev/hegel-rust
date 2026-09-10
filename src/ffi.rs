@@ -14,8 +14,13 @@
 //! invalid-argument unwind). Keeping that split means the unsafe boundary stays
 //! small and the control-flow policy stays with the test lifecycle.
 
+pub(crate) mod sys;
+
+use self::sys as hegel_c;
+
+use crate::control::hegel_internal_error;
 use crate::runner::{
-    Backend, Database, HealthCheck, Mode, NondeterminismStrictness, Phase, Settings, Verbosity,
+    Backend, Database, HealthCheck, NondeterminismStrictness, Phase, Settings, Verbosity,
 };
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
@@ -33,7 +38,7 @@ impl Context {
     fn new() -> Self {
         // SAFETY: hegel_context_new never returns null.
         Context {
-            raw: hegel_c::hegel_context_new(),
+            raw: unsafe { hegel_c::hegel_context_new() },
         }
     }
 
@@ -139,11 +144,6 @@ impl SettingsHandle {
             // out-parameter.
             unsafe {
                 require_ok(hegel_c::hegel_settings_new(ctx, &mut raw));
-                require_ok(hegel_c::hegel_settings_set_mode(
-                    ctx,
-                    raw,
-                    map_mode(settings.mode),
-                ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
                     ctx,
                     raw,
@@ -431,6 +431,33 @@ impl CTestCase {
             hegel_c::hegel_test_case_should_capture(ctx, self.raw, &mut out)
         }));
         out
+    }
+
+    /// Open a block on this handle via `hegel_test_case_block`: a new
+    /// libhegel handle onto the *same* choice stream whose print region is
+    /// nested in this handle's at the current position, every line of it
+    /// indented `indent` columns further. This is how a stateful rule body
+    /// or a `repeat` iteration prints under its heading. The block is used
+    /// in place of this handle, never concurrently with it, and is freed
+    /// independently on drop.
+    pub(crate) fn block_handle(&self, indent: u64) -> CTestCase {
+        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
+        // SAFETY: self.raw is a live handle; &mut raw is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_block(ctx, self.raw, indent, &mut raw)
+        }));
+        CTestCase { raw }
+    }
+
+    /// Attribute the lines recorded through this handle — and through the
+    /// blocks and clones derived from it afterwards — to concurrent worker
+    /// `worker_index` (`hegel_test_case_set_worker`): the engine prefixes
+    /// each with `[worker N +X.XXXms] `, stamped when the line is recorded.
+    pub(crate) fn set_worker(&self, worker_index: i64) {
+        // SAFETY: self.raw is a live handle.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_set_worker(ctx, self.raw, worker_index)
+        }));
     }
 
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
@@ -781,7 +808,9 @@ impl CTestCase {
 
     /// Register a state machine. Each rule is assigned to a concurrency
     /// group by `rule_groups` (parallel to `rule_names`); group ids are
-    /// arbitrary and the machine has one group per distinct value. The
+    /// arbitrary and the machine has one group per distinct value. Each
+    /// invariant is flagged always-check or sampled by
+    /// `invariant_always_check` (parallel to `invariant_names`). The
     /// engine draws the concurrency level in
     /// `[min_concurrency, max_concurrency]` at creation — weighted toward
     /// the maximum (the engine owns the distribution) — and returns it
@@ -791,6 +820,7 @@ impl CTestCase {
         rule_names: &[&str],
         rule_groups: &[i64],
         invariant_names: &[&str],
+        invariant_always_check: &[bool],
         min_concurrency: i64,
         max_concurrency: i64,
     ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
@@ -810,6 +840,7 @@ impl CTestCase {
                 rule_groups.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
+                invariant_always_check.as_ptr(),
                 invariant_ptrs.len(),
                 min_concurrency,
                 max_concurrency,
@@ -948,6 +979,17 @@ impl CTestCase {
             }));
         });
         PrinterHandle { raw }
+    }
+
+    /// Append a note to this handle's print region (`hegel_note`): whole
+    /// lines, ordered with the handle's drawn values, indented with the
+    /// region's block, prefixed with the handle's worker attribution, and
+    /// held back by the engine while a drawn value is mid-print on the
+    /// region.
+    pub(crate) fn note(&self, text: &str) -> Result<(), PrinterCallError> {
+        PrinterHandle::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_note(ctx, self.raw, text.as_ptr(), text.len())
+        }))
     }
 
     /// Report the test case's outcome. `origin` is supplied only for an
@@ -1285,6 +1327,17 @@ impl PrinterHandle {
         }
     }
 
+    /// Whether this handle's region can still be written to: `false` once
+    /// the document has been read, or — for a deferred slot — once the
+    /// speculative region its anchor sat inside was aborted.
+    pub(crate) fn is_live(&self) -> bool {
+        let mut live = false;
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_is_live(ctx, self.raw, &mut live)
+        }));
+        live
+    }
+
     /// Emit literal text. Must not contain newlines.
     pub(crate) fn text(&self, s: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
@@ -1447,8 +1500,8 @@ impl RunResult {
 
     /// The `index`-th distinct failure; `index` must be less than
     /// [`failure_count`](Self::failure_count) (libhegel rejects an
-    /// out-of-range index). The blob is copied out and the libhegel failure
-    /// snapshot released before returning.
+    /// out-of-range index). The strings are copied out and the libhegel
+    /// failure snapshot released before returning.
     pub(crate) fn failure(&self, index: usize) -> Failure {
         let mut f: *mut hegel_c::HegelFailure = ptr::null_mut();
         // SAFETY: self.raw is this snapshot's live pointer; &mut f is valid.
@@ -1465,7 +1518,8 @@ impl RunResult {
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
             require_ok(hegel_c::hegel_failure_caveat(ctx, f, &mut caveat));
             let failure = Failure {
-                origin: cstr_opt(origin).unwrap_or_default(),
+                origin: cstr_opt(origin)
+                    .unwrap_or_else(|| hegel_internal_error!("failure {index} has no origin")),
                 reproduce_blob: cstr_opt(blob),
                 caveat: cstr_opt(caveat),
             };
@@ -1527,13 +1581,6 @@ fn cstr_opt(p: *const c_char) -> Option<String> {
         None
     } else {
         Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
-    }
-}
-
-fn map_mode(mode: Mode) -> u32 {
-    match mode {
-        Mode::TestRun => hegel_c::hegel_mode_t::HEGEL_MODE_TEST_RUN as u32,
-        Mode::SingleTestCase => hegel_c::hegel_mode_t::HEGEL_MODE_SINGLE_TEST_CASE as u32,
     }
 }
 

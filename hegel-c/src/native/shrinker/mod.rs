@@ -99,7 +99,9 @@ pub trait ShrinkProbe {
     /// follow a validated accept — anchor raises, incumbent persistence —
     /// belong here, not in `run`. A probe wrapping another must forward
     /// this, or the default swallows the inner probe's accepts.
-    fn candidate_adopted(&mut self) {}
+    fn candidate_adopted(&mut self) -> Result<(), InternalError> {
+        Ok(())
+    }
 }
 
 impl<F> ShrinkProbe for F
@@ -388,7 +390,7 @@ impl<'a> Shrinker<'a> {
             self.run_test_fn(ShrinkRun::Full(nodes)).await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
             return Ok(true);
         }
         Ok(false)
@@ -435,7 +437,7 @@ impl<'a> Shrinker<'a> {
             .await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
         }
         Ok(())
     }
@@ -443,8 +445,12 @@ impl<'a> Shrinker<'a> {
     /// Common bookkeeping when a candidate becomes the new shrink target:
     /// record the displaced sequence, bump `improvements`, fold the diff
     /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
-    fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
-        self.test_fn.candidate_adopted();
+    fn accept_improvement(
+        &mut self,
+        new_nodes: Vec<ChoiceNode>,
+        new_spans: Spans,
+    ) -> ShrinkResult<()> {
+        self.test_fn.candidate_adopted()?;
         let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
@@ -461,6 +467,7 @@ impl<'a> Shrinker<'a> {
         );
         self.current_nodes = new_nodes;
         self.current_spans = new_spans;
+        Ok(())
     }
 
     /// Update `changed` to reflect a diff between `prev` and `new`.
@@ -615,6 +622,7 @@ impl<'a> Shrinker<'a> {
                 "remove_discarded",
                 Box::new(|sh| boxed_pass(async move { sh.remove_discarded().await.map(|_| ()) })),
             ),
+            ShrinkPass::new("delete_spans", Box::new(|sh| boxed_pass(sh.delete_spans()))),
             ShrinkPass::new(
                 "try_trivial_spans",
                 Box::new(|sh| boxed_pass(sh.try_trivial_spans())),
@@ -650,6 +658,10 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "delete_chunks",
                 Box::new(|sh| boxed_pass(sh.delete_chunks())),
+            ),
+            ShrinkPass::new(
+                "delete_between_repeats",
+                Box::new(|sh| boxed_pass(sh.delete_between_repeats())),
             ),
             ShrinkPass::new("zero_choices", Box::new(|sh| boxed_pass(sh.zero_choices()))),
             ShrinkPass::new(

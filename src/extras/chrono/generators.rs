@@ -1,3 +1,4 @@
+use crate::ffi::sys as hegel_c;
 use crate::generators::{
     DefaultGenerator, Generator, PrintableGenerator, TestCase, hashsets, integers,
 };
@@ -6,6 +7,49 @@ use crate::pretty::{PrettyPrintable, PrettyPrinter};
 impl PrettyPrintable for Weekday {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
         printer.text(&format!("Weekday::{self:?}"));
+    }
+}
+
+impl PrettyPrintable for chrono::Month {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!("Month::{self:?}"));
+    }
+}
+
+/// `Days` and `Months` expose no accessor for their value, so the
+/// constructor argument is recovered from the derived `Debug` output
+/// (`Days(5)`); a representation that stops matching that shape prints
+/// as-is.
+fn print_counted_constructor(repr: &str, name: &str, printer: &mut PrettyPrinter) {
+    match repr
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('('))
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        Some(count) => printer.text(&format!("{name}::new({count})")),
+        None => crate::pretty::print_debug_repr(repr, printer),
+    }
+}
+
+macro_rules! pretty_wrapped_count {
+    ($($t:ty, $name:literal);+) => {$(
+        impl PrettyPrintable for $t {
+            fn pretty_print(&self, printer: &mut PrettyPrinter) {
+                print_counted_constructor(&format!("{self:?}"), $name, printer);
+            }
+        }
+    )+};
+}
+
+pretty_wrapped_count!(chrono::Days, "Days"; chrono::Months, "Months");
+
+impl PrettyPrintable for chrono::IsoWeek {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "NaiveDate::from_isoywd_opt({}, {}, Weekday::Mon).unwrap().iso_week()",
+            self.year(),
+            self.week()
+        ));
     }
 }
 
@@ -753,3 +797,7 @@ pub fn datetimes() -> DateTimeGenerator<FixedOffsetGenerator, FixedOffset> {
         _phantom: PhantomData,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/extras/chrono/generators_tests.rs"]
+mod tests;

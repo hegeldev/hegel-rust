@@ -7,6 +7,7 @@
 //! but going through the Rust wrappers the rest of hegeltest will use.
 
 use super::*;
+use crate::ffi::sys as hegel_c;
 use crate::runner::{Backend, Settings};
 
 #[test]
@@ -100,7 +101,7 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
         use crate::test_case::full_ranges;
         let d = tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE)?;
         assert!((1..=9999).contains(&d.year));
-        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND)?;
+        let t = tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_NANOSECOND)?;
         assert!(t.hour <= 23);
         let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME)?;
         assert!((1..=12).contains(&dt.date.month));
@@ -137,7 +138,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
         ));
         assert!(matches!(tc.new_pool(), Err(ALREADY_COMPLETE)));
         assert!(matches!(
-            tc.new_state_machine(&["only"], &[0], &[], 1, 1),
+            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1),
             Err(ALREADY_COMPLETE)
         ));
     }
@@ -217,8 +218,12 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     let result = run.result();
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
-    let blob = result
-        .failure(0)
+    let failure = result.failure(0);
+    assert_eq!(
+        failure.origin, origin,
+        "the engine reports the origin the failure was marked complete with"
+    );
+    let blob = failure
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 

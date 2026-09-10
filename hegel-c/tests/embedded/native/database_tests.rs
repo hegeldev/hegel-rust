@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::bignum::BigInt;
-use crate::native::core::ChoiceValue;
-use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::{BooleanChoice, RealizedStream};
+use crate::native::core::{ChoiceNode, ChoiceValue, CloneRecord, MAX_CLONE_DEPTH};
 use alloc::string::ToString;
 use alloc::vec;
 use tempfile::TempDir;
@@ -106,14 +106,14 @@ fn round_trip_mixed_choices() {
         ChoiceValue::Integer(BigInt::from(42)),
         ChoiceValue::Boolean(true),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
 #[test]
 fn deserialize_choices_exact_rejects_trailing_bytes() {
     let choices = vec![ChoiceValue::Boolean(true)];
-    let mut bytes = serialize_choices(&choices);
+    let mut bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices_exact(&bytes), Some(choices.clone()));
     bytes.push(0);
     assert_eq!(deserialize_choices(&bytes), Some(choices));
@@ -239,7 +239,7 @@ fn serialize_roundtrips_various_integer_values() {
         ChoiceValue::Integer(BigInt::from(i128::MIN) * BigInt::from(7)),
         ChoiceValue::Integer(BigInt::from(0)),
     ];
-    let bytes = serialize_choices(&values);
+    let bytes = serialize_choices(&values).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(values));
 }
 
@@ -270,7 +270,7 @@ fn round_trip_float_choices_preserves_bit_pattern() {
         ChoiceValue::Float(f64::MAX),
         ChoiceValue::Float(f64::MIN_POSITIVE),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     let round_tripped = deserialize_choices(&bytes).unwrap();
     assert_eq!(round_tripped.len(), choices.len());
     for (got, want) in round_tripped.iter().zip(choices.iter()) {
@@ -299,7 +299,7 @@ fn round_trip_bytes_choices() {
         ChoiceValue::Bytes(vec![0xff, 0x00, 0x80, 0x7f]),
         ChoiceValue::Bytes(vec![1; 1024]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -328,7 +328,7 @@ fn round_trip_string_choices() {
         ChoiceValue::String(vec![b'a' as u32, b'b' as u32, b'c' as u32]),
         ChoiceValue::String(vec![0x2603, 0x1F600, 0]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -455,7 +455,7 @@ fn serialize_roundtrips_clone_values() {
         ]),
         ChoiceValue::Bytes(vec![7]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -473,7 +473,7 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
             discarded: false,
         }],
     )));
-    let bytes = serialize_choices(std::slice::from_ref(&realized));
+    let bytes = serialize_choices(std::slice::from_ref(&realized)).unwrap();
     let round_tripped = deserialize_choices(&bytes).unwrap();
     assert_eq!(round_tripped.len(), 1);
     assert_eq!(round_tripped[0], realized);
@@ -521,4 +521,56 @@ fn deserialize_rejects_clone_nesting_beyond_max_depth() {
     ok_bytes.extend_from_slice(&0u32.to_le_bytes());
     let decoded = deserialize_choices(&ok_bytes).unwrap();
     assert_eq!(decoded.len(), 1);
+}
+
+fn nested_clones(depth: usize) -> Vec<ChoiceValue> {
+    let mut choices = vec![ChoiceValue::Boolean(true)];
+    for _ in 0..depth {
+        choices = vec![ChoiceValue::Clone(std::sync::Arc::new(
+            CloneRecord::from_values(choices),
+        ))];
+    }
+    choices
+}
+
+#[test]
+fn serialize_round_trips_clone_nesting_at_max_depth() {
+    let choices = nested_clones(MAX_CLONE_DEPTH);
+    let bytes = serialize_choices(&choices).unwrap();
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn serialize_rejects_clone_nesting_beyond_max_depth() {
+    assert!(serialize_choices(&nested_clones(MAX_CLONE_DEPTH + 1)).is_none());
+}
+
+fn nested_clone_nodes(depth: usize) -> Vec<ChoiceNode> {
+    let mut nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
+    for _ in 0..depth {
+        nodes = vec![ChoiceNode::clone_stream(
+            std::sync::Arc::new(RealizedStream::new(nodes, Vec::new())),
+            false,
+        )];
+    }
+    nodes
+}
+
+#[test]
+fn serialize_nodes_matches_serialize_choices_at_max_depth() {
+    let nodes = nested_clone_nodes(MAX_CLONE_DEPTH);
+    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+    assert_eq!(
+        serialize_nodes(&nodes).unwrap(),
+        serialize_choices(&choices).unwrap()
+    );
+    assert_eq!(
+        deserialize_choices(&serialize_nodes(&nodes).unwrap()),
+        Some(choices)
+    );
+}
+
+#[test]
+fn serialize_nodes_rejects_clone_nesting_beyond_max_depth() {
+    assert!(serialize_nodes(&nested_clone_nodes(MAX_CLONE_DEPTH + 1)).is_none());
 }

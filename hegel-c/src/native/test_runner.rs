@@ -29,6 +29,7 @@ use alloc::vec::Vec;
 use rand::RngExt;
 
 use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
+use crate::control::InternalError;
 use crate::exchange::CaseExchange;
 use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
@@ -192,28 +193,6 @@ pub(crate) async fn explore(
         core::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
     )
     .await
-}
-
-/// Run one test case (used by `Mode::SingleTestCase`) and return its
-/// failure, if any.
-///
-/// A single test case is not a property-test run — there is no exploration,
-/// shrinking, or replay — so it bypasses [`explore`] entirely; the one case
-/// offered through the exchange is its own report.
-pub(crate) async fn run_single_case(
-    settings: &Settings,
-    database_key: Option<&str>,
-    exchange: &CaseExchange,
-) -> Result<Option<Failure>, RunError> {
-    let mut rng = create_rng(settings, database_key)?;
-    let ntc = NativeTestCase::new_random(rng.spawn())?;
-    ntc.family().set_state_machine_steps_unbounded();
-    let (data_source, handle) = NativeDataSource::new(ntc);
-    exchange.offer(Box::new(data_source)).await;
-    match NativeDataSource::take_outcome(&handle)? {
-        TestCaseResult::Interesting(failure) => Ok(Some(failure)),
-        _ => Ok(None),
-    }
 }
 
 /// Replay a reproduce blob (used by `hegel_run_start_blob`) and return the
@@ -485,6 +464,7 @@ impl<'a> Engine<'a> {
             && !self.test_is_trivial
             && self.within_invalid_budget(invalid_budget)
             && !found_in_reuse
+            && max_test_cases > 1
         {
             let (run, mismatch) = self
                 .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
@@ -496,9 +476,7 @@ impl<'a> Engine<'a> {
                 run.status == Status::EarlyStop,
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
-                settings
-                    .suppress_health_check
-                    .contains(&HealthCheck::LargeInitialTestCase),
+                settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
                 return Err(RunError::HealthCheck(msg));
             }
@@ -564,9 +542,7 @@ impl<'a> Engine<'a> {
                     if run.status == Status::Invalid
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
-                        && !settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::FilterTooMuch)
+                        && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
                     {
                         return Err(RunError::HealthCheck(format!(
                             "FailedHealthCheck: FilterTooMuch — it looks like this \
@@ -581,9 +557,7 @@ impl<'a> Engine<'a> {
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
                         self.overrun_test_cases,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TestCasesTooLarge),
+                        settings.health_check_suppressed(HealthCheck::TestCasesTooLarge),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -592,9 +566,7 @@ impl<'a> Engine<'a> {
                         self.valid_test_cases,
                         self.total_test_time,
                         too_slow_threshold,
-                        settings
-                            .suppress_health_check
-                            .contains(&HealthCheck::TooSlow),
+                        settings.health_check_suppressed(HealthCheck::TooSlow),
                     ) {
                         return Err(RunError::HealthCheck(msg));
                     }
@@ -632,13 +604,23 @@ impl<'a> Engine<'a> {
         self.nd_discovery_sweep(verbosity, &output).await?;
         self.capture_discoveries = false;
 
+        if self.test_is_trivial
+            && self.valid_test_cases == 0
+            && !self.origins.any_live()
+            && self.invalid_test_cases > 0
+        {
+            return Err(RunError::Unsatisfiable(
+                "Unsatisfiable: unable to satisfy the test's assumptions. The \
+             test draws no data, and assume() rejected its only possible input."
+                    .to_string(),
+            ));
+        }
+
         if self.consecutive_duplicates >= DUPLICATE_STOP
             && self.valid_test_cases == 0
             && !self.origins.any_live()
             && !self.test_is_trivial
-            && !settings
-                .suppress_health_check
-                .contains(&HealthCheck::FilterTooMuch)
+            && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
             && self.invalid_test_cases > 0
         {
             return Err(RunError::HealthCheck(format!(
@@ -679,11 +661,9 @@ impl<'a> Engine<'a> {
                     let primary_max: Option<Vec<u8>> = self
                         .origins
                         .live()
-                        .map(|(_, nodes)| {
-                            let choices: Vec<ChoiceValue> =
-                                nodes.iter().map(|n| n.value()).collect();
-                            serialize_choices(&choices)
-                        })
+                        .map(|(_, nodes)| serialize_executed_nodes(nodes))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
                         .max_by(|a, b| shortlex(a, b));
                     for raw in entries {
                         if primary_max
@@ -774,25 +754,52 @@ impl<'a> Engine<'a> {
         self.final_replay(verbosity, &output, final_deadline, shrink_phase)
             .await?;
 
-        if let (Some(db), Some(key)) = (self.db(), database_key) {
+        self.reconcile_database()?;
+
+        if verbosity == Verbosity::Debug {
+            output.line(&format!(
+                "Test done. interesting_test_cases={}",
+                self.origins.live().count()
+            ));
+        }
+
+        if settings.show_statistics {
+            for line in self.statistics.render() {
+                output.line(&line);
+            }
+        }
+
+        Ok(self.build_report()?)
+    }
+
+    /// End-of-run database reconciliation: save every surviving failure's
+    /// bytes — the version-2 replay state for confirmed and trusted origins
+    /// under nondeterministic handling, the incumbent's choices otherwise —
+    /// then dispatch each displaced primary entry by provenance (same-run
+    /// leftovers are deleted, run-start entries demote to the secondary
+    /// key) and evict the shortlex-largest secondary entries above
+    /// [`SECONDARY_CORPUS_CAP`].
+    fn reconcile_database(&self) -> Result<(), InternalError> {
+        if let (Some(db), Some(key)) = (self.db(), self.database_key) {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::database::sub_key(key_bytes, b"secondary");
-            let new_entries: crate::native::HashSet<Vec<u8>> = if self.nd_handling() {
-                self.origins
-                    .iter()
-                    .filter(|(_, c)| !c.needs_confirmation())
-                    .filter_map(|(_, c)| c.incumbent_values().map(|v| c.repro_state(v)))
-                    .map(|state| crate::native::blob::encode_nd_state(&state))
-                    .collect()
+            let mut new_entries: crate::native::HashSet<Vec<u8>> =
+                crate::native::HashSet::default();
+            if self.nd_handling() {
+                for (_, counterexample) in self.origins.iter() {
+                    if counterexample.needs_confirmation() {
+                        continue;
+                    }
+                    if let Some(values) = counterexample.incumbent_values() {
+                        let state = counterexample.repro_state(values)?;
+                        new_entries.insert(encode_nd_state_checked(&state)?);
+                    }
+                }
             } else {
-                self.origins
-                    .live()
-                    .map(|(_, nodes)| {
-                        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                        serialize_choices(&choices)
-                    })
-                    .collect()
-            };
+                for (_, nodes) in self.origins.live() {
+                    new_entries.insert(serialize_executed_nodes(nodes)?);
+                }
+            }
             let primary_now = db.fetch(key_bytes);
             for new_bytes in &new_entries {
                 db.save(key_bytes, new_bytes);
@@ -817,21 +824,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-
-        if verbosity == Verbosity::Debug {
-            output.line(&format!(
-                "Test done. interesting_test_cases={}",
-                self.origins.live().count()
-            ));
-        }
-
-        if settings.show_statistics {
-            for line in self.statistics.render() {
-                output.line(&line);
-            }
-        }
-
-        Ok(self.build_report())
+        Ok(())
     }
 
     /// Assemble the run's failure report, enforcing decision 24 at the
@@ -843,7 +836,7 @@ impl<'a> Engine<'a> {
     /// origins (bar rejects and never-replayed report-time admissions
     /// alike) report caveat-only, and only when nothing confirmed or
     /// trusted survived (decision 3).
-    fn build_report(&mut self) -> TestRunResult {
+    fn build_report(&mut self) -> Result<TestRunResult, InternalError> {
         let nd_blobs = self.nd_handling();
         let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = self
             .origins
@@ -864,13 +857,18 @@ impl<'a> Engine<'a> {
         for (origin, nodes) in origins_sorted {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             let (reproduce_blob, caveat) = if nd_blobs {
-                let state = self.nd_state_for(&origin, choices);
-                (
-                    Some(crate::native::blob::encode_nd_failure(&state)),
-                    self.origins.caveat(&origin),
-                )
+                let state = self.nd_state_for(&origin, choices)?;
+                let blob = crate::control::hegel_internal_unwrap!(
+                    crate::native::blob::encode_nd_failure(&state),
+                    "a failing test case's clone values nest deeper than MAX_CLONE_DEPTH"
+                );
+                (Some(blob), self.origins.caveat(&origin))
             } else {
-                (Some(crate::native::blob::encode_failure(&choices)), None)
+                let blob = crate::control::hegel_internal_unwrap!(
+                    crate::native::blob::encode_failure(&choices),
+                    "a failing test case's clone values nest deeper than MAX_CLONE_DEPTH"
+                );
+                (Some(blob), None)
             };
             failures.push(Failure {
                 origin,
@@ -892,7 +890,7 @@ impl<'a> Engine<'a> {
                 });
             }
         }
-        TestRunResult { failures }
+        Ok(TestRunResult { failures })
     }
 }
 
@@ -1092,6 +1090,35 @@ fn within_invalid_budget(
     (invalid_test_cases + overrun_test_cases) <= base + per_valid * valid_test_cases
 }
 
+/// The database bytes for an executed test case's nodes. The engine bounds
+/// clone nesting at `MAX_CLONE_DEPTH` as the case runs, so the serializer
+/// refusing its values is a violated internal invariant.
+fn serialize_executed_nodes(nodes: &[ChoiceNode]) -> Result<Vec<u8>, InternalError> {
+    Ok(crate::control::hegel_internal_unwrap!(
+        serialize_nodes(nodes),
+        "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+    ))
+}
+
+/// [`serialize_executed_nodes`] for a realized timeline's values.
+fn serialize_executed_choices(choices: &[ChoiceValue]) -> Result<Vec<u8>, InternalError> {
+    Ok(crate::control::hegel_internal_unwrap!(
+        serialize_choices(choices),
+        "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+    ))
+}
+
+/// The version-2 entry bytes for replay state built from executed
+/// timelines, under the same invariant as [`serialize_executed_nodes`].
+fn encode_nd_state_checked(
+    state: &crate::native::blob::NdReproState,
+) -> Result<Vec<u8>, InternalError> {
+    Ok(crate::control::hegel_internal_unwrap!(
+        crate::native::blob::encode_nd_state(state),
+        "a stored timeline's clone values nest deeper than MAX_CLONE_DEPTH"
+    ))
+}
+
 /// Shortlex ordering over serialized choice sequences: by length first, then
 /// lexicographically. Mirrors Hypothesis's `shortlex` database ordering.
 fn shortlex(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
@@ -1177,10 +1204,10 @@ impl<'a> Persister<'a> {
     /// sighting, or shortlex-precedes the previous save, the new bytes are
     /// written to the primary key and any previously-saved bytes for this
     /// origin are then deleted.
-    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
-        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-        let new_bytes = serialize_choices(&new_choices);
+    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) -> Result<(), InternalError> {
+        let new_bytes = serialize_executed_nodes(nodes)?;
         self.record_bytes(origin, nodes, new_bytes);
+        Ok(())
     }
 
     /// [`Self::record`] for a nondeterministic origin: the entry is the
@@ -1191,9 +1218,10 @@ impl<'a> Persister<'a> {
         origin: &str,
         nodes: &[ChoiceNode],
         state: &crate::native::blob::NdReproState,
-    ) {
-        let new_bytes = crate::native::blob::encode_nd_state(state);
+    ) -> Result<(), InternalError> {
+        let new_bytes = encode_nd_state_checked(state)?;
         self.record_bytes(origin, nodes, new_bytes);
+        Ok(())
     }
 
     /// [`Self::record_nd`] for a backtrack-restored incumbent: the restored
@@ -1206,9 +1234,10 @@ impl<'a> Persister<'a> {
         origin: &str,
         nodes: &[ChoiceNode],
         state: &crate::native::blob::NdReproState,
-    ) {
-        let new_bytes = crate::native::blob::encode_nd_state(state);
+    ) -> Result<(), InternalError> {
+        let new_bytes = encode_nd_state_checked(state)?;
         self.record_bytes_forced(origin, nodes, new_bytes, true);
+        Ok(())
     }
 
     fn record_bytes(&mut self, origin: &str, nodes: &[ChoiceNode], new_bytes: Vec<u8>) {
@@ -1462,6 +1491,7 @@ impl<'a> Engine<'a> {
         self.consecutive_duplicates = 0;
         if self.settings.nondeterminism_strictness == NondeterminismStrictness::Warn
             && self.settings.verbosity != Verbosity::Quiet
+            && !self.settings.in_antithesis
         {
             self.settings.output.line(nondeterminism_notice());
         }
@@ -1637,7 +1667,7 @@ impl<'a> Engine<'a> {
                     batch.captured.into_iter().chain(trusted.pool().to_vec()),
                 );
                 trusted.confirm(probe_anchor, None, pool, evidence)?;
-                self.record_nd_incumbent(&origin, &initial);
+                self.record_nd_incumbent(&origin, &initial)?;
                 witness
             } else {
                 self.origins.entry(&origin).record_trusted_batch(evidence);
@@ -1679,7 +1709,7 @@ impl<'a> Engine<'a> {
             self.origins
                 .entry(&origin)
                 .confirm(probe_anchor, None, pool, evidence)?;
-            self.record_nd_incumbent(&origin, &initial);
+            self.record_nd_incumbent(&origin, &initial)?;
             witness
         };
 
@@ -2007,6 +2037,10 @@ impl<'a> Engine<'a> {
                     .collect()
             })
             .unwrap_or_default();
+        let entry_keys: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|(timeline, _)| serialize_executed_choices(timeline))
+            .collect::<Result<_, _>>()?;
         let attempts_left = self
             .origins
             .get(origin)
@@ -2082,12 +2116,7 @@ impl<'a> Engine<'a> {
                 } else {
                     raws.iter()
                         .filter(|&&i| status[i] == Some(true))
-                        .min_by(|&&a, &&b| {
-                            shortlex(
-                                &serialize_choices(&entries[a].0),
-                                &serialize_choices(&entries[b].0),
-                            )
-                        })
+                        .min_by(|&&a, &&b| shortlex(&entry_keys[a], &entry_keys[b]))
                         .copied()
                 }
             };
@@ -2171,8 +2200,8 @@ impl<'a> Engine<'a> {
                 });
             }
             let incumbent: Vec<ChoiceValue> = entries[candidate].0.clone();
-            let state = self.nd_state_for(origin, incumbent);
-            self.persister.supersede_nd(origin, &nodes, &state);
+            let state = self.nd_state_for(origin, incumbent)?;
+            self.persister.supersede_nd(origin, &nodes, &state)?;
             return Ok(Backtrack::Restored { nodes });
         }
     }
@@ -2674,7 +2703,7 @@ impl<'a> Engine<'a> {
                     evidence,
                 );
                 confirmed?;
-                self.record_nd_incumbent(&origin, &nodes);
+                self.record_nd_incumbent(&origin, &nodes)?;
             } else {
                 self.reject_origin(&origin, evidence, false);
             }
@@ -2693,7 +2722,7 @@ impl<'a> Engine<'a> {
         &self,
         origin: &str,
         incumbent: Vec<ChoiceValue>,
-    ) -> crate::native::blob::NdReproState {
+    ) -> Result<crate::native::blob::NdReproState, InternalError> {
         match self.origins.get(origin) {
             Some(counterexample) => counterexample.repro_state(incumbent),
             None => Counterexample::default().repro_state(incumbent),
@@ -2726,10 +2755,14 @@ impl<'a> Engine<'a> {
     /// Persist `origin`'s new incumbent as a version-2 entry carrying its
     /// timeline pool — the validated-persistence points under ND handling
     /// (confirmation and gauntlet accepts).
-    fn record_nd_incumbent(&mut self, origin: &str, nodes: &[ChoiceNode]) {
+    fn record_nd_incumbent(
+        &mut self,
+        origin: &str,
+        nodes: &[ChoiceNode],
+    ) -> Result<(), InternalError> {
         let incumbent: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-        let state = self.nd_state_for(origin, incumbent);
-        self.persister.record_nd(origin, nodes, &state);
+        let state = self.nd_state_for(origin, incumbent)?;
+        self.persister.record_nd(origin, nodes, &state)
     }
 
     /// Spawn an independent RNG from the engine's, for components (probes,
@@ -2779,7 +2812,7 @@ impl<'a> Engine<'a> {
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
         let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
-        let mut mismatch = self.record_run(&run, elapsed, measurement);
+        let mut mismatch = self.record_run(&run, elapsed, measurement)?;
         if mismatch.is_some()
             && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
         {
@@ -2810,11 +2843,11 @@ impl<'a> Engine<'a> {
         run: &RunResult,
         elapsed: core::time::Duration,
         measurement: bool,
-    ) -> Option<RunError> {
+    ) -> Result<Option<RunError>, InternalError> {
         let mismatch = if self.nd_active {
             None
         } else {
-            self.record_execution(run, measurement)
+            self.record_execution(run, measurement)?
         };
         if measurement {
             if self.nd_active || self.check_window {
@@ -2852,16 +2885,16 @@ impl<'a> Engine<'a> {
             let origin = run.origin.clone().unwrap_or_default();
             if !self.nd_active {
                 if !measurement || self.reuse_replays {
-                    self.persister.record(&origin, &run.nodes);
+                    self.persister.record(&origin, &run.nodes)?;
                     let counterexample = self.origins.entry(&origin);
                     let accept = counterexample.adopt(run.nodes.clone());
-                    counterexample.record_sighting(&run.nodes, accept);
+                    counterexample.record_sighting(&run.nodes, accept)?;
                 }
             } else if self.origins.incumbent(&origin).is_none() {
                 self.origins.entry(&origin).adopt(run.nodes.clone());
             }
         }
-        mismatch
+        Ok(mismatch)
     }
 
     /// Feed one executed run to the detectors the tree used to be: the kind
@@ -2872,17 +2905,21 @@ impl<'a> Engine<'a> {
     /// never see. The returned error is `NonDeterministic` for kind drift
     /// and `Flaky` for a verdict change (decision 30's split); the caller
     /// keeps it under `error` strictness and flips otherwise.
-    fn record_execution(&mut self, run: &RunResult, measurement: bool) -> Option<RunError> {
+    fn record_execution(
+        &mut self,
+        run: &RunResult,
+        measurement: bool,
+    ) -> Result<Option<RunError>, InternalError> {
         if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
-            if let Some(msg) = self.kind_ledger.observe(&run.nodes) {
-                return Some(RunError::NonDeterministic(msg));
+            if let Some(msg) = self.kind_ledger.observe(&run.nodes)? {
+                return Ok(Some(RunError::NonDeterministic(msg)));
             }
         }
         if run.status == Status::EarlyStop {
-            return None;
+            return Ok(None);
         }
         let recorded = self.exec_cache.record(
-            serialize_nodes(&run.nodes),
+            serialize_executed_nodes(&run.nodes)?,
             run.status,
             run.origin.as_deref(),
             &run.nodes,
@@ -2896,9 +2933,9 @@ impl<'a> Engine<'a> {
                 self.consecutive_duplicates = 0;
             }
         }
-        recorded
+        Ok(recorded
             .verdict_mismatch
-            .then(|| RunError::Flaky(flaky_diagnostic()))
+            .then(|| RunError::Flaky(flaky_diagnostic())))
     }
 
     /// Whether the generation-phase invalid/overrun budget still has room.
@@ -2973,7 +3010,11 @@ impl<'a> Engine<'a> {
         extend: usize,
     ) -> Result<RunResult, RunError> {
         if !self.nd_active {
-            if let Some(hit) = self.exec_cache.serve(&serialize_choices(choices)) {
+            let key = crate::control::hegel_internal_unwrap!(
+                serialize_choices(choices),
+                "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
+            if let Some(hit) = self.exec_cache.serve(&key) {
                 return Ok(RunResult {
                     status: hit.status,
                     nodes: hit.nodes,
@@ -3081,9 +3122,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
         self.gauntlet.then_some(previous)
     }
 
-    fn candidate_adopted(&mut self) {
+    fn candidate_adopted(&mut self) -> Result<(), InternalError> {
         let Some(accept) = self.pending_accept.take() else {
-            return;
+            return Ok(());
         };
         let first_accept = self.raised.insert(accept.key);
         if first_accept && accept.lower_bound > self.anchor {
@@ -3094,7 +3135,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 .raise_anchor(accept.lower_bound);
         }
         self.engine
-            .record_nd_incumbent(&self.target_origin, &accept.nodes);
+            .record_nd_incumbent(&self.target_origin, &accept.nodes)
     }
 
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
@@ -3121,7 +3162,10 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 return Ok((matched, run.nodes, Spans::from(run.spans)));
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
-            let key = serialize_choices(&realized);
+            let key = crate::control::hegel_internal_unwrap!(
+                serialize_choices(&realized),
+                "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
             if self.ledger.get(&key).is_none_or(|l| l.verdict.is_none()) {
                 let (seed, pinned) = self
                     .ledger

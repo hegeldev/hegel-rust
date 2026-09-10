@@ -15,26 +15,46 @@ const MAIN_REWRITE: &str = env!("CARGO_BIN_EXE_fixture_main_rewrite");
 const MAIN_EXPLICIT: &str = env!("CARGO_BIN_EXE_fixture_main_explicit");
 
 #[test]
-fn test_basic_main_runs() {
+fn test_basic_main_runs_exactly_one_test_case() {
     let output = fixture(BASIC_MAIN).run();
     let count = output.stderr.matches("ran").count();
-    assert_eq!(count, 7, "stderr:\n{}", output.stderr);
+    assert_eq!(count, 1, "stderr:\n{}", output.stderr);
 }
 
 #[test]
-fn test_main_cli_overrides_test_cases() {
-    let output = fixture(BASIC_MAIN).args(&["--test-cases", "3"]).run();
+fn test_main_env_var_cannot_override_the_test_case_count() {
+    let output = fixture(BASIC_MAIN).env("HEGEL_TEST_CASES", "50").run();
     let count = output.stderr.matches("ran").count();
-    assert_eq!(count, 3, "stderr:\n{}", output.stderr);
+    assert_eq!(count, 1, "stderr:\n{}", output.stderr);
+}
+
+#[test]
+fn test_main_persists_failures_to_the_database() {
+    let db_dir = tempfile::TempDir::new().unwrap();
+    let db_path = db_dir.path().join("db");
+    fixture(MAIN_FAILING)
+        .args(&["--database", db_path.to_str().unwrap()])
+        .expect_failure("got nonneg")
+        .run();
+    assert!(db_path.is_dir());
+}
+
+#[test]
+fn test_main_removed_flags_are_unknown_arguments() {
+    for args in [&["--test-cases", "3"][..], &["--single-test-case"][..]] {
+        fixture(BASIC_MAIN)
+            .args(args)
+            .expect_failure("Unknown argument")
+            .run();
+    }
 }
 
 #[test]
 fn test_main_unknown_arg_exits_with_error() {
-    let output = fixture(BASIC_MAIN)
+    fixture(BASIC_MAIN)
         .arg("--not-a-real-arg")
         .expect_failure("Unknown argument")
         .run();
-    let _ = output;
 }
 
 #[test]
@@ -67,9 +87,7 @@ fn test_main_explicit_test_case() {
 
 #[test]
 fn test_main_verbosity_override() {
-    let output = fixture(MAIN_SIMPLE)
-        .args(&["--verbosity", "debug", "--test-cases", "1"])
-        .run();
+    let output = fixture(MAIN_SIMPLE).args(&["--verbosity", "debug"]).run();
     assert!(
         output.stderr.contains("test case #") || output.stderr.contains("Test done."),
         "Expected debug output, got: {}",
@@ -79,6 +97,5 @@ fn test_main_verbosity_override() {
 
 #[test]
 fn test_main_seed_override() {
-    let output = fixture(MAIN_SIMPLE).args(&["--seed", "42"]).run();
-    let _ = output;
+    fixture(MAIN_SIMPLE).args(&["--seed", "42"]).run();
 }

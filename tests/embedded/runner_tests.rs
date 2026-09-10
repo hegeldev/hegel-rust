@@ -206,19 +206,24 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
 }
 
 #[test]
-fn test_settings_for_ci_disables_database_and_derandomizes() {
+fn test_settings_for_ci_disables_database_derandomizes_and_suppresses_too_slow() {
     use crate::runner::Database;
     let settings = Settings::for_ci(true);
     assert_eq!(settings.database, Database::Disabled);
     assert!(settings.derandomize);
+    assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
+
+    let settings = settings.suppress_health_check([]);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 #[test]
-fn test_settings_outside_ci_leave_database_unset_and_randomized() {
+fn test_settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
     use crate::runner::Database;
     let settings = Settings::for_ci(false);
     assert_eq!(settings.database, Database::Unset);
     assert!(!settings.derandomize);
+    assert!(settings.suppress_health_check.is_empty());
 }
 
 #[test]
@@ -254,6 +259,45 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
+#[test]
+fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
+    let s = Settings::new().test_cases(50).for_single_test_case();
+    assert_eq!(s.test_cases, 1);
+    assert_eq!(
+        s.suppress_health_check,
+        vec![HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge]
+    );
+}
+
+#[test]
+fn test_settings_for_single_test_case_keeps_existing_suppressions() {
+    let s = Settings::new()
+        .suppress_health_check([HealthCheck::TestCasesTooLarge, HealthCheck::FilterTooMuch])
+        .for_single_test_case();
+    assert_eq!(
+        s.suppress_health_check,
+        vec![
+            HealthCheck::TestCasesTooLarge,
+            HealthCheck::FilterTooMuch,
+            HealthCheck::TooSlow
+        ]
+    );
+}
+
+#[test]
+fn hegel_single_test_case_runs_exactly_one_case() {
+    use crate::generators as gs;
+    let mut count = 0;
+    Hegel::new(|tc: TestCase| {
+        tc.draw(gs::booleans());
+        count += 1;
+    })
+    .settings(Settings::new().test_cases(50).verbosity(Verbosity::Quiet))
+    .__single_test_case()
+    .run();
+    assert_eq!(count, 1);
+}
+
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
@@ -283,7 +327,6 @@ mod reproduce {
                 c_tc,
                 &mut test_fn,
                 false,
-                Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
                 None,

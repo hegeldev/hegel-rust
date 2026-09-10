@@ -65,18 +65,6 @@ pub enum Phase {
     Shrink,
 }
 
-/// Controls the test execution mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Mode {
-    /// Run a full test (multiple test cases with shrinking). This is the default.
-    TestRun,
-    /// Run a single test case with no shrinking or replay. Useful for
-    /// Antithesis workloads and other contexts where you want pure data
-    /// generation without property-testing overhead.
-    SingleTestCase,
-}
-
 /// Selects the source of randomness the engine draws from.
 ///
 /// Mirrors Hypothesis's `backend` setting (specifically `backend="hypothesis"`
@@ -140,11 +128,18 @@ pub enum NondeterminismStrictness {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled
-/// and tests are derandomized by default.
+/// In CI environments (detected automatically), the database is disabled,
+/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
+/// default.
+///
+/// Inside [Antithesis](https://antithesis.com/) (detected via
+/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
+/// by default: Antithesis owns reproduction, and its thread pausing would
+/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. The
+/// database can still be enabled explicitly with [`Settings::database`];
+/// health checks stay off.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub(crate) mode: Mode,
     pub(crate) test_cases: u64,
     pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
@@ -164,14 +159,14 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically.
+    /// Create settings with defaults. Detects CI environments automatically;
+    /// Antithesis detection happens in the engine.
     pub fn new() -> Self {
         Self::for_ci(is_in_ci())
     }
 
     fn for_ci(in_ci: bool) -> Self {
         Self {
-            mode: Mode::TestRun,
             test_cases: 100,
             stateful_step_count: 50,
             verbosity: Verbosity::Normal,
@@ -183,7 +178,11 @@ impl Settings {
             } else {
                 Database::Unset
             },
-            suppress_health_check: Vec::new(),
+            suppress_health_check: if in_ci {
+                vec![HealthCheck::TooSlow]
+            } else {
+                Vec::new()
+            },
             phases: vec![
                 Phase::Explicit,
                 Phase::Reuse,
@@ -196,12 +195,6 @@ impl Settings {
             print_blob: false,
             backend: None,
         }
-    }
-
-    /// Set the execution mode. Defaults to [`Mode::TestRun`].
-    pub fn mode(mut self, mode: Mode) -> Self {
-        self.mode = mode;
-        self
     }
 
     /// Select the randomness backend.
@@ -379,6 +372,20 @@ impl Settings {
         self
     }
 
+    /// The settings a `#[hegel::main]` binary runs with: one test case, with
+    /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
+    /// both measure how valid test cases accumulate over a run and a run of
+    /// one has nothing to measure.
+    pub(crate) fn for_single_test_case(mut self) -> Self {
+        self.test_cases = 1;
+        for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {
+            if !self.suppress_health_check.contains(&check) {
+                self.suppress_health_check.push(check);
+            }
+        }
+        self
+    }
+
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
@@ -452,6 +459,7 @@ pub struct Hegel<F> {
     test_location: Option<TestLocation>,
     settings: Settings,
     reproduce_failure: Option<String>,
+    single_test_case: bool,
 }
 
 impl<F> Hegel<F>
@@ -466,6 +474,7 @@ where
             settings: Settings::new(),
             test_location: None,
             reproduce_failure: None,
+            single_test_case: false,
         }
     }
 
@@ -478,6 +487,18 @@ where
     #[doc(hidden)]
     pub fn __database_key(mut self, key: String) -> Self {
         self.database_key = Some(key);
+        self
+    }
+
+    /// Run exactly one test case, the behavior of `#[hegel::main]` binaries.
+    /// Applied after the environment overrides in [`run`](Self::run), so
+    /// `HEGEL_TEST_CASES` cannot undo it. Also suppresses
+    /// [`HealthCheck::TooSlow`] and [`HealthCheck::TestCasesTooLarge`]: both
+    /// judge how a run accumulates valid test cases, which is meaningless
+    /// for a run of one.
+    #[doc(hidden)]
+    pub fn __single_test_case(mut self) -> Self {
+        self.single_test_case = true;
         self
     }
 
@@ -515,7 +536,10 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        let settings = self.settings.with_env_overrides();
+        let mut settings = self.settings.with_env_overrides();
+        if self.single_test_case {
+            settings = settings.for_single_test_case();
+        }
         if let Some(blob) = self.reproduce_failure {
             crate::run_lifecycle::drive_blob_replay(
                 self.test_fn,

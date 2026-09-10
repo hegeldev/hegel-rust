@@ -1,5 +1,182 @@
 # Changelog
 
+## 0.41.7 - 2026-09-10
+
+This patch improves the diagnostic for a flaky test. When a shrunk failure no longer fails on its final replay, the `Flaky test detected` message now also names the failure that did not reproduce, as the panic location the engine recorded for it.
+
+`PrettyPrinter::should_print` now also reports `false` for a printer whose region has died — a clone that outlived the document it was printing into — since its writes are discarded.
+
+In a concurrent state machine's failure report, every line of a multi-line `tc.note()` made from a worker thread now carries the `[worker N +X.XXXms]` attribution; previously only the note's first line did.
+
+Internally, the frontend now leaves the shape of its output to the engine: `TestCase::note` goes through the engine's own note primitive, the indentation of stateful rule bodies and `tc.repeat` iterations is the engine's block regions, and the worker attribution on concurrent workers' lines is stamped by the engine rather than assembled from lower-level printing calls.
+
+## 0.41.6 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.9.
+
+## 0.41.5 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.8.
+
+## 0.41.4 - 2026-09-09
+
+`#[hegel::main]` binaries now suppress the `TooSlow` and `TestCasesTooLarge` health checks. Stateful test cases no longer stop at random after tens of thousands of rounds: the engine's per-round stop probability is now 2^-32 instead of 2^-16.
+
+## 0.41.3 - 2026-09-09
+
+This patch updates the engine, which replaces its data tree with a flat execution cache. Runs are faster and cache memory is bounded. A test that flips between passing and failing on identical generated values now fails the run as flaky instead of being silently masked, and `HealthCheck::FilterTooMuch` fires after a streak of duplicate invalid test cases instead of on exhaustion of the generation space.
+
+## 0.41.2 - 2026-09-09
+
+Internal refactoring of how the frontend declares the engine's C ABI.
+
+## 0.41.1 - 2026-09-08
+
+This patch adds `.print_as_call("path::to::function")` on mapped generators, for when a `map` produces a foreign type whose `Debug` output is not pastable Rust (`let kd = 0v3;`) but the drawn input is. It prints the mapped expression, and requires the map's input generator to be printable ([#446](https://github.com/hegeldev/hegel-rust/issues/446)).
+
+```rust
+let keys = gs::integers::<u64>()
+    .map(KeyData::from_ffi)
+    .print_as_call("KeyData::from_ffi");
+```
+
+A failing draw from `keys` reports `let key = KeyData::from_ffi(3);`.
+
+## 0.41.0 - 2026-09-08
+
+This release changes how hegeltest links Hegel's engine. The engine crate (`hegeltest-c`) is no longer a Rust dependency of `hegeltest`: by default the build script compiles it into the `libhegel_c` shared library and your tests load it at runtime, the same way every other language binding consumes the engine. Its dependencies therefore no longer appear in your cargo graph, where they were subject to feature unification and could even change type inference in unrelated code ([#442](https://github.com/hegeldev/hegel-rust/issues/442)).
+
+`cargo test` and `cargo run` work unchanged. What changes is running a hegeltest binary outside cargo — a deployed `#[hegel::main]` fuzzer, a test binary copied to another machine — which now needs `libhegel_c` shipped next to the executable, its directory named in the `HEGEL_C_LIB_DIR` environment variable, or a copy findable by the platform's own library search (`LD_LIBRARY_PATH` and friends), tried in that order. Whichever copy is found must be the exact engine version this hegeltest release was built against. A mismatched library is refused on load with an error naming both versions. To keep self-contained binaries instead, enable the new `static-engine` feature, which links the engine in as a Rust dependency exactly as before, including its dependency tree:
+
+```toml
+hegeltest = { version = "0.40.0", features = ["static-engine"] }
+```
+
+Builds without access to crates.io need one of the same escape hatches: when there is no local engine checkout the build script fetches the pinned `hegeltest-c` source from crates.io, so either enable `static-engine` or set `HEGEL_C_LIB_DIR` (it also works at build time) to a directory containing a prebuilt library. Targets that cannot load shared libraries at runtime, such as statically linked musl, need `static-engine`.
+
+This release also removes the internal `__bench` feature (the engine microbenchmarks moved into `hegeltest-c`) and drops the unused `crc32fast`, `dashu-int`, `miniz_oxide`, and `rustc-hash` dependencies. `rand` is now a dependency only under the `rand` feature, and `tempfile` is now test-only.
+
+## 0.40.6 - 2026-09-08
+
+This patch fixes a panic in Hegel's backtrace formatting. When a failing test's short backtrace contained the `__rust_end_short_backtrace` and `__rust_begin_short_backtrace` markers in an arrangement where the frame the end marker selected came after the begin marker, the formatter computed a start index greater than its end index and panicked with `slice index starts at N but ends at M` while slicing the frame list. That panic replaced the real test failure with an unrelated engine-side crash. The formatter now detects the inconsistent range and falls back to keeping the full backtrace instead of panicking.
+
+## 0.40.5 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.5.
+
+## 0.40.4 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.4.
+
+## 0.40.3 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.3.
+
+## 0.40.2 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.2.
+
+## 0.40.1 - 2026-09-07
+
+This patch suppresses `HealthCheck::TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Explicit `Settings::suppress_health_check` calls still replace the default.
+
+## 0.40.0 - 2026-09-07
+
+This release adds `#[invariant(always_run)]` for stateful tests ([#449](https://github.com/hegeldev/hegel-rust/issues/449)). A plain `#[invariant]` is checked in full on the machine's initial and final state and sampled in between; an always-run invariant runs after every rule (at every join point, for concurrent machines) instead. Use it for invariants that must observe every intermediate state, including invariants that mutate state when checked:
+
+```rust
+#[invariant(always_run)]
+fn no_unobserved_writes(&mut self, _: TestCase) {
+    assert!(self.writes_since_last_check <= 1);
+    self.writes_since_last_check = 0;
+}
+```
+
+For hand-written `StateMachine` implementations this is a breaking change: `invariants()` now returns `Vec<Invariant<Self>>` instead of `Vec<Rule<Self>>` — construct entries with `Invariant::new` (sampled) or `Invariant::new_always_run`. `ConcurrentInvariant` gains the same `always_run` field and `new_always_run` constructor.
+
+## 0.39.9 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.6.
+
+## 0.39.8 - 2026-09-07
+
+This patch improves the failure reports of stateful tests. A failing `#[invariant]` now ends the report with `Invariant <name> failed:`, and a panicking `#[rule]` body with `Rule <name> failed:`, instead of leaving only the panic's file and line to identify the failing method. The `Initial invariant check.` line is reworded to `Checking invariants on the initial state.` (likewise for the final check) and no longer printed for machines with no invariants. ([#440](https://github.com/hegeldev/hegel-rust/issues/440))
+
+## 0.39.7 - 2026-09-07
+
+This patch adds `generators::btree_sets` and `generators::btree_maps` for generating `BTreeSet` and `BTreeMap` values, with the same `min_size`/`max_size` builders as `hashsets` and `hashmaps`. Both types also implement `DefaultGenerator`, so `gs::default::<BTreeMap<u8, u8>>()` and `#[derive(DefaultGenerator)]` on structs containing them now work.
+
+## 0.39.6 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.5.
+
+## 0.39.5 - 2026-09-07
+
+This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.
+
+## 0.39.4 - 2026-09-04
+
+This patch improves shrinking for collections whose elements each cost
+more than eight choices to generate. Previously such an element could
+only be deleted a few choices at a time, so shrunk counterexamples kept
+collection elements with no effect on the failure.
+
+## 0.39.3 - 2026-09-04
+
+This patch improves the shrinking of stateful test failures: shrunk rule
+sequences no longer keep redundant steps, such as inserts whose effect a
+later step overwrites
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)). Previously a
+step could only be deleted as a short run of individual choices, so machines
+with several invariants or draw-heavy rules shrank to sequences padded with
+no-op steps.
+
+## 0.39.2 - 2026-09-04
+
+This patch fixes shrinking and the `LargeInitialTestCase` health check for stateful tests.
+
+## 0.39.1 - 2026-09-04
+
+This patch improves the ergonomics of draw-time printing:
+
+- `BoxedGenerator<T>` is now a `PrintableGenerator` whenever `T` implements `PrettyPrintable`, printing drawn values by their own representation. A `.boxed()` in a generator definition no longer forces printing annotations onto every downstream draw site. `.boxed_printable()` remains the way to keep a custom printing strategy through the erasure.
+- `PrettyPrintable` is implemented for more standard-library types: the range types and `Bound`, `VecDeque`, `LinkedList`, `BinaryHeap`, the `NonZero` integers, `Cow`, and `Path`/`PathBuf`. The `chrono`, `jiff`, and `serde_json` integrations add impls for `Month`, `Days`, `Months`, `IsoWeek`, `TimeZone`, `AmbiguousOffset`, and `Map<String, Value>`. Every generator `gs::default()` returns can now be passed to `tc.draw` (several, such as `PathBuf`'s, could previously only be drawn silently).
+- Generators defined with `derive_generator!` implement `PrintableGenerator` whenever every field type is `PrettyPrintable`, printing `Name { field: value }` expressions.
+- Draws in helper functions no longer have to print as the anonymous `draw_1`, `draw_2`, …. Marking the helper `#[hegel::test_helper]` names its draws after their bindings, the same rewrite `#[hegel::test]` applies to a test body, and the new `TestCase::draw_named` reports a single draw under an explicit name.
+- The new `hegel::prelude` module exports the traits and entry points most tests need, so one `use hegel::prelude::*;` covers them.
+- `#[derive(PrettyPrintable)]` on a type with a non-printable field now reports an error pointing at that field, stating that every field must be `PrettyPrintable` and suggesting `#[pretty(debug)]`, instead of draw-site advice attached to the derive. Draw-site printability errors now lead with the once-per-type fix (implementing `PrettyPrintable`) and explain how `-> impl Generator<..>` return types and `.boxed()` interact with printability.
+- The `hegel::pretty` module docs now explain the whole printing system: what is printable out of the box, how to make your own types printable, the escape hatches for foreign types, type erasure, and draw naming.
+
+## 0.39.0 - 2026-09-03
+
+This release removes the `antithesis` cargo feature. The Antithesis integration is now always compiled in and activates automatically when the `ANTITHESIS_OUTPUT_DIR` environment variable is set, so running inside Antithesis no longer requires a feature flag and no longer fails when the flag is missing. Remove `features = ["antithesis"]` from your `hegeltest` dependency; Cargo rejects unknown features, so builds that still name it will not compile until it is removed.
+
+## 0.38.1 - 2026-09-03
+
+This patch fixes the ordering of step labels in stateful counterexamples. Each label used to print after the draws its rule made, so reading a failing sequence meant shifting every label back by one. Notes are also no longer deferred while an engine span is open, only while a drawn value is mid-print, so a note can never trail the output of a later draw.
+
+Each step now prints as a block, with the rule's draws and notes scoped to it:
+
+```
+Step 1: add {
+  let n = 1;
+}
+```
+
+`#[rule]` and `#[invariant]` bodies now rewrite `tc.draw` calls the way `#[hegel::test]` bodies do, so a rule's draws print under their variable names (`let n = 1;` instead of `let draw_1 = 1;`) and `tc.target` calls get per-expression labels. Draw names are scoped to the rule invocation: a name drawn once per rule prints bare in every step, and only names drawn repeatedly within one invocation get a numeric suffix.
+
+## 0.38.0 - 2026-09-02
+
+This release makes generated times and datetimes nanosecond resolution instead of microsecond.
+
+`extras::jiff::times()` now generates every `jiff::civil::Time`. A range whose bounds are between two consecutive microseconds is no longer an error.
+
+## 0.37.0 - 2026-09-02
+
+This release removes `Mode::SingleTestCase` and, with it, the ways it silently changed test semantics: state machines no longer run rules forever in any configuration (they are always bounded by `stateful_step_count`), and `tc.repeat(...)` always uses the engine-driven loop protocol. The `Mode` enum, `Settings::mode`, and the `--single-test-case` CLI flag are gone.
+
+Instead, `#[hegel::main]` binaries now always run exactly one test case per invocation. The run otherwise behaves like any property test: invalid test cases (a failed `assume()`) are retried until one valid case has run, health checks apply, and failures are shrunk, reported, and persisted to the failure database, so a failure found by one invocation is replayed by the next. The test-case count is the one thing that cannot be changed — the `test_cases` attribute argument is rejected at compile time, the `--test-cases` CLI flag has been removed, and `HEGEL_TEST_CASES` has no effect on these binaries.
+
 ## 0.36.1 - 2026-09-02
 
 This patch adds event statistics. `tc.event(label)` records that a labelled situation occurred in the current test case, and `tc.event_value(label, value)` records a numeric observation; with statistics enabled — `Settings::show_statistics(true)`, or the `HEGEL_STATISTICS` environment variable — the end of the run reports, per label, the fraction of generation-phase test cases each event occurred in and a distribution summary (count, min, median, mean, p90, max) of each numeric observation. Use it to check that the situations a test is meant to exercise actually occur, and at the sizes you expect.

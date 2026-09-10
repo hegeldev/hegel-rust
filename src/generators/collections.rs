@@ -2,7 +2,7 @@ use super::{Collection, Generator, PrintableGenerator, TestCase, labels};
 use crate::control::hegel_internal_assert;
 use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -365,6 +365,250 @@ pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     values: V,
 ) -> HashMapGenerator<K, V, KT, VT> {
     HashMapGenerator {
+        keys,
+        values,
+        min_size: 0,
+        max_size: None,
+        _phantom: PhantomData,
+    }
+}
+
+/// Generator for `BTreeSet<T>`. Created by [`btree_sets()`].
+pub struct BTreeSetGenerator<G, T> {
+    elements: G,
+    min_size: usize,
+    max_size: Option<usize>,
+    _phantom: PhantomData<fn(T)>,
+}
+
+impl<G, T> BTreeSetGenerator<G, T> {
+    /// Set the minimum number of elements.
+    pub fn min_size(mut self, min_size: usize) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum number of elements.
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+}
+
+impl<G, T> BTreeSetGenerator<G, T>
+where
+    T: Ord,
+{
+    fn draw_set(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> BTreeSet<T> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        tc.start_span(labels::SET);
+        printer.begin_group(16, "BTreeSet::from([");
+        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut set = BTreeSet::new();
+        while collection.more() {
+            let mut speculation = printer.speculate();
+            if !set.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let element = draw(&self.elements, tc, speculation.printer());
+            if set.contains(&element) {
+                speculation.abort();
+                collection.reject(Some("duplicate element"));
+            } else {
+                speculation.commit();
+                set.insert(element);
+            }
+        }
+        hegel_internal_assert!(set.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
+        set
+    }
+}
+
+impl<T, G> Generator<BTreeSet<T>> for BTreeSetGenerator<G, T>
+where
+    G: Generator<T>,
+    T: Ord,
+{
+    fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
+        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
+            elements.do_draw(tc)
+        })
+    }
+}
+
+impl<T, G> PrintableGenerator<BTreeSet<T>> for BTreeSetGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+    T: Ord,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeSet<T> {
+        self.draw_set(tc, printer, |elements, tc, printer| {
+            tc.draw_and_print(elements, printer)
+        })
+    }
+}
+
+/// Generate B-tree sets with elements from the given generator.
+///
+/// See [`BTreeSetGenerator`] for builder methods.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+/// use std::collections::BTreeSet;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers()).max_size(10));
+///     assert!(set.len() <= 10);
+/// }
+/// ```
+pub fn btree_sets<T, G: Generator<T>>(elements: G) -> BTreeSetGenerator<G, T> {
+    BTreeSetGenerator {
+        elements,
+        min_size: 0,
+        max_size: None,
+        _phantom: PhantomData,
+    }
+}
+
+/// Generator for `BTreeMap<K, V>`. Created by [`btree_maps()`].
+pub struct BTreeMapGenerator<K, V, KT, VT> {
+    keys: K,
+    values: V,
+    min_size: usize,
+    max_size: Option<usize>,
+    _phantom: PhantomData<fn(KT, VT)>,
+}
+
+impl<K, V, KT, VT> BTreeMapGenerator<K, V, KT, VT> {
+    /// Set the minimum number of entries.
+    pub fn min_size(mut self, min_size: usize) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum number of entries.
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+}
+
+impl<K, V, KT, VT> Generator<BTreeMap<KT, VT>> for BTreeMapGenerator<K, V, KT, VT>
+where
+    K: Generator<KT>,
+    V: Generator<VT>,
+    KT: Ord,
+{
+    fn do_draw(&self, tc: &TestCase) -> BTreeMap<KT, VT> {
+        self.draw_map(
+            tc,
+            &mut PrettyPrinter::noop(),
+            |keys, tc, _| keys.do_draw(tc),
+            |values, tc, _| values.do_draw(tc),
+        )
+    }
+}
+
+impl<K, V, KT, VT> BTreeMapGenerator<K, V, KT, VT>
+where
+    KT: Ord,
+{
+    fn draw_map(
+        &self,
+        tc: &TestCase,
+        printer: &mut PrettyPrinter,
+        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
+    ) -> BTreeMap<KT, VT> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        tc.start_span(labels::MAP);
+        printer.begin_group(16, "BTreeMap::from([");
+        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut map = BTreeMap::new();
+        while collection.more() {
+            let mut speculation = printer.speculate();
+            if !map.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            speculation.printer().text("(");
+            let key = draw_key(&self.keys, tc, speculation.printer());
+            match map.entry(key) {
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    speculation.abort();
+                    collection.reject(Some("duplicate key"));
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    speculation.printer().text(", ");
+                    let value = draw_value(&self.values, tc, speculation.printer());
+                    speculation.printer().text(")");
+                    speculation.commit();
+                    entry.insert(value);
+                }
+            }
+        }
+        hegel_internal_assert!(map.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
+        map
+    }
+}
+
+impl<K, V, KT, VT> PrintableGenerator<BTreeMap<KT, VT>> for BTreeMapGenerator<K, V, KT, VT>
+where
+    K: PrintableGenerator<KT>,
+    V: PrintableGenerator<VT>,
+    KT: Ord,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeMap<KT, VT> {
+        self.draw_map(
+            tc,
+            printer,
+            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            |values, tc, printer| tc.draw_and_print(values, printer),
+        )
+    }
+}
+
+/// Generate B-tree maps.
+///
+/// See [`BTreeMapGenerator`] for builder methods.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+/// use std::collections::BTreeMap;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let map: BTreeMap<i32, String> = tc.draw(gs::btree_maps(gs::integers(), gs::text()));
+/// }
+/// ```
+pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
+    keys: K,
+    values: V,
+) -> BTreeMapGenerator<K, V, KT, VT> {
+    BTreeMapGenerator {
         keys,
         values,
         min_size: 0,
