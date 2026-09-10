@@ -266,7 +266,7 @@ fn the_alias_skips_profiles_already_in_the_chain() {
     let s = resolve("ci", &config, &[], &Settings::base(false), &detected("ci")).unwrap();
     assert_eq!(
         s.test_cases, 9,
-        "common's implicit parent skips the already-visited ci and reaches development"
+        "common's implicit parent skips the already-visited ci and falls back to base"
     );
 }
 

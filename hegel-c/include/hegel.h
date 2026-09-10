@@ -1017,8 +1017,8 @@ hegel_result_t hegel_settings_get_phases(hegel_context_t *ctx,
 /*
  Parameters:
  `out`: Receives the suppressed health checks as a bitwise OR of
-   `hegel_health_check_t` values. Reports only explicit suppressions;
-   inside Antithesis every check is skipped regardless.
+   `hegel_health_check_t` values, as resolved from the profile and any
+   `hegel_settings_set_suppress_health_check` call.
 
  Returns `HEGEL_OK`.
  */
