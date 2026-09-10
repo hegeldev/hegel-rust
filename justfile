@@ -101,7 +101,6 @@ c-test-smoke:
 # follow-up.
 [unix]
 c-test-examples:
-    mkdir -p target/c-examples
     scripts/c-examples-run.sh
 
 [windows]
@@ -121,7 +120,6 @@ c-test-examples:
 c-test-abort:
     RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/abort cargo build -p hegeltest-c
     HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug cargo test -p hegeltest-c
-    mkdir -p target/c-examples
     HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug scripts/c-examples-run.sh
 
 [windows]

@@ -8,10 +8,16 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INCLUDE="$ROOT/hegel-c/include"
+TARGET_DIR=$(cd "$ROOT" && cargo metadata --format-version 1 --no-deps \
+    | grep -o '"target_directory":"[^"]*"' | cut -d'"' -f4)
+if [ -z "$TARGET_DIR" ]; then
+    echo "could not read target_directory from cargo metadata" >&2
+    exit 1
+fi
 # HEGEL_C_LIB_DIR lets the caller point at a library built into a separate
 # target dir — e.g. the panic=abort build produced by `just c-test-abort`.
-LIBDIR="${HEGEL_C_LIB_DIR:-$ROOT/target/debug}"
-OUT="$ROOT/target/c-examples"
+LIBDIR="${HEGEL_C_LIB_DIR:-$TARGET_DIR/debug}"
+OUT="$TARGET_DIR/c-examples"
 mkdir -p "$OUT"
 
 # System libraries the Rust standard library needs when libhegel is
