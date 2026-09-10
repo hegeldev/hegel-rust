@@ -10,6 +10,7 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use crate::native::core::BUFFER_SIZE;
 use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
@@ -1107,29 +1108,36 @@ fn too_large_check_quiet_when_enough_valid_cases() {
 
 #[test]
 fn large_initial_check_reports_on_overrun() {
-    let msg = large_initial_check(true, Status::Invalid, 0, false);
+    let msg = large_initial_check(true, Status::Invalid, 0, BUFFER_SIZE, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
 
 #[test]
 fn large_initial_check_reports_on_large_valid_example() {
-    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, false);
+    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, BUFFER_SIZE, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
 
 #[test]
+fn large_initial_check_never_fires_on_size_without_a_bound() {
+    assert!(large_initial_check(false, Status::Valid, usize::MAX, usize::MAX, false).is_none());
+}
+
+#[test]
 fn large_initial_check_quiet_for_small_valid_example() {
-    assert!(large_initial_check(false, Status::Valid, 1, false).is_none());
+    assert!(large_initial_check(false, Status::Valid, 1, BUFFER_SIZE, false).is_none());
 }
 
 #[test]
 fn large_initial_check_quiet_when_suppressed() {
-    assert!(large_initial_check(true, Status::Invalid, 0, true).is_none());
+    assert!(large_initial_check(true, Status::Invalid, 0, BUFFER_SIZE, true).is_none());
 }
 
 #[test]
 fn large_initial_check_quiet_for_interesting() {
-    assert!(large_initial_check(false, Status::Interesting, BUFFER_SIZE, false).is_none());
+    assert!(
+        large_initial_check(false, Status::Interesting, BUFFER_SIZE, BUFFER_SIZE, false).is_none()
+    );
 }
 
 #[test]

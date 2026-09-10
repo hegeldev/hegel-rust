@@ -270,6 +270,26 @@ fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
 }
 
 #[test]
+fn test_settings_for_single_test_case_removes_the_choice_limit_unless_set() {
+    assert_eq!(Settings::new().max_choices, None);
+    assert_eq!(Settings::new().for_single_test_case().max_choices, Some(0));
+    assert_eq!(
+        Settings::new()
+            .max_choices(10)
+            .for_single_test_case()
+            .max_choices,
+        Some(10)
+    );
+    assert_eq!(
+        Settings::new()
+            .max_choices(0)
+            .for_single_test_case()
+            .max_choices,
+        Some(0)
+    );
+}
+
+#[test]
 fn test_settings_for_single_test_case_keeps_existing_suppressions() {
     let s = Settings::new()
         .suppress_health_check([HealthCheck::TestCasesTooLarge, HealthCheck::FilterTooMuch])

@@ -143,7 +143,12 @@ fn test_recursive_on_an_exhausted_stream_is_an_overrun() {
                 tc.draw_silent(trees!());
                 unreachable!("a recursive draw on an exhausted stream must overrun");
             })
-            .settings(Settings::new().database(None).seed(Some(0)))
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .seed(Some(0))
+                    .max_choices(1000),
+            )
             .run();
         },
         "LargeInitialTestCase",
@@ -182,7 +187,12 @@ fn test_recursive_completing_on_an_exhausted_stream_is_an_overrun() {
                 tc.draw_silent(g);
                 unreachable!("completing a recursive draw on an exhausted stream must overrun");
             })
-            .settings(Settings::new().database(None).seed(Some(0)))
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .seed(Some(0))
+                    .max_choices(1000),
+            )
             .run();
         },
         "LargeInitialTestCase",

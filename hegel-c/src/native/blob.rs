@@ -56,13 +56,13 @@ const PREFIX_ZLIB: u8 = 1;
 const ZLIB_LEVEL: u8 = 6;
 
 /// Upper bound on the decompressed size of a zlib payload, so a hostile blob
-/// cannot force an arbitrarily large allocation. A choice sequence caps at
-/// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192) choices at
-/// [`serialize_choices`]' ~17-byte per-choice sizing, about 136 KiB. 16 MiB
-/// leaves generous headroom for content-carrying choices (bytes and strings
-/// also serialize their payloads). [`encode_failure`] keeps the raw form for
-/// payloads past this bound, so its output always decodes.
-const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
+/// cannot force an arbitrarily large allocation. A choice sequence under the
+/// default [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20) bound
+/// reaches about 17 MiB at [`serialize_choices`]' ~17-byte per-choice
+/// sizing; 64 MiB leaves headroom for content-carrying choices (bytes and
+/// strings also serialize their payloads). [`encode_failure`] keeps the raw
+/// form for payloads past this bound, so its output always decodes.
+const MAX_DECOMPRESSED_LEN: usize = 64 << 20;
 
 /// Encode a choice sequence into a failure blob (see the module docs for the
 /// format). The returned string is safe to embed in source as a string

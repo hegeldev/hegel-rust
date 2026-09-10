@@ -33,8 +33,7 @@ use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
-    Status, sort_key,
+    ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
@@ -232,8 +231,8 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    let ntc =
-                        NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE)?;
+                    let bound = self.choice_bound();
+                    let ntc = NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), bound)?;
                     let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(err) = mismatch {
                         return Err(err);
@@ -295,7 +294,7 @@ impl<'a> Engine<'a> {
             && max_test_cases > 1
         {
             let (run, mismatch) = self
-                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
+                .test_function(NativeTestCase::for_simplest(self.choice_bound())?)
                 .await?;
             if let Some(err) = mismatch {
                 return Err(err);
@@ -304,6 +303,7 @@ impl<'a> Engine<'a> {
                 run.status == Status::EarlyStop,
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
+                self.choice_bound(),
                 settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
                 return Err(RunError::HealthCheck(msg));
@@ -346,7 +346,8 @@ impl<'a> Engine<'a> {
 
                 let mut case_rng = self.rng.spawn();
                 let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let ntc = NativeTestCase::new_random_with_params(case_rng, params);
+                let ntc =
+                    NativeTestCase::new_random_with_params(case_rng, params, self.choice_bound());
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");
                 }
@@ -694,20 +695,21 @@ pub(crate) fn too_large_check(
 }
 
 /// Returns the `FailedHealthCheck: LargeInitialTestCase` message when the
-/// smallest natural example either overran the buffer or, while valid, used
-/// more than half of it, unless the check is suppressed; otherwise `None`.
-/// Mirrors Hypothesis's `large_base_example` health check.
+/// smallest natural example either overran the choice bound or, while valid,
+/// used more than half of it, unless the check is suppressed; otherwise
+/// `None`. Mirrors Hypothesis's `large_base_example` health check.
 pub(crate) fn large_initial_check(
     overran: bool,
     status: Status,
     node_count: usize,
+    choice_bound: usize,
     suppressed: bool,
 ) -> Option<String> {
     if suppressed {
         return None;
     }
     let too_large =
-        overran || (status == Status::Valid && node_count.saturating_mul(2) > BUFFER_SIZE);
+        overran || (status == Status::Valid && node_count.saturating_mul(2) > choice_bound);
     if too_large {
         Some(
             "FailedHealthCheck: LargeInitialTestCase — the smallest natural input \
@@ -1058,6 +1060,11 @@ impl<'a> Engine<'a> {
         self.persister.db.as_deref()
     }
 
+    /// The run's per-test-case choice bound (see [`Settings::max_choices`]).
+    pub(crate) fn choice_bound(&self) -> usize {
+        self.settings.choice_bound()
+    }
+
     /// End-of-run database reconciliation: save every surviving failure's
     /// bytes, then dispatch each displaced primary entry by provenance —
     /// same-run leftovers are deleted, run-start entries demote to the
@@ -1306,7 +1313,7 @@ impl<'a> Engine<'a> {
         let ntc = if extend == 0 {
             NativeTestCase::for_choices(choices, nodes, None)
         } else {
-            let budget = crate::native::core::flattened_values_len(choices) + extend;
+            let budget = crate::native::core::flattened_values_len(choices).saturating_add(extend);
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
         };
         let (run, mismatch) = self.test_function(ntc).await?;
@@ -1449,8 +1456,9 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let extend =
-                BUFFER_SIZE.saturating_sub(crate::native::core::flattened_values_len(&attempt));
+            let extend = self
+                .choice_bound()
+                .saturating_sub(crate::native::core::flattened_values_len(&attempt));
             let run = self.cached_test_function(&attempt, None, extend).await?;
             if run.status == Status::Interesting {
                 return Ok(());

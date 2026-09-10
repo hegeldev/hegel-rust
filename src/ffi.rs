@@ -171,6 +171,13 @@ impl SettingsHandle {
                     raw,
                     settings.show_statistics,
                 ));
+                if let Some(max_choices) = settings.max_choices {
+                    require_ok(hegel_c::hegel_settings_set_max_choices(
+                        ctx,
+                        raw,
+                        max_choices,
+                    ));
+                }
                 match &settings.database {
                     Database::Disabled => {
                         let empty = CString::new("").unwrap();

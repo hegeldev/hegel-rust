@@ -162,6 +162,9 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    /// Upper bound on the number of choices one test case may make, or 0
+    /// for no bound. See [`Settings::max_choices`].
+    pub(crate) max_choices: usize,
 }
 
 impl Settings {
@@ -200,6 +203,32 @@ impl Settings {
             report_multiple_failures: true,
             show_statistics: false,
             backend: None,
+            max_choices: crate::native::core::BUFFER_SIZE,
+        }
+    }
+
+    /// Set the maximum number of choices a single test case may make, or 0
+    /// for no limit. Defaults to
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20).
+    ///
+    /// A test case that reaches the limit is concluded as an overrun: the
+    /// draw that would exceed it fails, the case is discarded, and enough
+    /// overruns trip the [`HealthCheck::TestCasesTooLarge`] and
+    /// [`HealthCheck::LargeInitialTestCase`] health checks. Removing the
+    /// limit lets a long-running test case — a concurrent state machine
+    /// exercised for hours, say — keep drawing indefinitely, at the cost of
+    /// the memory to record every choice it makes.
+    pub fn max_choices(mut self, max_choices: usize) -> Self {
+        self.max_choices = max_choices;
+        self
+    }
+
+    /// The effective per-test-case choice bound: [`Settings::max_choices`],
+    /// with 0 as `usize::MAX`.
+    pub(crate) fn choice_bound(&self) -> usize {
+        match self.max_choices {
+            0 => usize::MAX,
+            n => n,
         }
     }
 
