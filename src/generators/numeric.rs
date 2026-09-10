@@ -208,6 +208,7 @@ impl<T> FloatGenerator<T> {
     /// Set the minimum value (inclusive by default).
     pub fn min_value(mut self, min_value: T) -> Self {
         self.min = Some(min_value);
+        self.exclude_min = false;
         self.params = OnceLock::new();
         self
     }
@@ -215,6 +216,23 @@ impl<T> FloatGenerator<T> {
     /// Set the maximum value (inclusive by default).
     pub fn max_value(mut self, max_value: T) -> Self {
         self.max = Some(max_value);
+        self.exclude_max = false;
+        self.params = OnceLock::new();
+        self
+    }
+
+    /// Set the minimum value (exclusive).
+    pub fn min_value_exclusive(mut self, min_value: T) -> Self {
+        self.min = Some(min_value);
+        self.exclude_min = true;
+        self.params = OnceLock::new();
+        self
+    }
+
+    /// Set the maximum value (exclusive).
+    pub fn max_value_exclusive(mut self, max_value: T) -> Self {
+        self.max = Some(max_value);
+        self.exclude_max = true;
         self.params = OnceLock::new();
         self
     }

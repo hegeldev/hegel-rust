@@ -667,6 +667,30 @@ mod float_nastiness {
     }
 
     #[test]
+    fn test_inclusive_bound_overrides_exclusive_bound() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value_exclusive(0.0)
+                .max_value_exclusive(0.0)
+                .min_value(0.0)
+                .max_value(0.0),
+            |x: &f64| *x == 0.0,
+        );
+    }
+
+    #[test]
+    fn test_exclusive_bound_overrides_inclusive_bound() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value(-1.0)
+                .max_value(1.0)
+                .min_value_exclusive(0.0)
+                .max_value_exclusive(1.0),
+            |x: &f64| 0.0 < *x && *x < 1.0,
+        );
+    }
+
+    #[test]
     fn test_can_exclude_neg_infinite_endpoint() {
         assert_all_examples(
             gs::floats::<f64>()
