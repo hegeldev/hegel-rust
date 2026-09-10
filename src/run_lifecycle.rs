@@ -302,7 +302,7 @@ pub(crate) fn run_test_case(
         should_emit,
         case_sink.or_else(|| output.sink().cloned()),
     );
-    let reporter = tc.child(0);
+    let reporter = tc.reporter();
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
 
@@ -591,8 +591,8 @@ pub(crate) fn drive<F>(
                 if multiple && !quiet {
                     output.line("");
                 }
-                let blob = result
-                    .failure(index)
+                let failure = result.failure(index);
+                let blob = failure
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
                 let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
@@ -602,7 +602,10 @@ pub(crate) fn drive<F>(
                 let (tc_result, payload, diagnostic) =
                     run_test_case(c_tc, &mut test_fn, true, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
-                    panic!("{FLAKY_DIAGNOSTIC}");
+                    panic!(
+                        "{FLAKY_DIAGNOSTIC}\nThe failure that did not reproduce was: {}",
+                        failure.origin
+                    );
                 }
                 if let Some(diagnostic) = diagnostic {
                     output.block(&diagnostic);

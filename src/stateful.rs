@@ -150,7 +150,7 @@ use crate::ffi::{PoolHandle, StateMachineHandle};
 use crate::generators::Generator;
 use crate::run_lifecycle::{self, PanicInfo};
 use crate::test_case::{labels, raise_for_rc};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Mutex, mpsc};
@@ -162,21 +162,6 @@ use std::sync::{Mutex, mpsc};
 /// overlap with any named group's rules (see
 /// [`ConcurrentStateMachine`]).
 pub const ANONYMOUS_GROUP: &str = "<anonymous>";
-
-thread_local! {
-    /// The worker-thread index [`Machine::run_concurrent`] assigns to each of its
-    /// worker threads, used to tag that worker's draw/note output lines.
-    /// `None` outside a concurrent stateful worker.
-    static WORKER_INDEX: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-/// The calling thread's concurrent-worker index, if it is one of
-/// [`Machine::run_concurrent`]'s worker threads. Read by the output machinery to tag
-/// each worker line with its worker's index and time offset, and to regroup
-/// the failure report's buffered lines worker by worker within each round.
-pub(crate) fn current_worker_index() -> Option<usize> {
-    WORKER_INDEX.with(|cell| cell.get())
-}
 
 /// A rule that can be applied to the state machine during testing.
 pub struct Rule<M: ?Sized> {
@@ -1157,7 +1142,8 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// round lands — is anchored under the header that labels the round.
 /// Cloning once per worker up front would instead pool a worker's output
 /// across all rounds at its single anchor, detaching the headers from the
-/// rounds they label.
+/// rounds they label. The clone is attributed to this worker, so the engine
+/// stamps each of its lines `[worker N +X.XXXms] `.
 ///
 /// The closed channel is what terminates workers: the main thread holds
 /// the senders as locals of its `thread::scope` body, so *any* exit from
@@ -1174,7 +1160,6 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     rounds: mpsc::Receiver<TestCase>,
     events: mpsc::Sender<WorkerEvent>,
 ) {
-    WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
         while let Ok(tc) = rounds.recv() {
@@ -1271,8 +1256,10 @@ fn run_concurrent_machine<M: ConcurrentStateMachine + Sync>(
                 group_names[group]
             ));
 
-            for tx in &round_txs {
-                let _ = tx.send(tc.clone());
+            for (worker, tx) in round_txs.iter().enumerate() {
+                let worker_tc = tc.clone();
+                worker_tc.with_ctc(|ctc| ctc.set_worker(worker as i64));
+                let _ = tx.send(worker_tc);
             }
             let events: Vec<WorkerEvent> = event_rxs
                 .iter()

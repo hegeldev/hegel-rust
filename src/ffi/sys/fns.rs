@@ -103,11 +103,13 @@ macro_rules! for_each_hegel_fn {
             fn hegel_string_generator_text(ctx: *mut HegelContext, min_size: u64, max_size: u64, codec: *const c_char, min_codepoint: u32, max_codepoint: u32, categories: *const *const c_char, categories_len: usize, exclude_categories: *const *const c_char, exclude_categories_len: usize, include_characters: *const u8, include_characters_len: usize, exclude_characters: *const u8, exclude_characters_len: usize, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_string_generator_url(ctx: *mut HegelContext, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_target(ctx: *mut HegelContext, tc: *mut HegelTestCase, value: f64, label: *const c_char) -> hegel_result_t;
+            fn hegel_test_case_block(ctx: *mut HegelContext, tc: *const HegelTestCase, indent: u64, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_clone(ctx: *mut HegelContext, tc: *const HegelTestCase, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_from_blob(ctx: *mut HegelContext, s: *const HegelSettings, blob: *const c_char, callback: hegel_output_callback_t, user_data: *mut c_void, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_is_nondeterministic(ctx: *mut HegelContext, tc: *const HegelTestCase, out_is_nondeterministic: *mut bool) -> hegel_result_t;
             fn hegel_test_case_printer(ctx: *mut HegelContext, tc: *mut HegelTestCase, options: *const HegelPrinterOptions, out_printer: *mut *mut HegelPrinter) -> hegel_result_t;
+            fn hegel_test_case_set_worker(ctx: *mut HegelContext, tc: *const HegelTestCase, worker_index: i64) -> hegel_result_t;
             fn hegel_version(ctx: *mut HegelContext, out_version: *mut *const c_char) -> hegel_result_t;
         }
     };
