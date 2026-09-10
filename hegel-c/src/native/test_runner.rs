@@ -1121,7 +1121,6 @@ impl<'a> Engine<'a> {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
-        family.set_stateful_step_count(self.settings.stateful_step_count);
         family.set_reject_concurrent_machine(!self.nondeterministic);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;

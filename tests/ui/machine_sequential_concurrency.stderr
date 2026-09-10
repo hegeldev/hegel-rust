@@ -1,0 +1,16 @@
+error[E0599]: the method `max_concurrency` exists for struct `Machine<Counter>`, but its trait bounds were not satisfied
+  --> tests/ui/machine_sequential_concurrency.rs:23:35
+   |
+17 | struct Counter {
+   | -------------- doesn't satisfy `Counter: ConcurrentStateMachine`
+...
+23 |     machine(Counter { value: 0 }).max_concurrency(3).run(tc);
+   |                                   ^^^^^^^^^^^^^^^ private field, not a method
+   |
+   = note: the following trait bounds were not satisfied:
+           `Counter: ConcurrentStateMachine`
+note: the trait `ConcurrentStateMachine` must be implemented
+  --> src/stateful.rs
+   |
+   | pub trait ConcurrentStateMachine {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

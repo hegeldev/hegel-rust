@@ -36,7 +36,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_new_collection(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_collection: *mut *mut HegelCollection) -> hegel_result_t;
             fn hegel_new_pool(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_pool: *mut *mut HegelPool) -> hegel_result_t;
             fn hegel_new_recursion(ctx: *mut HegelContext, tc: *mut HegelTestCase, max_depth: u64, max_leaves: u64, out_recursion: *mut *mut HegelRecursion) -> hegel_result_t;
-            fn hegel_new_state_machine(ctx: *mut HegelContext, tc: *mut HegelTestCase, rule_names: *const *const c_char, rule_groups: *const i64, num_rules: usize, invariant_names: *const *const c_char, invariant_always_check: *const bool, num_invariants: usize, min_concurrency: i64, max_concurrency: i64, out_state_machine: *mut *mut HegelStateMachine, out_concurrency: *mut i64) -> hegel_result_t;
+            fn hegel_new_state_machine(ctx: *mut HegelContext, tc: *mut HegelTestCase, rule_names: *const *const c_char, rule_groups: *const i64, num_rules: usize, invariant_names: *const *const c_char, invariant_always_check: *const bool, num_invariants: usize, min_concurrency: i64, max_concurrency: i64, step_count: i64, out_state_machine: *mut *mut HegelStateMachine, out_concurrency: *mut i64) -> hegel_result_t;
             fn hegel_next_test_case(ctx: *mut HegelContext, run: *mut HegelRun, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_note(ctx: *mut HegelContext, tc: *mut HegelTestCase, text: *const u8, len: usize) -> hegel_result_t;
             fn hegel_pool_add(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, out_variable_id: *mut i64) -> hegel_result_t;
@@ -86,7 +86,6 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_report_multiple_failures(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_seed(ctx: *mut HegelContext, s: *mut HegelSettings, seed: u64, has_seed: bool) -> hegel_result_t;
             fn hegel_settings_set_show_statistics(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
-            fn hegel_settings_set_stateful_step_count(ctx: *mut HegelContext, s: *mut HegelSettings, n: i64) -> hegel_result_t;
             fn hegel_settings_set_suppress_health_check(ctx: *mut HegelContext, s: *mut HegelSettings, checks: u32) -> hegel_result_t;
             fn hegel_settings_set_test_cases(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
             fn hegel_settings_set_verbosity(ctx: *mut HegelContext, s: *mut HegelSettings, v: u32) -> hegel_result_t;

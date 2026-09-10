@@ -889,36 +889,6 @@ pub unsafe extern "C" fn hegel_settings_set_test_cases(
 }
 
 /// Parameters:
-/// `n`: Target number of steps to run per stateful test case. Each stateful
-///   case runs at least one step and at most `n`. The default is 50. `n`
-///   must be at least 1.
-///
-/// Returns `HEGEL_OK`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_stateful_step_count(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    n: i64,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_stateful_step_count") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    if n < 1 {
-        set_last_error(
-            ctx,
-            &format!(
-                "hegel_settings_set_stateful_step_count: step count must be at least 1, got {n}"
-            ),
-        );
-        return HEGEL_E_INVALID_ARG;
-    }
-    handle.inner = handle.inner.clone().stateful_step_count(n);
-    HEGEL_OK
-}
-
-/// Parameters:
 /// `v`: Controls the output verbosity. See `hegel_verbosity_t`.
 ///
 /// Returns `HEGEL_OK`.
@@ -2656,7 +2626,12 @@ unsafe fn state_machine_ref<'a>(
 /// `max_concurrency` (concurrency bugs need concurrency) rather than
 /// shrink-biased toward the minimum. Pass `min_concurrency ==
 /// max_concurrency` to fix the level without consuming entropy — `1, 1`
-/// for a sequential machine.
+/// for a sequential machine. `step_count` is the target number of counted
+/// rounds the machine runs per test case: every case runs at least one
+/// round and at most `step_count` (at concurrency 1, where a round is one
+/// rule, that is at most `step_count` completed rules), and each sampled
+/// invariant is checked with probability `1 / step_count` per join point.
+/// The engine has no default; frontends typically use 50.
 ///
 /// The engine owns rule selection — including swarm testing, where each
 /// worker enables a random subset of rules (at least one per group) and
@@ -2709,7 +2684,8 @@ unsafe fn state_machine_ref<'a>(
 /// `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
 /// `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
 /// is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
-/// `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
+/// `max_concurrency < min_concurrency`, `step_count < 1`, or on null /
+/// non-UTF-8 names.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_state_machine(
     ctx: *mut HegelContext,
@@ -2722,6 +2698,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     num_invariants: usize,
     min_concurrency: i64,
     max_concurrency: i64,
+    step_count: i64,
     out_state_machine: *mut *mut HegelStateMachine,
     out_concurrency: *mut i64,
 ) -> hegel_result_t {
@@ -2795,6 +2772,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         invariant_always_check,
         min_concurrency,
         max_concurrency,
+        step_count,
     ) {
         Ok(machine) => {
             let concurrency = machine.concurrency();
@@ -2819,7 +2797,7 @@ pub const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
 
 /// Start the machine's next round: make the per-round stop decision (a
 /// recorded boolean draw with a small stop probability, bounded by the
-/// `stateful_step_count` setting) and, if the test case continues, draw
+/// machine's `step_count`) and, if the test case continues, draw
 /// which concurrency group is current for the round. Writes the current
 /// group's id (its value in the creating `rule_groups`) into
 /// `*out_group_id` when a new round has begun and the workers should pull
@@ -2995,10 +2973,10 @@ pub unsafe extern "C" fn hegel_state_machine_rule_rejected(
 /// current join point, writing the decision into `*out_should_check`: true
 /// unconditionally (consuming no entropy) for an invariant whose
 /// `invariant_always_check` flag was set at creation, otherwise a
-/// recorded boolean draw that is true with probability
-/// `1 / stateful_step_count`, so each sampled invariant's expected number
-/// of sampled runs over a full-length test case is one, regardless of the
-/// step count. The caller owns the machine's guaranteed invariant checks —
+/// recorded boolean draw that is true with probability `1 / step_count`
+/// (the machine's creation-time step count), so each sampled invariant's
+/// expected number of sampled runs over a full-length test case is one,
+/// regardless of the step count. The caller owns the machine's guaranteed invariant checks —
 /// its initial state, and its final state once
 /// `hegel_state_machine_next_group` signals termination — and should run
 /// those unconditionally, without calling this.

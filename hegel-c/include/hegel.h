@@ -910,18 +910,6 @@ hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_setting
 
 /*
  Parameters:
- `n`: Target number of steps to run per stateful test case. Each stateful
-   case runs at least one step and at most `n`. The default is 50. `n`
-   must be at least 1.
-
- Returns `HEGEL_OK`.
- */
-hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
-                                                      hegel_settings_t *s,
-                                                      int64_t n);
-
-/*
- Parameters:
  `v`: Controls the output verbosity. See `hegel_verbosity_t`.
 
  Returns `HEGEL_OK`.
@@ -1508,7 +1496,12 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  `max_concurrency` (concurrency bugs need concurrency) rather than
  shrink-biased toward the minimum. Pass `min_concurrency ==
  max_concurrency` to fix the level without consuming entropy — `1, 1`
- for a sequential machine.
+ for a sequential machine. `step_count` is the target number of counted
+ rounds the machine runs per test case: every case runs at least one
+ round and at most `step_count` (at concurrency 1, where a round is one
+ rule, that is at most `step_count` completed rules), and each sampled
+ invariant is checked with probability `1 / step_count` per join point.
+ The engine has no default; frontends typically use 50.
 
  The engine owns rule selection — including swarm testing, where each
  worker enables a random subset of rules (at least one per group) and
@@ -1561,7 +1554,8 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
  is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
- `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
+ `max_concurrency < min_concurrency`, `step_count < 1`, or on null /
+ non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
@@ -1573,13 +1567,14 @@ hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        size_t num_invariants,
                                        int64_t min_concurrency,
                                        int64_t max_concurrency,
+                                       int64_t step_count,
                                        hegel_state_machine_t **out_state_machine,
                                        int64_t *out_concurrency);
 
 /*
  Start the machine's next round: make the per-round stop decision (a
  recorded boolean draw with a small stop probability, bounded by the
- `stateful_step_count` setting) and, if the test case continues, draw
+ machine's `step_count`) and, if the test case continues, draw
  which concurrency group is current for the round. Writes the current
  group's id (its value in the creating `rule_groups`) into
  `*out_group_id` when a new round has begun and the workers should pull
@@ -1675,10 +1670,10 @@ hegel_result_t hegel_state_machine_rule_rejected(hegel_context_t *ctx,
  current join point, writing the decision into `*out_should_check`: true
  unconditionally (consuming no entropy) for an invariant whose
  `invariant_always_check` flag was set at creation, otherwise a
- recorded boolean draw that is true with probability
- `1 / stateful_step_count`, so each sampled invariant's expected number
- of sampled runs over a full-length test case is one, regardless of the
- step count. The caller owns the machine's guaranteed invariant checks —
+ recorded boolean draw that is true with probability `1 / step_count`
+ (the machine's creation-time step count), so each sampled invariant's
+ expected number of sampled runs over a full-length test case is one,
+ regardless of the step count. The caller owns the machine's guaranteed invariant checks —
  its initial state, and its final state once
  `hegel_state_machine_next_group` signals termination — and should run
  those unconditionally, without calling this.
