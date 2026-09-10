@@ -32,6 +32,8 @@ macro_rules! for_each_hegel_fn {
             fn hegel_generate_string_result_free(ctx: *mut HegelContext, result: *mut hegel_generate_string_result_t) -> hegel_result_t;
             fn hegel_generate_time(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: hegel_time_t, max_value: hegel_time_t, out_value: *mut hegel_time_t) -> hegel_result_t;
             fn hegel_generate_uuid(ctx: *mut HegelContext, tc: *mut HegelTestCase, version: u8, has_version: bool, out_bytes: *mut u8) -> hegel_result_t;
+            fn hegel_label_combine(ctx: *mut HegelContext, labels: *const u64, len: usize, out_label: *mut u64) -> hegel_result_t;
+            fn hegel_label_from_name(ctx: *mut HegelContext, name: *const c_char, out_label: *mut u64) -> hegel_result_t;
             fn hegel_mark_complete(ctx: *mut HegelContext, tc: *mut HegelTestCase, status: u32, origin: *const c_char) -> hegel_result_t;
             fn hegel_new_collection(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_collection: *mut *mut HegelCollection) -> hegel_result_t;
             fn hegel_new_pool(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_pool: *mut *mut HegelPool) -> hegel_result_t;

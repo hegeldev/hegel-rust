@@ -21,11 +21,26 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
+/* Span labels identify the generator a span belongs to; derive them from
+ * names (and, for a generator with components, from the components'
+ * labels) rather than numbering them by hand. Computed once up front. */
+static uint64_t LIST_LABEL;
+static uint64_t LIST_ELEMENT_LABEL;
+
+static void init_labels(hegel_context_t *ctx) {
+    uint64_t list_kind, boolean_kind;
+    HEGEL_CHECK(hegel_label_from_name, ctx, "example.list", &list_kind);
+    HEGEL_CHECK(hegel_label_from_name, ctx, "example.boolean", &boolean_kind);
+    uint64_t parts[2] = {list_kind, boolean_kind};
+    HEGEL_CHECK(hegel_label_combine, ctx, parts, 2, &LIST_LABEL);
+    HEGEL_CHECK(hegel_label_from_name, ctx, "example.list_element", &LIST_ELEMENT_LABEL);
+}
+
 /* Draw a list of booleans, sized between min_size and max_size, using
- * a span (LIST) wrapping a collection (more/draw loop). Returns the
+ * a span wrapping a collection (more/draw loop). Returns the
  * number of elements drawn, or -1 on engine error. */
 static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t min_size, uint64_t max_size) {
-    if (hegel_start_span(ctx, tc, HEGEL_LABEL_LIST) != HEGEL_OK) return -1;
+    if (hegel_start_span(ctx, tc, LIST_LABEL) != HEGEL_OK) return -1;
 
     hegel_collection_t *collection;
     if (hegel_new_collection(ctx, tc, min_size, max_size, &collection) != HEGEL_OK) {
@@ -44,7 +59,7 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
         }
         if (!more) break;
 
-        if (hegel_start_span(ctx, tc, HEGEL_LABEL_LIST_ELEMENT) != HEGEL_OK) {
+        if (hegel_start_span(ctx, tc, LIST_ELEMENT_LABEL) != HEGEL_OK) {
             hegel_collection_free(ctx, collection);
             hegel_stop_span(ctx, tc, false);
             return -1;
@@ -70,6 +85,7 @@ static int draw_bool_list(hegel_context_t *ctx, hegel_test_case_t *tc, uint64_t 
 
 int main(void) {
     hegel_context_t *ctx = hegel_context_new();
+    init_labels(ctx);
 
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);

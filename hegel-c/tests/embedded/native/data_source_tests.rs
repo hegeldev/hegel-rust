@@ -26,7 +26,10 @@ fn take_nodes_and_take_spans_return_recorded_data() {
     let spans = NativeDataSource::take_spans(&handle);
     assert_eq!(nodes.len(), 1);
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].label, "26");
+    assert_eq!(
+        spans[0].label,
+        crate::native::draws::LABEL_INTEGER.to_string()
+    );
 }
 
 #[test]

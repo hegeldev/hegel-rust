@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::ffi::sys as hegel_c;
+use crate::generators as gs;
 use crate::runner::{Backend, Settings};
 
 #[test]
@@ -55,8 +56,7 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     drive_run(&run, |tc| {
         cases += 1;
 
-        tc.start_span(hegel_c::hegel_label_t::HEGEL_LABEL_LIST as u64)
-            .unwrap();
+        tc.start_span(gs::label_from_name("test.list")).unwrap();
         let collection = tc.new_collection(0, Some(3)).unwrap();
         loop {
             if !tc.collection_more(&collection)? {

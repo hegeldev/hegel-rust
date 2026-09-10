@@ -113,46 +113,6 @@ pub(crate) enum hegel_health_check_t {
     HEGEL_HC_LARGE_INITIAL_TEST_CASE = 1 << 3,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub(crate) enum hegel_label_t {
-    HEGEL_LABEL_LIST = 1,
-    HEGEL_LABEL_LIST_ELEMENT = 2,
-    HEGEL_LABEL_SET = 3,
-    HEGEL_LABEL_SET_ELEMENT = 4,
-    HEGEL_LABEL_MAP = 5,
-    HEGEL_LABEL_MAP_ENTRY = 6,
-    HEGEL_LABEL_TUPLE = 7,
-    HEGEL_LABEL_ONE_OF = 8,
-    HEGEL_LABEL_OPTIONAL = 9,
-    HEGEL_LABEL_FIXED_DICT = 10,
-    HEGEL_LABEL_FLAT_MAP = 11,
-    HEGEL_LABEL_FILTER = 12,
-    HEGEL_LABEL_MAPPED = 13,
-    HEGEL_LABEL_SAMPLED_FROM = 14,
-    HEGEL_LABEL_ENUM_VARIANT = 15,
-    HEGEL_LABEL_FEATURE_FLAG = 16,
-    HEGEL_LABEL_REGEX = 17,
-    HEGEL_LABEL_EMAIL = 18,
-    HEGEL_LABEL_URL = 19,
-    HEGEL_LABEL_DOMAIN = 20,
-    HEGEL_LABEL_DATE = 21,
-    HEGEL_LABEL_TIME = 22,
-    HEGEL_LABEL_DATETIME = 23,
-    HEGEL_LABEL_UUID = 24,
-    HEGEL_LABEL_IP_ADDRESS = 25,
-    HEGEL_LABEL_INTEGER = 26,
-    HEGEL_LABEL_FLOAT = 27,
-    HEGEL_LABEL_BOOLEAN = 28,
-    HEGEL_LABEL_BYTES = 29,
-    HEGEL_LABEL_STRING = 30,
-    HEGEL_LABEL_STATEFUL_RULE = 31,
-    HEGEL_LABEL_FRESH_ID = 32,
-    HEGEL_LABEL_SET_CHOICE = 33,
-    HEGEL_LABEL_CONCURRENCY = 34,
-    HEGEL_LABEL_RECURSIVE = 35,
-}
-
 pub(crate) type hegel_output_callback_t =
     Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
 

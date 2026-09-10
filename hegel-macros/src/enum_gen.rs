@@ -438,8 +438,15 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 #(#user_predicates,)*
                 #(#variant_params: ::hegel::generators::Generator<#self_ty>,)*
             {
+                fn label(&self) -> u64 {
+                    ::hegel::generators::combine_labels(&[
+                        ::hegel::generators::label_from_name(::core::any::type_name::<#self_ty>()),
+                        #(self.#field_names.label(),)*
+                    ])
+                }
+
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::ENUM_VARIANT);
+                    __tc.start_span(self.label());
                     let index: usize = #variant_index_draw;
 
                     let __result = match index {
@@ -462,7 +469,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::ENUM_VARIANT);
+                    __tc.start_span(self.label());
                     let index: usize = #variant_index_draw;
 
                     let __result = match index {

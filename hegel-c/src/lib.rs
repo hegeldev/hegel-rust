@@ -298,105 +298,6 @@ pub enum hegel_health_check_t {
     HEGEL_HC_LARGE_INITIAL_TEST_CASE = 1 << 3,
 }
 
-/// Passed to `hegel_start_span`. libhegel opens spans around its own draws.
-/// If your Hegel library opens spans, give them labels libhegel has not
-/// reserved below, or shrinking may get slower.
-#[repr(C)]
-#[derive(Copy, Clone)]
-#[allow(non_camel_case_types)]
-pub enum hegel_label_t {
-    /// Outer span around a list / sequence.
-    HEGEL_LABEL_LIST = 1,
-    /// One element of a list.
-    HEGEL_LABEL_LIST_ELEMENT = 2,
-    /// Outer span around a set (unordered, no duplicates).
-    HEGEL_LABEL_SET = 3,
-    /// One element of a set.
-    HEGEL_LABEL_SET_ELEMENT = 4,
-    /// Outer span around a map / dictionary.
-    HEGEL_LABEL_MAP = 5,
-    /// One (key, value) entry of a map.
-    HEGEL_LABEL_MAP_ENTRY = 6,
-    /// Outer span around a tuple / fixed-arity record.
-    HEGEL_LABEL_TUPLE = 7,
-    /// Outer span around a `one_of` / disjunction; useful so the shrinker
-    /// can swap which branch is taken.
-    HEGEL_LABEL_ONE_OF = 8,
-    /// Outer span around an `optional` (None vs Some(value)).
-    HEGEL_LABEL_OPTIONAL = 9,
-    /// Outer span around a fixed-shape record (named fields known
-    /// statically).
-    HEGEL_LABEL_FIXED_DICT = 10,
-    /// Outer span around a `flat_map` / monadic dependent draw.
-    HEGEL_LABEL_FLAT_MAP = 11,
-    /// Outer span around a `filter` / rejection-sampling wrapper.
-    HEGEL_LABEL_FILTER = 12,
-    /// Outer span around a `map` / pure transformation.
-    HEGEL_LABEL_MAPPED = 13,
-    /// Outer span around a `sampled_from` / pick-from-collection draw.
-    HEGEL_LABEL_SAMPLED_FROM = 14,
-    /// Outer span around the variant discriminator of a sum-type draw.
-    HEGEL_LABEL_ENUM_VARIANT = 15,
-    /// Span around one swarm-testing feature-flag draw. Emitted internally
-    /// by the engine's state-machine rule selection
-    /// (`hegel_state_machine_next_rule`); callers normally never open this
-    /// span themselves.
-    HEGEL_LABEL_FEATURE_FLAG = 16,
-    /// Span around one regex string draw. Emitted internally by
-    /// `hegel_generate_string`; callers normally never open this span
-    /// themselves. Likewise for the other engine-side compound draws below.
-    HEGEL_LABEL_REGEX = 17,
-    /// Span around one email-address draw (`hegel_generate_string`).
-    HEGEL_LABEL_EMAIL = 18,
-    /// Span around one URL draw (`hegel_generate_string`).
-    HEGEL_LABEL_URL = 19,
-    /// Span around one domain-name draw (`hegel_generate_string`).
-    HEGEL_LABEL_DOMAIN = 20,
-    /// Span around one date draw (`hegel_generate_date`).
-    HEGEL_LABEL_DATE = 21,
-    /// Span around one time draw (`hegel_generate_time`).
-    HEGEL_LABEL_TIME = 22,
-    /// Span around one datetime draw (`hegel_generate_datetime`).
-    HEGEL_LABEL_DATETIME = 23,
-    /// Span around one UUID draw (`hegel_generate_uuid`).
-    HEGEL_LABEL_UUID = 24,
-    /// Span around one IP-address draw (`hegel_generate_ipv4` /
-    /// `hegel_generate_ipv6`).
-    HEGEL_LABEL_IP_ADDRESS = 25,
-    /// Span around one integer draw (`hegel_generate_integer` /
-    /// `hegel_generate_integer_big`). Emitted internally, like every
-    /// per-draw label: same-label spans are what the engine's mutation
-    /// machinery duplicates to propose repeated values.
-    HEGEL_LABEL_INTEGER = 26,
-    /// Span around one float draw (`hegel_generate_float`).
-    HEGEL_LABEL_FLOAT = 27,
-    /// Span around one boolean draw (`hegel_generate_boolean`).
-    HEGEL_LABEL_BOOLEAN = 28,
-    /// Span around one bytes draw (`hegel_generate_bytes`).
-    HEGEL_LABEL_BYTES = 29,
-    /// Span around one text string draw (`hegel_generate_string` with a
-    /// text generator).
-    HEGEL_LABEL_STRING = 30,
-    /// Outer span around one stateful-testing rule invocation, grouping all
-    /// the draws a single rule makes so the shrinker can delete a whole step
-    /// at once. Opened by the frontend's state-machine driver.
-    HEGEL_LABEL_STATEFUL_RULE = 31,
-    /// Span around one fresh-identifier draw (`hegel_pool_add`). Emitted
-    /// internally by the engine.
-    HEGEL_LABEL_FRESH_ID = 32,
-    /// Span around one choose-from-set draw (`hegel_pool_generate`). Emitted
-    /// internally by the engine.
-    HEGEL_LABEL_SET_CHOICE = 33,
-    /// Span around the concurrency-level draw made by
-    /// `hegel_new_state_machine`.
-    HEGEL_LABEL_CONCURRENCY = 34,
-    /// Span around one sub-value of a recursive generator: the leaf-or-branch
-    /// decision plus the drawn content. Every sub-value at every depth uses
-    /// this same label, which is what lets the shrinker replace a tree with
-    /// one of its own subtrees.
-    HEGEL_LABEL_RECURSIVE = 35,
-}
-
 /// Per-line output callback, passed to `hegel_run_start` /
 /// `hegel_test_case_from_blob` (see there for the full contract). `user_data`
 /// is the pointer supplied alongside the callback; `line` is one line of
@@ -1855,10 +1756,17 @@ unsafe fn typed_draw<T>(
 /// Libraries should wrap each compound generator in a span.
 ///
 /// Parameters:
-/// `label`: Identifies what kind of structure this span groups. The
-///   values reserved by libhegel are the `hegel_label_t` constants in
-///   `hegel.h`. Libraries may use any stable `u64` to define their own
-///   spans.
+/// `label`: Identifies the generator that opened the span. Labels have no
+///   meaning beyond identity: libhegel treats two spans with the same label
+///   as coming from the same generator, and so as candidates for swapping,
+///   duplicating and reordering with each other, and does nothing else with
+///   them. Any value is valid as long as the same generator always uses the
+///   same label; derive labels with `hegel_label_from_name` and
+///   `hegel_label_combine` (or the same hashes computed ahead of time)
+///   rather than numbering them by hand, so that generators with the same
+///   shape but different components — a list of integers and a list of
+///   strings, say — get different labels. libhegel opens spans around its
+///   own draws with labels derived from names of the form `hegel.<kind>`.
 ///
 /// Returns `HEGEL_OK`.
 ///
@@ -1903,6 +1811,80 @@ pub unsafe extern "C" fn hegel_stop_span(
         Ok(()) => HEGEL_OK,
         Err(e) => translate_ds_error(ctx, e),
     }
+}
+
+/// The span label for a generator identified by a name: the 64-bit FNV-1a
+/// hash of the name's bytes. Use it for the label of a generator with no
+/// component generators (`hegel_label_from_name("mylib.integers")`), and
+/// for the first argument of `hegel_label_combine` for one that has
+/// components. A name only has to be stable and unique to its generator; a
+/// prefix naming the library keeps it clear of libhegel's own `hegel.<kind>`
+/// names and of other libraries'.
+///
+/// Parameters:
+/// `name`: Non-NULL, NUL-terminated. Hashed as bytes, so any encoding
+///   works as long as the generator always uses the same one.
+/// `out_label`: Receives the label.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a NULL `name` or
+/// `out_label`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_label_from_name(
+    ctx: *mut HegelContext,
+    name: *const c_char,
+    out_label: *mut u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if name.is_null() {
+        set_last_error(ctx, "hegel_label_from_name: name is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if out_label.is_null() {
+        set_last_error(ctx, "hegel_label_from_name: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let bytes = unsafe { CStr::from_ptr(name) }.to_bytes();
+    unsafe { *out_label = crate::native::labels::label_from_bytes(bytes) };
+    HEGEL_OK
+}
+
+/// The span label for a generator built from other generators: a hash of
+/// the given labels, in order. Pass the generator's own label (from
+/// `hegel_label_from_name`) first and its components' labels after it, so
+/// that `lists(integers())` and `lists(text())` get different labels while
+/// every `lists(integers())` gets the same one. Combining is
+/// order-sensitive, and combining a single label does not return it
+/// unchanged.
+///
+/// Parameters:
+/// `labels`: `len` labels. May be NULL when `len` is 0.
+/// `out_label`: Receives the combined label.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a NULL `labels` with a
+/// non-zero `len` or a NULL `out_label`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_label_combine(
+    ctx: *mut HegelContext,
+    labels: *const u64,
+    len: usize,
+    out_label: *mut u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if labels.is_null() && len > 0 {
+        set_last_error(ctx, "hegel_label_combine: labels is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if out_label.is_null() {
+        set_last_error(ctx, "hegel_label_combine: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let labels = if len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(labels, len) }
+    };
+    unsafe { *out_label = crate::native::labels::combine_labels(labels) };
+    HEGEL_OK
 }
 
 /// Opaque handle to an engine-managed variable-length collection.
